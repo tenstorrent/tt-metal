@@ -106,7 +106,7 @@ void MAIN {
         if constexpr (!pack_untilize_reinit) {
             const uint32_t output_faces =
                 last_tile_is_partial ? num_faces_in_last_output_tile : num_faces_in_output_tile;
-            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, 32, output_faces);
+            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
         }
     }
 
@@ -175,6 +175,9 @@ void MAIN {
                     copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
                     copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_scratch_in_dst_idx);
 
+                    MATH(DPRINT << "BEFORE REDUCE" << ENDL());
+                    dprint_tensix_dest_reg(index_dst_idx);
+
                     if (first_c_block) {
                         max_reduce_with_indices_init();
                     }
@@ -194,8 +197,8 @@ void MAIN {
                             copy_tile_to_dst_init_short(down_left_wrap_inc_tmp_cb_id);
                             pack_reconfig_data_format(down_left_wrap_inc_tmp_cb_id);
                             copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
-                            // dprint_tensix_dest_reg(inc_dst_idx);
-                            // UNPACK(DPRINT << "WRAP DOWN LEFT: " << down_left_wrap_inc << ENDL());
+                            MATH(DPRINT << "WRAP DOWN LEFT: " << down_left_wrap_inc << ENDL());
+                            dprint_tensix_dest_reg(inc_dst_idx);
                         } else {
                             // we are still in the same row, move to the right
                             current_idx_col += right_inc;
@@ -206,13 +209,14 @@ void MAIN {
                             copy_tile_to_dst_init_short(right_inc_tmp_cb_id);
                             pack_reconfig_data_format(right_inc_tmp_cb_id);
                             copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
-                            // dprint_tensix_dest_reg(inc_dst_idx);
-                            // UNPACK(DPRINT << "MOVE RIGHT: " << right_inc << ENDL());
+                            MATH(DPRINT << "MOVE RIGHT: " << right_inc << ENDL());
+                            dprint_tensix_dest_reg(inc_dst_idx);
                         }
                         add_int_tile_init();
                         add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
                     }
-                    // dprint_tensix_dest_reg(index_dst_idx);
+                    MATH(DPRINT << "AFTER INC" << ENDL());
+                    dprint_tensix_dest_reg(index_scratch_out_dst_idx);
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -258,12 +262,16 @@ void MAIN {
 
                 if (last_c_block) {
                     cb_reserve_back(idx_tmp_cb_id, 1);
-                    PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, true /*tilize en*/>(idx_tmp_cb_id)));
-                    pack_tile_block(index_scratch_out_dst_idx, idx_tmp_cb_id, 1);
+                    PACK(
+                        (llk_pack_init<false /*untilize*/, false /*skip_inputs*/, false /*tilize en*/>(idx_tmp_cb_id)));
+                    pack_tile<true>(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
                     cb_push_back(idx_tmp_cb_id, 1);
                     cb_wait_front(idx_tmp_cb_id, 1);
                     cb_pop_front(idx_tmp_cb_id, 1);
-                    // PACK(tt::compute::common::print_full_tile(idx_tmp_cb_id));
+                    PACK((llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
+                        out_cb_id, num_out_sticks, output_faces)));
+                    PACK(DPRINT << "PACKED TILE" << ENDL());
+                    PACK(tt::compute::common::print_full_tile(idx_tmp_cb_id));
 
                     // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
                     // tile_regs_wait this is necessary to ensure MATH finishes incrementing indices before UNPACK
