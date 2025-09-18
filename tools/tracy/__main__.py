@@ -291,7 +291,11 @@ def main():
                 # Short form of the command being tested (first arg, basename, no extension)
                 cmd_short = ""
                 if len(args) > 0:
-                    cmd_base = os.path.basename(args[0])
+                    if os.path.basename(args[0]) == "pytest" and len(args) > 1:
+                        # Use the next argument after pytest for the name
+                        cmd_base = os.path.basename(args[-1])
+                    else:
+                        cmd_base = os.path.basename(args[0])
                     cmd_short = os.path.splitext(cmd_base)[0]
                     # Sanitize for filename
                     cmd_short = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cmd_short)
