@@ -222,6 +222,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 # models
 /models/ @uaydonat @yieldthought @cglagovichTT @tenstorrent/metalium-codeowners-large-changes
 /models/*/** @tenstorrent/metalium-codeowners-large-changes
+/models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/metalium-codeowners-large-changes
 models/common @yieldthought @mtairum @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
