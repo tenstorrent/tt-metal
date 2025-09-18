@@ -1,7 +1,6 @@
 training_config:
   project_name: "tt_train_nano_gpt"
   model_type: "qwen"
-  #model_path: "data/qwen2.5_exported.msgpack"
   seed: 5489
   model_save_interval: 500
   batch_size: 1
@@ -30,7 +29,11 @@ training_config:
 # nano_gpt --safetensors /path/to/Qwen/Qwen2.5-0.5B/  -c configs/training_shakespeare_qwen2_5_0_5B.yaml --eval 1
 
 eval_config:
-  repetition_penalty: 1.0
-  temperature: 0.7
+  repetition_penalty: 1.1
+  temperature: 1.2
   top_k: 50
   top_p: 1.0
+
+device_config:
+    enable_ddp: true
+    mesh_shape: [1,1]
