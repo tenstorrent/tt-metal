@@ -1,5 +1,0 @@
-# WebSocket Test Client Requirements
-# Install with: pip install -r websocket_requirements.txt
-
-websockets>=11.0.0
-asyncio
