@@ -95,7 +95,7 @@ tt::tt_metal::Tensor sample(
             seed);                            // seed
 
         rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
-        out = ttnn::mul_sfpu(out, 1.0F / temperature));
+        out = ttnn::mul_sfpu(out, 1.0F / temperature);
         out = ttnn::add(out, rand);
     }
 
