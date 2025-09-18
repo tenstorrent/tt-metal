@@ -37,8 +37,20 @@ void device_setup() {
     // set_default_sfpu_constant_register_state
 }
 
+inline __attribute__((always_inline)) void signal_ncrisc_completion() {
+    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_DONE;
+}
+
+inline void wait_subordinates() {
+    // WAYPOINT("NTW");
+    while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    // WAYPOINT("NTD");
+}
+
 int main() {
     configure_csr();
+    std::uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
     // WAYPOINT("I");
     // clear bss
     // handle noc_tobank ???
@@ -49,7 +61,12 @@ int main() {
 
     // risc_init();
     device_setup();
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    if (hartid > 0) {
+        signal_ncrisc_completion();
+    } else {
+        wait_subordinates();
+        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    }
     while (1) {
         // WAYPOINT("GW");
     }
