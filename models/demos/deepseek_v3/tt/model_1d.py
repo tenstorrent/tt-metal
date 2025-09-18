@@ -114,6 +114,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
             "mlp_decoder_block": [DecoderBlock.prefill_model_config(hf_config, mesh_device)],
             "transfer_row": {"topology": ttnn.Topology.Linear},
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
+            "lm_head": LMHead.prefill_model_config(hf_config, mesh_device, input_row_idx=0),
         }
 
     @classmethod
@@ -287,6 +288,50 @@ class Model1D(SharedStateAddOn, AbstractModule):
     def forward_prefill(
         cls,
         x: ttnn.Tensor,
+        user_id: int,
         cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_tables: Sequence[ttnn.Tensor],
     ) -> ttnn.Tensor:
-        raise NotImplementedError("Prefill mode is not implemented.")
+        """Forward pass for prefill mode."""
+
+        # Embedding
+        x = Embedding1D.forward_prefill(x, cfg["embedding"])
+
+        # Stage 1: MLP Decoder Block
+        mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
+            cfg["num_rows"], cfg["num_mlp_layers"]
+        )
+        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
+            zip(mlp_is_padding_layer.transpose(0, 1), mlp_meta_layer_indices.transpose(0, 1), strict=True)
+        ):
+            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
+                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
+            ):
+                if is_padding_layer:
+                    continue
+                x = DecoderBlock.forward_prefill(
+                    x,
+                    user_id,
+                    row_idx,
+                    cfg["mlp_decoder_block"][meta_layer_idx],
+                    rope_tensors,
+                    page_tables[layer_idx],
+                )
+
+            # Transfer rows
+            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+
+        # Norm (no resharding needed for prefill)
+        x_norm = DistributedRMSNorm.forward_prefill(x, cfg["norm"])
+        ttnn.deallocate(x)
+
+        # All gather before LM Head (same as decode path)
+        x_ag = ttnn.experimental.all_gather_async(x_norm, **cfg["lm_head"]["all_gather"])
+        ttnn.deallocate(x_norm)
+
+        # LM Head
+        x_lmhead = LMHead.forward_prefill(x_ag, cfg["lm_head"])
+        ttnn.deallocate(x_ag)
+
+        return x_lmhead
