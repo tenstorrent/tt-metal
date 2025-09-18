@@ -51,7 +51,13 @@ void SGDFused::step() {
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
 
         ttml::metal::sgd_fused(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL), gradients, m_config.lr, output_tensor);
+            tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+            gradients,
+            m_config.lr,
+            m_config.momentum,
+            output_tensor,
+            theta,
+            theta);
     }
     m_steps++;
 }

@@ -30,14 +30,17 @@ constexpr auto kComputeKernelPath =
 // reader runtime args
 constexpr uint32_t kParamInAddrIdx = 0;
 constexpr uint32_t kGradAddrIdx = 1U;
+constexpr uint32_t kMomentumInAddrIdx = 2U;
 // compute runtime args
-constexpr uint32_t kLrIdx = 0;
+constexpr uint32_t kLrIdx = 0U;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
+constexpr uint32_t kMomentumOutAddrIdx = 1U;
 
 constexpr auto kParamInCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
-constexpr auto kUpdateCbIndex = tt::CBIndex::c_3;
+constexpr auto kMomentumInCbIndex = tt::CBIndex::c_2;
+constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_3;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
@@ -65,7 +68,10 @@ void assign_per_core_runtime_args(
     const SGDFusedKernels& kernels,
     const tt::tt_metal::Buffer* param_in_buffer,
     const tt::tt_metal::Buffer* grad_buffer,
+    const tt::tt_metal::Buffer* momentum_buffer_in,
+    const tt::tt_metal::Buffer* momentum_buffer_out,
     const float lr,
+    const float momentum,
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -91,7 +97,11 @@ void assign_per_core_runtime_args(
             program,
             kernels.reader,
             core,
-            {param_in_buffer->address(), grad_buffer->address(), num_rows_per_core, num_rows_written});
+            {param_in_buffer->address(),
+             grad_buffer->address(),
+             momentum_buffer_in->address(),
+             num_rows_per_core,
+             num_rows_written});
 
         // Compute kernel: (learning_rate)
         SetRuntimeArgs(program, kernels.compute_group_1, core, {std::bit_cast<uint32_t>(lr)});
@@ -101,7 +111,11 @@ void assign_per_core_runtime_args(
         }
 
         // Writer kernel: (dst_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
+        SetRuntimeArgs(
+            program,
+            kernels.writer,
+            core,
+            {output_buffer->address(), momentum_buffer_out->address(), num_rows_per_core, num_rows_written});
 
         num_rows_written += num_rows_per_core;
     }
@@ -116,7 +130,10 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     // -------------------------------------------------------------------------
     const auto& param_in = tensor_args.param_in;
     const auto& grad = tensor_args.grad;
+    const auto& momentum_in = tensor_args.momentum_in;
+    const auto& momentum_out = tensor_args.momentum_out;
     const auto& lr = operation_attributes.lr;
+    const auto& momentum = operation_attributes.momentum;
 
     auto* device = param_in.device();
 
@@ -152,7 +169,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     uint32_t num_inner = param_in.logical_shape()[-1];
 
     // compile arguments
-    uint32_t block_size = get_block_size(Wt, 4U);
+    uint32_t block_size = get_block_size(Wt, 1U);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -172,8 +189,11 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
         program, all_cores, kGradCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    [[maybe_unused]] auto cb_update = create_circular_buffer(
-        program, all_cores, kUpdateCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    [[maybe_unused]] auto cb_mom_in = create_circular_buffer(
+        program, all_cores, kMomentumInCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+
+    [[maybe_unused]] auto cb_mom_out = create_circular_buffer(
+        program, all_cores, kMomentumOutCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
@@ -194,6 +214,18 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         "Grad buffer must be in DRAM. Input buffer of type {}",
         enchantum::to_string(grad_buffer->buffer_type()));
 
+    auto* momentum_in_buffer = momentum_in->buffer();
+    TT_FATAL(
+        momentum_in_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        "Momentum buffer must be in DRAM. Momentum buffer of type {}",
+        enchantum::to_string(momentum_in_buffer->buffer_type()));
+
+    auto* momentum_out_buffer = momentum_out->buffer();
+    TT_FATAL(
+        momentum_out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        "Momentum buffer must be in DRAM. Momentum buffer of type {}",
+        enchantum::to_string(momentum_out_buffer->buffer_type()));
+
     auto* output_buffer = output.buffer();
     TT_FATAL(
         output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
@@ -204,10 +236,13 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(param_in_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(grad_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(momentum_in_buffer).append_to(reader_compile_time_args);
+
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(momentum_out_buffer).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -217,7 +252,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
-        Wt};                        // num_inner / TILE_W
+        Wt,                         // num_inner / TILE_W
+        std::bit_cast<uint32_t>(momentum)};
 
     kernels.compute_group_1 = create_compute_kernel(
         program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
@@ -226,9 +262,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         std::vector<uint32_t> compute_group_2_args = {
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
-            Wt                          // num_inner / TILE_W
-        };
-
+            Wt,                         // num_inner / TILE_W
+            std::bit_cast<uint32_t>(momentum)};
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
@@ -242,7 +277,10 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         kernels,
         param_in_buffer,
         grad_buffer,
+        momentum_in_buffer,
+        momentum_out_buffer,
         lr,
+        momentum,
         output_buffer,
         num_cores,
         num_cores_y,
@@ -286,6 +324,9 @@ void SGDFusedProgramFactory::override_runtime_arguments(
 
     auto* param_in_buffer = tensor_args.param_in.buffer();
     auto* grad_buffer = tensor_args.grad.buffer();
+    auto* momentum_buffer_in = tensor_args.momentum_in->buffer();
+    auto* momentum_buffer_out = tensor_args.momentum_out->buffer();
+
     auto lr = operation_attributes.lr;
     auto* output_buffer = tensor_return_value.buffer();
 
@@ -305,6 +346,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kParamInAddrIdx] = param_in_buffer->address();
             runtime_args[kGradAddrIdx] = grad_buffer->address();
+            runtime_args[kMomentumInAddrIdx] = momentum_buffer_in->address();
         }
         if (core_group_1.contains(core)) {
             auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
@@ -317,6 +359,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputAddrIdx] = output_buffer->address();
+            runtime_args[kMomentumOutAddrIdx] = momentum_buffer_out->address();
         }
     }
 }

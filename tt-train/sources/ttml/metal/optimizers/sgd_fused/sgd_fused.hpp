@@ -10,6 +10,12 @@ namespace ttml::metal::optimizers::sgd_fused {
 
 struct SGDFusedOptimizer {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& param_in, const ttnn::Tensor& grad, float lr, const std::optional<ttnn::Tensor>& param_out);
+        const ttnn::Tensor& param_in,
+        const ttnn::Tensor& grad,
+        float lr,
+        float momentum,
+        const std::optional<ttnn::Tensor>& param_out,
+        const std::optional<ttnn::Tensor>& momentum_in,
+        const std::optional<ttnn::Tensor>& momentum_out);
 };
 }  // namespace ttml::metal::optimizers::sgd_fused
