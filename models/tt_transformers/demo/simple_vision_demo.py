@@ -88,7 +88,6 @@ def create_multimodal_model(
 
 
 def prepare_generator_args(
-    num_devices,
     data_parallel,
     mesh_device,
     max_batch_size,
@@ -200,7 +199,6 @@ def test_multimodal_demo_text(
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
     model_args, model = prepare_generator_args(
-        num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
         max_batch_size=max_batch_size,
