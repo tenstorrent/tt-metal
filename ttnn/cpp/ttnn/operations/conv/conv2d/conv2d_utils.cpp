@@ -1082,7 +1082,11 @@ uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding) {
-    float shard_height = (float)halo_input_shard_shape[0] / (float)input_width;
+    // When the shard begins in the middle of the tensor's width, we have two partial rows. This increases the number of
+    // rows of the shard. This causes halo to bring in extra rows of unused data. When batch_boundary_multiplier > 1, we
+    // can take the exact size.
+    float shard_height =
+        batch_size > 1 ? halo_input_shard_shape[0] : tt::div_up(halo_input_shard_shape[0], (float)input_width);
     uint32_t shard_batches = shard_height / input_height;
     // Halo adds the overlap region of the input tensor that is needed for the convolution.
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
