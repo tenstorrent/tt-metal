@@ -63,12 +63,12 @@ namespace {
 // TODO: Review if this should  be 2 for BH (the number of eth processors)
 // Hardcode to 1 to keep size as before
 #ifdef ARCH_BLACKHOLE
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+constexpr uint32_t PROFILER_RISC_COUNT = 1;
 #else
-static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #endif
 #else
-static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
 #else
 #error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
@@ -334,9 +334,9 @@ struct dprint_buf_msg_t {
 #endif
 
 // NOC aligment max from BH
-static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
+constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
-static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
+constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,
@@ -359,12 +359,12 @@ struct addressable_core_t {
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
 // Currently sized for BH (first term is DRAM, second term is PCIe and last term is eth). On WH only Eth and Tensix
 // cores are virtualized BH = DRAM(8*2) + 1 PCIe + Eth(12) vs. WH = Eth(16)
-constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
+constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
 // This is the max number of Non Worker Cores across BH and WH.
 // BH = DRAM(8) + 1 PCIe + Eth(12) vs. WH = DRAM(18) + 1 PCIe + Eth(16)
-constexpr static std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
-constexpr static std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
-constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
+constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
+constexpr std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
+constexpr std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
     volatile uint64_t noc_pcie_addr_end;
