@@ -31,15 +31,17 @@ class TtnnDWConv:
         
         # For depthwise convolution, groups should equal in_channels
         # This is handled in the parameter setup, but we validate here
-        assert parameter.groups == parameter.in_channels, \
-            f"DWConv requires groups=in_channels, got groups={parameter.groups}, in_channels={parameter.in_channels}"
+        # The parameter is a DWConv module, so we access the inner conv layer
+        assert parameter.conv.groups == parameter.conv.in_channels, \
+            f"DWConv requires groups=in_channels, got groups={parameter.conv.groups}, in_channels={parameter.conv.in_channels}"
         
         # Create the depthwise convolution using Yolov11Conv2D
         # The activation will be handled separately if enable_act is True
         activation = "silu" if enable_act else ""
         
+        # Pass the inner conv layer to Yolov11Conv2D, not the whole DWConv module
         self.conv = Yolov11Conv2D(
-            parameter, 
+            parameter.conv, 
             conv_pt,
             device=device,
             activation=activation,
