@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
         "print-link-health",
         "Print link health to terminal at startup",
         cxxopts::value<bool>()->default_value("false"))(
-        "p,port", "Port for the primary web server", cxxopts::value<int>()->default_value("8080"))(
+        "p,port", "Port for the web server", cxxopts::value<int>()->default_value("8080"))(
         "ws-port", "Port for the WebSocket server", cxxopts::value<int>()->default_value("8081"))(
         "aggregate-from",
         "Comma-separated list of WebSocket endpoints to aggregate telemetry from (e.g., "
@@ -205,22 +205,15 @@ int main(int argc, char* argv[]) {
     }
 
     // Web server
-    log_info(tt::LogAlways, "Starting primary web server on port {}", port);
+    log_info(tt::LogAlways, "Starting web server on port {}", port);
     std::future<bool> web_server;
     std::shared_ptr<TelemetrySubscriber> web_server_subscriber;
     std::tie(web_server, web_server_subscriber) = run_web_server(port, metal_src_dir);
 
-    // Web server #2 (testing the ability of our producer to supply two consumers)
-    uint16_t secondary_port = 5555;
-    log_info(tt::LogAlways, "Starting secondary web server on port {}", secondary_port);
-    std::future<bool> web_server2;
-    std::shared_ptr<TelemetrySubscriber> web_server2_subscriber;
-    std::tie(web_server2, web_server2_subscriber) = run_web_server(secondary_port, metal_src_dir);
-
     // WebSocket server (optional)
     std::future<bool> websocket_server;
     std::shared_ptr<TelemetrySubscriber> websocket_subscriber;
-    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers = {web_server_subscriber, web_server2_subscriber};
+    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers = {web_server_subscriber};
 
     // WebSocket server is always enabled
     log_info(tt::LogAlways, "Starting WebSocket server on port {}", ws_port);
@@ -240,10 +233,9 @@ int main(int argc, char* argv[]) {
 
     // Run until finished
     bool web_server_succeeded = web_server.get();
-    bool web_server2_succeeded = web_server2.get();
     bool websocket_succeeded = websocket_succeeded = websocket_server.get();
 
-    if (!web_server_succeeded || !web_server2_succeeded || !websocket_succeeded) {
+    if (!web_server_succeeded || !websocket_succeeded) {
         return 1;
     }
 
