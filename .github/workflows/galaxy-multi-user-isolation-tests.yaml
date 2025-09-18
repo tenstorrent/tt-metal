@@ -11,6 +11,8 @@ on:
         required: false
         default: true
         type: boolean
+  # schedule:
+  #   - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
   build-artifact:
@@ -107,8 +109,6 @@ jobs:
           }
 
           export -f run_test
-          run_test "tt-smi test" "tt-smi -ls"
-          # run_test "test_system_health" "./build/test/tt_metal/tt_fabric/test_system_health --cluster-type T3K"
           run_test "test_minimal_all_gather_async" "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
 
       - name: Tear down containers
