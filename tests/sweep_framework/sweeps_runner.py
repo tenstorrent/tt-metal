@@ -563,6 +563,7 @@ def run_sweeps(
     # Summary counters
     total_vectors_run = 0  # total number of test cases (vectors)
     total_tests_run = 0  # total number of suites executed
+    total_invalid_vectors = 0  # total number of invalid vectors (skipped)
     module_suite_test_count = {}  # module_name -> {suite_name: count}
     max_test_cases_module = None  # find the module with the most test cases
     max_test_cases_per_module = 0
