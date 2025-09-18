@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     get_prefill_rot_mat,
@@ -16,7 +17,6 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
