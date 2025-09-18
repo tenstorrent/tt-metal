@@ -1,8 +1,6 @@
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
     dispatch/benchmark_rw_buffer.cpp
-    ethernet/test_ethernet_read_and_send_data.cpp
-    ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
@@ -64,6 +62,12 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     endif()
 
     if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
+        target_sources(
+            ${TEST_TARGET}
+            PRIVATE
+                routing/tt_fabric_test_config.cpp
+                routing/tt_fabric_test_context.cpp
+        )
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
     target_include_directories(

@@ -4,7 +4,7 @@
 
 #include <hal.hpp>
 #include <tt_backend_api_types.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <cstdint>
 #include <string>
 

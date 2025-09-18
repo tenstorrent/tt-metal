@@ -6,7 +6,7 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
-run_mid_run_tracy_push() {
+run_mid_run_data_dump() {
     echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
@@ -20,7 +20,7 @@ run_async_test() {
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
-        ./tt_metal/tools/profiler/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        ./tools/tracy/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -41,7 +41,7 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        ./tt_metal/tools/profiler/profile_this.py -c "pytest models/demos/t3000/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        ./tools/tracy/profile_this.py -c "pytest models/demos/t3000/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -56,7 +56,7 @@ run_async_tracing_T3000_test() {
 
             # Testing device only report on the same artifacts
             rm -rf $PROFILER_OUTPUT_DIR/
-            ./tt_metal/tools/profiler/process_ops_logs.py --device-only --date
+            ./tools/tracy/process_ops_logs.py --device-only --date
             echo "Verifying device-only results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
@@ -75,7 +75,7 @@ run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    ./tt_metal/tools/profiler/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/ccl/test_all_gather.py::test_all_gather_on_t3000_post_commit_for_profiler_regression'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    ./tools/tracy/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/ccl/test_all_gather.py::test_all_gather_on_t3000_post_commit_for_profiler_regression'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
@@ -93,7 +93,7 @@ run_async_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    ./tt_metal/tools/profiler/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/ccl/test_new_all_gather.py::test_all_gather_sharded_ring'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    ./tools/tracy/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/ccl/test_new_all_gather.py::test_all_gather_sharded_ring'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
@@ -116,7 +116,7 @@ run_profiling_test() {
 
     run_async_tracing_T3000_test
 
-    run_mid_run_tracy_push
+    run_mid_run_data_dump
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 
@@ -140,8 +140,6 @@ main() {
     if [[ -z "$DONT_USE_VIRTUAL_ENVIRONMENT" ]]; then
         source python_env/bin/activate
     fi
-
-    export PYTHONPATH=$TT_METAL_HOME
 
     run_profiling_test
 }

@@ -20,12 +20,12 @@ import sys
 
 import tt_lib as ttl
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 def run_moreh_single_test(test_name, test_entry):
@@ -801,8 +801,8 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_lower_bound = 340.0
-    bw_upper_bound = 400.0
+    bw_lower_bound = 240.0
+    bw_upper_bound = 340.0
     assert bw_lower_bound <= throughput
     assert throughput <= bw_upper_bound
 

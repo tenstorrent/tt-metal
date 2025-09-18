@@ -681,7 +681,7 @@ int main(int argc, char **argv) {
                 device_config.mesh_shape));
         }
     } else if (device_config.enable_tp || device_config.enable_ddp) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
@@ -909,6 +909,16 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi && config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
+    }
+
+    if (device_config.enable_ddp) {
+        auto num_devices = static_cast<uint32_t>(device->num_devices());
+        if (config.batch_size % num_devices != 0) {
+            throw std::logic_error(fmt::format(
+                "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
+                config.batch_size,
+                num_devices));
+        }
     }
 
     auto get_samples_count = [&config](uint32_t global_step) {

@@ -55,7 +55,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND:
-            return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
+            return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16) || (a == DataType::UINT32 && b == DataType::UINT32));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
@@ -392,8 +392,8 @@ BinaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    std::optional<unary::EltwiseFusedActivations> activations,
+    std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().dtype(),
@@ -473,8 +473,8 @@ BinaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    std::optional<unary::EltwiseFusedActivations> activations,
+    std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().dtype(),

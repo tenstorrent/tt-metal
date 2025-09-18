@@ -43,7 +43,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
-        case BITWISE_AND: return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case BITWISE_AND:
+            return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16) || (a == UINT32 && b == UINT32));
         case QUANT:
         case REQUANT:
         case DEQUANT:
@@ -120,13 +121,13 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 }
 
 tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
-    // TODO: a more generalized way to skip the hashing of an UnaryWithParam?
+    // TODO: a more generalized way to skip the hashing of an EltwiseUnaryWithParam?
     // Don't hash the quantization scale, otherwise we build the kernel for each different scale
     return tt::stl::hash::hash_objects_with_default_seed(
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        is_quant_op ? ttnn::SmallVector<unary::UnaryWithParam>{} : post_activations,
+        is_quant_op ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,
@@ -463,9 +464,9 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations) {
     // Validate storage type for input tensors
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,
@@ -504,7 +505,7 @@ BinaryNgDeviceOperation::invoke(
             subtile_broadcast_type,
             is_sfpu_op,
             is_quant_op},
-        tensor_args_t{input_tensor_a, input_tensor_b, std::move(output_tensor)}};
+        tensor_args_t{input_tensor_a, input_tensor_b, output_tensor}};
 }
 
 std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>
@@ -515,9 +516,9 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
-    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations) {
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
@@ -537,7 +538,7 @@ BinaryNgDeviceOperation::invoke(
             SubtileBroadcastType::NONE,
             is_sfpu_op,
             is_quant_op},
-        tensor_args_t{input_tensor_a, std::nullopt, std::move(output_tensor)}};
+        tensor_args_t{input_tensor_a, std::nullopt, output_tensor}};
 }
 
 }  // namespace ttnn::operations::binary_ng

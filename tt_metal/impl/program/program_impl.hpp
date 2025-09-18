@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "jit_build/build.hpp"
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -13,7 +12,6 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "dev_msgs.h"                    // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"        // Kernel
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
@@ -23,15 +21,14 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
 
-#include <umd/device/tt_core_coordinates.h>             // CoreType
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/core_coordinates.hpp>        // CoreType
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 
 #include <atomic>
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <future>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -55,6 +52,19 @@ class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
+enum dispatch_core_processor_classes {
+    // Tensix processor classes
+    DISPATCH_CLASS_TENSIX_DM0 = 0,
+    DISPATCH_CLASS_TENSIX_DM1 = 1,
+    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
+
+    // Ethernet processor classes
+    DISPATCH_CLASS_ETH_DM0 = 0,
+    DISPATCH_CLASS_ETH_DM1 = 1,
+
+    DISPATCH_CLASS_MAX = 3,
+};
+
 namespace experimental {
 class GlobalCircularBuffer;
 }
@@ -69,30 +79,26 @@ void assemble_device_commands(
     bool use_prefetcher_cache);
 }
 
-using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
-
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
-    kernel_id_array_t kernel_ids;
+    // kernel_ids are ordered by dispatch class
+    std::vector<KernelHandle> kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
     uint32_t total_rta_size{};
-    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE]{};
-    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE]{};
-    launch_msg_t launch_msg{};
-    go_msg_t go_msg{};
+    // kernel_text_offsets is indexed by processor index within core.
+    std::vector<uint32_t> kernel_text_offsets;
+    dev_msgs::launch_msg_t launch_msg;
+    dev_msgs::go_msg_t go_msg;
 
-    KernelGroup();
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
-        kernel_id_array_t kernel_ids,
-        bool erisc_is_idle,
+        std::vector<KernelHandle> kernel_ids,
         uint32_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
-        const CoreRangeSet& new_ranges);
-
-    uint32_t get_programmable_core_type_index() const;
+        const CoreRangeSet& new_ranges,
+        const dev_msgs::Factory& dev_msgs_factory);
 
     CoreType get_core_type() const;
 };

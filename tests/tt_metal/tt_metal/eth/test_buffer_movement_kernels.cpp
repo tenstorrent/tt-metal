@@ -29,7 +29,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "multi_device_fixture.hpp"
@@ -38,8 +38,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -124,17 +124,15 @@ bool chip_to_chip_dram_buffer_transfer(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
-    auto& sender_program_ = sender_workload.get_programs().at(device_range);
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
-        sender_program_,
+        sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_sender.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
-        sender_program_,
+        sender_program,
         eth_sender_kernel,
         eth_sender_core,
         {
@@ -150,17 +148,15 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
-    auto& receiver_program_ = receiver_workload.get_programs().at(device_range);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
-        receiver_program_,
+        receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_dram_to_dram_receiver.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
-        receiver_program_,
+        receiver_program,
         eth_receiver_kernel,
         eth_receiver_core,
         {
@@ -177,9 +173,13 @@ bool chip_to_chip_dram_buffer_transfer(
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
         t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         fixture->RunProgram(sender_mesh_device, sender_workload, true);
         fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }
@@ -221,15 +221,13 @@ bool chip_to_chip_interleaved_buffer_transfer(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
-    auto& sender_program_ = sender_workload.get_programs().at(device_range);
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     /*std::vector<uint32_t> input_packed =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
             -1.0f,
             1.0f,
-            cfg.size_bytes / bfloat16::SIZEOF,
+            cfg.size_bytes / sizeof(bfloat16),
             std::chrono::system_clock::now().time_since_epoch().count());*/
 
     distributed::DeviceLocalBufferConfig sender_dram_config{
@@ -254,13 +252,13 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt_metal::TensorAccessorArgs(input_buffer).append_to(sender_compile_args);
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
-        sender_program_,
+        sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_sender.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = sender_compile_args});
 
     tt_metal::SetRuntimeArgs(
-        sender_program_,
+        sender_program,
         eth_sender_kernel,
         eth_sender_core,
         {(uint32_t)input_buffer->address(),
@@ -276,8 +274,6 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
-    auto& receiver_program_ = receiver_workload.get_programs().at(device_range);
 
     auto output_buffer =
         distributed::MeshBuffer::create(receiver_buffer_config, receiver_dram_config, receiver_mesh_device.get());
@@ -290,13 +286,13 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt_metal::TensorAccessorArgs(output_buffer).append_to(receiver_compile_args);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
-        receiver_program_,
+        receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/interleaved_buffer_to_buffer_receiver.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_1, .compile_args = receiver_compile_args});
 
     tt_metal::SetRuntimeArgs(
-        receiver_program_,
+        receiver_program,
         eth_receiver_kernel,
         eth_receiver_core,
         {
@@ -315,9 +311,13 @@ bool chip_to_chip_interleaved_buffer_transfer(
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
         t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         fixture->RunProgram(sender_mesh_device, sender_workload, true);
         fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }

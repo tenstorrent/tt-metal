@@ -6,13 +6,13 @@ import torch
 from torch import nn
 
 import ttnn
+from models.common.utility_functions import is_grayskull, is_wormhole_b0
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from models.demos.falcon7b_common.tt.model_utils import (
     get_default_hifi2_kernel_config,
     get_falcon_default_core_grid,
     get_weights_cached,
 )
-from models.utility_functions import is_grayskull, is_wormhole_b0
 from ttnn import ReplicateTensorToMesh
 
 

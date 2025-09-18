@@ -4,6 +4,8 @@
 
 #include "softmax_device_operation.hpp"
 
+#include <utility>
+
 #include "softmax_operation_types.hpp"
 #include "softmax_program_factory.hpp"
 
@@ -107,7 +109,6 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Determine if we should use sharded multi-core program factory
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
-    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto rank = input_tensor_shape.size();
 
     if (operation_attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
@@ -360,7 +361,7 @@ SoftmaxDeviceOperation::invoke(
             dim,
             scale,
             inplace,
-            output_mem_config,
+            std::move(output_mem_config),
             program_config,
             is_causal_mask,
             compute_kernel_config,
@@ -401,7 +402,7 @@ Tensor softmax(
     }
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    const auto dim_adjusted = dim < 0 ? input_tensor_4D.logical_shape().size() + dim : dim;
+    const auto dim_adjusted = dim < 0 ? input_tensor_4D.logical_shape().size() + dim : dim + (4 - rank);
     if (dim_adjusted == rank - 1) {
         // Input tensor formatting
         const ttnn::Shape input_pad_shape =
