@@ -80,13 +80,6 @@ inline void run_subordinate_eriscs(uint32_t enables) {
     }
 }
 
-inline void apply_tweaks() {
-    // #18384: This register was left dirty by eth training.
-    // It is not used in dataflow api, so it can be set to 0
-    // one time here instead of setting it each time in dataflow_api.
-    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
-}
-
 inline void service_base_fw() {
     // Base fw only uses noc0. Only do the reinit for noc0
     ncrisc_noc_full_sync<1>();
@@ -94,7 +87,6 @@ inline void service_base_fw() {
     update_boot_results_eth_link_status_check();
     noc_init<1>(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     ncrisc_noc_counters_init<1>();
-    apply_tweaks();
 }
 
 inline void wait_subordinate_eriscs() {
@@ -139,7 +131,6 @@ void __attribute__((noinline)) Application(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
-    apply_tweaks();
     ncrisc_noc_full_sync();
 
     deassert_all_reset();
@@ -190,7 +181,6 @@ void __attribute__((noinline)) Application(void) {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            apply_tweaks();
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);
 
