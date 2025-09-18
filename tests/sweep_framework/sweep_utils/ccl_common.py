@@ -37,3 +37,16 @@ def device_context(mesh_shape, fabric_config, device_params=None):
             ttnn.close_mesh_device(mesh_device)
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
             del mesh_device
+
+
+def get_mem_config(buffer_type, shard_shape, shard_strategy, device):
+    if shard_shape is None or shard_strategy is None:
+        return ttnn.MemoryConfig(buffer_type=buffer_type)
+    else:
+        core_grid_size = device.compute_with_storage_grid_size()
+        core_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))}
+        )
+
+        shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(shard_strategy, buffer_type, shard_spec)
