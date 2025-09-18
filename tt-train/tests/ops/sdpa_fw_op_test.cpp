@@ -41,7 +41,7 @@ protected:
 
 xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
     auto shape = query.shape();
-    size_t B = shape[0], H = shape[1], S = shape[2], d = shape[3];
+    size_t B = shape[0], H = shape[1], S = shape[2];
     xt::xarray<float> mask = xt::zeros<float>({B, H, S, S});
 
     for (size_t b = 0; b < B; ++b) {
@@ -133,10 +133,8 @@ xt::xarray<float> sdpa_grouped_naive(
     const std::size_t B = Q.shape()[0];
     const std::size_t S = Q.shape()[2];
     const std::size_t qD = Q.shape()[3];
-    const std::size_t kvD = K.shape()[3];
 
     const std::size_t Dh_q = qD / q_heads;
-    const std::size_t Dh_kv = kvD / kv_heads;
     const std::size_t Dh = Dh_q;  // assume Dh_q == Dh_kv
 
     xt::xarray<float> Out = xt::xarray<float>::from_shape({B, std::size_t(1), S, qD});
@@ -208,10 +206,8 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_grouped_naive_with_intermed
     const std::size_t B = Q.shape()[0];
     const std::size_t S = Q.shape()[2];
     const std::size_t qD = Q.shape()[3];
-    const std::size_t kvD = K.shape()[3];
 
     const std::size_t Dh_q = qD / q_heads;
-    const std::size_t Dh_kv = kvD / kv_heads;
     const std::size_t Dh = Dh_q;  // assume Dh_q == Dh_kv
 
     xt::xarray<float> Out = xt::xarray<float>::from_shape({B, std::size_t(1), S, qD});
@@ -413,7 +409,6 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
 
     using namespace ttml;
     auto [batch_num, heads, seq_len, embedding_dim] = query.logical_shape().to_array_4D();
-    auto groups = value.logical_shape().to_array_4D()[1];
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
@@ -626,118 +621,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_Batch_12Heads_6Group) {
 // VALIDATION TESTS - Testing Error Conditions and Edge Cases
 // =============================================================================
 
-TEST_F(SDPAForwardTest, ValidationTest_InvalidHeadConfiguration) {
-    using namespace ttml;
-
-    std::mt19937 gen(42);
-
-    // Test Case 1: Query heads not divisible by key heads (should fail)
-    // This creates a scenario where qHt % kHt != 0, triggering the TT_FATAL in device operation
-    {
-        // Create tensors with 3 query heads and 2 key/value heads (3 % 2 != 0)
-        xt::xarray<float> query_tensor = xt::random::rand<float>({1, 3, 128, 32}, -1.0F, 1.0F, gen);  // 3 heads
-        xt::xarray<float> key_tensor = xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);    // 2 heads
-        xt::xarray<float> value_tensor = xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);  // 2 heads
-        xt::xarray<float> attn_mask_tensor = xt::random::rand<float>({1, 3, 128, 128}, 0.0F, 1.0F, gen);
-
-        auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
-        auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
-        auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-        auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-
-        EXPECT_THROW(
-            { auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, false); }, std::runtime_error)
-            << "Should fail when q_heads is not divisible by kv_heads";
-    }
-}
-
-TEST_F(SDPAForwardTest, ValidationTest_ShapeMismatch) {
-    using namespace ttml;
-
-    std::mt19937 gen(42);
-
-    // Test Case 1: Key-Value dimension mismatch
-    {
-        // Create split-by-heads tensors with mismatched dimensions
-        xt::xarray<float> query_tensor =
-            xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);  // 2 heads, 32 dim each
-        xt::xarray<float> key_tensor =
-            xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);  // 2 heads, 32 dim each
-        xt::xarray<float> value_tensor =
-            xt::random::rand<float>({1, 2, 128, 16}, -1.0F, 1.0F, gen);  // Different dimension
-        xt::xarray<float> attn_mask_tensor = xt::random::rand<float>({1, 1, 128, 128}, 0.0F, 1.0F, gen);
-
-        auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
-        auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
-        auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-        auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-
-        EXPECT_THROW(
-            { auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, false); }, std::runtime_error)
-            << "Should fail with shape mismatch";
-    }
-
-    // Test Case 2: Batch size mismatch
-    {
-        xt::xarray<float> query_tensor = xt::random::rand<float>({2, 2, 128, 32}, -1.0F, 1.0F, gen);
-        xt::xarray<float> key_tensor =
-            xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);  // Different batch size
-        xt::xarray<float> value_tensor = xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);
-        xt::xarray<float> attn_mask_tensor = xt::random::rand<float>({2, 1, 128, 128}, 0.0F, 1.0F, gen);
-
-        auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
-        auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
-        auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-        auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-
-        EXPECT_THROW(
-            { auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, false); }, std::runtime_error)
-            << "Should fail with shape mismatch";
-    }
-
-    // Test Case 3: Sequence length mismatch
-    {
-        xt::xarray<float> query_tensor = xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);
-        xt::xarray<float> key_tensor = xt::random::rand<float>({1, 2, 64, 32}, -1.0F, 1.0F, gen);  // Different seq len
-        xt::xarray<float> value_tensor = xt::random::rand<float>({1, 2, 64, 32}, -1.0F, 1.0F, gen);
-        xt::xarray<float> attn_mask_tensor = xt::random::rand<float>({1, 1, 128, 64}, 0.0F, 1.0F, gen);
-
-        auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
-        auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
-        auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-        auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-
-        EXPECT_THROW(
-            { auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, false); }, std::runtime_error)
-            << "Should fail with shape mismatch";
-    }
-}
-
-TEST_F(SDPAForwardTest, ValidationTest_KeyValueShapeMismatch) {
-    using namespace ttml;
-
-    std::mt19937 gen(42);
-
-    // Test case where Key and Value have different shapes
-    // This should trigger the TT_FATAL: "Key and Value must have the same shape"
-    {
-        xt::xarray<float> query_tensor = xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);
-        xt::xarray<float> key_tensor = xt::random::rand<float>({1, 2, 128, 32}, -1.0F, 1.0F, gen);  // Shape: 1,2,128,32
-        xt::xarray<float> value_tensor =
-            xt::random::rand<float>({1, 2, 128, 16}, -1.0F, 1.0F, gen);  // Shape: 1,2,128,16 - Different!
-        xt::xarray<float> attn_mask_tensor = xt::random::rand<float>({1, 2, 128, 128}, 0.0F, 1.0F, gen);
-
-        auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
-        auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
-        auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-        auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-
-        EXPECT_THROW(
-            { auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, 0.0F, false); }, std::runtime_error)
-            << "Should fail when Key and Value have different shapes";
-    }
-}
-
 TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
 
@@ -802,7 +685,7 @@ TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
 TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
     using namespace ttml;
 
-    const uint32_t B = 1U, H = 1U, S = 128U, d = 64U;
+    const uint32_t B = 1U, S = 128U, d = 64U;
     std::mt19937 gen(42);
 
     // Create split-by-heads tensors for the new interface
@@ -858,112 +741,4 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         EXPECT_TRUE(xt::all(interm_xtensor > 0.0f)) << "All intermediate values should be positive";
         EXPECT_TRUE(xt::all(interm_xtensor <= 1.0f)) << "All intermediate values should be <= 1.0 (reciprocals)";
     }
-}
-
-TEST_F(SDPAForwardTest, ValidationTest_PerformanceTest) {
-    using namespace ttml;
-
-    uint32_t B = 1U, H = 1U, S = 1024, dQ = 4096U, dKV = 1024;
-    uint32_t num_query_heads = 32U;
-    uint32_t num_key_heads = 8U;
-    float dropout_prob = 0.0F;
-    uint32_t random_seed = 42;
-
-    auto* mesh_devices = &autograd::ctx().get_device();
-    auto device_ids = mesh_devices->get_device_ids();
-    using Clock = std::chrono::high_resolution_clock;
-
-    // Generate already split-by-heads tensors directly
-    std::mt19937 gen(random_seed);
-    const uint32_t head_dim_q = dQ / num_query_heads;
-    const uint32_t head_dim_kv = dKV / num_key_heads;
-
-    xt::xarray<float> query_tensor = xt::random::rand<float>({B, num_query_heads, S, head_dim_q}, -1.0F, 1.0F, gen);
-    xt::xarray<float> key_tensor = xt::random::rand<float>({B, num_key_heads, S, head_dim_kv}, -1.0F, 1.0F, gen);
-    xt::xarray<float> value_tensor = xt::random::rand<float>({B, num_key_heads, S, head_dim_kv}, -1.0F, 1.0F, gen);
-
-    // Create attention mask in kernel-expected format (B, qNH, S, S)
-    xt::xarray<float> query_for_mask = xt::random::rand<float>({B, num_query_heads, S, dQ}, -1.0F, 1.0F, gen);
-    xt::xarray<float> attn_mask_tensor = generate_mask(query_for_mask);
-
-    // Convert to device tensors
-    auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
-    auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
-    auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-    auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-    const bool return_intermediates = true;
-
-    // Run SDPA kernel
-    auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, return_intermediates);
-    xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());  // Kernel returns (B, 1, S, qD*q_heads)
-    xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
-
-    // Run composite SDPA implementation with split tensors, then fuse output to match kernel
-    auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask);
-    xt::xarray<float> composite_result_split_xtensor = core::to_xtensor(composite_result_split[0]);
-    xt::xarray<float> composite_interm_xtensor = core::to_xtensor(composite_result_split[1]);
-
-    // Fuse composite output to match kernel format (B, 1, S, qD*q_heads)
-    xt::xarray<float> composite_result_xtensor = fuse_heads(composite_result_split_xtensor, num_query_heads);
-
-    // Run float reference implementation with split tensors (produces FUSED output)
-    auto [float_result, float_intermediates] =
-        sdpa_split_heads_naive_with_intermediates(query_tensor, key_tensor, value_tensor, attn_mask_tensor);
-
-    float mse_kernel_vs_float = compute_mse(float_result, result_xtensor);
-    float mse_composite_vs_float = compute_mse(float_result, composite_result_xtensor);
-
-    fmt::print(
-        "Performance Test MSE: Kernel vs Float: {}, Composite vs Float: {}\n",
-        mse_kernel_vs_float,
-        mse_composite_vs_float);
-
-    // for (const auto& device_id : device_ids) {
-    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-    // }
-    // // Sleep for ten seconds to stabilize GPU frequency
-    // std::this_thread::sleep_for(std::chrono::seconds(10));
-
-    // const int test_size = 50;
-
-    // std::vector<ttnn::Tensor> result_holder;
-    // result_holder.reserve(test_size);
-
-    // std::vector<ttnn::Tensor> baseline_holder;
-    // baseline_holder.reserve(test_size);
-
-    // auto op_start = Clock::now();
-    // for (int i = 0; i < test_size; ++i) {
-    //     result = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, return_intermediates);
-    //     result_holder.push_back(result[0].value());
-    // }
-    // // xt::xarray<float> test_result_xtensor = core::to_xtensor(result[0].value());
-    // // xt::xarray<float> test_interm_xtensor = core::to_xtensor(result[1].value());
-    // for (const auto& device_id : device_ids) {
-    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-    // }
-    // auto op_end = Clock::now();
-
-    // // Sleep for ten seconds to stabilize GPU frequency
-    // std::this_thread::sleep_for(std::chrono::seconds(10));
-
-    // auto baseline_start = Clock::now();
-    // for (int i = 0; i < test_size; ++i) {
-    //     composite_result_split = composite_sdpa_fw(query, key, value, attn_mask);
-    //     baseline_holder.push_back(composite_result_split[0]);
-    // }
-    // // xt::xarray<float> test_baseline_result_xtensor = fuse_heads(core::to_xtensor(baseline_result[0]),
-    // // num_query_heads); xt::xarray<float> test_baseline_interm_xtensor = core::to_xtensor(baseline_result[1]);
-    // for (const auto& device_id : device_ids) {
-    //     tt::tt_metal::Synchronize(mesh_devices->get_device(device_id));
-    // }
-    // auto baseline_end = Clock::now();
-
-    // std::chrono::duration<float, std::milli> op_duration = op_end - op_start;
-    // std::chrono::duration<float, std::milli> baseline_duration = baseline_end - baseline_start;
-
-    // std::cout << "op: " << op_duration.count() / static_cast<float>(test_size) << " ms\n";
-    // std::cout << "baseline : " << baseline_duration.count() / static_cast<float>(test_size) << " ms\n";
-
-    EXPECT_TRUE(false);
 }

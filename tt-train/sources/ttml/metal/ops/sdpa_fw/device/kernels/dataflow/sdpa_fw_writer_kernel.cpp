@@ -26,16 +26,24 @@ void kernel_main() {
     constexpr uint32_t q_heads = get_compile_time_arg_val(3);          // num of heads in query
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // num of heads per group
 
-    constexpr uint32_t onetile = 1U;
-
     const uint32_t tile_bytes = get_tile_size(cb_output);
     const DataFormat data_format = get_dataformat(cb_output);
 
-    const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
-        .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto output_args = TensorAccessorArgs<5>();
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
-    const InterleavedAddrGenFast</* is dram */ true> intermediates_addr_generator = {
-        .bank_base_address = intermediates_addr, .page_size = tile_bytes, .data_format = data_format};
+#ifdef RETURN_INTERMEDIATES
+    constexpr auto intermediates_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+#endif
+
+    constexpr uint32_t onetile = 1U;
+
+    // const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
+    //     .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
+
+    // const InterleavedAddrGenFast</* is dram */ true> intermediates_addr_generator = {
+    //     .bank_base_address = intermediates_addr, .page_size = tile_bytes, .data_format = data_format};
 
     const uint32_t tiles_per_head = qWt;
     const uint32_t outWt = tiles_per_head * q_heads;  // fused width in tiles: (qNH * d) / TILE_W

@@ -52,7 +52,7 @@ void apply_mask_on_reg(uint32_t cb_attn_mask, uint32_t scaler_bits, uint32_t min
     // masked positions receive large negative values (will be 0.0 after softmax),
     // unmasked positions remain unchanged
     add_binary_tile_init();
-    add_binary_tile(register_idx, mask_register);
+    add_binary_tile(register_idx, mask_register, register_idx);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_qk_result, uint32_t cb_identity_scaler>
@@ -69,7 +69,6 @@ void update_cur_row_max_value(uint32_t cb_cur_max, uint32_t cb_prev_max, bool do
     reduce_uninit();
 
     if (do_eltwise_max) {
-        // DPRINT << "do eltwise max" << ENDL();
         cb_wait_front(cb_prev_max, onetile);
         copy_tile_init(cb_prev_max);
         copy_tile(cb_prev_max, /* tile_idx */ 0, /* register idx */ prev_max_dst_idx);
@@ -129,10 +128,8 @@ void matmul_qk_by_v(uint32_t cb_qk_result, uint32_t cb_value, uint32_t cb_cur_mm
     cb_reserve_back(cb_cur_mm_out, Wt);
 
     // TODO[check]: check whether I can use mm_init_short here instead of full init
-    mm_init_short(cb_qk_result, cb_value, /* transpose */ 0);
-    pack_reconfig_data_format(cb_cur_mm_out);
-    reconfig_data_format(cb_qk_result, cb_value);
-    // mm_init(cb_qk_result, cb_value, cb_cur_mm_out, /* transpose */ 0);
+    // mm_init_short(cb_qk_result, cb_value, /* transpose */ 0);
+    mm_init(cb_qk_result, cb_value, cb_cur_mm_out, /* transpose */ 0);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -200,7 +197,7 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 
     // add to updated previous exp sum with current exp sum
     add_binary_tile_init();
-    add_binary_tile(exp_sum_dst_idx, exp_sum_dst_idx + 1U);
+    add_binary_tile(exp_sum_dst_idx, exp_sum_dst_idx + 1U, exp_sum_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -212,35 +209,38 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
     cb_push_back(cb_cur_sum_exp, onetile);
 }
 
+#ifndef FP32_DEST_ACC_EN
 /*This uses L1 accumulation to accumulate onto cb_cur_mm_out*/
-// template <uint32_t Wt, uint32_t block_size>
-// void update_cur_mm_out(uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
-//     cb_wait_front(cb_prev_mm_out, Wt);
-//     cb_wait_front(cb_cur_mm_out, Wt);
-//     cb_wait_front(cb_exp_max_diff, onetile);
+template <uint32_t Wt, uint32_t block_size>
+void update_cur_mm_out(uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
+    cb_wait_front(cb_prev_mm_out, Wt);
+    cb_wait_front(cb_cur_mm_out, Wt);
+    cb_wait_front(cb_exp_max_diff, onetile);
 
-//     PACK((llk_pack_reconfig_l1_acc(true)));  // enable L1 accumulation
-//     pack_reconfig_data_format(cb_cur_mm_out);
+    PACK((llk_pack_reconfig_l1_acc(true)));  // enable L1 accumulation
+    pack_reconfig_data_format(cb_cur_mm_out);
 
-//     reconfig_data_format(cb_prev_mm_out, cb_exp_max_diff);
-//     mul_bcast_cols_init_short(cb_prev_mm_out, cb_exp_max_diff);
-//     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
-//         tile_regs_acquire();
-//         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-//             mul_tiles_bcast_cols(cb_prev_mm_out, cb_exp_max_diff, tile_idx + block_idx, 0, block_idx);
-//         }
-//         tile_regs_commit();
-//         tile_regs_wait();
-//         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-//             pack_tile(/*dst_reg_idx*/ block_idx, cb_cur_mm_out);
-//         }
-//         tile_regs_release();
-//     }
-//     PACK((llk_pack_reconfig_l1_acc(false)));  // disable L1 accumulation
-//     cb_pop_front(cb_cur_mm_out, Wt);
-//     cb_reserve_back(cb_cur_mm_out, Wt);
-//     cb_push_back(cb_cur_mm_out, Wt);
-// }
+    reconfig_data_format(cb_prev_mm_out, cb_exp_max_diff);
+    mul_bcast_cols_init_short(cb_prev_mm_out, cb_exp_max_diff);
+    for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
+        tile_regs_acquire();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_tiles_bcast_cols(cb_prev_mm_out, cb_exp_max_diff, tile_idx + block_idx, 0, block_idx);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            pack_tile<true>(/*dst_reg_idx*/ block_idx, cb_cur_mm_out, tile_idx + block_idx);
+        }
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(false)));  // disable L1 accumulation
+    cb_pop_front(cb_cur_mm_out, Wt);
+    cb_reserve_back(cb_cur_mm_out, Wt);
+    cb_push_back(cb_cur_mm_out, Wt);
+}
+
+#else
 
 template <uint32_t Wt>
 void update_cur_mm_out(
@@ -251,7 +251,6 @@ void update_cur_mm_out(
 
     cb_reserve_back(cb_mm_result_holder, Wt);
     reconfig_data_format(cb_prev_mm_out, cb_exp_max_diff);
-    pack_reconfig_data_format(cb_mm_result_holder);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx++) {
         tile_regs_acquire();
         mul_bcast_cols_init_short(cb_prev_mm_out, cb_exp_max_diff);
@@ -261,10 +260,11 @@ void update_cur_mm_out(
         copy_tile(cb_cur_mm_out, /* tile_idx */ tile_idx, /* register idx */ 1U);
 
         add_binary_tile_init();
-        add_binary_tile(0, 1U);
+        add_binary_tile(0, 1U, 0);
         tile_regs_commit();
 
         tile_regs_wait();
+        pack_reconfig_data_format(cb_mm_result_holder);
         pack_tile(0, cb_mm_result_holder);
         tile_regs_release();
     }
@@ -273,8 +273,6 @@ void update_cur_mm_out(
     cb_wait_front(cb_mm_result_holder, Wt);
     cb_pop_front(cb_cur_mm_out, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
-    pack_reconfig_data_format(cb_cur_mm_out);
-    // TODO[optimize]: copy by blocks
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx++) {
         tile_regs_acquire();
         copy_tile_init(cb_mm_result_holder);
@@ -282,12 +280,15 @@ void update_cur_mm_out(
         tile_regs_commit();
 
         tile_regs_wait();
+        pack_reconfig_data_format(cb_cur_mm_out);
         pack_tile(0, cb_cur_mm_out);
         tile_regs_release();
     }
     cb_push_back(cb_cur_mm_out, Wt);
     cb_pop_front(cb_mm_result_holder, Wt);
 }
+
+#endif
 
 // reduce and recip in place
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_identity_scaler, uint32_t cb_matmul_reduce>

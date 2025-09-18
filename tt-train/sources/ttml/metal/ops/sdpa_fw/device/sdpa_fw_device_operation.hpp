@@ -36,6 +36,7 @@ struct SDPAForwardDeviceOperation {
         const std::optional<ttnn::Tensor>& mask,  // attention mask
         const float dropout_probability = 0.0F,   // default value
         const bool return_intermediates = false,
+        const bool fp32_dest_acc_en = true,
         const std::optional<ttnn::Tensor>& preallocated_intermediate = std::nullopt,
         const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };

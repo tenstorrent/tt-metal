@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cmath>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 
@@ -51,15 +52,15 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumAttnMaskTiles = 1U;
-constexpr uint32_t kQKResultTiles = 1U;  //[Debug] should be 2U
+constexpr uint32_t kQKResultTiles = 1U;
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
-constexpr uint32_t kIntermediateTiles = 1U;  // [Debug] should be 2U
 constexpr uint32_t kSingleTileBuffer = 1U;
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
+const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
 
 }  // namespace
 
@@ -245,61 +246,61 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    auto cb_query = create_circular_buffer(
+    [[maybe_unused]] auto cb_query = create_circular_buffer(
         program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    auto cb_key =
+    [[maybe_unused]] auto cb_key =
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
 
-    auto cb_value = create_circular_buffer(
+    [[maybe_unused]] auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
 
     // create mask buffer only if it's going to be used
     if (use_attn_mask) {
-        auto cb_attn_mask = create_circular_buffer(
+        [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
     }
     // create intermediate buffer only if we need to return intermediates
     if (args.return_intermediates) {
-        auto cb_intermediate = create_circular_buffer(
+        [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
             program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
     }
 
-    auto cb_reduction_scaler = create_circular_buffer(
+    [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_mat_mul_reduce = create_circular_buffer(
+    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_qk_result = create_circular_buffer(
+    [[maybe_unused]] auto cb_qk_result = create_circular_buffer(
         program, all_cores, kQKResultCbIndex, data_format, bfloat16_single_tile_size_bytes, kQKResultTiles);
 
-    auto cb_prev_max_value = create_circular_buffer(
+    [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
         program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
 
-    auto cb_cur_max_value = create_circular_buffer(
+    [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
         program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
 
     // lets try to use precise data format for holding exp sum/diff values
-    auto cb_exp_max_diff = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_max_diff = create_circular_buffer(
         program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpMaxDiffTiles);
 
-    auto cb_prev_exp_sum = create_circular_buffer(
+    [[maybe_unused]] auto cb_prev_exp_sum = create_circular_buffer(
         program, all_cores, kPrevSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
-    auto cb_cur_exp_sum = create_circular_buffer(
+    [[maybe_unused]] auto cb_cur_exp_sum = create_circular_buffer(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
-    auto cb_prev_mm_out = create_circular_buffer(
+    [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
         program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    auto cb_cur_mm_out =
+    [[maybe_unused]] auto cb_cur_mm_out =
         create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    auto cb_output =
+    [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    auto cb_mm_result_holder = create_circular_buffer(
+    [[maybe_unused]] auto cb_mm_result_holder = create_circular_buffer(
         program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     // -------------------------------------------------------------------------
@@ -362,6 +363,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         defines[kUseAttnMaskDefKey] = "1";
     }
 
+    // TODO: #28800 - Enable L1 accumulation when fp32_dest_acc_en = true.
+    // Currently, this define is only used to support L1 accumulation when fp32_dest_acc_en = false.
+    // It should be removed once L1 accumulation is properly fixed for fp32_dest_acc_en = true.
+    if (args.fp32_dest_acc_en) {
+        defines[kFP32DestAccEnKey] = "1";
+    }
+
     SDPAForwardKernels kernels;
 
     // Reader compile-time arguments
@@ -377,6 +385,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         minus_one,        // used to transform mask from 1/0 to 0/-1
         custom_inf        // used to transform mask from 0/-1 to 0/-1e9F
     };
+    tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
+
     kernels.reader = create_reader_kernel(
         program,
         all_cores,
@@ -391,6 +404,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         qNH,             // number of heads in query
         heads_per_group  // number of heads per group
     };
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
     kernels.writer = create_writer_kernel(
         program, all_cores, /* writer_compile_args */ writer_compile_args, defines, kWriterKernelPath);
 
@@ -476,10 +491,6 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto& sdpa_fw_reader_kernel = shared_vars.sdpa_fw_reader_kernel;
     auto& sdpa_fw_writer_kernel = shared_vars.sdpa_fw_writer_kernel;
-    auto& sdpa_fw_group_1_kernel = shared_vars.sdpa_fw_kernel_group_1;
-    auto& sdpa_fw_group_2_kernel = shared_vars.sdpa_fw_kernel_group_2;
-    auto& core_group_1 = shared_vars.core_group_1;
-    auto& core_group_2 = shared_vars.core_group_2;
     auto& program = cached_program.program;
 
     uint32_t num_cores = shared_vars.num_cores;

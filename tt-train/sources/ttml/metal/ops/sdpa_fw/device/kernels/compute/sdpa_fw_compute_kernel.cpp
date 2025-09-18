@@ -159,8 +159,11 @@ void MAIN {
                 cb_pop_front(alias_cb_prev_sum_exp, onetile);
 
                 // update previous matmul output with exp_max_diff and add it to current matmul output
-                // update_cur_mm_out<qWt, block_size>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
+#ifndef FP32_DEST_ACC_EN
+                update_cur_mm_out<qWt, block_size>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
+#else
                 update_cur_mm_out<qWt>(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff, cb_mm_result_holder);
+#endif
                 cb_pop_front(cb_exp_max_diff, onetile);
                 cb_pop_front(alias_cb_prev_mm_out, qWt);
             }

@@ -11,6 +11,7 @@ namespace ttml::metal::ops::sdpa_fw::device {
 struct operation_attributes_t {
     bool return_intermediates{false};
     float dropout_probability{0.0F};  // default value
+    bool fp32_dest_acc_en{true};
 };
 
 struct tensor_args_t {

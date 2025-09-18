@@ -13,11 +13,12 @@
 #include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
+template <typename AddrGen>
 void read_head(
     const uint32_t start_idx,
     const uint32_t num_of_tiles,
     const uint32_t cb_id,
-    const InterleavedAddrGenFast<true>& address_generator,
+    const AddrGen& address_generator,
     const uint32_t tile_bytes) {
     cb_reserve_back(cb_id, num_of_tiles);
     uint32_t l1_write_addr = get_write_ptr(cb_id);
@@ -59,23 +60,38 @@ void kernel_main() {
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sdpa scaler factor
     constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
     constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-1e9F
+    constexpr auto query_args = TensorAccessorArgs<10>();
+    constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
+    constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
+
+#ifdef USE_ATTN_MASK
+    constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t onetile = 1U;
 
     const uint32_t tile_bytes = get_tile_size(cb_query);
     const DataFormat data_format = get_dataformat(cb_query);
 
-    const InterleavedAddrGenFast</* is_dram */ true> query_address_generator = {
-        .bank_base_address = query_address, .page_size = tile_bytes, .data_format = data_format};
+    const auto query_address_generator = TensorAccessor(query_args, query_address, tile_bytes);
+    const auto key_address_generator = TensorAccessor(key_args, key_address, tile_bytes);
+    const auto value_address_generator = TensorAccessor(value_args, value_address, tile_bytes);
 
-    const InterleavedAddrGenFast</* is_dram */ true> key_address_generator = {
-        .bank_base_address = key_address, .page_size = tile_bytes, .data_format = data_format};
+#ifdef USE_ATTN_MASK
+    const auto mask_address_generator = TensorAccessor(mask_args, mask_address, tile_bytes);
+#endif
 
-    const InterleavedAddrGenFast</* is_dram */ true> value_address_generator = {
-        .bank_base_address = value_address, .page_size = tile_bytes, .data_format = data_format};
+    // const InterleavedAddrGenFast</* is_dram */ true> query_address_generator = {
+    //     .bank_base_address = query_address, .page_size = tile_bytes, .data_format = data_format};
 
-    const InterleavedAddrGenFast</* is_dram */ true> mask_address_generator = {
-        .bank_base_address = mask_address, .page_size = tile_bytes, .data_format = data_format};
+    // const InterleavedAddrGenFast</* is_dram */ true> key_address_generator = {
+    //     .bank_base_address = key_address, .page_size = tile_bytes, .data_format = data_format};
+
+    // const InterleavedAddrGenFast</* is_dram */ true> value_address_generator = {
+    //     .bank_base_address = value_address, .page_size = tile_bytes, .data_format = data_format};
+
+    // const InterleavedAddrGenFast</* is_dram */ true> mask_address_generator = {
+    //     .bank_base_address = mask_address, .page_size = tile_bytes, .data_format = data_format};
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;

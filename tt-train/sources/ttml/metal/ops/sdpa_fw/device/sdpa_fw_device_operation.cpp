@@ -26,7 +26,6 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
-    const auto& mask = tensor_args.mask;
     const auto& preallocated_output = tensor_args.preallocated_output;
 
     const auto check_tensor = [](const ttnn::Tensor& tensor,
@@ -235,10 +234,13 @@ SDPAForwardDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& mask,  // attention mask
     const float dropout_probability,          // default value
     const bool return_intermediates,
+    const bool fp32_dest_acc_en,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     operation_attributes_t operation_attributes{
-        .return_intermediates = return_intermediates, .dropout_probability = dropout_probability};
+        .return_intermediates = return_intermediates,
+        .dropout_probability = dropout_probability,
+        .fp32_dest_acc_en = fp32_dest_acc_en};
     tensor_args_t tensor_args{
         .query = query_tensor,
         .key = key_tensor,
