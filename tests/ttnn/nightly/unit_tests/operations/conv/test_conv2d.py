@@ -126,6 +126,7 @@ def run_conv(
     enable_activation_reuse=False,
     config_tensors_in_dram=False,
     custom_pcc=None,
+    force_split_reader=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -255,6 +256,7 @@ def run_conv(
         full_inner_dim=bs_full_inner_dim,
         enable_activation_reuse=enable_activation_reuse,
         config_tensors_in_dram=config_tensors_in_dram,
+        force_split_reader=force_split_reader,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -4944,4 +4946,73 @@ def test_conv2d_1kX1k(
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db,
         slice_config=slice_config,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size",
+    [1],
+)
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w",
+    (
+        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
+@pytest.mark.parametrize("force_split_reader", [True])
+def test_conv_block_sharding(
+    device,
+    torch_tensor_map,
+    math_fidelity,
+    output_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    output_layout,
+    force_split_reader,
+):
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        output_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        {},
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=output_layout,
+        groups=1,
+        in_place=False,
+        force_split_reader=force_split_reader,
     )

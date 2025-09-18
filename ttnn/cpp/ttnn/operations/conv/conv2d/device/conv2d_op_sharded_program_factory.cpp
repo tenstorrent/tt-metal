@@ -318,7 +318,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             fp32_dest_acc_en,
             output.dtype(),
             enable_activation_reuse));
-    log_debug(
+    log_info(
         tt::LogOp,
         "force_split_reader: {}, enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, "
         "act_block_h_ntiles: {}",
@@ -756,8 +756,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(enable_split_reader ? act_block_num_tiles_split / conv_act_c_blocks
-                                       : act_block_num_tiles / conv_act_c_blocks),
+        (uint32_t)(enable_split_reader ? act_block_num_tiles_split : act_block_num_tiles),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
@@ -884,37 +883,40 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         num_blocks_weight_w_per_core,
         out_conv_c_blocks};
 
-    if (height_sharded) {
-        if (enable_split_reader) {
-            std::vector<uint32_t> split_reader_args = {
-                (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
-                (uint32_t)conv_act_c_read_bytes,
-                (uint32_t)filter_w,                       // weight_size_w
-                (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
-                (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
-                (uint32_t)needs_act_block_zero_out,
-                (uint32_t)dilation_h,
-                (uint32_t)dilation_w,
-                (uint32_t)stride_w};
+    std::vector<uint32_t> split_reader_args;
+    if (enable_split_reader) {
+        split_reader_args = {
+            (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
+            (uint32_t)conv_act_c_read_bytes,
+            (uint32_t)filter_w,                       // weight_size_w
+            (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
+            (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
+            (uint32_t)needs_act_block_zero_out,
+            (uint32_t)dilation_h,
+            (uint32_t)dilation_w,
+            (uint32_t)stride_w};
 
-            if (enable_activation_reuse) {
-                std::vector<uint32_t> activation_reuse_args = {
-                    filter_h,
-                    activation_reuse_config.act_cb_num_tiles_split_last,
-                    act_block_w_ntiles,
-                    static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
-                    activation_reuse_config.image_width_tiles,
-                    output_image_width,
-                    activation_reuse_config.reuse_window_offset,
-                    static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
-                    static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
-                split_reader_args.insert(
-                    split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
-            }
-            writer_compile_time_args.insert(
-                writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+        std::vector<uint32_t> activation_reuse_args;
+        if (enable_activation_reuse) {
+            activation_reuse_args = {
+                filter_h,
+                activation_reuse_config.act_cb_num_tiles_split_last,
+                act_block_w_ntiles,
+                static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
+                activation_reuse_config.image_width_tiles,
+                output_image_width,
+                activation_reuse_config.reuse_window_offset,
+                static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
+                static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
+        } else {
+            activation_reuse_args = std::vector<uint32_t>(9, 0);
         }
+        split_reader_args.insert(split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
+    } else {
+        split_reader_args = std::vector<uint32_t>(18, 0);
     }
+    writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+    log_info(tt::LogOp, "writer_compile_time_args: {}", writer_compile_time_args.size());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
@@ -1118,6 +1120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         std::vector<uint32_t> sender_rt_args = {
             weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
         if (block_sharded) {
+            const bool is_sender_core = input_cores.contains(core);
             // 2D multicast setup
             if (transpose_mcast) {
                 CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
@@ -1139,7 +1142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                      num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
                      weights_mcast_sender_semaphore_id,
                      weights_mcast_receiver_semaphore_id,
-                     output.buffer()->aligned_page_size()});
+                     static_cast<uint32_t>(is_sender_core)});
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
             } else {
                 CoreCoord top_core = {(std::size_t)core.x, 0};
@@ -1158,7 +1161,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                     {num_cores_y - 1,
                      num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
                      weights_mcast_sender_semaphore_id,
-                     weights_mcast_receiver_semaphore_id});
+                     weights_mcast_receiver_semaphore_id,
+                     static_cast<uint32_t>(is_sender_core)});
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
             }
         } else {
@@ -1213,6 +1217,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
                     receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
                 }
+                const bool is_sender_core = input_cores.contains(core);
+                receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
             } else {
                 bool is_no_op_core = !input_cores.contains(core);
                 receiver_args = std::vector<uint32_t>{

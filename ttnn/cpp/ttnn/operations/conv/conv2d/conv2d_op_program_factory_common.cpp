@@ -266,8 +266,9 @@ std::vector<CBInfo> get_cb_info(
             row_major_act_cb_num_tiles = act_block_num_tiles;
         }
 
-        const bool overlap_act_cb =
-            sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
+        // If split reader is enabled, we disable overlap for ACT_ROW_MAJOR_BFLOAT16 CB for now - subject to change
+        const bool overlap_act_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && !split_reader_enabled &&
+                                    conv_input_df == output_df && !skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
             .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,
@@ -495,7 +496,9 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
  */
 bool is_split_reader_supported(
     TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles) {
-    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
+    return (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+           !is_1d_depthwise_conv && act_block_h_ntiles > 1;
 }
 
 static uint32_t get_tilize_cycles_per_tile(
