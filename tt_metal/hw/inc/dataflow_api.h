@@ -1887,8 +1887,8 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
-    // workaround for avoiding hangs, as counters will be checked inside the noc_fast_spoof_write_dw_inline, will remove
-    // this restriction once all inline write change to stream reg write.
+    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
+    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
     constexpr bool update_counter_in_callee = true;
 #else
     constexpr bool update_counter_in_callee = update_counter;
@@ -2128,8 +2128,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
 
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
-    // workaround for avoiding hangs, as counters will be checked inside the noc_fast_spoof_write_dw_inline, will remove
-    // this restriction once all inline write change to stream reg write.
+    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
+    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
     constexpr bool update_counter_in_callee = true;
 #else
     constexpr bool update_counter_in_callee = update_counter;
@@ -2225,8 +2225,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
 
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
-    // workaround for avoiding hangs, as counters will be checked inside the noc_fast_spoof_write_dw_inline, will remove
-    // this restriction once all inline write change to stream reg write.
+    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
+    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
     constexpr bool update_counter_in_callee = true;
 #else
     constexpr bool update_counter_in_callee = update_counter;
