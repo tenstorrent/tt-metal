@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <algorithm>
 #include "dataflow_api.h"
-#include "debug/dprint_pages.h"
 
 static inline int next_index_u32(volatile tt_l1_ptr uint32_t* idx, volatile tt_l1_ptr uint32_t* dims, uint32_t ndims) {
     // increment least-significant dim first
@@ -38,17 +37,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* input_odo = output_page_shape + num_dims;
     volatile tt_l1_ptr uint32_t* output_odo = input_odo + num_dims;
 
-    // DPRINT << "input_odo: ";
-    // for (uint32_t i = 0; i < num_dims; i++) {
-    //     DPRINT << input_odo[i] << ", ";
-    // }
-    // DPRINT << ENDL();
-    // DPRINT << "output_odo: ";
-    // for (uint32_t i = 0; i < num_dims; i++) {
-    //     DPRINT << output_odo[i] << ", ";
-    // }
-    // DPRINT << ENDL();
-
     constexpr auto dst_args = TensorAccessorArgs<6>();
 
     const auto s0 = TensorAccessor(dst_args, output_addr, page_size);
@@ -78,24 +66,20 @@ void kernel_main() {
                 break;
             }
         }
-        // DPRINT << "within_input_region: " << (uint32_t)within_input_region << ENDL();
-        DPRINT << "written pages: " << out_pages_written << ENDL();
 
         uint64_t dst_noc_addr = get_noc_addr(output_page_offset, s0);
         if (within_input_region) {
-            DPRINT << "WAITING" << ENDL();
             cb_wait_front(input_cb_id, 1);
-            DPRINT << "RECEIVED PAGE" << ENDL();
             uint32_t l1_read_addr = get_read_ptr(input_cb_id);
             noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+            noc_async_write_barrier();
             next_index_u32(input_odo, input_page_shape, num_dims);
             cb_pop_front(input_cb_id, 1);
         } else {
             noc_async_write(l1_write_addr, dst_noc_addr, page_size);
+            noc_async_write_barrier();
         }
-        noc_async_write_barrier();
         next_index_u32(output_odo, output_page_shape, num_dims);
         output_page_offset++;
     }
-    DPRINT << "Finished!" << ENDL();
 }

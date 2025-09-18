@@ -1502,15 +1502,16 @@ operation::ProgramWithCallbacks pad_tile_multicore(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t page_size = output.buffer()->page_size();
+    uint32_t multi_buffering_size = 2;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_cb_config =
-        tt::tt_metal::CircularBufferConfig(page_size * 2, {{input_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(page_size * multi_buffering_size, {{input_cb_index, cb_data_format}})
             .set_page_size(input_cb_index, page_size);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, input_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig output_cb_config =
-        tt::tt_metal::CircularBufferConfig(page_size * 2, {{output_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(page_size * multi_buffering_size, {{output_cb_index, cb_data_format}})
             .set_page_size(output_cb_index, page_size);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, output_cb_config);
 
@@ -1578,9 +1579,6 @@ operation::ProgramWithCallbacks pad_tile_multicore(
 
     std::vector<uint32_t> all_runtime_args;
 
-    std::cout << "num_pages_per_core_group_1: " << num_pages_per_core_group_1 << std::endl;
-    std::cout << "num_pages_per_core_group_2: " << num_pages_per_core_group_2 << std::endl;
-
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -1591,6 +1589,7 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             num_pages_per_core = num_pages_per_core_group_2;
         } else {
             num_pages_per_core = 0;  // no-op
+            continue;
         }
 
         all_runtime_args = {
@@ -1624,16 +1623,6 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             next_index_u32(output_odo, output_page_shape, output_odo.size());
             output_page_offset++;
         }
-        std::cout << "input_odo: ";
-        for (auto v : input_odo) {
-            std::cout << v << ", ";
-        }
-        std::cout << std::endl;
-        std::cout << "output_odo: ";
-        for (auto v : output_odo) {
-            std::cout << v << ", ";
-        }
-        std::cout << std::endl;
     }
 
     auto override_runtime_args_callback =
@@ -1645,49 +1634,28 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             const std::vector<Tensor>& output_tensors) {
             const auto& src_tensor = input_tensors.at(0);
 
-            // auto dst_tensor = output_tensors.at(0);
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
 
-            // uint32_t num_cores_x = compute_with_storage_grid_size.x;
-            // uint32_t num_cores_y = compute_with_storage_grid_size.y;
+            uint32_t num_cores_x = compute_with_storage_grid_size.x;
+            uint32_t num_cores_y = compute_with_storage_grid_size.y;
+            uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-            // uint32_t num_cores_total = num_cores_x * num_cores_y;
+            for (uint32_t i = 0; i < num_cores_total; i++) {
+                CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-            // auto output_tensor_shape = dst_tensor.logical_shape();
-            // uint32_t H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1],
-            //          N_padded = output_tensor_shape[0];
-            // uint32_t NCH_padded = H_padded * C_padded * N_padded;
+                // Update reader kernel runtime args
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    runtime_args[0] = src_buffer->address();
+                }
 
-            // auto
-            //     [num_cores,
-            //      all_cores,
-            //      core_group_1,
-            //      core_group_2,
-            //      num_pages_per_core_group_1,
-            //      num_pages_per_core_group_2] =
-            //         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
-            // auto all_runtime_args = get_runtime_args_rm(
-            //     src_tensor,
-            //     dst_tensor,
-            //     input_tensor_start,
-            //     num_cores_total,
-            //     num_cores,
-            //     num_cores_y,
-            //     core_group_1,
-            //     num_pages_per_core_group_1,
-            //     core_group_2,
-            //     num_pages_per_core_group_2);
-
-            // for (uint32_t i = 0; i < num_cores_total; i++) {
-            //     CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            //     {
-            //         SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-            //     }
-
-            //     {
-            //         SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
-            //     }
-            // }
+                // Update writer kernel runtime args
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    runtime_args[0] = dst_buffer->address();
+                }
+            }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
