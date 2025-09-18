@@ -71,8 +71,6 @@ def main():
             str(args.iters),
             "--warmup",
             str(args.warmup),
-            "--format",
-            "csv",
             "--csv",
             str(csv_path),
         ]

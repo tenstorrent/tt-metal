@@ -209,8 +209,6 @@ def main():
                 ITERS,
                 "--warmup",
                 WARMUP,
-                "--format",
-                "csv",
                 "--csv",
                 str(HOST_CSV),
             ]
