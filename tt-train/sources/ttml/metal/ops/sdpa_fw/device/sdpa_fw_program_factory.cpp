@@ -159,7 +159,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
-    // [Debug] could I assume that Wt%(heads*TILE_WIDTH) == 0 ?
     auto [qB, qNH, qS, qEmbd] = query.padded_shape().to_array_4D();
     auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
     auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
@@ -214,30 +213,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t block_size = get_block_size(qWt, 4U);
 
     const bool use_attn_mask = attn_mask.has_value();
-
-    //[DEBUG]:
-    fmt::print(
-        "SDPA FW: NC={}, St={}, qWt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, heads_per_group = "
-        "{},total_rows_to_process "
-        "= {}, num_cores={} ({}x{}), "
-        "group1 cores={} rows/core={}, group2 "
-        "cores={} rows/core={}\n",
-        NC,
-        St,
-        qWt,
-        scaler,
-        block_size,
-        qNH,
-        kv_heads,
-        heads_per_group,
-        total_rows_to_process,
-        num_cores,
-        num_cores_x,
-        num_cores_y,
-        core_group_1.size(),
-        num_rows_per_core_group_1,
-        core_group_2.size(),
-        num_rows_per_core_group_2);
 
     auto data_format = input_data_format;
     auto precise_data_format = tt::DataFormat::Float32;
