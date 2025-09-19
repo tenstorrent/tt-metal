@@ -90,33 +90,33 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
         this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-        this->prefetch_q_writers.emplace_back(
-            tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
+        // this->prefetch_q_writers.emplace_back(
+        //     tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
 
-        tt_cxy_pair completion_queue_writer_core =
-            tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
-                device_id, channel, cq_id);
-        auto completion_queue_writer_virtual =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                completion_queue_writer_core.chip,
-                CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
-                core_type);
+        // tt_cxy_pair completion_queue_writer_core =
+        //     tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
+        //         device_id, channel, cq_id);
+        // auto completion_queue_writer_virtual =
+        //     tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        //         completion_queue_writer_core.chip,
+        //         CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
+        //         core_type);
 
-        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::tt_metal::MetalContext::instance()
-                                                                                 .get_cluster()
-                                                                                 .get_tlb_data(tt_cxy_pair(
-                                                                                     completion_queue_writer_core.chip,
-                                                                                     completion_queue_writer_virtual.x,
-                                                                                     completion_queue_writer_virtual.y))
-                                                                                 .value();
-        auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
+        // const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::tt_metal::MetalContext::instance()
+        //                                                                          .get_cluster()
+        //                                                                          .get_tlb_data(tt_cxy_pair(
+        //                                                                              completion_queue_writer_core.chip,
+        //                                                                              completion_queue_writer_virtual.x,
+        //                                                                              completion_queue_writer_virtual.y))
+        //                                                                          .value();
+        // auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
 
-        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_writers.emplace_back(
-            tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(tt_cxy_pair(
-                completion_queue_writer_core.chip,
-                completion_queue_writer_virtual.x,
-                completion_queue_writer_virtual.y)));
+        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % (1 << 20);
+        // this->completion_q_writers.emplace_back(
+        //     tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(tt_cxy_pair(
+        //         completion_queue_writer_core.chip,
+        //         completion_queue_writer_virtual.x,
+        //         completion_queue_writer_virtual.y)));
 
         this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
@@ -336,13 +336,27 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
+uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+CoreType core_type = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    tt_cxy_pair completion_queue_writer_core =
+            tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
+                device_id, channel, cq_id);
+        auto completion_queue_writer_virtual =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                completion_queue_writer_core.chip,
+                CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
+                core_type);
+    
 
-    this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
+    // this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &read_ptr_and_toggle, sizeof(read_ptr_and_toggle), {device_id, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y}, this->completion_byte_addrs[cq_id]);
+
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
-    uint16_t channel =
+    channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
     uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_RD);
@@ -485,7 +499,11 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (stall_prefetcher) {
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
-    this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
+    // this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &command_size_16B, sizeof(command_size_16B), this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
+    
+
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 

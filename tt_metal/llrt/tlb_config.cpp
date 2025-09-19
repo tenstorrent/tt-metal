@@ -77,21 +77,21 @@ void configure_static_tlbs(
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
     }
 
-    std::int32_t address = 0;
+    // std::int32_t address = 0;
     // Setup static TLBs for all worker cores
-    for (const CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, sdesc.get_umd_coord_system())) {
-        // TODO
-        // Note: see issue #10107
-        // Strict is less performant than Posted, however, metal doesn't presently
-        // use this on a perf path and the launch_msg "kernel config" needs to
-        // arrive prior to the "go" message during device init and slow dispatch
-        // Revisit this when we have a more flexible UMD api
-        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, TLB_DATA::Strict);
-    }
-    // Setup static TLBs for all eth cores
-    for (const CoreCoord& core : sdesc.get_cores(CoreType::ETH, sdesc.get_umd_coord_system())) {
-        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, TLB_DATA::Strict);
-    }
+    // for (const CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, sdesc.get_umd_coord_system())) {
+    //     // TODO
+    //     // Note: see issue #10107
+    //     // Strict is less performant than Posted, however, metal doesn't presently
+    //     // use this on a perf path and the launch_msg "kernel config" needs to
+    //     // arrive prior to the "go" message during device init and slow dispatch
+    //     // Revisit this when we have a more flexible UMD api
+    //     device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, TLB_DATA::Strict);
+    // }
+    // // Setup static TLBs for all eth cores
+    // for (const CoreCoord& core : sdesc.get_cores(CoreType::ETH, sdesc.get_umd_coord_system())) {
+    //     device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, TLB_DATA::Strict);
+    // }
 
     // TODO (#9932): Remove workaround for BH
     // if (arch != tt::ARCH::BLACKHOLE) {
