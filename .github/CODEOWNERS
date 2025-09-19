@@ -77,7 +77,7 @@ tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmu
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/kernels/ @abhullar-tt @tenstorrent/metalium-codeowners-large-changes # these should go away or get moved to tests
-tt_metal/llrt/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
+tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @marty1885 @tenstorrent/metalium-codeowners-large-changes
 tt_metal/programming_examples/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/programming_examples/profiler/test_noc_event_profiler/ @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/metalium-codeowners-large-changes
@@ -205,7 +205,7 @@ tests/ttnn/unit_tests/operations/data_movement/ @sjameelTT @ntarafdar @nardoTT @
 /tests/ttnn/**/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @aczajkowskiTT @jbbieniekTT @mgajewskiTT @nmauriceTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/ @stevendae @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/ @stevendae @bbradelTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
@@ -222,6 +222,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 # models
 /models/ @uaydonat @yieldthought @cglagovichTT @tenstorrent/metalium-codeowners-large-changes
 /models/*/** @tenstorrent/metalium-codeowners-large-changes
+/models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/metalium-codeowners-large-changes
 models/common @yieldthought @mtairum @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/metalium-codeowners-large-changes

@@ -530,7 +530,7 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     TT_FATAL(
         user_chip_ids.size() >= mesh_container.size(),
-        "Number of chips visible ({}) is less than number of chips specified in mesh graph descriptor ({})",
+        "Number of chips visible ({}) is less than the number of chips specified in mesh graph descriptor ({}), check system status with tt-smi that all chips are visible.",
         user_chip_ids.size(),
         mesh_container.size());
 
@@ -1149,7 +1149,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(chip_id_t ph
             return fabric_node_id;
         }
     }
-    TT_FATAL(false, "Physical chip id not found in logical mesh chip id mapping");
+    TT_FATAL(false, "Physical chip id {} not found in control plane chip mapping. You are calling for a chip outside of the fabric cluster. Check that your mesh graph descriptor specifies the correct topology", physical_chip_id);
     return FabricNodeId(MeshId{0}, 0);
 }
 
@@ -1701,19 +1701,20 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
 }
 
 template <>
-void ControlPlane::write_all_to_all_routing_fields<1, true>(MeshId mesh_id) const {
+void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) const {
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& local_mesh_chip_id_container =
         this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-    uint16_t num_chips = local_mesh_chip_id_container.size();
+    uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
+                             ? MAX_CHIPS_LOWLAT_1D
+                             : static_cast<uint16_t>(local_mesh_chip_id_container.size());
+
+    routing_path_t<1, false> routing_path;
+    routing_path.calculate_chip_to_all_routing_fields(0, num_chips);
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        routing_path_t<1, false> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
-
-        // Calculate routing fields within the same mesh only
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
         write_to_all_tensix_cores(
@@ -1772,7 +1773,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
     }
 
     for (const auto& mesh_id : this->get_local_mesh_id_bindings()) {
-        this->write_all_to_all_routing_fields<1, true>(mesh_id);
+        this->write_all_to_all_routing_fields<1, false>(mesh_id);
         this->write_all_to_all_routing_fields<2, true>(mesh_id);
     }
 }
