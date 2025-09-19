@@ -34,7 +34,7 @@ struct MultiInterleavedConfig {
 /// @param mesh_device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterleavedConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiInterleavedConfig& test_config) {
     log_info(
         tt::LogTest,
         "num transaction {}, num pages: {}, page size bytes: {}",
@@ -204,7 +204,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord mst_grid_size,
@@ -240,7 +240,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord mst_grid_size,
