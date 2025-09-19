@@ -254,9 +254,9 @@ int main(int argc, char** argv) {
         }
         eth_sender_core_iter++;
     } while (device_id == std::numeric_limits<chip_id_t>::max() ||
-             !test_fixture.devices_.at(device_id)->is_mmio_capable());
+             !test_fixture.devices_.at(device_id)->get_devices()[0]->is_mmio_capable());
     TT_FATAL(device_id != std::numeric_limits<chip_id_t>::max(), "No valid receiver device found to connect to");
-    TT_FATAL(test_fixture.devices_.at(device_id)->is_mmio_capable(), "Receiver device is not mmio capable");
+    TT_FATAL(test_fixture.devices_.at(device_id)->get_devices()[0]->is_mmio_capable(), "Receiver device is not mmio capable");
     const auto& device_1 = test_fixture.devices_.at(device_id);
 
     // Add more configurations here until proper argc parsing added
