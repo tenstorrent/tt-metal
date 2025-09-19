@@ -63,15 +63,14 @@ void TestContext::read_telemetry() {
     }
 
     fixture_->barrier_reads();
-
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
         auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
         auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
-        auto freq_mhz = cluster.get_device_aiclk(physical_chip_id);
-        double freq_ghz = double(freq_mhz) / 1000.0;
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        auto freq_mhz = get_device_frequency_mhz(device_id);
+        double freq_ghz = double(freq_mhz) / 1000.0;
         // Wait for reads to complete
         for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
             const auto& eth_cores =

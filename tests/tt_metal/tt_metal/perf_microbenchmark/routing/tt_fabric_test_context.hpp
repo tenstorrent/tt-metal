@@ -858,11 +858,8 @@ private:
 
     unsigned int get_device_frequency_mhz(const FabricNodeId& device_id) {
         if (!device_freq_mhz_map_.contains(device_id)) {
-            auto physical_chip_id =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
-                    device_id);
-            device_freq_mhz_map_[device_id] =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
+            auto physical_chip_id = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
+            device_freq_mhz_map_[device_id] = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
         }
         auto freq_mhz = device_freq_mhz_map_.at(device_id);
         TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
@@ -897,12 +894,12 @@ private:
                 for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
                     RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
                     uint32_t config_link_id = config.link_id.value_or(0);
-
+                    
                     // Create cache key: device_id + direction + link_id
-                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
-                                            std::to_string(static_cast<int>(config_direction)) + "_" +
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" + 
+                                            std::to_string(static_cast<int>(config_direction)) + "_" + 
                                             std::to_string(config_link_id);
-
+                    
                     config_cache[cache_key] = std::make_tuple(
                         config.parameters.payload_size_bytes,
                         config.parameters.num_packets,
@@ -927,7 +924,7 @@ private:
                 } else if (topology == Topology::Mesh) {
                     num_devices = mesh_shape[0] * mesh_shape[1];
                 }
-
+                
                 for (const auto& [link_id, cycles] : link_map) {
                     if (cycles == 0) {
                         continue;  // Skip to avoid division by zero
@@ -943,15 +940,11 @@ private:
                     max_traffic_count = std::max(max_traffic_count, total_traffic_count);
 
                     // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
-                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
-                                            std::to_string(static_cast<int>(direction)) + "_" + std::to_string(link_id);
-
-                    TT_FATAL(
-                        config_cache.contains(cache_key),
-                        "Config not found in cache for device {} direction {} link {}",
-                        device_id.chip_id,
-                        static_cast<int>(direction),
-                        link_id);
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" + 
+                                          std::to_string(static_cast<int>(direction)) + "_" + 
+                                          std::to_string(link_id);
+                    
+                    TT_FATAL(config_cache.contains(cache_key), "Config not found in cache for device {} direction {} link {}", device_id.chip_id, static_cast<int>(direction), link_id);
                     auto [payload_size_bytes, num_packets_val, packet_size_val] = config_cache.at(cache_key);
                     num_packets = num_packets_val;
                     packet_size = packet_size_val;
@@ -1622,7 +1615,7 @@ private:
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
-
+    
     // Device frequency cache to avoid repeated calculations
     std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
     double measured_bw_min_ = 0.0;
