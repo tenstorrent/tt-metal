@@ -36,7 +36,6 @@ enum class KernelName {
     ComputeBcastTTT,  // TTT : column and scalar bcast cases
     ComputeColBcastTTS,
     ComputeColBcastTST,
-    ComputeRowBcastTTT,
     ComputeScalarBcastTST,
     ComputeScalarBcastTTS,
 };
