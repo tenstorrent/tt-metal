@@ -12,7 +12,6 @@ namespace experimental {
 
 struct SliceWriteOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& output_tensor,
         const ttnn::SmallVector<uint32_t>& output_tensor_start,
