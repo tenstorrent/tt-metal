@@ -142,7 +142,6 @@ ResultWithOptions conv2d(
                 input_tensor.logical_shape());
             return result_to_result_with_options(
                 conv2d_DRAM(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -234,7 +233,7 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     if (mm_conv) {
         std::tie(weight_tensor_on_device, bias_tensor_on_device) =
-            prepare_conv_weights_biases_for_matmul(queue_id, weight_tensor, bias_tensor, device);
+            prepare_conv_weights_biases_for_matmul(weight_tensor, bias_tensor, device);
 
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
