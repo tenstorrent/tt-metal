@@ -384,11 +384,12 @@ struct mailboxes_t {
                                           // dispatch init moves to one-shot.
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
     volatile struct go_msg_t go_messages[go_message_num_entries];
-    uint32_t pads_1[3];                  // CODEGEN:skip
+    uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;  // Index into go_messages to use. Always 0 on unicast cores.
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
+    uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
 };
