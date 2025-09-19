@@ -18,7 +18,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 24.04
+      version: 22.04
       build-wheel: true
   t3000-demo-tests:
     needs: build-artifact
