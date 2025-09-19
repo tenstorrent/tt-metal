@@ -11,7 +11,8 @@ import pytest
 
 @pytest.mark.parametrize("val_a, val_b", [(1.0, 0.0), (-1.0, 0.0), (0.0, 0.0)])
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_div_zero(device, val_a, val_b, dtype):
+@pytest.mark.parametrize("approx", [True, False])
+def test_div_zero(device, val_a, val_b, dtype, approx):
     torch_dtype = getattr(torch, dtype)
     tt_dtype = getattr(ttnn, dtype)
 
@@ -27,9 +28,11 @@ def test_div_zero(device, val_a, val_b, dtype):
     x_tt = ttnn.from_torch(x_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=None)
+    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=None, fast_and_approximate_mode=approx)
     tt_out = ttnn.to_torch(z_tt_div)
 
     # Note: torch.equal return false for if both tensors are nan
     # This is why we use assert_with_ulp to test for equality
-    assert_with_ulp(z_torch, tt_out, 0, allow_nonfinite=True)
+
+    if not approx:
+        assert_with_ulp(z_torch, tt_out, 0, allow_nonfinite=True)
