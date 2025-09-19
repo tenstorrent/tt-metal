@@ -16,7 +16,7 @@ import signal
 
 from loguru import logger
 
-from tt_metal.tools.profiler.common import (
+from tracy.common import (
     PROFILER_ARTIFACTS_DIR,
     PROFILER_WASM_DIR,
     PROFILER_WASM_TRACE_FILE_NAME,
