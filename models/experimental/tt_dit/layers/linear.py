@@ -216,6 +216,7 @@ class RowParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        self.sharding_factor = tuple(self.mesh_device.shape)[self.mesh_axis]
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -223,9 +224,9 @@ class RowParallelLinear(Module):
         if init:
             # row-parallel bias must not be replicated across mesh_devices
             bias_init = torch.randn([1, out_features])
-            if tuple(mesh_device.shape)[mesh_axis] > 1:
-                zero_bias = torch.zeros(1, out_features * (tuple(mesh_device.shape)[mesh_axis] - 1))
-                bias_init = torch.cat([bias_init, zero_bias], dim=-1)
+            if self.sharding_factor > 1:
+                zero_bias = torch.zeros(self.sharding_factor - 1, out_features)
+                bias_init = torch.cat([bias_init, zero_bias])
         else:
             bias_init = False
 
@@ -236,7 +237,12 @@ class RowParallelLinear(Module):
             init=init,
         )
         self.bias = (
-            Parameter(shape=[1, out_features], mesh_mapping={mesh_axis: 1}, device=mesh_device, init=bias_init)
+            Parameter(
+                shape=[self.sharding_factor, out_features],
+                mesh_mapping={mesh_axis: 0},  # TODO: is it correct not to shard along fsdp_mesh_axis?
+                device=mesh_device,
+                init=bias_init,
+            )
             if bias
             else None
         )
@@ -256,9 +262,9 @@ class RowParallelLinear(Module):
         if "bias" in state:
             bias = state["bias"].reshape(1, -1)
 
-            if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-                zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.mesh_axis] - 1))
-                bias = torch.cat([bias, zero_bias], dim=-1)
+            if self.sharding_factor > 1:
+                zero_bias = torch.zeros(self.sharding_factor - 1, bias.shape[1])
+                bias = torch.cat([bias, zero_bias])
 
             state["bias"] = bias
 
@@ -293,7 +299,7 @@ class RowParallelLinear(Module):
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+        if self.sharding_factor > 1:
             needs_reshape = len(output.shape) <= 3
             if needs_reshape:
                 output = ttnn.unsqueeze(output, 0)
