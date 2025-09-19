@@ -15,6 +15,7 @@ from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
 from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.experimental.tt_dit.utils.check import assert_quality
 
@@ -57,7 +58,7 @@ def test_clip_encoder(
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
 
     # For N300 with parallel factor = 1, use factor=1 regardless of submesh shape
-    if mesh_device.shape == (1, 2) and submesh_shape == (1, 1) or submesh_shape == (1, 2):
+    if mesh_device.shape == (1, 2) and (submesh_shape == (1, 1) or submesh_shape == (1, 2)):
         parallel_factor = 1
     else:
         parallel_factor = encoder_submesh.shape[1]
@@ -66,11 +67,11 @@ def test_clip_encoder(
         tensor_parallel=ParallelFactor(factor=parallel_factor, mesh_axis=1),
     )
     logger.info(f"Parallel factor: {parallel_factor}")
-    # ccl_manager = CCLManager(
-    #     mesh_device=encoder_submesh,
-    #     num_links=1,
-    #     topology=ttnn.Topology.Linear,
-    # )
+    ccl_manager = CCLManager(
+        mesh_device=encoder_submesh,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
 
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
@@ -122,7 +123,7 @@ def test_clip_encoder(
     tt_clip = CLIPEncoder(
         config=config,
         mesh_device=encoder_submesh,
-        ccl_manager=None,
+        ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         eos_token_id=eos_token_id,
     )
