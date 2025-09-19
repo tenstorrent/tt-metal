@@ -11,7 +11,7 @@ import ttnn
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from sphinx.ext.autodoc import FunctionDocumenter
+from sphinx.ext.autodoc import FunctionDocumenter, DataDocumenter
 
 import ttnn.decorators
 
@@ -155,23 +155,59 @@ class FastOperationDocumenter(FunctionDocumenter):
     priority = FunctionDocumenter.priority + 10
 
     def format_signature(self, **kwargs: Any) -> str:
-        docstrings = self.get_doc()
-        if len(docstrings) == 0 or "Overloaded function" in self.object.__doc__:
-            return "(*args, ***kwargs)"
+        # Disable auto-generated signatures to remove the highlighted blue signature box
+        return ""
 
-        if len(docstrings) > 1:
-            raise ValueError("Multiple docstrings found for FastOperation")
+    def format_name(self) -> str:
+        # Override to prevent signature formatting in the name
+        return self.object.__name__
 
-        lines = inspect.cleandoc(self.object.__doc__)
-        parser = DocstringParser(lines)
-        parser.parse()
-
-        return parser.construct_signature()
+    def add_directive_header(self, sig: str) -> None:
+        # Override to prevent adding signature to directive header
+        sourcename = self.get_sourcename()
+        self.add_line(f".. py:{self.directivetype}:: {self.format_name()}", sourcename)
+        if self.options.noindex:
+            self.add_line("   :noindex:", sourcename)
+        if self.objpath:
+            # add crossref info
+            self.add_line(f"   :module: {self.modname}", sourcename)
 
     @classmethod
     def can_document_member(cls, member, membername, isattr, parent):
         return isinstance(member, ttnn.decorators.FastOperation)
 
 
+def process_signature(app, what, name, obj, options, signature, return_annotation):
+    """Remove signatures for all autodoc directives."""
+    # Always return empty signature to disable all auto-generated signatures
+    return ("", None)
+
+
 def setup(app):
+    # Register only the FastOperationDocumenter (which has a unique objtype)
     app.add_autodocumenter(FastOperationDocumenter)
+
+    # Connect the signature processor to remove all signatures
+    app.connect("autodoc-process-signature", process_signature)
+
+    # Add configuration
+    app.add_config_value("ttnn_disable_auto_signatures", True, "env")
+
+    # Monkey patch the format_signature method globally to disable signatures
+    try:
+        from sphinx.ext.autodoc import DataDocumenter as OriginalDataDocumenter
+        from sphinx.ext.autodoc import FunctionDocumenter as OriginalFunctionDocumenter
+
+        def empty_signature(self, **kwargs):
+            return ""
+
+        OriginalDataDocumenter.format_signature = empty_signature
+        OriginalFunctionDocumenter.format_signature = empty_signature
+    except ImportError:
+        pass
+
+    return {
+        "version": "1.0",
+        "parallel_read_safe": True,
+        "parallel_write_safe": True,
+    }

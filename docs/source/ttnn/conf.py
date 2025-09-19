@@ -79,6 +79,18 @@ napoleon_use_rtype = False
 napoleon_preprocess_types = False
 napoleon_attr_annotations = True
 
+# TTNN specific settings
+ttnn_disable_auto_signatures = True
+
+# Autodoc settings to disable signatures
+autodoc_typehints = "none"
+autodoc_typehints_format = "short"
+add_function_parentheses = False
+add_module_names = False
+
+# Suppress inline emphasis warnings for function names with underscores
+suppress_warnings = ["misc.highlighting_failure"]
+
 # Email settings
 email_automode = True
 

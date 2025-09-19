@@ -45,7 +45,7 @@ html/tt-metalium: build_doxygen sphinx_build_dir
 	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=tt-metalium $(SPHINXBUILD) "$(SOURCEDIR)/tt-metalium" "$(TT_METALIUM_BUILDDIR)" $(SPHINXOPTS) $(O)
 
 html/ttnn: build_doxygen sphinx_build_dir
-	@ ${TTNN_FLAGS} DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)" $(SPHINXOPTS) $(O)
+	@ ${TTNN_FLAGS} DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "source/ttnn" "$(TTNN_BUILDDIR)" $(O)
 
 html: html/tt-metalium html/ttnn
 	mkdir -p $(HTMLDIR)

@@ -469,3 +469,24 @@ https://github.com/readthedocs/sphinx_rtd_theme/issues/1301
 .py.property {
   display: block !important;
 }
+
+/* Hide auto-generated function signatures */
+.sig {
+    display: none !important;
+}
+
+.sig-name {
+    display: none !important;
+}
+
+.sig-paren {
+    display: none !important;
+}
+
+dl.py.data > dt {
+    display: none !important;
+}
+
+dl.py.function > dt {
+    display: none !important;
+}
