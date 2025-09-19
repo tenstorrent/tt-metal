@@ -862,7 +862,7 @@ def create_causal_mask(
         if mode == "prefill":
             max_seq_len = cache_position[-1].item() + 1
         else:
-            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+            max_seq_len = (PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size) // args.max_batch_size
     else:
         max_seq_len = args.max_seq_len
 
@@ -892,7 +892,7 @@ def create_causal_mask(
         device=None,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
-        # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
 
     return causal_mask
@@ -925,7 +925,7 @@ def create_sliding_window_causal_mask(
         if mode == "prefill":
             max_seq_len = cache_position[-1].item() + 1
         else:
-            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+            max_seq_len = (PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size) // args.max_batch_size
     else:
         max_seq_len = args.max_seq_len
 
@@ -964,6 +964,6 @@ def create_sliding_window_causal_mask(
         device=None,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
-        # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
     return causal_mask

@@ -311,7 +311,7 @@ def prepare_generator_args(
             2048,  # max_seq_len
             1,  # batch_size
             600,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -319,7 +319,7 @@ def prepare_generator_args(
             1,
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -944,35 +944,6 @@ def test_demo_text(
         out_tok = prefilled_token
 
         logger.info(f"Starting decode loop...")
-        # Zero out the KV cache (need to verify mask is working)
-        # for layer in generator.model[0].layers:
-        #     torch_k_cache = ttnn.to_torch(
-        #         layer.attention.layer_past[0], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
-        #     )
-        #     torch_v_cache = ttnn.to_torch(
-        #         layer.attention.layer_past[1], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
-        #     )
-        #     zeros_mask = torch.zeros(
-        #         (1, torch_k_cache.shape[1], torch_k_cache.shape[2] - current_pos.item(), torch_k_cache.shape[3])
-        #     )
-        #     torch_k_cache[:, :, current_pos.item() :, :] = zeros_mask
-        #     torch_v_cache[:, :, current_pos.item() :, :] = zeros_mask
-        #     layer.attention.layer_past[0] = ttnn.from_torch(
-        #         torch_k_cache,
-        #         dtype=ttnn.bfloat16,
-        #         layout=ttnn.TILE_LAYOUT,
-        #         device=mesh_device,
-        #         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     )
-        #     layer.attention.layer_past[1] = ttnn.from_torch(
-        #         torch_v_cache,
-        #         dtype=ttnn.bfloat16,
-        #         layout=ttnn.TILE_LAYOUT,
-        #         device=mesh_device,
-        #         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     )
 
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
