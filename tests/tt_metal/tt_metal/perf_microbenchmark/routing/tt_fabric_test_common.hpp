@@ -411,11 +411,17 @@ public:
         uint32_t address,
         const std::vector<uint8_t>& data) const {
         auto device = mesh_device_->get_device(device_coord);
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
-            cluster.write_core(data.data(), data.size(), tt_cxy_pair(device->id(), virtual_core), address);
+
+            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+                    .enqueue_write_shard_to_core(
+                        tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                        data.data(),
+                        data.size(),
+                        false);
         }
+        mesh_device_->mesh_command_queue().finish();
     }
 
 
