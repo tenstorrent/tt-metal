@@ -1360,18 +1360,6 @@ LightMetalBinary LightMetalEndCapture() {
 #endif
 }
 
-void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        if (cq_id.has_value()) {
-            Finish(device->command_queue(cq_id.value()), sub_device_ids);
-        } else {
-            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id), sub_device_ids);
-            }
-        }
-    }
-}
-
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
     auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
     cq_stack.push_back(cq_id);

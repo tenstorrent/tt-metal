@@ -810,7 +810,11 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
                 continue;
             }
-            Synchronize(dev);    // Synchronize device
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+                for (uint8_t cq_id = 0; cq_id < dev->num_hw_cqs(); ++cq_id) {
+                    Finish(dev->command_queue(cq_id));
+                }
+            }  // Synchronize device
         }
     }
 

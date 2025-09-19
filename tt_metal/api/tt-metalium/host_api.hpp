@@ -656,24 +656,6 @@ bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**
- * Synchronize the device with host by waiting for all operations to complete.
- * If cq_id is provided then only the operations associated with that cq_id are waited for,
- * otherwise operations for all command queues are waited on.
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device         | The device to synchronize.                                                        | IDevice*                      |                                    | Yes      |
- * | cq_id          | The specific command queue id to synchronize  .                                   | uint8_t                       |                                    | No       |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
- */
-// clang-format on
-void Synchronize(
-    IDevice* device, std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-// clang-format off
-/**
  * Push the current command queue id to the stack.
  * Return value: void
  * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
