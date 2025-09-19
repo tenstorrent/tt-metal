@@ -577,8 +577,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     // create writer kernel with compile time and runtime args
 
