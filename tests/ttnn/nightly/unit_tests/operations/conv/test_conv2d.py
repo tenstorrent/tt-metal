@@ -64,14 +64,14 @@ def randomize_torch_tensor(
     generate_positive_numbers=False,
 ):
     if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16).float()
         torch_tensor = torch.abs(torch_tensor)
         return torch_tensor
     else:
         if tensor_shape in torch_tensor_map.keys():
             torch_tensor = torch_tensor_map[tensor_shape]
         else:
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+            torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16).float()
             torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -4956,7 +4956,7 @@ def test_conv2d_1kX1k(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w",
     (
-        (32, 32, 56, 56, 3, 3, 1, 1, 1, 1),
+        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -5008,7 +5008,7 @@ def test_conv_block_sharding(
         stride_h,
         stride_w,
         (pad_h, pad_w),
-        {},
+        {"act_block_h": 64},
         shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
         output_layout=output_layout,

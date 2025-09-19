@@ -894,12 +894,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             (uint32_t)needs_act_block_zero_out,
             (uint32_t)dilation_h,
             (uint32_t)dilation_w,
-            (uint32_t)stride_w};
+            (uint32_t)stride_w,
+            (uint32_t)filter_h};
 
         std::vector<uint32_t> activation_reuse_args;
         if (enable_activation_reuse) {
             activation_reuse_args = {
-                filter_h,
                 activation_reuse_config.act_cb_num_tiles_split_last,
                 act_block_w_ntiles,
                 static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
