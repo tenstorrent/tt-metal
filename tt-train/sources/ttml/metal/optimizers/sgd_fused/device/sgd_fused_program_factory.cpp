@@ -43,6 +43,8 @@ constexpr auto kMomentumInCbIndex = tt::CBIndex::c_2;
 constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_3;
 constexpr auto kMomentumToDramCbIndex = tt::CBIndex::c_4;
 
+constexpr auto kUpdateCbIndex = tt::CBIndex::c_5;
+
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
 }  // namespace
@@ -198,6 +200,9 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
 
     [[maybe_unused]] auto cb_mom_to_dram = create_circular_buffer(
         program, all_cores, kMomentumToDramCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+
+    [[maybe_unused]] auto cb_update = create_circular_buffer(
+        program, all_cores, kUpdateCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
