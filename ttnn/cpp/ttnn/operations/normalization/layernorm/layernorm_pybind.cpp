@@ -15,10 +15,11 @@ void bind_normalization_layernorm_program_config(py::module& module) {
 
     py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig")
         .def(
-            py::init<bool, bool>(),
+            py::init<bool, bool, bool>(),
             py::kw_only(),
             py::arg("legacy_reduction").noconvert() = true,
-            py::arg("legacy_rsqrt").noconvert() = true)
+            py::arg("legacy_rsqrt").noconvert() = true,
+            py::arg("use_welford").noconvert() = false)
         .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
