@@ -85,8 +85,7 @@ template <
     uint32_t dilation_h,
     uint32_t dilation_w,
     bool return_indices>
-ALWI void read_window_with_top_left_index(
-    uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t in_idx_l1_read_base_addr) {
+ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // return_indices requires 1 tile at a time, otherwise we can reduce 8 tiles at a time.
@@ -246,29 +245,27 @@ void kernel_main() {
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_idx_cb_id = (reader_id == 1) ? get_compile_time_arg_val(19) : get_compile_time_arg_val(18);
-    constexpr uint32_t in_shard_idx_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(22);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(23);
-    constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(25);
-    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(26);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(27);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(28);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(29);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(30);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(31);
-    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(32);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(33);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(34);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(35);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(36);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(37);
-    constexpr uint32_t pad_t = get_compile_time_arg_val(38);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(39);
-    constexpr uint32_t right_inc = get_compile_time_arg_val(40);
-    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(41);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
+    constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(28);
+    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(29);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(30);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(31);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(32);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(33);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(34);
+    constexpr uint32_t pad_t = get_compile_time_arg_val(35);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(36);
+    constexpr uint32_t right_inc = get_compile_time_arg_val(37);
+    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(38);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
@@ -411,10 +408,6 @@ void kernel_main() {
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
-    uint32_t in_idx_l1_read_base_addr = 0;
-    if constexpr (return_indices) {
-        in_idx_l1_read_base_addr = get_read_ptr(in_shard_idx_cb_id);
-    }
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
@@ -486,7 +479,7 @@ void kernel_main() {
                 last_tile_is_partial,
                 dilation_h,
                 dilation_w,
-                return_indices>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+                return_indices>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -517,6 +510,6 @@ void kernel_main() {
             last_tile_is_partial,
             dilation_h,
             dilation_w,
-            return_indices>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+            return_indices>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()
