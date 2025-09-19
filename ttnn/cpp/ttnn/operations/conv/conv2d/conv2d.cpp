@@ -751,6 +751,7 @@ Result conv2d_L1(
             }
         }
 
+        log_info(tt::LogOp, "abh override: {}", conv_config.act_block_h_override / 32);
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
