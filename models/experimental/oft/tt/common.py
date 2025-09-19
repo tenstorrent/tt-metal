@@ -24,7 +24,7 @@ class Conv:
         reshard=False,
         deallocate=False,
         height_sharding=None,
-        activation="",
+        activation=None,
         width_sharding=False,
         block_sharding=False,
         dtype=ttnn.bfloat8_b,
@@ -320,7 +320,7 @@ class Conv_fallback:
         has_bias=False,
         act_block_h=32,
         dtype=ttnn.bfloat16,
-        activation="",
+        activation=None,
         output_layout=ttnn.TILE_LAYOUT,
         **kwargs,
     ):
