@@ -111,7 +111,7 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
 
 void write_to_device_buffer(
     const void* src,
-    std::shared_ptr<PinnedMemory> pinned_memory = nullptr,
+    std::shared_ptr<PinnedMemory> pinned_memory,
     Buffer& buffer,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,

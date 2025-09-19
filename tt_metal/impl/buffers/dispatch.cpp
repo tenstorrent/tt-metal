@@ -35,6 +35,7 @@
 // For pinned memory NOC addressing (host-only)
 #include "tt_metal/api/tt-metalium/pinned_memory.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include "tt_metal/api/tt-metalium/buffer.hpp"
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {
@@ -288,7 +289,7 @@ public:
         uint32_t pinned_noc_xy,
         uint32_t pinned_addr_lo,
         bool is_pinned) :
-        BufferWriteDispatchParams(total_pages_to_write, pinned_noc_xy, pinned_addr_lo, is_pinned),
+        BufferWriteDispatchParams(pinned_noc_xy, pinned_addr_lo, is_pinned),
         buffer_page_mapping(buffer->get_buffer_page_mapping()),
         buffer(buffer),
         are_pages_large(this->pinned_feasible ? false : are_pages_larger_than_max_prefetch_cmd_size(*buffer)) {
@@ -491,7 +492,6 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
             pinned_src_addr_lo,
             pinned_feasible);
     }
-    dispatch_params.pinned_feasible = pinned_feasible;
     return dispatch_params;
 }
 
@@ -519,7 +519,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
 
     bool pinned_feasible = dispatch_params.pinned_feasible;
     if (pinned_feasible) {
-        command_sequence.add_prefetch_relay_linear_h(
+        command_sequence.add_prefetch_relay_linear(
             dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr_lo);
 
     } else {
@@ -570,7 +570,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
     HugepageDeviceCommand& command_sequence,
     Buffer& buffer,
     ShardedBufferWriteDispatchParams& dispatch_params) {
-    bool use_pinned_memory = dispatch_params.pinned_feasible;
+    // bool use_pinned_memory = dispatch_params.pinned_feasible;
 
     const CoreCoord virtual_core =
         buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
@@ -651,7 +651,7 @@ void issue_buffer_dispatch_command_sequence(
         calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, dispatch_params.pages_per_txn);
     }
     if (use_pinned_memory) {
-        calculator.add_prefetch_relay_linear_h();
+        calculator.add_prefetch_relay_linear();
     } else {
         calculator.add_data<false>(data_size_bytes);
     }
@@ -824,9 +824,10 @@ void write_to_device_buffer(
     uint32_t pinned_src_addr_lo = 0;
     bool pinned_feasible = has_pinned_inputs && is_unpadded;
     if (pinned_feasible) {
-        const chip_id_t mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(buffer.device->id());
-        auto noc_addr_pair_opt = pinned_memory->get_noc_addr(buffer.device->id());
+        auto device_id = buffer.device()->id();
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const chip_id_t mmio_device_id = cluster.get_associated_mmio_device(device_id);
+        auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
         pinned_feasible = noc_addr_pair_opt.has_value() and noc_addr_pair_opt->second == mmio_device_id;
         if (pinned_feasible) {
             const uint64_t pinned_noc_base = noc_addr_pair_opt->first;
@@ -843,7 +844,6 @@ void write_to_device_buffer(
                 pinned_size,
                 src_offset_base,
                 buffer.size());
-            const auto& cluster = MetalContext::instance().get_cluster();
             const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
             const uint64_t src_noc_addr = pinned_noc_base + src_offset_base;
             uint32_t pinned_src_addr_lo = static_cast<uint32_t>(src_noc_addr - pcie_base);
