@@ -47,19 +47,15 @@ TEST_P(AddUnaryFixture, CompareWithTorchReference) {
 
     // create input tensor with fill value
     auto input_tensor = ttnn::fill(zero_tensor, param.scalar1);
-    std::cout << "input_tensor: " << param.scalar1 << std::endl;
-    input_tensor.print();
 
     // Run TTNN unary add operation
     auto ttnn_output = ttnn::add_sfpu(input_tensor, param.scalar2);
-    std::cout << "ttnn_output: " << std::endl;
-    ttnn_output.print();
 
     int32_t expected_scalar_result = param.scalar1 + param.scalar2;
 
     // Create expected tensor (should be filled with the expected scalar value)
     auto expected_tensor = ttnn::full(shape, expected_scalar_result, dtype, ttnn::TILE_LAYOUT, device);
-    // expected_tensor.print();
+
     // Compare results using allclose
     auto expected_host = ttnn::from_device(expected_tensor);
     auto output_host = ttnn::from_device(ttnn_output);

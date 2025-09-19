@@ -221,7 +221,6 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MAX>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MIN>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::REMAINDER>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FMOD>;
-// template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FILL>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
@@ -246,10 +245,10 @@ template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::
     const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<float>(
-    QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<int32_t>(
-    QueueId, const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor Sigmoid_accurate::invoke(
     const Tensor& input,
@@ -536,7 +535,7 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam(unary_op_type, (param))}, memory_config, optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam(unary_op_type, (param))}, memory_config, optional_output_tensor);
 }
 
 template <UnaryOpType unary_op_type, typename T>
@@ -546,7 +545,7 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam(unary_op_type, (param))}, memory_config, optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam(unary_op_type, (param))}, memory_config, optional_output_tensor);
 }
 
 // Explicit template instantiation
@@ -560,7 +559,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam{unary_op_type, (param)}}, memory_config, optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam{unary_op_type, (param)}}, memory_config, optional_output_tensor);
 }
 
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
@@ -570,7 +569,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        queue_id, input_tensor, {EltwiseUnaryWithParam{unary_op_type, (param)}}, memory_config, optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam{unary_op_rev_type, (param)}}, memory_config, optional_output_tensor);
 }
 
 template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>;

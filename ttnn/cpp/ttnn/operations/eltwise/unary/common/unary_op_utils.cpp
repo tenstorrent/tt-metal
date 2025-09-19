@@ -107,8 +107,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     switch (op_type) {
         case UnaryOpType::FILL:
             if (input_dtype == DataType::INT32) {
-                std::cout << "utils FILL " << (int)param0_raw << std::endl;
-                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (int)param0_raw)};
+                op_init_and_name = {
+                    "fill_tile_init();",
+                    fmt::format(
+                        "fill_tile_int({}, {}u);", idst, std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             } else if (input_dtype == DataType::UINT32) {
                 op_init_and_name = {
                     "fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0_raw)};
@@ -274,10 +276,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
-                std::cout << "utils " << (int)param0_raw << std::endl;
                 op_init_and_name = {
                     "binop_with_scalar_tile_init();",
-                    fmt::format("add_unary_tile_int32({}, {}u);", idst, (int)param0_raw)};
+                    fmt::format(
+                        "add_unary_tile_int32({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             } else if (input_dtype == DataType::UINT32) {
                 op_init_and_name = {
                     "binop_with_scalar_tile_init();",
