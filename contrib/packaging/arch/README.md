@@ -9,7 +9,7 @@ This article covers installation of the Tenstorrent software stack on Arch Linux
 
 ## Prerequisites
 
-An [AUR helper](/index.php/AUR_helpers) is required to install packages from the [AUR](https://aur.archlinux.org/). This guide uses [yay](/index.php/Yay).
+An [AUR helper](https://wiki.archlinux.org/title/AUR_helpers) is required to install packages from the [AUR](https://aur.archlinux.org/). This guide uses [yay](https://github.com/Jguer/yay).
 
 ### Installing yay
 
@@ -62,7 +62,7 @@ yay -S tt-kmd-git-dkms tt-smi-git tt-flash-git
 
 ### Loading the kernel module
 
-Since the kernel module is installed via [DKMS](/index.php/Dynamic_Kernel_Module_Support), reboot to load it:
+Since the kernel module is installed via [DKMS](https://wiki.archlinux.org/title/Dynamic_Kernel_Module_Support), reboot to load it:
 
 ```bash
 sudo reboot
