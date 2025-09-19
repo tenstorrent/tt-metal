@@ -42,6 +42,5 @@ pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio
 ```
 
 ## Notes:
-- By default, demo tests (Conditional Generation, Audio Classification) run on all available devices in non-CI environment.
-- Only the conditional generation demo is executed in CI to avoid redundant testing. It runs for both a single device and all available devices.
+- By default, demo tests (Conditional Generation, Audio Classification) run on a single device (1) and all available devices.
 - To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
