@@ -139,36 +139,39 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
     execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
     let snippets = findErrorSnippetsInDir(extractDir, maxSnippets);
     core.info(`Total snippets collected: ${snippets.length}`);
-    if (!Array.isArray(snippets) || snippets.length === 0) {
-      // API fallback: identify a failing job/step without parsing logs
-      try {
-        const { data } = await octokit.rest.actions.listJobsForWorkflowRun({
-          owner,
-          repo,
-          run_id: runId,
-        });
-        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-        // Prefer a job with failing conclusion
-        let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled');
-        let failingStep = undefined;
-        if (!failingJob) {
-          // Otherwise, find any job with a failing step
-          for (const job of jobs) {
-            const step = (job.steps || []).find(s => s.conclusion === 'failure');
-            if (step) {
-              failingJob = job;
-              failingStep = step;
-              break;
-            }
-          }
+
+    // Query job/step status once to validate findings and/or provide fallback
+    let hasFailingJob = false;
+    let failingLabel = 'no failing job detected';
+    try {
+      const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
+      const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+      let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled');
+      let failingStep = undefined;
+      if (!failingJob) {
+        for (const job of jobs) {
+          const step = (job.steps || []).find(s => s.conclusion === 'failure');
+          if (step) { failingJob = job; failingStep = step; break; }
         }
-        const label = failingJob ? `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}` : 'no failing job detected';
-        snippets = [{ label, snippet: 'could not find failure in logs' }];
-      } catch (e) {
-        core.info(`API fallback failed for run ${runId}: ${e.message}`);
-        snippets = [{ label: 'no failing job detected', snippet: 'could not find failure in logs' }];
       }
+      if (failingJob) {
+        hasFailingJob = true;
+        failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`;
+      }
+    } catch (e) {
+      core.info(`Job status lookup failed for run ${runId}: ${e.message}`);
     }
+
+    // If we found FAILED lines but the run has no failing job, suppress false positives
+    if ((snippets && snippets.length > 0) && !hasFailingJob) {
+      snippets = [];
+    }
+
+    // If we did not find FAILED lines but the run has a failing job, emit synthetic entry
+    if ((!snippets || snippets.length === 0) && hasFailingJob) {
+      snippets = [{ label: failingLabel, snippet: 'could not find failure in logs' }];
+    }
+
     return snippets;
   } catch (e) {
     core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
