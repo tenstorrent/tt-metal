@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.arange &mdash; TT-NN  documentation</title>
+  <title>ttnn.rand &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.arange.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.rand.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.empty" href="ttnn.empty.html" />
-    <link rel="prev" title="ttnn.to_memory_config" href="ttnn.to_memory_config.html" /> 
+    <link rel="next" title="ttnn.matmul" href="ttnn.matmul.html" />
+    <link rel="prev" title="ttnn.full_like" href="ttnn.full_like.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -63,7 +63,7 @@
 <li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
 <li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.arange</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.arange.html">ttnn.arange</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.empty.html">ttnn.empty</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.empty_like.html">ttnn.empty_like</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.zeros.html">ttnn.zeros</a></li>
@@ -72,7 +72,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.ones_like.html">ttnn.ones_like</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full.html">ttnn.full</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full_like.html">ttnn.full_like</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rand.html">ttnn.rand</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.rand</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
@@ -127,9 +127,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.arange</li>
+      <li class="breadcrumb-item active">ttnn.rand</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.arange.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.rand.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -137,41 +137,65 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-arange">
-<h1>ttnn.arange<a class="headerlink" href="#ttnn-arange" title="Permalink to this heading"></a>
+  <section id="ttnn-rand">
+<h1>ttnn.rand<a class="headerlink" href="#ttnn-rand" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
-<dt class="sig sig-object py" id="ttnn.arange">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">arange</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.arange',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.creation.arange_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.arange" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.rand">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">rand</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.rand',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.rand.rand_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.rand" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Creates a tensor with values ranging from <cite>start</cite> (inclusive) to <cite>end</cite> (exclusive) with a specified <cite>step</cite> size. The data type, device, layout and memory configuration of the resulting tensor can be specified.</p>
+<p>Generates a tensor with the given shape, filled with random values from a uniform distribution.
+based on the specified data type:</p>
+<ul class="simple">
+<li>
+<dl class="simple">
+<dt>DataType.float32 / bfloat16 / bfloat4_b / bfloat8_b:</dt>
+<dd>
+<p>Floating-point values in range [0.0, 1.0)</p>
+</dd>
+</dl>
+</li>
+<li>
+<dl class="simple">
+<dt>Integer data types:</dt>
+<dd>
+<p>Not supported for uniform random generation.</p>
+</dd>
+</dl>
+</li>
+</ul>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<ul class="simple">
-<li><p><strong>start</strong> (<em>int</em><em>, </em><em>optional</em>) – The start of the range. Defaults to 0.</p></li>
-<li><p><strong>end</strong> (<em>int</em>) – The end of the range (exclusive).</p></li>
-<li><p><strong>step</strong> (<em>int</em><em>, </em><em>optional</em>) – The step size between consecutive values. Defaults to 1.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The data type of the tensor. Defaults to <cite>ttnn.bfloat16</cite>.</p></li>
-<li><p><strong>device</strong> (<em>ttnn.Device</em><em>, </em><em>optional</em>) – The device where the tensor will be allocated. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration for the tensor. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
-<li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – The tensor layout. Defaults to <cite>ttnn.ROW_MAJOR</cite>.</p></li>
-</ul>
+<p><strong>shape</strong> (<em>list</em><em>[</em><em>int</em><em>]</em>) – </p>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><em>ttnn.Tensor</em> – A tensor containing evenly spaced values within the specified range.</p>
+<ul class="simple">
+<li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – The device on which the tensor will be allocated. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The data type of the tensor. Defaults to ttnn.bfloat16.</p></li>
+<li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
+<li><p><strong>low</strong> (<em>float</em><em>, </em><em>optional</em>) – The lower bound of the range (inclusive).</p></li>
+<li><p><strong>high</strong> (<em>float</em><em>, </em><em>optional</em>) – The upper bound of the range (exclusive).</p></li>
+<li><p><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>) – An optional seed to initialize the random number generator
+for reproducible results. Defaults to 0.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – A tensor with specified shape, dtype, and layout containing random values.</p>
 </dd>
 </dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
-<span class="go">ttnn.Tensor([ 0.00000,  2.00000,  ...,  6.00000,  8.00000], shape=Shape([5]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="n">N</span><span class="p">,</span><span class="n">N</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DRAM_MEMORY_CONFIG</span> <span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -185,8 +209,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.to_memory_config.html" class="btn btn-neutral float-left" title="ttnn.to_memory_config" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.empty.html" class="btn btn-neutral float-right" title="ttnn.empty" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.full_like.html" class="btn btn-neutral float-left" title="ttnn.full_like" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.matmul.html" class="btn btn-neutral float-right" title="ttnn.matmul" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
