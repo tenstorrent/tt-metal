@@ -37,7 +37,6 @@
 #include <umd/device/types/harvesting.hpp>
 #include <umd/device/types/cluster_types.hpp>
 
-
 namespace tt {
 namespace llrt {
 class RunTimeOptions;
