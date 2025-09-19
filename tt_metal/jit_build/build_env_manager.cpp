@@ -13,7 +13,6 @@
 #include <map>
 #include <optional>
 #include <string>
-#include <tt-logger/tt-logger.hpp>
 #include <variant>
 
 #include "assert.hpp"
