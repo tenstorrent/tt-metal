@@ -5,121 +5,37 @@
 import ttnn
 import torch
 import pytest
-<<<<<<< HEAD
-
-from loguru import logger
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import comp_pcc, comp_allclose
-
-from models.experimental.detr3d.common import load_torch_model_state
-from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
-from models.experimental.detr3d.reference.model_3detr import GenericMLP
-from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
-
-
-@pytest.mark.parametrize(
-    "input_dim, hidden_dims, output_dim, norm_fn_name, hidden_use_bias, output_use_bias, output_use_activation,"
-    "output_use_norm, dropout, x_shape, weight_key_prefix",
-    [
-        (
-            256,
-            [256],
-            256,
-            "bn1d",
-            False,
-            False,
-            True,
-            True,
-            None,
-            (1, 256, 1024),
-            "encoder_to_decoder_projection",
-        ),
-        (
-            256,
-            [256],
-            256,
-            None,
-            True,
-            True,
-            True,
-            False,
-            None,
-            (1, 256, 128),
-            "query_projection",
-        ),
-        (
-            256,
-            [256, 256],
-            11,
-            "bn1d",
-            False,
-            True,
-            False,
-            False,
-            0.0,
-            (8, 256, 128),
-            "mlp_heads.sem_cls_head",
-        ),
-        (
-            256,
-            [256, 256],
-            3,
-            "bn1d",
-            False,
-            True,
-            False,
-            False,
-            0.0,
-            (8, 256, 128),
-            "mlp_heads.center_head",
-        ),
-        (
-            256,
-            [256, 256],
-            3,
-            "bn1d",
-            False,
-            True,
-            False,
-            False,
-            0.0,
-            (8, 256, 128),
-            "mlp_heads.size_head",
-        ),
-        (
-            256,
-            [256, 256],
-            12,
-            "bn1d",
-            False,
-            True,
-            False,
-            False,
-            0.0,
-            (8, 256, 128),
-            "mlp_heads.angle_cls_head",
-        ),
-        (
-            256,
-            [256, 256],
-            12,
-            "bn1d",
-            False,
-            True,
-            False,
-            False,
-            0.0,
-            (8, 256, 128),
-            "mlp_heads.angle_residual_head",
-        ),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-=======
 from models.experimental.detr3d.ttnn.ttnn_generic_mlp import TttnnGenericMLP
-from models.experimental.detr3d.reference.detr3d_model import GenericMLP
+from models.experimental.detr3d.reference.detr3d_model import GenericMLP, Conv1d
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.model_preprocessing import convert_torch_model_to_ttnn_model
+
+
+def fold_batch_norm1d_into_conv1d(conv, bn):
+    if not bn.track_running_stats:
+        raise RuntimeError("BatchNorm1d must have track_running_stats=True to be folded into Conv1d")
+
+    weight = conv.weight  # Shape: [out_channels, in_channels, kernel_size]
+    bias = conv.bias
+    running_mean = bn.running_mean
+    running_var = bn.running_var
+    eps = bn.eps
+    scale = bn.weight
+    shift = bn.bias
+
+    # For 1D: scale factor applied per output channel
+    weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None]
+
+    if bias is not None:
+        bias = (bias - running_mean) * (scale / torch.sqrt(running_var + eps)) + shift
+    else:
+        bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
+
+    # For 1D convolutions, bias shape should be [1, 1, -1] instead of [1, 1, 1, -1]
+    bias = bias.reshape(1, 1, 1, -1)
+
+    return weight, bias
 
 
 def p(x, a="x"):
@@ -134,18 +50,47 @@ def preprocess_conv_parameter(parameter, *, dtype):
     return parameter
 
 
-def custom_preprocessor(model, name):
+def custom_preprocessor(
+    model, name, ttnn_module_args, convert_to_ttnn, custom_preprocessor_func=None, mesh_mapper=None
+):
     parameters = {}
-    if isinstance(model, torch.nn.Conv1d):
-        weight = model.weight
-        if model.bias is not None:
-            bias = model.bias
-            if bias.dim() < 4:
-                bias = bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-            parameters["bias"] = preprocess_conv_parameter(bias, dtype=ttnn.float32)
-        parameters["weight"] = preprocess_conv_parameter(weight, dtype=ttnn.float32)
+    if isinstance(model, Conv1d):
+        if model.norm is not None:
+            weight, bias = fold_batch_norm1d_into_conv1d(model, model.norm)
+            parameters["weight"] = ttnn.from_torch(weight, mesh_mapper=mesh_mapper)
+            parameters["bias"] = ttnn.from_torch(bias, mesh_mapper=mesh_mapper)
+        else:
+            weight = model.weight
+            if model.bias is not None:
+                bias = model.bias
+                if bias.dim() < 4:
+                    bias = bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                parameters["bias"] = ttnn.from_torch(bias, mesh_mapper=mesh_mapper)
+            parameters["weight"] = ttnn.from_torch(weight, mesh_mapper=mesh_mapper)
+    # if isinstance(model, torch.nn.Conv1d):
+    #     weight = model.weight
+    #     if model.bias is not None:
+    #         bias = model.bias
+    #         if bias.dim() < 4:
+    #             bias = bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+    #         parameters["bias"] = preprocess_conv_parameter(bias, dtype=ttnn.float32)
+    #     parameters["weight"] = preprocess_conv_parameter(weight, dtype=ttnn.float32)
+    else:
+        # Let the sub-modules handle their own preprocessing
+        for child_name, child in model.named_children():
+            parameters[child_name] = convert_torch_model_to_ttnn_model(
+                child,
+                name=f"{name}.{child_name}",
+                custom_preprocessor=custom_preprocessor_func,
+                convert_to_ttnn=convert_to_ttnn,
+                ttnn_module_args=ttnn_module_args,
+            )
 
     return parameters
+
+
+def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+    return custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn, custom_mesh_preprocessor, None)
 
 
 @pytest.mark.parametrize(
@@ -159,59 +104,17 @@ def custom_preprocessor(model, name):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
->>>>>>> 3a871f2607 (added 3detr files from venkatesh/DETR3D_implementation)
 def test_ttnn_generic_mlp(
     input_dim,
     hidden_dims,
     output_dim,
     norm_fn_name,
-<<<<<<< HEAD
-=======
     activation,
     use_conv,
->>>>>>> 3a871f2607 (added 3detr files from venkatesh/DETR3D_implementation)
     hidden_use_bias,
     output_use_bias,
     output_use_activation,
     output_use_norm,
-<<<<<<< HEAD
-    dropout,
-    x_shape,
-    weight_key_prefix,
-    device,
-):
-    torch_model = GenericMLP(
-        input_dim=input_dim,
-        hidden_dims=hidden_dims,
-        output_dim=output_dim,
-        norm_fn_name=norm_fn_name,
-        activation="relu",
-        use_conv=True,
-        dropout=dropout,
-        hidden_use_bias=hidden_use_bias,
-        output_use_bias=output_use_bias,
-        output_use_activation=output_use_activation,
-        output_use_norm=output_use_norm,
-        weight_init_name=None,
-    )
-    load_torch_model_state(torch_model, weight_key_prefix)
-
-    x = torch.randn(x_shape)
-    torch_out = torch_model(x)
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model,
-        custom_preprocessor=create_custom_mesh_preprocessor(None),
-        device=device,
-    )
-    ttnn_model = TtnnGenericMLP(
-        parameters,
-        device,
-        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-        output_use_activation=output_use_activation,
-    )
-    ttnn_x = ttnn.from_torch(
-        x.permute(0, 2, 1),
-=======
     weight_init_name,
     dropout,
     x_shape,
@@ -236,37 +139,18 @@ def test_ttnn_generic_mlp(
     torch_out = torch_model(x)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=custom_mesh_preprocessor,
         device=device,
     )
     print("param are", parameters)
     ttnn_model = TttnnGenericMLP(torch_model, parameters, device)
     ttnn_x = ttnn.from_torch(
         x.permute(0, 2, 1).unsqueeze(dim=0),
->>>>>>> 3a871f2607 (added 3detr files from venkatesh/DETR3D_implementation)
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-<<<<<<< HEAD
-    ttnn_out = ttnn_model(ttnn_x)
-    ttnn_out = ttnn.to_torch(ttnn_out)
-    ttnn_out = ttnn_out.permute(0, 2, 1)
-
-    passing, pcc_message = comp_pcc(torch_out, ttnn_out, 0.999)
-    logger.info(f"Output PCC: {pcc_message}")
-    logger.info(comp_allclose(torch_out, ttnn_out))
-    logger.info(f"Input shape: {x_shape}, Weight prefix: {weight_key_prefix}")
-    logger.info(f"MLP config - Input: {input_dim}, Hidden: {hidden_dims}, Output: {output_dim}")
-
-    if passing:
-        logger.info("GenericMLP Test Passed!")
-    else:
-        logger.warning("GenericMLP Test Failed!")
-
-    assert passing, f"PCC value is lower than 0.999. Check implementation! {pcc_message}"
-=======
     p(ttnn_x, "ttnn input")
     ttnn_out = ttnn_model(ttnn_x)
     print("outputs are", ttnn_out.shape, torch_out.shape)
@@ -275,5 +159,4 @@ def test_ttnn_generic_mlp(
         ttnn_out = ttnn_out.reshape(1, 8, 128, 12).permute(0, 1, 3, 2).squeeze(0)
     else:
         ttnn_out = ttnn_out.squeeze(dim=0).permute(0, 2, 1)
-    assert_with_pcc(torch_out, ttnn_out, 1.0)
->>>>>>> 3a871f2607 (added 3detr files from venkatesh/DETR3D_implementation)
+    assert_with_pcc(torch_out, ttnn_out, 0.999)

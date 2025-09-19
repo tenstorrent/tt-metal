@@ -4,7 +4,7 @@
 
 import ttnn
 from models.experimental.detr3d.ttnn.common import TtnnConv1D
-import torch
+from models.experimental.detr3d.reference.detr3d_model import Conv1d
 
 
 def p(x, a="x"):
@@ -24,36 +24,46 @@ class TttnnGenericMLP:
         self.tt_layers = []
         for i, layer in enumerate(module.layers):
             # dropout
-            if isinstance(layer, torch.nn.Dropout):
-                print(f"Skipping Dropout at layers[{i}]")
+            # if isinstance(layer, torch.nn.Dropout):
+            #     print(f"Skipping Dropout at layers[{i}]")
             # bn1d  - torch
-            elif isinstance(layer, torch.nn.BatchNorm1d):
-                print(f"Adding BatchNorm1d from layers[{i}]")
-                self.tt_layers.append(layer)
-            elif isinstance(layer, torch.nn.Conv1d):
-                conv1d_layer = TtnnConv1D(module.layers[i], parameters.layers[i], device)
+            # elif isinstance(layer, torch.nn.BatchNorm1d):
+            #     print("module is", layer)
+            #     print(f"Adding BatchNorm1d from layers[{i}]")
+            #     self.tt_layers.append(layer)
+            if isinstance(layer, Conv1d):
+                if layer.activation:
+                    activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+                else:
+                    activation = None
+                conv1d_layer = TtnnConv1D(layer, parameters.layers[f"{i}"], device, activation=activation)
                 self.tt_layers.append(conv1d_layer)
-            elif isinstance(layer, torch.nn.ReLU):
-                relu_layer = ttnn.relu
-                self.tt_layers.append(relu_layer)
+            # elif isinstance(layer, torch.nn.Conv1d):
+            #     conv1d_layer = TtnnConv1D(module.layers[i], parameters.layers[i], device)
+            #     # conv1d_layer = TtnnConv1D(module.layers[i], parameters.layers[i], device)
+            #     self.tt_layers.append(conv1d_layer)
+            # elif isinstance(layer, torch.nn.ReLU):
+            #     relu_layer = ttnn.relu
+            #     self.tt_layers.append(relu_layer)
 
         print(self.tt_layers)
 
     def __call__(self, x):
         for i, layer in enumerate(self.tt_layers):
-            if isinstance(layer, torch.nn.BatchNorm1d):
-                if x.is_sharded():
-                    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-                x = ttnn.to_torch(x).squeeze(dim=0).permute(0, 2, 1)
-                x = layer(x).unsqueeze(dim=0).permute(0, 1, 3, 2)  # torch bn1d
-                x = ttnn.from_torch(
-                    x,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-            else:
-                x = layer(x)
-                print(f"ttnn layer no {i}out is", x.shape)
+            # if isinstance(layer, torch.nn.BatchNorm1d):
+            #     if x.is_sharded():
+            #         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            #     print(f"{x.shape=}")
+            #     x = ttnn.to_torch(x).squeeze(dim=0).permute(0, 2, 1)
+            #     x = layer(x).unsqueeze(dim=0).permute(0, 1, 3, 2)  # torch bn1d
+            #     x = ttnn.from_torch(
+            #         x,
+            #         dtype=ttnn.bfloat16,
+            #         layout=ttnn.TILE_LAYOUT,
+            #         device=self.device,
+            #         memory_config=ttnn.L1_MEMORY_CONFIG,
+            #     )
+            # else:
+            x = layer(x)
+            print(f"ttnn layer no {i}out is", x.shape)
         return x
