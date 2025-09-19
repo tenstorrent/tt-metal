@@ -26,8 +26,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool reverse_order) {
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         return composite_common::composite_all_gather(
             input_tensor,
@@ -69,8 +69,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order) {
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
@@ -130,10 +130,12 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
             cluster_axis,
             all_gather_async_llama_sharded_case,
             use_optimal_ccl_for_llama,
+            all_gather_async_llama_sharded_case,
             barrier_semaphore,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            reverse_order);
     }
 }
 
@@ -152,8 +154,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool reverse_order) {
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
@@ -189,8 +191,8 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     bool reverse_order) {
     // NOTE: reverse_order parameter is ignored, always use true for reversed API
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         return composite_common::composite_all_gather(
             input_tensor,
@@ -232,10 +234,11 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order) {
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
-        return composite_common::composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
+        return composite_common::composite_all_gather(
+            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensor,
@@ -272,8 +275,8 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool reverse_order) {
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);

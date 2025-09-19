@@ -992,7 +992,9 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
-    def ring_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
+    def ring_all_gather(
+        self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None, reverse_order=False
+    ):
         B = input_tensor_mesh.shape[1]
         input_tensor_mesh = ttnn.reshape(
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
@@ -1004,7 +1006,11 @@ class TT_CCL:
         # persistent_buffers = None
 
         num_links = 4
-        ttnn_tensor_out = ttnn.experimental.all_gather_async(
+        if reverse_order:
+            all_gather_function = ttnn.experimental.all_gather_async_reversed
+        else:
+            all_gather_function = ttnn.experimental.all_gather_async
+        ttnn_tensor_out = all_gather_function(
             input_tensor=input_tensor_mesh,
             # persistent_intermediate_buffer=persistent_buffers["intermediate"],
             persistent_output_buffer=persistent_buffers,
