@@ -89,6 +89,10 @@ __attribute__((noinline)) void service_lite_fabric() {
              ->config.routing_enabled) {
         return;
     }
+    // Update local reads/writes issued/acked counters
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
     lite_fabric::run_sender_channel_step<0>();
     lite_fabric::run_receiver_channel_step<0>();
 }
