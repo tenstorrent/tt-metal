@@ -70,8 +70,7 @@ IsInDeviceOperation::invocation_result_t IsInDeviceOperation::invoke(
     const uint32_t& single_fetch_subchunk_size,
     const bool& assume_unique,
     const bool& invert,
-    const std::optional<Tensor>& optional_out,
-    const QueueId& queue_id) {
+    const std::optional<Tensor>& optional_out) {
     return {{assume_unique, invert, single_fetch_subchunk_size}, {elements_tensor, test_elements_tensor, optional_out}};
 }
 
