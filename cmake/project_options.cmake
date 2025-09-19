@@ -5,7 +5,7 @@
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
 option(EXPERIMENTAL_NANOBIND_BINDINGS "Enables experimental build of python bindings with nanobind" OFF)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
-option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
+option(ENABLE_TRACY "Enable Tracy Profiling" ON)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 option(BUILD_SHARED_LIBS "Create shared libraries" ON)
