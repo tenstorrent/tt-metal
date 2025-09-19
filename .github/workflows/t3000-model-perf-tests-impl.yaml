@@ -9,12 +9,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      build-artifact-profiler-name:
-        required: true
-        type: string
-      wheel-artifact-profiler-name:
-        required: true
-        type: string
       docker-image:
         required: true
         type: string
@@ -146,14 +140,14 @@ jobs:
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-profiler-name }}
+          name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.wheel-artifact-profiler-name }}
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         run: |
           sudo cpupower frequency-set -g performance
