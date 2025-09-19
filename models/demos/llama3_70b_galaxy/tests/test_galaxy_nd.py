@@ -14,7 +14,7 @@ from ttnn import (
     ShardTensor2dMesh,
     ConcatMesh2dToTensor,
 )
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 
 # from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 

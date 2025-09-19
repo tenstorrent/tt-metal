@@ -43,8 +43,8 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
@@ -175,7 +175,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 }
 
 bool validation(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     std::vector<CoreCoord>& all_cores,

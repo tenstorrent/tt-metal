@@ -10,7 +10,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "tt_metal/hw/inc/dev_msgs.h"
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
@@ -22,6 +21,7 @@
 #include <impl/debug/watcher_server.hpp>
 
 #include <array>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_set>
 #include <vector>
 
@@ -96,6 +96,11 @@ public:
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
+    // This is used to track the current thread's command queue id stack
+    using CommandQueueIdStack = std::vector<uint8_t>;
+    CommandQueueIdStack& get_command_queue_id_stack_for_thread();
+    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
@@ -126,9 +131,11 @@ private:
         chip_id_t device_id,
         const HalProgrammableCoreType& core_type,
         CoreCoord virtual_core,
-        launch_msg_t* launch_msg,
-        go_msg_t* go_msg);
+        dev_msgs::launch_msg_t::View launch_msg,
+        dev_msgs::go_msg_t::ConstView go_msg);
     void initialize_and_launch_firmware(chip_id_t device_id);
+    dev_msgs::core_info_msg_t populate_core_info_msg(
+        chip_id_t device_id, HalProgrammableCoreType programmable_core_type) const;
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
@@ -164,6 +171,11 @@ private:
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+
+    // We are using a thread_local to allow each thread to have its own command queue id stack.
+    // This not only allows consumers to set active command queue for a thread
+    // but to also easily push/pop ids to temporarily change the current cq id.
+    static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

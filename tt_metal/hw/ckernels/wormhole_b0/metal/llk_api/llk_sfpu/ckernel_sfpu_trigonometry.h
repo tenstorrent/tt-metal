@@ -9,12 +9,10 @@
 #include "sfpi.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_recip.h"
-
+#include "ckernel_sfpu_exp.h"
 using namespace sfpi;
 
-namespace ckernel {
-
-namespace sfpu {
+namespace ckernel::sfpu {
 
 static const float PI = 3.1415927f;
 static const float PI_2 = 1.5707964f;
@@ -237,11 +235,39 @@ inline void calculate_acos() {
     }
 }
 
+// cosh = (exp(x) + exp(-x)) / 2
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_cosh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) + _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
+// sinh = (exp(x) - exp(-x)) / 2
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_sinh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) - _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE>
 void atan_init() {
     // Initialisation for use of sfpu_reciprocal<false>.
     recip_init<false>();
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+template <bool APPROXIMATION_MODE>
+void init_hyperbolic_trig() {
+    _init_exponential_<APPROXIMATION_MODE, false, p_sfpu::kCONST_1_FP16B>();
+}
+
+}  // namespace ckernel::sfpu

@@ -25,17 +25,24 @@ void kernel_main() {
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
 
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+
+    uint32_t core_index = get_arg_val<uint32_t>(0);
+    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(core_index);
+
 #ifdef ACTIVATION_REUSE
-    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(27);
-    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(28);
-    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(29) == 1;
-    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(30);
-    constexpr uint32_t output_image_width = get_compile_time_arg_val(31);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(32);
-    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(30);
+    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(31);
+    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(32) == 1;
+    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(33);
+    constexpr uint32_t output_image_width = get_compile_time_arg_val(34);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
+    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(36) == 1;
 
     uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(0);
 #endif
+
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act>();
@@ -44,8 +51,6 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
 
     // LOOP TO FILL READER INDICES
-    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t reader_idx = 0;
 

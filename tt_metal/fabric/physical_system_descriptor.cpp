@@ -605,7 +605,7 @@ ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
     return asic_descriptors_.at(asic_id).asic_location;
 }
 
-std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(std::string hostname) const {
+std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
     std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.find(hostname) != system_graph_.asic_connectivity_graph.end()) {
         for (const auto& [asic_id, _] : system_graph_.asic_connectivity_graph.at(hostname)) {

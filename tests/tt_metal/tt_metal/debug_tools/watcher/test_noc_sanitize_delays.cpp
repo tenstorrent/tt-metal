@@ -31,7 +31,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -61,7 +61,7 @@ void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
 }
 
 void RunDelayTestOnCore(
-    MeshWatcherDelayFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, CoreCoord& core) {
+    MeshWatcherDelayFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -183,7 +183,7 @@ TEST_F(MeshWatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
         GTEST_SKIP();
 
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunDelayTestOnCore(dynamic_cast<MeshWatcherDelayFixture*>(fixture), mesh_device, core);
         },

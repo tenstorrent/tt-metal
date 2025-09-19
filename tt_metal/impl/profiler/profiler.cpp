@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_coord.hpp"
-#include "dev_msgs.h"
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
 #include "device_pool.hpp"
+#include "llrt/hal.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
@@ -39,10 +39,10 @@
 #include "tt-metalium/profiler_types.hpp"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/arch.h>
-#include <umd/device/types/xy_pair.h>
-#include <umd/device/wormhole_implementation.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/arch/wormhole_implementation.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "tt_cluster.hpp"
 
@@ -875,16 +875,18 @@ bool useFastDispatch(IDevice* device) {
 void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data) {
     ZoneScoped;
 
+    const auto& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), virtual_core);
-    profiler_msg_t* profiler_msg =
-        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr control_vector_addr =
+        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                                dev_msgs::profiler_msg_t::Field::control_vector);
     if (useFastDispatch(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-            const distributed::DeviceMemoryAddress address = {
-                device_coord, virtual_core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
+            const distributed::DeviceMemoryAddress address = {device_coord, virtual_core, control_vector_addr};
             mesh_cq.enqueue_write_shard_to_core(
                 address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
         } else {
@@ -892,13 +894,13 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
                 .enqueue_write_to_core(
                     virtual_core,
                     data.data(),
-                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    control_vector_addr,
                     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
                     true);
         }
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            device->id(), virtual_core, data, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+            device->id(), virtual_core, data, control_vector_addr);
     }
 }
 
@@ -961,15 +963,17 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
 
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
-    profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr buffer_addr =
+        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                                dev_msgs::profiler_msg_t::Field::buffer);
     const uint32_t num_risc_processors = hal.get_num_risc_processors(core_type);
     core_l1_data_buffer.resize(kernel_profiler::PROFILER_L1_VECTOR_SIZE * num_risc_processors);
     if (auto mesh_device = device->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
         dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
             .enqueue_read_shard_from_core(
-                distributed::DeviceMemoryAddress{
-                    device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
+                distributed::DeviceMemoryAddress{device_coord, worker_core, buffer_addr},
                 core_l1_data_buffer.data(),
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
                 true);
@@ -978,7 +982,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
             .enqueue_read_from_core(
                 worker_core,
                 core_l1_data_buffer.data(),
-                reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
+                buffer_addr,
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
                 true);
     }
@@ -990,11 +994,14 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
 
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
-    profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr buffer_addr =
+        profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                                dev_msgs::profiler_msg_t::Field::buffer);
     core_l1_data_buffer = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device_id,
         worker_core,
-        reinterpret_cast<uint64_t>(profiler_msg->buffer),
+        buffer_addr,
         kernel_profiler::PROFILER_L1_BUFFER_SIZE * hal.get_num_risc_processors(core_type));
 }
 
@@ -1019,16 +1026,18 @@ void DeviceProfiler::readL1DataBuffers(IDevice* device, const std::vector<CoreCo
 
 void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core) {
     ZoneScoped;
+    const auto& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, virtual_core);
-    profiler_msg_t* profiler_msg =
-        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr profiler_msg = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr control_vector_addr =
+        profiler_msg + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                           dev_msgs::profiler_msg_t::Field::control_vector);
     if (useFastDispatch(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
-            const distributed::DeviceMemoryAddress address = {
-                device_coord, virtual_core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
+            const distributed::DeviceMemoryAddress address = {device_coord, virtual_core, control_vector_addr};
             core_control_buffers[virtual_core].resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
             mesh_cq.enqueue_read_shard_from_core(
                 address,
@@ -1041,16 +1050,13 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
                 .enqueue_read_from_core(
                     virtual_core,
                     core_control_buffers[virtual_core].data(),
-                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    control_vector_addr,
                     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
                     true);
         }
     } else {
         core_control_buffers[virtual_core] = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            device_id,
-            virtual_core,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+            device_id, virtual_core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
     }
 }
 
@@ -1120,7 +1126,8 @@ void DeviceProfiler::readRiscProfilerResults(
     const uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
             worker_core);
-    const uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+    const uint32_t startIndex = coreFlatID * MetalContext::instance().hal().get_max_processors_per_core() *
+                                PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     // translate worker core virtual coord to phys coordinates
     const CoreCoord phys_coord = getPhysicalAddressFromVirtual(device_id, worker_core);

@@ -36,7 +36,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 void build_and_run_program(
-    std::shared_ptr<distributed::MeshDevice> device,
+    const std::shared_ptr<distributed::MeshDevice>& device,
     bool slow_dispatch,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,

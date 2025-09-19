@@ -5,11 +5,9 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include "dev_msgs.h"
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <initializer_list>
-#include <limits>
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -22,25 +20,18 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
-#include <stdexcept>
-#include <string>
-#include <string_view>
 #include <tuple>
-#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "allocator.hpp"
 #include "allocator_types.hpp"
 #include "assert.hpp"
-#include "buffer_types.hpp"
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -49,40 +40,30 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "trace/trace.hpp"
-#include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
-#include "multi_producer_single_consumer_queue.hpp"
-#include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "trace/trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include <tt-metalium/control_plane.hpp>
-#include <umd/device/coordinate_manager.h>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/coordinates/coordinate_manager.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
-enum class ARCH;
 
 namespace tt_metal {
 
@@ -98,8 +79,8 @@ void IDevice::set_program_cache_misses_allowed(bool allowed) {
     this->get_program_cache().set_cache_misses_allowed(allowed);
 }
 
-Device::Device(Device&& other) = default;
-Device& Device::operator=(Device&& other) = default;
+Device::Device(Device&& other) noexcept = default;
+Device& Device::operator=(Device&& other) noexcept = default;
 
 Device::Device(
     chip_id_t device_id,
@@ -364,11 +345,16 @@ void Device::init_command_queue_device() {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
         for (const CoreCoord& logical_dispatch_core : logical_dispatch_cores) {
-            launch_msg_t msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->launch_msg;
-            go_msg_t go_msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->go_msg;
+            const auto* kernel = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index);
+            dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
+            dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(
-                this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
+                this->id(),
+                virtual_core,
+                msg.view(),
+                go_msg,
+                this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
     }
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
@@ -405,11 +391,10 @@ void Device::configure_fabric() {
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-            launch_msg_t* msg =
-                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-            go_msg_t* go_msg =
-                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
-            msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
+            auto* kg = fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
@@ -670,14 +655,15 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
-CommandQueue& Device::command_queue(size_t cq_id) {
+CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
     if (!using_fast_dispatch_) {
         return *(CommandQueue*)(IDevice*)this;
     }
-    TT_FATAL(cq_id < command_queues_.size(), "cq_id {} is out of range", cq_id);
+    auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
-    return *command_queues_[cq_id];
+    return *command_queues_[actual_cq_id];
 }
 
 void Device::enable_program_cache() {
@@ -788,8 +774,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
                 this->id());
         bool dram_is_virtualized =
-            noc_translation_enabled && (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
-                                        hal.get_virtualized_core_types().end());
+            noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;

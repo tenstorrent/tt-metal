@@ -55,10 +55,11 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;
@@ -275,16 +276,17 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         }
     }();
 
-    auto local_root_devices = extract_locals(scoped_devices->root_devices());
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    const auto root_devices = scoped_devices->root_devices();
 
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(mesh_shape, scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : local_root_devices) {
+    for (auto device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -318,10 +320,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
             MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         fabric_node_ids.push_back(fabric_node_id);
     }
+
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    const auto root_devices = scoped_devices->root_devices();
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(
-            MeshShape(1, device_ids.size()), scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
@@ -486,9 +490,13 @@ tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coo
     return view_->get_fabric_node_id(coord);
 }
 
-MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
-    TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
-    return *(mesh_command_queues_[cq_id]);
+MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
+    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+
+    TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
+    auto& command_queue = mesh_command_queues_[id];
+    TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
+    return *command_queue;
 }
 
 DeviceIds MeshDevice::get_device_ids() const {
@@ -809,7 +817,7 @@ SystemMemoryManager& MeshDevice::sysmem_manager() {
     return reference_device()->sysmem_manager();
 }
 
-CommandQueue& MeshDevice::command_queue(size_t cq_id) {
+CommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) {
     TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->command_queue(cq_id);
 }
@@ -827,6 +835,12 @@ void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
 
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
+}
+
+MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) {
+    auto trace_id = MeshTrace::next_id();
+    this->begin_mesh_trace(cq_id, trace_id);
+    return trace_id;
 }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {

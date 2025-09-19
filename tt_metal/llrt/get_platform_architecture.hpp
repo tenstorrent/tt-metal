@@ -5,14 +5,40 @@
 #pragma once
 
 #include <cstdlib>
+#include <mutex>
 
 #include "assert.hpp"
 #include "llrt/rtoptions.hpp"
-#include <umd/device/pci_device.hpp>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/tt_simulation_device.h>
+#include "tracy/Tracy.hpp"
+#include <umd/device/pcie/pci_device.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/simulation/simulation_device.hpp>
 
 namespace tt::tt_metal {
+
+inline tt::ARCH get_physical_architecture() {
+    ZoneScoped;
+    static tt::ARCH current_arch = tt::ARCH::Invalid;
+    static std::once_flag current_arch_once_flag;
+    std::call_once(current_arch_once_flag, []() {
+        // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
+        // This map holds PCI info for each mmio chip.
+        auto devices_info = PCIDevice::enumerate_devices_info();
+        if (!devices_info.empty()) {
+            current_arch = devices_info.begin()->second.get_arch();
+            for (auto& [device_id, device_info] : devices_info) {
+                tt::ARCH detected_arch = device_info.get_arch();
+                TT_FATAL(
+                    current_arch == detected_arch,
+                    "Expected all devices to be {} but device {} is {}",
+                    tt::arch_to_str(current_arch),
+                    device_id,
+                    tt::arch_to_str(detected_arch));
+            }
+        }
+    });
+    return current_arch;
+}
 
 /**
  * @brief Detects the platform architecture based on the environment or hardware.
@@ -47,6 +73,7 @@ namespace tt::tt_metal {
  * @see tt::get_arch_from_string
  * @see PCIDevice::enumerate_devices_info
  */
+
 inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtoptions) {
     auto arch = tt::ARCH::Invalid;
     // If running in mock mode, derive architecture from provided cluster descriptor
@@ -58,24 +85,11 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         }
         return arch;
     } else if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
-        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
-        arch = init.get_arch_name();
+        auto soc_desc =
+            tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+        arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
     } else {
-        // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
-        // This map holds PCI info for each mmio chip.
-        auto devices_info = PCIDevice::enumerate_devices_info();
-        if (devices_info.size() > 0) {
-            arch = devices_info.begin()->second.get_arch();
-            for (auto& [device_id, device_info] : devices_info) {
-                tt::ARCH detected_arch = device_info.get_arch();
-                TT_FATAL(
-                    arch == detected_arch,
-                    "Expected all devices to be {} but device {} is {}",
-                    tt::arch_to_str(arch),
-                    device_id,
-                    tt::arch_to_str(detected_arch));
-            }
-        }
+        arch = get_physical_architecture();
     }
 
     return arch;

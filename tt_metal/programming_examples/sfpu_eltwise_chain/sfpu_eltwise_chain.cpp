@@ -37,7 +37,7 @@ using namespace tt::tt_metal;
 void golden_softplus(const std::vector<bfloat16>& src_vec, std::vector<bfloat16>& result_vec) {
     TT_FATAL(src_vec.size() == result_vec.size(), "Input and output vectors must be the same size");
     for (size_t i = 0; i < src_vec.size(); ++i) {
-        result_vec[i] = bfloat16(std::log1p(std::exp(src_vec[i].to_float())));  // Softplus function
+        result_vec[i] = bfloat16(std::log1p(std::exp(static_cast<float>(src_vec[i]))));  // Softplus function
     }
 }
 
@@ -65,8 +65,8 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
     float y_mean = 0.0f;
 
     for (size_t i = 0; i < vec_a.size(); i++) {
-        x_mean += vec_a[i].to_float();
-        y_mean += vec_b[i].to_float();
+        x_mean += static_cast<float>(vec_a[i]);
+        y_mean += static_cast<float>(vec_b[i]);
     }
 
     x_mean /= vec_a.size();
@@ -78,8 +78,8 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
     float y_stddev = 0.0f;
 
     for (size_t i = 0; i < vec_a.size(); i++) {
-        float x_diff = vec_a[i].to_float() - x_mean;
-        float y_diff = vec_b[i].to_float() - y_mean;
+        float x_diff = static_cast<float>(vec_a[i]) - x_mean;
+        float y_diff = static_cast<float>(vec_b[i]) - y_mean;
 
         covariance += x_diff * y_diff;
         x_stddev += x_diff * x_diff;
@@ -179,7 +179,7 @@ int main() {
 
     // Compute kernel
     std::vector<uint32_t> compute_compile_time_args = {src_cb_index, ones_cb_index, result_cb_index};
-    KernelHandle compute_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/compute/compute.cpp",
         core,

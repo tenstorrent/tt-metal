@@ -24,7 +24,7 @@ from models.experimental.grok.tt.grok_common import (
 from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 from transformers import AutoTokenizer
 
 
