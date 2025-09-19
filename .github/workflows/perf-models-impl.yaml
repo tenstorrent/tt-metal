@@ -41,17 +41,12 @@ jobs:
       DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       DOCKER_OPTS: |
             -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -v ${{ github.workspace }}:${{ github.workspace }}
-            -w ${{ github.workspace }}
-            --user 0
-
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix['test-info'].arch }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
             -e LOGURU_LEVEL=INFO
-            -e PIP_CACHE_DIR=/pip-cache
       PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
@@ -72,8 +67,6 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
-      - name: Fix Git dubious ownership
-        run: git config --global --add safe.directory ${{ github.workspace }}
       - name: Run falcon7b model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
