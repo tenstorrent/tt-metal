@@ -12,12 +12,11 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct CopyOperation {
-    static ttnn::Tensor invoke(QueueId queue_id, const Tensor& src_tensor, const Tensor& dst_tensor);
+    static ttnn::Tensor invoke(const Tensor& src_tensor, const Tensor& dst_tensor);
 };
 
 struct AssignOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const MemoryConfig& output_mem_config,
         std::optional<const DataType> output_dtype = std::nullopt,
@@ -28,7 +27,7 @@ struct AssignOperation {
         const MemoryConfig& output_mem_config,
         std::optional<const DataType> output_dtype = std::nullopt);
 
-    static ttnn::Tensor invoke(QueueId queue_id, const Tensor& input_a, const Tensor& input_b);
+    static ttnn::Tensor invoke(const Tensor& input_a, const Tensor& input_b);
 };
 
 }  // namespace operations::data_movement
