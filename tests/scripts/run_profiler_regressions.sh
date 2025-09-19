@@ -11,8 +11,8 @@ run_mid_run_data_dump() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
     python -m tracy -v -r -p --sync-host-device --cpp-post-process --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
-    runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
-    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/ops_perf_results.csv
+    runDate=$(ls $PROFILER_OUTPUT_DIR/)
+    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
 }
 
 run_profiling_test() {
