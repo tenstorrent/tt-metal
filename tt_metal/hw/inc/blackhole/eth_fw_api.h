@@ -22,6 +22,10 @@
 
 #define ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR 0xFFB14020
 #define ETH_RISC_NUM_INTERRUPT_VECS 5
+#define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR 0xFFB98850
+#define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR 0xFFB98854
+#define ETH_PTP_CYCLES_1MS 50000
+#define ETH_UPDATE_LINK_STATUS_INTERVAL_MS 1000
 
 enum link_train_status_e : uint32_t {
     LINK_TRAIN_TRAINING,
@@ -170,7 +174,8 @@ struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
     uint32_t* eth_link_status_check_ptr;  // Pointer to the eth link status check function
-    uint32_t spare[16 - 3];
+    uint32_t* eth_flush_icache_ptr;       // Pointer to the eth flush icache function
+    uint32_t spare[16 - 4];
 };
 
 enum eth_mailbox_e : uint32_t {
@@ -210,7 +215,23 @@ struct boot_results_t {
 #define MEM_SYSENG_ETH_LIVE_STATUS (MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status))
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "risc_common.h"
+#include "tt_metal/hw/inc/risc_common.h"
+#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
+
+uint64_t eth_read_ptp_clock() {
+    uint32_t ptp_timer_lo = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR);
+    uint32_t ptp_timer_hi = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR);
+    return (((uint64_t)ptp_timer_hi) << 32) | ptp_timer_lo;
+}
+
+uint64_t get_next_link_status_check_timestamp() {
+    return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(MEM_AERISC_LINK_STATUS_CHECK_TIMESTAMP);
+}
+
+void update_next_link_status_check_timestamp() {
+    uint64_t timestamp = eth_read_ptp_clock() + (ETH_PTP_CYCLES_1MS * 1000);
+    *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(MEM_AERISC_LINK_STATUS_CHECK_TIMESTAMP) = timestamp;
+}
 
 void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
     auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
@@ -269,9 +290,15 @@ FORCE_INLINE void service_eth_msg() {
 }
 
 FORCE_INLINE void update_boot_results_eth_link_status_check() {
-    invalidate_l1_cache();
-    reinterpret_cast<void (*)(uint32_t)>(
-        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    uint64_t curr_timestamp = eth_read_ptp_clock();
+    // Debounce to only be called at every interval
+    if (curr_timestamp > get_next_link_status_check_timestamp()) {
+        invalidate_l1_cache();
+        reinterpret_cast<void (*)(uint32_t)>(
+            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+
+        update_next_link_status_check_timestamp();
+    }
 }
 
 #endif

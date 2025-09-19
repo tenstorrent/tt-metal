@@ -135,6 +135,7 @@ void __attribute__((noinline)) Application(void) {
 
     deassert_all_reset();
     wait_subordinate_eriscs();
+    update_next_link_status_check_timestamp();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
