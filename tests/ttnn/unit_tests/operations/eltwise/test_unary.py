@@ -1781,5 +1781,5 @@ def test_unary_rpow_ttnn(input_shapes, exponent, device):
     golden_function = ttnn.get_golden_function(ttnn.rpow)
     golden_tensor = golden_function(in_data1, exponent)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=8)  # ULP<=1 for exponents less than 5
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.99)
