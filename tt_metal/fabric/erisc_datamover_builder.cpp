@@ -825,6 +825,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         this->sender_channels_size_bytes[i] = channel_buffer_size_bytes * num_sender_buffer_slots[i];
     }
+    // add a dummy value for downstream_sender_channels_num_buffers to avoid compile warnings, in the case when there's
+    // no downstream connection and still instantiating downstream adaptor.
+    this->downstream_sender_channels_num_buffers.fill(1);
     // set the remote sender channel sizes
     this->remote_sender_channels_num_buffers = num_remote_sender_buffer_slots;
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
