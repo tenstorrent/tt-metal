@@ -217,6 +217,7 @@ struct boot_results_t {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "tt_metal/hw/inc/risc_common.h"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
+#include "dev_msgs.h"
 
 FORCE_INLINE uint64_t eth_read_ptp_clock() {
     uint32_t ptp_timer_lo = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR);
@@ -225,12 +226,12 @@ FORCE_INLINE uint64_t eth_read_ptp_clock() {
 }
 
 FORCE_INLINE uint64_t get_next_link_status_check_timestamp() {
-    return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(MEM_AERISC_LINK_STATUS_CHECK_TIMESTAMP);
+    return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
 }
 
 FORCE_INLINE void update_next_link_status_check_timestamp() {
     uint64_t timestamp = eth_read_ptp_clock() + (ETH_PTP_CYCLES_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
-    *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(MEM_AERISC_LINK_STATUS_CHECK_TIMESTAMP) = timestamp;
+    *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
 }
 
 FORCE_INLINE void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
