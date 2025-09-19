@@ -19,8 +19,10 @@ from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+PDL_L1_SMALL_SIZE = 37 * 1024  # Minimum L1 small size for Panoptic DeepLab
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 def test_panoptic_deeplab(device):
     """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
     # compute_grid = device.compute_with_storage_grid_size()
