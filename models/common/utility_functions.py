@@ -964,28 +964,36 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
-def skip_for_blackhole(reason_str="not working for Blackhole"):
+def skip_for_blackhole(reason_str="Test_Infrastructure_Skip: not working for Blackhole"):
     return pytest.mark.skipif(is_blackhole(), reason=reason_str)
 
 
-def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
+def skip_for_wormhole_b0(reason_str="Test_Infrastructure_Skip: not working for Wormhole B0"):
     return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
 
 
-def skip_for_grayskull(reason_str="not working for Grayskull"):
+def skip_for_grayskull(reason_str="Test_Infrastructure_Skip: not working for Grayskull"):
     return pytest.mark.skipif(is_grayskull(), reason=reason_str)
 
 
-def run_for_blackhole(reason_str="only runs for Blackhole"):
+def run_for_blackhole(reason_str="Test_Infrastructure_Skip: only runs for Blackhole"):
     return pytest.mark.skipif(not is_blackhole(), reason=reason_str)
 
 
-def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
+def run_for_wormhole_b0(reason_str="Test_Infrastructure_Skip: only runs for Wormhole B0"):
     return pytest.mark.skipif(not is_wormhole_b0(), reason=reason_str)
 
 
-def run_for_grayskull(reason_str="only runs for Grayskull"):
+def run_for_grayskull(reason_str="Test_Infrastructure_Skip: only runs for Grayskull"):
     return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
+
+
+def skip_for_n_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant for this number of devices"):
+    return pytest.mark.skipif(ttnn.get_num_devices() == n, reason=reason_str)
+
+
+def skip_for_n_or_less_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant for this number of devices"):
+    return pytest.mark.skipif(ttnn.get_num_devices() <= n, reason=reason_str)
 
 
 def get_devices_for_t3000(all_devices, num_devices):
