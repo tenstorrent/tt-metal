@@ -247,25 +247,21 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
           stack2.push(p);
         } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
           try {
+            // Simple fallback: Only consider lines that contain exact uppercase 'FAILED'.
             const text = fs.readFileSync(p, 'utf8');
             const rawLines = text.split(/\r?\n/);
-            let hitIndex = -1;
-            for (let i = 0; i < rawLines.length && hitIndex === -1; i++) {
+            const FAILED = /\bFAILED\b/; // case-sensitive
+            for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) {
               const line = rawLines[i];
-              if (failureMarkers.some(rx => rx.test(line))) {
-                hitIndex = i;
-                break;
+              if (FAILED.test(line)) {
+                const fileBase = path.basename(p);
+                // Return just the line containing FAILED
+                collected.push({
+                  label: `${fileBase}:\nFAILED line`,
+                  snippet: line.length > 600 ? line.slice(0, 600) + '…' : line,
+                });
+                break; // one per file is enough
               }
-            }
-            if (hitIndex !== -1) {
-              const from = Math.max(0, hitIndex - 3);
-              const to = Math.min(rawLines.length, hitIndex + 4);
-              const snippet = rawLines.slice(from, to).join('\n');
-              const fileBase = path.basename(p);
-              collected.push({
-                label: `${fileBase}:\nfallback match`,
-                snippet: snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet,
-              });
             }
           } catch (_) { /* ignore */ }
         }
