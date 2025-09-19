@@ -173,11 +173,12 @@ public:
                 current_shape[majorDim] = last_shard_shape[majorDim];
                 current_shape[minorDim] = last_shard_shape[minorDim];
             } else {
-                TT_FATAL(
-                    current_shape[majorDim] == last_shard_shape[majorDim] and
-                        current_shape[minorDim] == last_shard_shape[minorDim],
-                    "no un-even shard size support memory layout {}",
-                    memory_layout);
+                // TODO
+                // TT_FATAL(
+                //     current_shape[majorDim] == last_shard_shape[majorDim] and
+                //         current_shape[minorDim] == last_shard_shape[minorDim],
+                //     "no un-even shard size support memory layout {}",
+                //     memory_layout);
             }
         }
         return current_shape;

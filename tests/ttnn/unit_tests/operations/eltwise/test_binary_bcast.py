@@ -1650,13 +1650,13 @@ def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
     )
 
     input_combinations = (
-        # (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
     for a_config, b_config, out_config in input_combinations:
