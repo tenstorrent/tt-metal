@@ -7,12 +7,10 @@
 #include <optional>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "groupnorm_types.hpp"
-
-using namespace tt::constants;
-using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -29,7 +27,7 @@ Ref: https://pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html
 >>> output = m(input)
 */
 
-operation::ProgramWithCallbacks groupnorm_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -46,7 +44,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_welford);
 
-operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -56,7 +54,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     float eps,
     uint32_t num_groups,
     uint32_t num_batches,
-    tt::tt_metal::DataType im_data_format,
+    DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
     const DeviceComputeKernelConfig& compute_kernel_config,

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <optional>
 #include <array>
 
 #include <algorithm>
@@ -16,10 +15,7 @@
 
 #include <tt-metalium/work_split.hpp>
 
-using std::pair;
 using CoreCoord = tt_xy_pair;
-
-using namespace tt::constants;
 
 std::vector<uint32_t> get_prime_factors(uint32_t n) {
     uint32_t i = 2;

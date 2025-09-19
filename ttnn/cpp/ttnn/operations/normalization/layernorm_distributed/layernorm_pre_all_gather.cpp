@@ -7,6 +7,8 @@
 #include "device/layernorm_pre_all_gather_op.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 
+namespace operation = tt::tt_metal::operation;
+
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(

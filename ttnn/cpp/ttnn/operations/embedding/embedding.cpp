@@ -43,7 +43,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
     bool fused_tilized = false;
-    if (input_tensor.padded_shape()[-1] % TILE_HEIGHT == 0 && weight.padded_shape()[-1] % TILE_WIDTH == 0) {
+    if (input_tensor.padded_shape()[-1] % tt::constants::TILE_HEIGHT == 0 &&
+        weight.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
         if (layout.has_value()) {
             if (layout.value() == ttnn::TILE_LAYOUT) {
                 fused_tilized = true;
