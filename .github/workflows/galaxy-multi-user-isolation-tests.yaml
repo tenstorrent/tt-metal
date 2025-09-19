@@ -1,0 +1,112 @@
+name: Galaxy Multi-user Isolation Tests
+on:
+  workflow_dispatch:
+    inputs:
+      galaxy-multi-user-isolation-tests:
+        description: 'Run Galaxy multi-host job'
+        required: false
+        default: true
+        type: boolean
+  schedule:
+    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+  galaxy-multi-user-isolation-tests:
+    needs: build-artifact
+    runs-on:
+      # A physical, multi-host WH 6U that's in service
+      - topology-6u
+      - arch-wormhole_b0
+      - bare-metal
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Create Docker Compose file
+        run: python3 .github/scripts/utils/multi-user-create-files.py --image "${{ needs.build-artifact.outputs.dev-docker-image }}"
+      - name: Run Docker Compose
+        run: |
+          TRAY_PODS_DIR=".multi-user-galaxy-docker-files"
+          REQUIRED_PODS=4
+          TIMEOUT=300
+
+          rm -rf "$TRAY_PODS_DIR"
+          mkdir -p "$TRAY_PODS_DIR"
+
+          EPOCH_START=$(date +%s)
+
+          docker compose -p multi-user -f multi-user-dc.yaml up -d
+
+          # wait for REQUIRED .txt files to appear (with timeout)
+          while true; do
+            files=( "$TRAY_PODS_DIR"/tray-*.txt )
+            count=${#files[@]}
+            elapsed=$(( $(date +%s) - EPOCH_START))
+            if [ "$count" -ge "$REQUIRED_PODS" ]; then
+              break
+            fi
+            if [ "$elapsed" -ge "$TIMEOUT" ]; then
+              echo "Error: Not all $REQUIRED_PODS files appeared within $TIMEOUT seconds (found $count)."
+              exit 1
+            fi
+            sleep 1
+          done
+
+          echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
+
+      - name: Run the tests
+        run: |
+          run_test() {
+            testname="$1"
+            command="$2"
+            pids=()
+            for tray in tray-0 tray-1 tray-2 tray-3; do
+              echo ">>> Running $testname in $tray"
+              (
+                docker exec "$tray" bash -c "$command" | sed "s/^/[$tray] /"
+                status=${PIPESTATUS[0]}
+                exit $status
+              ) &
+              pids+=($!)
+            done
+
+            status=0
+            for pid in "${pids[@]}"; do
+              if ! wait "$pid"; then
+                status=1
+              fi
+            done
+
+            if [ $status -ne 0 ]; then
+              exit 1
+            fi
+          }
+
+          export -f run_test
+          run_test "test_minimal_all_gather_async" "pytest -v tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
+
+      - name: Tear down containers
+        if: always()
+        run: |
+          docker compose -p multi-user -f multi-user-dc.yaml down

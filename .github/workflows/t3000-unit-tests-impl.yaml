@@ -36,11 +36,11 @@ jobs:
           { name: "t3k llama3.2-90b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b-vision_unit_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
           #{ name: "t3k llama3.1-70b tests", arch: wormhole_b0, cmd: run_t3000_llama3.1-70b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
           { name: "t3k llama3.2-90b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          #{ name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
+          { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, # Harry Zhou
           { name: "t3k grok tests", arch: wormhole_b0, cmd: run_t3000_grok_tests, timeout: 30, owner_id: U03HY7MK4BT}, #Mark O'Connor
           { name: "t3k unet shallow tests", arch: wormhole_b0, cmd: run_t3000_unet_shallow_tests, timeout: 30, owner_id: U06ECNVR0EN}, #Evan Smal
           { name: "t3k mistral tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 30, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-          { name: "t3k qwen25_vl tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_unit_tests, timeout: 40, owner_id: U07RY6B5FLJ}, #Gongyu Wang
+          { name: "t3k qwen25_vl tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_unit_tests, timeout: 20, owner_id: U07RY6B5FLJ}, #Gongyu Wang
           { name: "t3k gemma3-small tests", arch: wormhole_b0, cmd: run_t3000_gemma3-small_tests, timeout: 30, owner_id: U08E1JCDVNX},  #Pavle Petrovic
         ]
     name: ${{ matrix.test-group.name }}

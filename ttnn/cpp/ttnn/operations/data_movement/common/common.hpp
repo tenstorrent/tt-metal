@@ -63,11 +63,7 @@ bool is_enough_space(
     uint32_t num_tiles_per_row);
 
 ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
-    const ttnn::Tensor& tensor,
-    float value,
-    bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config);
+    const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
 
 uint32_t wrap_index(int index, int size);
 
@@ -102,13 +98,13 @@ public:
         post_transform_(params.post_transform),
         operation_(params.operation) {}
 
-    inline bool should_format(OpInputTypes... args) const { return predicate_(args...); }
+    bool should_format(OpInputTypes... args) const { return predicate_(args...); }
 
-    inline OwnedArgsType pre_format(OpInputTypes... args) const { return pre_transform_(args...); }
+    OwnedArgsType pre_format(OpInputTypes... args) const { return pre_transform_(args...); }
 
-    inline OpOutputType post_format(const OpOutputType& output) const { return post_transform_(output); }
+    OpOutputType post_format(const OpOutputType& output) const { return post_transform_(output); }
 
-    inline OpOutputType operator()(OpInputTypes... args) const {
+    OpOutputType operator()(OpInputTypes... args) const {
         if (should_format(args...)) {
             auto formatted_input = pre_format(args...);
             auto op_output = std::apply(operation_, formatted_input);

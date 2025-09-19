@@ -143,6 +143,10 @@ example: `http://10.250.37.37:4242`, for port ``4242``.
 
 If you forwarded your port, navigate to `http://localhost:8888`.
 
+`http://<ip address>:<port>` will redirect you to the tt-metalium docs at `http://<ip address>:<port>/tt-metalium/`.
+
+To view the ttnn docs, navigate to `http://<ip address>:<port>/ttnn`.
+
 4. If you make changes, you may need to check spelling errors.
 
 We use the spell-checker, Aspell, to ensure we don't sneak in some typos in
@@ -249,7 +253,7 @@ structure our tests with this framework is to bundle it into a single
 executable.
 
 You can use `--gtest_filter` to filter out the specific test you'd like.
-For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
+For example, to build and run the `MeshDispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
 1. Build the tests:
@@ -259,7 +263,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_api --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
+   ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.TensixDRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:
@@ -268,7 +272,7 @@ On slow dispatch, to run another specific test, the equivalent would be:
 2. Run with the slow dispatch mode:
    ```
    export TT_METAL_SLOW_DISPATCH_MODE=1
-   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="DeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
+   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="MeshDeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
    ```
 
 We have split our tests into the two dispatch modes for less pollution of state
@@ -546,7 +550,7 @@ To set up pre-commit on your local machine, follow these steps:
   and without CI failure.
 
 ### Skipping CI/CD for documentation updates
-- CI/CD can be skipped for *documentation only* updates that incur no functional change.
+- CI/CD can be skipped for *documentation only* updates that incur no functional change. However, note that modifying `.rst` files in `docs/` is *not a documentation only* update, as the CI step for building documentation needs to run.
 - Upon submitting a PR and getting the necessary approvals:
   - Click Squash and Merge
   - Before confirming, edit the top level commit message by prepending the token `[skip ci]`

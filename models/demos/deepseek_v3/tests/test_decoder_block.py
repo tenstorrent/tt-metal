@@ -37,16 +37,16 @@ from models.demos.deepseek_v3.utils.test_utils import (
     [
         (DecoderBlock, None, 0),
         (MoEDecoderBlock, None, 3),
-        # (DecoderBlock, "model.layers.0", None),
-        # (MoEDecoderBlock, "model.layers.3", None), # TODO: Uncomment once PCC is fixed for MoE
+        (DecoderBlock, "model.layers.0", None),
+        (MoEDecoderBlock, "model.layers.3", None),
     ],
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size",
     [
         ("decode", 1, 32),
-        # ("prefill", 512), # TODO: Uncomment once MLA prefill works
-        # ("prefill", 2048),  # Test chunking # TODO: Uncomment once MLA prefill works
+        ("prefill", 128, 1),
+        # ("prefill", 2048, 1),  # Test chunking # TODO: Uncomment once MLA prefill works
     ],
 )
 def test_forward_pass(
@@ -110,11 +110,11 @@ def test_forward_pass(
     weight_config = DecoderBlockClass.convert_weights(
         hf_config_short, [state_dict] * mesh_device.shape[0], tmp_path, mesh_device
     )
-    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, is_padding_layer)
     model_state = DecoderBlockClass.create_state(
         hf_config_short, paged_config, mesh_device, ccl, is_padding_layer, (paged_input_cache,) * mesh_device.shape[0]
     )
-    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
+    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device, is_padding_layer)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Set up ttnn inputs

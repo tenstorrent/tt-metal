@@ -15,7 +15,6 @@
 #include <ttnn/decorators.hpp>
 #include <ttnn/device_operation.hpp>
 #include <ttnn/distributed/types.hpp>
-#include <ttnn/common/queue_id.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/core_coord.hpp>

@@ -32,6 +32,7 @@ tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core(
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& input_mask,
+    const std::optional<const Tensor>& reciprocals,
     Tensor& output,
     float eps,
     uint32_t num_groups,
@@ -40,7 +41,8 @@ tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core(
     CoreCoord grid_size,
     bool inplace,
     uint32_t num_out_blocks,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
 
 tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
@@ -55,7 +57,8 @@ tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
 
 struct GroupNorm {
     float eps;
@@ -63,6 +66,7 @@ struct GroupNorm {
     MemoryConfig output_mem_config;
     GroupNormProgramConfig program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
+    bool use_welford;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
