@@ -211,6 +211,53 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
     }
   }
 
+  // Fallback: if no snippets collected via primary heuristics, try to at least
+  // return names (and a small context) of log files that clearly indicate failure.
+  if (collected.length === 0) {
+    const fallbackMarkers = [
+      /\bFAILED\b/,            // pytest summary and generic FAILED
+      /\[\s*FAILED\s*\]/,    // gtest [  FAILED  ]
+      /\bERROR\b/,             // generic ERROR
+      /Traceback\b/            // python tracebacks
+    ];
+
+    const stack2 = [rootDir];
+    while (stack2.length && collected.length < maxCount) {
+      const dir = stack2.pop();
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const ent of entries) {
+        const p = path.join(dir, ent.name);
+        if (ent.isDirectory()) {
+          stack2.push(p);
+        } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
+          try {
+            const text = fs.readFileSync(p, 'utf8');
+            const rawLines = text.split(/\r?\n/);
+            let hitIndex = -1;
+            for (let i = 0; i < rawLines.length && hitIndex === -1; i++) {
+              const line = rawLines[i];
+              if (fallbackMarkers.some(rx => rx.test(line))) {
+                hitIndex = i;
+                break;
+              }
+            }
+            if (hitIndex !== -1) {
+              const from = Math.max(0, hitIndex - 3);
+              const to = Math.min(rawLines.length, hitIndex + 4);
+              const snippet = rawLines.slice(from, to).join('\n');
+              const fileBase = path.basename(p);
+              collected.push({
+                label: `${fileBase}:\nfallback match`,
+                snippet: snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet,
+              });
+            }
+          } catch (_) { /* ignore */ }
+        }
+        if (collected.length >= maxCount) break;
+      }
+    }
+  }
+
   return collected;
 }
 
