@@ -34,7 +34,6 @@ void get_device_expert_indices(
         noc_async_read(map_page_noc_addr, mapping_l1_buffer_addr,MappingPageSizeBytes);
         noc_async_read_barrier();
 
-        invalidate_l1_cache();
         if (mapping_ptr[DeviceIdx] == 1u) {
             *(output_ptr++) = expert_idx;
         }
