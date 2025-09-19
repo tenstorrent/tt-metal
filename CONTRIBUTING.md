@@ -145,7 +145,7 @@ If you forwarded your port, navigate to `http://localhost:8888`.
 
 `http://<ip address>:<port>` will redirect you to the tt-metallium docs at `http://<ip address>:<port>/tt-metalium/`.
 
-To view the tt-nn docs, navigate to `http://<ip address>:<port>/ttnn`.
+To view the ttnn docs, navigate to `http://<ip address>:<port>/ttnn`.
 
 4. If you make changes, you may need to check spelling errors.
 
