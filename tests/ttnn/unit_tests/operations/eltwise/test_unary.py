@@ -1758,6 +1758,7 @@ def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 
     if ttnn_dtype == ttnn.bfloat16:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=5.0)
+
     else:
         assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
