@@ -237,8 +237,7 @@ autograd::TensorPtr Bert::operator()(
         pooled_output = (*m_pooler)(pooled_output);
 
         // BERT uses tanh activation for the pooler output
-        // TODO: Implement tanh if needed for exact BERT compatibility
-        // pooled_output = ops::tanh(pooled_output);
+        pooled_output = ops::tanh(pooled_output);
 
         return pooled_output;
     }
