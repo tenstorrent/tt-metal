@@ -251,7 +251,7 @@ Tensor QuantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
-                    false,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
@@ -268,7 +268,7 @@ Tensor QuantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
-                    false,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
@@ -548,7 +548,7 @@ Tensor DequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
-                    false,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
@@ -564,7 +564,7 @@ Tensor DequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
-                    false,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
