@@ -24,9 +24,9 @@ protected:
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
-        std::shared_ptr<PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        std::shared_ptr<PinnedMemory> pinned_memory = nullptr) = 0;
     virtual void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
