@@ -158,6 +158,7 @@ void kernel_main() {
     // generate and send mask to compute if causal
 
     if constexpr (is_causal) {
+        // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 

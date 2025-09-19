@@ -371,12 +371,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
 
-    const auto q_tile = full_tile;
+    auto q_tile = full_tile;
     const auto k_tile = full_tile;
     const auto v_tile = full_tile;
-    const auto mask_tile = full_tile;
+    auto mask_tile = full_tile;
 
-    const auto out_tile = full_tile;
+    auto out_tile = full_tile;
 
     auto scalar_tile = full_tile;
     auto im_tile = full_tile;

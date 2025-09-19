@@ -169,6 +169,7 @@ void kernel_main() {
         }
         if constexpr (use_half_tile and not tilize_q) {
             // q_addr represents 32x32 tiles; read them as 16x32 tiles
+            // TODO: Properly setup q input as tiny tiles and remove special handling for tiny tiles
             for (uint8_t tile = 0; tile < q_chunk_tiles; tile++) {
                 noc_async_read(q_read_addr, q_write_ptr, q_tile_bytes);
                 q_read_addr += 2 * q_tile_bytes;
@@ -262,7 +263,6 @@ void kernel_main() {
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
         if constexpr (is_paged_attention) {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
-                // Read K chunk in row-major order (to simplify page mapping). Write tiles to CB in transposed order.
                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t_dynamic;
                 uint64_t k_base_read_ptr;
                 {
@@ -287,14 +287,15 @@ void kernel_main() {
                             physical_k_tile_id += 1;                               // Go to next tile in row
                             k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
-                        if (++barrier_count == barrier_threshold) {
-                            noc_async_read_barrier();
-                            barrier_count = 0;
+                            if (++barrier_count == barrier_threshold) {
+                                noc_async_read_barrier();
+                                barrier_count = 0;
+                            }
                         }
                     }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_k_in, k_chunk_tiles);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_k_in, k_chunk_tiles);
 
                 if constexpr (use_attention_mask) {
                     mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(

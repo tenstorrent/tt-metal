@@ -84,10 +84,10 @@ void MAIN {
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
     constexpr uint32_t cb_out_accumulate_im = tt::CBIndex::c_26;
-    constexpr uint32_t cb_cur_max = tt::CBIndex::c_27;
-    constexpr uint32_t cb_prev_max = tt::CBIndex::c_28;
-    constexpr uint32_t cb_cur_sum = tt::CBIndex::c_29;
-    constexpr uint32_t cb_prev_sum = tt::CBIndex::c_30;
+    constexpr uint32_t cb_max_1 = tt::CBIndex::c_27;
+    constexpr uint32_t cb_max_2 = tt::CBIndex::c_28;
+    constexpr uint32_t cb_sum_1 = tt::CBIndex::c_29;
+    constexpr uint32_t cb_sum_2 = tt::CBIndex::c_30;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
     constexpr uint32_t cb_prev_sum_2 = tt::CBIndex::c_21;
     constexpr uint32_t cb_exp_max_diff_2 = tt::CBIndex::c_22;
