@@ -8,6 +8,7 @@ Welcome to the community-driven Linux distribution support folder for Tenstorren
 | ------ | ---------------- | ------- | ------ |
 | Debian 12    | ❌ | ✅ | ❌ |
 | QubesOS 4    | ❌ | ❌ | ✅ |
+| Arch Linux   | ✅ | — | ✅ |
 | Alpine 3.21  |    |    |    |
 | LinuxMint 22 |    |    |    |
 
