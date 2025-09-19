@@ -825,7 +825,7 @@ void issue_read_buffer_dispatch_command_sequence(
     const bool is_unpadded = (buffer.page_size() == dispatch_params.padded_page_size);
     const bool has_pinned_inputs = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
     const uint32_t xfer_bytes = dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
-    bool pinned_feasible = false;
+    bool use_pinned_transfer = false;
     uint32_t pinned_dst_noc_xy = 0;
     uint32_t pinned_dst_addr_lo = 0;
 
@@ -854,7 +854,7 @@ void issue_read_buffer_dispatch_command_sequence(
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_dst_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
                     pcie_cores.front().x, pcie_cores.front().y);
-                pinned_feasible = true;
+                use_pinned_transfer = true;
             }
         }
     }
@@ -865,7 +865,7 @@ void issue_read_buffer_dispatch_command_sequence(
         calculator.add_dispatch_wait();
     }
     calculator.add_prefetch_stall();
-    if (pinned_feasible) {
+    if (use_pinned_transfer) {
         // When flush_prefetch=false and inline_data=false, size is ignored.
         calculator.add_dispatch_write_linear_h<false, false>(0);
     } else {
@@ -896,7 +896,7 @@ void issue_read_buffer_dispatch_command_sequence(
         dispatch_params.expected_num_workers_completed[offset_index]);
 
     // Select write op once, then unify relay
-    if (pinned_feasible) {
+    if (use_pinned_transfer) {
         //fmt::println(stderr, "Reading pinned");
         command_sequence.add_dispatch_write_linear_h<false, false>(0, pinned_dst_noc_xy | 0x8, pinned_dst_addr_lo, xfer_bytes);
     } else {
