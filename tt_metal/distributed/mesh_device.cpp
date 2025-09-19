@@ -61,6 +61,9 @@
 #include "impl/context/metal_context.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/pcie/pci_device.hpp>
+#include <limits>
 
 namespace tt {
 namespace tt_metal {
@@ -228,6 +231,40 @@ MeshDevice::MeshDevice(
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
+
+    // Cache memory pinning parameters at construction time
+    // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
+    bool iommu_enabled = false;
+    try {
+        tt::umd::Cluster umd_cluster;
+        auto mmio_ids = umd_cluster.get_target_mmio_device_ids();
+        if (!mmio_ids.empty()) {
+            chip_id_t mmio_id = *mmio_ids.begin();
+            auto pci = umd_cluster.get_tt_device(mmio_id)->get_pci_device();
+            if (pci) {
+                iommu_enabled = pci->is_iommu_enabled();
+            }
+        }
+    } catch (...) {
+        iommu_enabled = false;
+    }
+
+    if (!iommu_enabled) {
+        memory_pinning_params_ = MemoryPinningParameters{0u, 0u, false};
+    } else {
+        const auto device_arch = this->arch();
+        const bool map_to_noc_supported = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
+        if (device_arch == tt::ARCH::BLACKHOLE) {
+            memory_pinning_params_ = MemoryPinningParameters{
+                std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint64_t>::max(), map_to_noc_supported};
+        } else if (device_arch == tt::ARCH::WORMHOLE_B0) {
+            const uint64_t four_gb = 4ULL * 1024ULL * 1024ULL * 1024ULL;
+            const uint64_t hugepage_size = static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
+            memory_pinning_params_ = MemoryPinningParameters{12u, four_gb - hugepage_size, map_to_noc_supported};
+        } else {
+            memory_pinning_params_ = MemoryPinningParameters{0u, 0u, false};
+        }
+    }
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
@@ -1077,5 +1114,7 @@ std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
 
     return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
+
+MeshDevice::MemoryPinningParameters MeshDevice::get_memory_pinning_parameters() const { return memory_pinning_params_; }
 
 }  // namespace tt::tt_metal::distributed
