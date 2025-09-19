@@ -190,21 +190,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    void* dst,
-    bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
-    Buffer& buffer_obj = detail::GetBufferObject(buffer);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::ReadFromBuffer(buffer_obj, (uint8_t*)dst);
-    }
-    BufferRegion region(0, buffer_obj.size());
-    EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
-}
-
 void EnqueueReadSubBuffer(
     CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,

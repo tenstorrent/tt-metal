@@ -590,51 +590,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
 
 // clang-format off
 /**
- * Reads a buffer from the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
- * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
- * | dst            | The memory where the result will be stored                                        | void*                               |                                        | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- */
-// clang-format on
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    void* dst,
-    bool blocking);
-
-// clang-format off
-/**
- * Reads a buffer from the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
- * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
- * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                        | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- */
-// clang-format on
-template <typename DType>
-void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, bool blocking) {
-    dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
-    EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking);
-}
-template <typename DType>
-void EnqueueReadBuffer(
-    CommandQueue& cq, const std::shared_ptr<Buffer>& buffer, std::vector<DType>& dst, bool blocking) {
-    EnqueueReadBuffer(cq, *buffer, dst, blocking);
-}
-
-// clang-format off
-/**
  * Reads a specified region of the buffer from the device
  *
  * Return value: void
