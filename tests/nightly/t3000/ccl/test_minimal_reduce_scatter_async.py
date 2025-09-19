@@ -642,10 +642,10 @@ def test_reduce_scatter_async_sharded_to_sharded(
         (
             [1, 1, 384, 240],
             3,
-            [256, 256],
+            [64, 256],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            [256, 32],
+            [64, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
