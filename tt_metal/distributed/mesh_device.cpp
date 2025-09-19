@@ -276,16 +276,17 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         }
     }();
 
-    auto local_root_devices = extract_locals(scoped_devices->root_devices());
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    const auto root_devices = scoped_devices->root_devices();
 
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(mesh_shape, scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : local_root_devices) {
+    for (auto device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -319,10 +320,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
             MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         fabric_node_ids.push_back(fabric_node_id);
     }
+
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    const auto root_devices = scoped_devices->root_devices();
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(
-            MeshShape(1, device_ids.size()), scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
