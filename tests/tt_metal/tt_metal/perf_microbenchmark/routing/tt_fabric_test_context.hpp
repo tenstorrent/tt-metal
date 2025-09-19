@@ -411,10 +411,12 @@ public:
     }
 
     void generate_bandwidth_summary() {
-
+        // Load golden CSV file
+        load_golden_csv();
+        
         // Calculate bandwidth statistics for multi-iteration tests
         calculate_bandwidth_summary_statistics();
-        
+
         // Generate bandwidth summary CSV file
         generate_bandwidth_summary_csv();
 
@@ -1288,10 +1290,12 @@ private:
         for (std::string stat_name : stat_names_) {
             summary_csv_stream << "," << stat_name;
         }
+        summary_csv_stream << ",tolerance_percent";
         summary_csv_stream << "\n";
         log_info(tt::LogTest, "Initialized summary CSV file: {}", summary_csv_file_path.string());
 
         // Write data rows
+        std::vector<GoldenCsvEntry>::iterator golden_it = golden_csv_entries_.begin();
         for (const auto& result : bandwidth_results_summary_) {
             // Convert vector of num_devices to a string representation
             std::string num_devices_str = "[";
@@ -1308,6 +1312,15 @@ private:
             << result.num_links << "," << result.packet_size << "," << result.num_iterations;
             for (double stat : result.statistics_vector) {
                 summary_csv_stream << "," << std::fixed << std::setprecision(6) << stat;
+            }
+            // To write the acceptable tolerance for this set, iterate through the golden csv entries, which are already in the same order as the bandwidth summary.
+            if (golden_it == golden_csv_entries_.end()) {
+                log_warning(tt::LogTest, "Golden CSV entry not found for test {}, putting 0 in summary CSV", result.test_name);
+                summary_csv_stream << "," << 0.0;
+            } 
+            else {
+                summary_csv_stream << "," << golden_it->tolerance_percent;
+                golden_it++;
             }
             summary_csv_stream << "\n";
         }
@@ -1399,7 +1412,7 @@ private:
             entry.bandwidth_GB_s = std::stod(tokens[10]);
             // Skip min, max, std dev
             entry.tolerance_percent = std::stod(tokens[14]);
-
+            std::cout << "entry.tolerance_percent: " << entry.tolerance_percent << std::endl;
             golden_csv_entries_.push_back(entry);
         }
 
@@ -1441,7 +1454,7 @@ private:
         comparison_results_.clear();
         failed_tests_.clear();
         // Load golden CSV (will warn if not found)
-        load_golden_csv();
+        // load_golden_csv();
         if (golden_csv_entries_.empty()) {
             log_warning(tt::LogTest, "Skipping golden CSV comparison - no golden file found");
             return;
