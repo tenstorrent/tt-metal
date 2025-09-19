@@ -92,7 +92,6 @@ runs:
         # spitting our endless logs, causing the runner being unable to call home, resulting in job failures / runner
         # offline status on GitHub. Issue tt-metal/#12626
         options: |
-          -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           --rm
           -v /etc/passwd:/etc/passwd:ro
           -v /etc/shadow:/etc/shadow:ro
@@ -121,12 +120,9 @@ runs:
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e no_proxy={0}', env.CIV2_no_proxy)) || '' }}
           ${{ inputs.device }}
           -w ${{ github.workspace }}
-          --user 0
           -e PIP_CACHE_DIR=/pip-cache
         run: |
           set -eu
-
-          git config --global --add safe.directory ${{ github.workspace }}
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
