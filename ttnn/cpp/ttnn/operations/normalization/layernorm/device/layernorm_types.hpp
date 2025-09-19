@@ -17,6 +17,7 @@ enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL
 struct LayerNormDefaultProgramConfig {
     bool legacy_reduction = true;
     bool legacy_rsqrt = true;
+    bool use_welford = false;
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
