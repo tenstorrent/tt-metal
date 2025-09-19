@@ -30,6 +30,9 @@
 namespace {
 void print_aerisc_training_status(chip_id_t device_id, const CoreCoord& virtual_core) {
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
+        return;
+    }
     const auto port_status_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::PORT_STATUS);
     const auto retrain_count_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RETRAIN_COUNT);
     const auto rx_link_up_addr = hal.get_eth_fw_mailbox_val(tt::tt_metal::FWMailboxMsg::RX_LINK_UP);
