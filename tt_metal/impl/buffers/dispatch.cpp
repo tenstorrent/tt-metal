@@ -816,6 +816,8 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
 
@@ -826,6 +828,7 @@ void issue_read_buffer_dispatch_command_sequence(
     bool pinned_feasible = false;
     uint32_t pinned_dst_noc_xy = 0;
     uint32_t pinned_dst_addr_lo = 0;
+
     if (has_pinned_inputs && is_unpadded) {
         const chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
@@ -835,10 +838,13 @@ void issue_read_buffer_dispatch_command_sequence(
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(dispatch_params.pinned_memory->get_host_ptr());
             const uint8_t* dst_ptr = static_cast<const uint8_t*>(dispatch_params.dst);
-            const uint64_t dst_offset_base =
-                static_cast<uint64_t>(dst_ptr - pinned_host_base) + dispatch_params.unpadded_dst_offset;
-            const uint64_t pinned_size = dispatch_params.pinned_memory->get_buffer_size();
-            if (dst_offset_base + xfer_bytes <= pinned_size) {
+            const uint8_t* pinned_region_end = pinned_host_base + dispatch_params.pinned_memory->get_buffer_size();
+            const uint8_t* dst_region_start = dst_ptr + dispatch_params.unpadded_dst_offset;
+            const uint8_t* dst_region_end = dst_region_start + xfer_bytes;
+            if ((reinterpret_cast<uintptr_t>(dst_region_start) % hal.get_write_alignment(HalMemType::HOST) == 0) &&
+                (dst_region_start >= pinned_host_base) &&
+                (dst_region_end <= pinned_region_end)) {
+                const uint64_t dst_offset_base = static_cast<uint64_t>(dst_region_start - pinned_host_base);
                 const auto& cluster = MetalContext::instance().get_cluster();
                 const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
                 const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
