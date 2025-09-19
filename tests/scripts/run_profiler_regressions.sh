@@ -11,8 +11,8 @@ run_mid_run_data_dump() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
     python -m tracy -v -r -p --sync-host-device --cpp-post-process --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
-    runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
-    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/ops_perf_results.csv
+    runDate=$(ls $PROFILER_OUTPUT_DIR/)
+    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
 }
 
 run_async_test() {
@@ -27,11 +27,11 @@ run_async_test() {
             echo "No verification as test was skipped"
         else
             echo "Verifying test results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
+            runDate=$(ls $PROFILER_OUTPUT_DIR/)
             LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
-            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/ops_perf_results.csv
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
         fi
     fi
 }
@@ -49,24 +49,23 @@ run_async_tracing_T3000_test() {
             echo "No verification as test was skipped"
         else
             echo "Verifying test results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
+            runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
             LINE_COUNT=2700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
-            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/reports/ops_perf_results.csv
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
 
             # Testing device only report on the same artifacts
             rm -rf $PROFILER_OUTPUT_DIR/$runDate
             ./tools/tracy/process_ops_logs.py --device-only --date
             echo "Verifying device-only results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
+            runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
             LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
-            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/reports/ops_perf_results.csv
-
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
             LINE_COUNT=1800
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv" "$LINE_COUNT")
             echo $res
@@ -85,11 +84,11 @@ run_ccl_T3000_test() {
         echo "No verification as test was skipped"
     else
         echo "Verifying test results"
-        runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
+        runDate=$(ls $PROFILER_OUTPUT_DIR/)
         LINE_COUNT=8 #8 devices
         res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGather")
         echo $res
-        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/reports/ops_perf_results.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
     fi
 }
 
@@ -104,11 +103,11 @@ run_async_ccl_T3000_test() {
         echo "No verification as test was skipped"
     else
         echo "Verifying test results"
-        runDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v "reports" | grep -v "ops_perf_results.csv")
+        runDate=$(ls $PROFILER_OUTPUT_DIR/)
         LINE_COUNT=128 #8 devices x 16 iterations
         res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherCommandProcessorAsync")
         echo $res
-        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_OUTPUT_DIR/reports/ops_perf_results.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
     fi
 }
 
