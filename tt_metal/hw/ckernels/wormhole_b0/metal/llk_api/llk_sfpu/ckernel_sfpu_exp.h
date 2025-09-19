@@ -15,6 +15,19 @@ namespace sfpu {
 sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 
 /*
+ * Both _float_to_int32_ and _float_to_int32_positive_ use branch to handle special cases
+ * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
+ * This allow for a branch free (and much smaller algorithm) to compute integer value
+ */
+sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
+    sfpi::vInt exp = exexp(val);
+    sfpi::vInt man = exman8(val);
+    sfpi::vInt shift = exp - 23;
+    man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
+    return man;
+}
+
+/*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
  * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
@@ -33,8 +46,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // Intermediary values can overflow if input value is below -88.0f, which leads to output increasing again instead
     // of staying at 0. This overflow happens when `log2(e) * val < 127.0f`, which correspond to `val < 88.0f`
     // Would it be possible to call minmax ?
-    // could also add SKIP_POSITIVE_CHECK here.ß
-    v_if(val > -88.0f) { val = -88.f; }
+    // could also add SKIP_POSITIVE_CHECK here.
+    // TODO: Could compute abs (setsgn) and clamp to 88.8f in a single branch / SFPSWAP
+    v_if(val < -88.0f) { val = -88.f; }
+    v_endif;
+
+    v_if(val > 88.8f) { val = 88.8f; }
     v_endif;
 
     // Idea: Loop unrolling + Loop splitting to reduce overhead of loading constants
@@ -44,7 +61,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // factor = 0x00b8aa3b (computed through log(e))
     // bias = 0x3f800000
     // Is sfpi::vFloat(0x3f800000) getting optimized ?
-    sfpi::vInt z = _float_to_int32_positive_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+    sfpi::vInt z = _float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
     sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
@@ -61,7 +78,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // Let y = exp(d2 * d3). Can ?
     // exexp(y) < 0 ?
     // exexp(y) > 30 ?
-    zif = _float_to_int32_positive_(d2 * d3);
+    zif = _float_to_int32_exp21f_(d2 * d3);
 
     // Restore exponent
     // Is this compiling properly to 1 instruction (vs. add + setexp)
