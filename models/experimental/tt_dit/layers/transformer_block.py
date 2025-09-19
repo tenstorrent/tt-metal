@@ -11,12 +11,12 @@ import ttnn
 from ..layers.feedforward import ParallelFeedForward
 from ..layers.linear import ColParallelLinear
 from ..layers.normalization import DistributedLayerNorm
+from ..utils.substate import rename_substate
 from .attention import Attention, all_gather
 from .module import Module
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-    from typing import Any
+    import torch
 
     from ..parallel.config import DiTParallelConfig
     from ..parallel.manager import CCLManager
@@ -159,8 +159,17 @@ class TransformerBlock(Module):
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
-        def _shuffle_ada_norm_linear(linear_state):
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm1.linear", "norm1_linear")
+        rename_substate(state, "norm1.norm", "norm1_norm")
+        rename_substate(state, "norm1_context.linear", "norm1_context_linear")
+        rename_substate(state, "norm1_context.norm", "norm1_context_norm")
+        rename_substate(state, "ff.net.0.proj", "ff.ff1")
+        rename_substate(state, "ff.net.2", "ff.ff2")
+        rename_substate(state, "ff_context.net.0.proj", "ff_context.ff1")
+        rename_substate(state, "ff_context.net.2", "ff_context.ff2")
+
+        def _shuffle_ada_norm_linear(prefix: str) -> None:
             # Rearrange QKV projections such column-fracturing shards the heads
             def _shuffle(x, in_dim):
                 ndev = self.parallel_config.tensor_parallel.factor
@@ -174,29 +183,18 @@ class TransformerBlock(Module):
                 x = x.T
                 return x
 
-            in_dim = linear_state["weight"].shape[1]
-            linear_state["weight"] = _shuffle(linear_state["weight"], in_dim)
-            if "bias" in linear_state:
-                linear_state["bias"] = _shuffle(linear_state["bias"].reshape(-1, 1), in_dim).squeeze()
+            weight_key = f"{prefix}.weight"
+            bias_key = f"{prefix}.bias"
 
-        state["norm1_linear"] = state.get("norm1", {}).pop("linear")
-        state["norm1_norm"] = state.get("norm1", {}).pop("norm")
-        state["norm1_context_linear"] = state.get("norm1_context", {}).pop("linear")
-        state["norm1_context_norm"] = state.get("norm1_context", {}).pop("norm")
+            if weight_key in state:
+                in_dim = state[weight_key].shape[1]
 
-        state["ff"] = {
-            "ff1": state.get("ff", {}).get("net", {}).get("0", {}).pop("proj"),
-            "ff2": state.get("ff", {}).get("net", {}).pop("2"),
-        }
-        state["ff_context"] = {
-            "ff1": state.get("ff_context", {}).get("net", {}).get("0", {}).pop("proj"),
-            "ff2": state.get("ff_context", {}).get("net", {}).pop("2"),
-        }
+                state[weight_key] = _shuffle(state[weight_key], in_dim)
+                if bias_key in state:
+                    state[bias_key] = _shuffle(state[bias_key].reshape(-1, 1), in_dim).squeeze()
 
-        if "norm1_linear" in state:
-            _shuffle_ada_norm_linear(state["norm1_linear"])
-        if "norm1_context_linear" in state:
-            _shuffle_ada_norm_linear(state["norm1_context_linear"])
+        _shuffle_ada_norm_linear("norm1_linear")
+        _shuffle_ada_norm_linear("norm1_context_linear")
 
     def forward(
         self,
