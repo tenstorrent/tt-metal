@@ -138,6 +138,17 @@ private:
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
 public:
+    struct MemoryPinningParameters {
+        uint32_t max_pins;
+        uint64_t max_total_pin_size;
+        bool can_map_to_noc;
+    };
+
+private:
+    MemoryPinningParameters memory_pinning_params_{};
+
+public:
+
     MeshDevice(
         std::shared_ptr<ScopedDevices> scoped_devices,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
@@ -327,6 +338,9 @@ public:
         const MeshCoordinateRangeSet& coordinate_range_set,
         HostBuffer& host_buffer,
         bool map_to_noc = false);
+
+    MemoryPinningParameters get_memory_pinning_parameters() const;
+
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
