@@ -93,7 +93,8 @@ jobs:
     runs-on: ${{ 
       inputs.runner-label == 'N150' && 'tt-ubuntu-2204-N150-viommu-stable' || 
       inputs.runner-label == 'N300' && 'tt-ubuntu-2204-N300-viommu-stable' || 
-      inputs.runner-label == 'P150' && 'tt-ubuntu-2204-P150-viommu-stable' 
+      inputs.runner-label == 'P150' && 'tt-ubuntu-2204-P150-viommu-stable' ||
+      fromJSON(format('["{0}", "in-servicex", "cloud-virtual-machinex"]', inputs.runner-label))
     }}
     steps:
       - name: ⬇️  Setup Job
