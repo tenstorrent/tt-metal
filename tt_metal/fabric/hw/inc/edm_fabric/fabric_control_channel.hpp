@@ -466,25 +466,65 @@ public:
     bool is_active() const { return static_cast<Derived*>(this)->is_active(); }
 };
 
-class LocalHandshakeFSMContext : public BaseFSMContext<LocalHandshakeFSMContext> {
+class HeartbeatFSMContext : public BaseFSMContext<HeartbeatFSMContext> {
 public:
-    void init() { state_ = 0; }
+    FORCE_INLINE void init() { state_ = State::INIT; }
 
-    void process() { state_++; }
+    FORCE_INLINE void process(ControlPacketHeader* packet_header) {
+        // drop any non-heartbeat packets
+        if (packet_header->type != ControlPacketType::HEARTBEAT) {
+            return;
+        }
 
-    bool is_active() const { return state_ != 0; }
+        switch (state_) {
+            case State::INIT:
+                // based on the sub_type, we can determine if we are a sender or a receiver
+                if (packet_header->sub_type == ControlPacketSubType::INIT) {
+                    // TODO: stage the packet in the local buffer
+                    state_ = State::WAITING_FOR_HEARTBEAT;
+                } else if (packet_header->sub_type == ControlPacketSubType::ACK_REQUEST) {
+                    // TODO: send the ack response
+                    state_ = State::COMPLETED;
+                } else {
+                    // Drop any other packets
+                    return;
+                }
+                break;
+            case State::WAITING_FOR_HEARTBEAT:
+                // Drop any non-ack response packets
+                if (packet_header->sub_type != ControlPacketSubType::ACK_RESPONSE) {
+                    return;
+                }
+
+                state_ = State::COMPLETED;
+                break;
+            default: __builtin_unreachable();
+        }
+    }
+
+    FORCE_INLINE bool is_active() const { return state_ != State::COMPLETED; }
 
 private:
-    uint32_t state_;
+    enum class State : uint32_t {
+        INIT,
+        WAITING_FOR_HEARTBEAT,
+        COMPLETED,
+    };
+
+    FORCE_INLINE void prepare_request_packet(ControlPacketHeader* packet_header) {}
+
+    FORCE_INLINE void prepare_response_packet(ControlPacketHeader* packet_header) {}
+
+    State state_;
 };
 
 class RerouteFSMContext : public BaseFSMContext<RerouteFSMContext> {
 public:
-    void init() { state_ = 0; }
+    FORCE_INLINE void init() { state_ = 0; }
 
-    void process() { state_++; }
+    FORCE_INLINE void process(ControlPacketHeader* packet_header) { state_++; }
 
-    bool is_active() const { return state_ != 0; }
+    FORCE_INLINE bool is_active() const { return state_ != 0; }
 
 private:
     uint32_t state_;
@@ -494,18 +534,47 @@ class FSMManager {
 public:
     enum class ActiveFSMType : uint32_t {
         NONE,
-        LOCAL_HANDSHAKE,
+        HEARTBEAT,
+        REROUTE,
     };
 
     FSMManager() = default;
 
     FORCE_INLINE void init() { active_fsm_type_ = ActiveFSMType::NONE; }
 
-    bool is_any_fsm_active() const { return active_fsm_type_ != ActiveFSMType::NONE; }
+    FORCE_INLINE bool is_any_fsm_active() const { return active_fsm_type_ != ActiveFSMType::NONE; }
+
+    FORCE_INLINE void activate_fsm(ControlPacketType packet_type) {
+        // TODO: do we really need to check here if any FSM is active?
+        if (is_any_fsm_active()) {
+            return;
+        }
+
+        switch (packet_type) {
+            case ControlPacketType::HEARTBEAT:
+                active_fsm_type_ = ActiveFSMType::HEARTBEAT;
+                heartbeat_fsm_context_.init();
+                break;
+            case ControlPacketType::REROUTE:
+                active_fsm_type_ = ActiveFSMType::REROUTE;
+                reroute_fsm_context_.init();
+                break;
+            default: __builtin_unreachable();
+        }
+    }
+
+    FORCE_INLINE void process(ControlPacketHeader* packet_header) {
+        switch (active_fsm_type_) {
+            case ActiveFSMType::HEARTBEAT: heartbeat_fsm_context_.process(packet_header); break;
+            case ActiveFSMType::REROUTE: reroute_fsm_context_.process(packet_header); break;
+            default: __builtin_unreachable();
+        }
+    }
 
 private:
     ActiveFSMType active_fsm_type_ = ActiveFSMType::NONE;
-    LocalHandshakeFSMContext local_handshake_fsm_context_;
+    HeartbeatFSMContext heartbeat_fsm_context_;
+    RerouteFSMContext reroute_fsm_context_;
 };
 
 class FabricControlChannel {
@@ -604,15 +673,18 @@ private:
     FORCE_INLINE void process_local_control_packet(ControlPacketHeader* packet_header) {
         if (!fsm_manager_.is_any_fsm_active()) {
             // need to peel the packet type to initialize the appropriate FSM?
+            fsm_manager_.activate_fsm(packet_header->type);
         }
+
+        fsm_manager_.process(packet_header);
     }
 
     FORCE_INLINE void process_control_packet(ControlPacketHeader* packet_header) {
         // process the control packet based on its type and source
 
         // step 1: check if the packet is local or not
-        const auto dst_chip_id = packet_header->dst_chip_id;
-        const auto dst_mesh_id = packet_header->dst_mesh_id;
+        const auto dst_chip_id = packet_header->dst_node_id.chip_id;
+        const auto dst_mesh_id = packet_header->dst_node_id.mesh_id;
         const auto dst_channel_id = packet_header->dst_channel_id;
 
         const tt_l1_ptr fabric_router_l1_config_t* routing_table =

@@ -621,27 +621,48 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
 };
 
 enum ControlPacketType : uint8_t {
-    HANDSHAKE_INIT = 0,
-    ACKNOWLEDGMENT = 1,
-    TERMINATE_START = 2,
-    REROUTE_INIT = 3,
-    REROUTE_CONFIRM = 4,
-    REROUTE_READY = 5
+    HEARTBEAT = 0,
+    REROUTE = 1,
+};
+
+enum ControlPacketSubType : uint8_t {
+    INIT = 0,
+    ACK_REQUEST = 1,
+    ACK_RESPONSE = 2,
+};
+
+union NodeId {
+    struct {
+        uint16_t mesh_id;
+        uint16_t chip_id;
+    };
+    uint32_t node_id_32;
+};
+
+struct HeartbeatPacketContext {
+    NodeId target_node_id;
+    uint32_t target_channel_mask;
+};
+
+struct ReroutePacketContext {
+    uint8_t reserved[8];
+};
+
+union ControlPacketContext {
+    HeartbeatPacketContext heartbeat_packet_context;
+    ReroutePacketContext reroute_packet_context;
+    uint8_t context[8];
 };
 
 struct ControlPacketHeader {
-    union {
-        struct {
-            uint16_t dst_chip_id;
-            uint16_t dst_mesh_id;
-        };
-        uint32_t dst_node_id;  // Used for efficiently writing the dst info
-    };
+    NodeId src_node_id;
+    NodeId dst_node_id;
+    uint8_t src_channel_id;
     uint8_t dst_channel_id;
     ControlPacketType type;
-    uint8_t unique_id;
-    uint8_t seq_num;
-    uint8_t reserved[8];
+    ControlPacketSubType sub_type;
+    ControlPacketContext context;
+    uint8_t reserved[12];
 };
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
@@ -651,7 +672,7 @@ static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
 static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyMeshPacketHeader) is not equal to 64B");
 static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
-static_assert(sizeof(ControlPacketHeader) == 16, "sizeof(ControlPacketHeader) is not equal to 16B");
+static_assert(sizeof(ControlPacketHeader) == 32, "sizeof(ControlPacketHeader) is not equal to 32B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
