@@ -282,7 +282,7 @@ An RB can only have one producer and one consumer.
 
 ### 2.2.2 Fabric Router <a id="router"></a>
 
-Fabric Router is responsible for routing packets in the fabric. Every router requires routing tables to make routing decisions. It is the responsibility of the control plane to configure routing tables in every fabric router. Any router in the fabric only needs to determine the next hop in the direction of packet destination. At every hop, a fabric router picks the next hop for the current packet from its private routing table and forwards the packet in that direction. Routing decisions are purely based on routing table lookups.
+Fabric Router is responsible for routing packets in the fabric. As stated earlier, packets are source routed within a mesh. Fabric workers and It is the responsibility of the control plane to configure routing tables in every fabric router. Any router in the fabric only needs to determine the next hop in the direction of packet destination. At every hop, a fabric router picks the next hop for the current packet from its private routing table and forwards the packet in that direction. Routing decisions are purely based on routing table lookups.
 
 In a 2-D Mesh, a router has 5 possible directions. East, West, North, South to one of its four possible neighbors. The fifth direction is the center or the device itself. This is the case on the last hop, where the packet has reached its destination device, and the packet needs to be consumed at the router’s device.
 
@@ -308,17 +308,6 @@ Mapping the outgoing mux paths and incoming demux paths onto one core halves tha
 
 A major drawback of this approach is inefficient RB usage since we must size the buffers for worst case assuming traffic from all directions all the time. In practice, only some of the VCs and routes will be active which means most of the RBs and thus precious SRAM space will be unutilized.
 
-**Pros:**
-
-* Dedicated Buffers
-* 1-1 Producer-Consumer
-* Routing functions distributed over multiple RiscV worker cores.
-
-**Cons:**
-
-* Inefficient RB memory usage
-* Requires a lot of worker cores
-* Not scalable
 
 ### 2.2.3 Routing Tables <a id="routing_tables"></a>
 
