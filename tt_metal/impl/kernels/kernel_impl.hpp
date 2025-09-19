@@ -87,7 +87,7 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0 + enchantum::to_underlying(config.processor);
+        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_DM0 + enchantum::to_underlying(config.processor);
     }
 
     ~DataMovementKernel() override = default;
