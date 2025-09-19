@@ -701,7 +701,6 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
     // Get the number of ports per chip from a local mesh
-    //
     std::uint32_t num_ports_per_chip = 0;
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < router_intra_mesh_routing_table.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
@@ -1296,26 +1295,6 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
     auto dst_mesh_coord = this->routing_table_generator_->mesh_graph->chip_to_coordinate(
         dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
-    // The src node is considered valid in this API if its owned by the current host. This requires the node to be in a
-    // mesh on this host.
-    //  bool valid_src = this->is_local_mesh(src_fabric_node_id.mesh_id);
-    // Fabric Route will terminate at the exit node if the host does not own the destination node. i.e. dest is not on a
-    // mesh or coordinate range owned by the host.
-    bool end_route_at_exit_node =
-        ((dst_fabric_node_id.mesh_id != src_fabric_node_id.mesh_id) and
-         !(this->is_local_mesh(dst_fabric_node_id.mesh_id)) and (host_local_coord_range.contains(dst_mesh_coord)));
-    // If getting route within mesh, but the dest is not local, we stop at the last local node in the mesh.
-    bool end_route_at_edge_of_local_mesh =
-        ((dst_fabric_node_id.mesh_id == src_fabric_node_id.mesh_id) and
-         !(host_local_coord_range.contains(dst_mesh_coord)));
-
-    // TT_FATAL(
-    //  valid_src,
-    //  "Cannot generate the fabric route between {} and {} on host {}, since M {} is not local to the host.",
-    //  src_fabric_node_id,
-    //  dst_fabric_node_id,
-    //  this->local_mesh_binding_.host_rank,
-    //  src_fabric_node_id.mesh_id);
 
     std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
@@ -1361,6 +1340,8 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
     auto src_chip_id = src_fabric_node_id.chip_id;
     auto dst_mesh_id = dst_fabric_node_id.mesh_id;
     auto dst_chip_id = dst_fabric_node_id.chip_id;
+    // TODO: remove returning of std::nullopt, and just return NONE value
+    // Tests and usage should check for NONE value
     if (src_mesh_id != dst_mesh_id) {
         const auto& inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
         if (inter_mesh_routing_table[*src_mesh_id][src_chip_id][*dst_mesh_id] != RoutingDirection::NONE) {
