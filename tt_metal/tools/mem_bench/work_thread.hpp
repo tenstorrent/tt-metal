@@ -60,7 +60,7 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
                                         &go_cv,
                                         &threads_ready,
                                         total_threads,
-                                        intermediate_callable = std::move(intermediate_callable)]() mutable {
+                                        intermediate_fn = std::forward<IntermediateF>(intermediate_fn)]() mutable {
         std::unique_lock lk{m};
         threads_ready++;
         if (threads_ready == total_threads) {
