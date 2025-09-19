@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::binary {
 
 namespace utils {
-    bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
+    bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
     switch (val) {
         case BinaryOpType::ADD:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
@@ -47,14 +47,14 @@ namespace utils {
         case BinaryOpType::RIGHT_SHIFT:
         case BinaryOpType::LOGICAL_RIGHT_SHIFT: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT32 && b == DataType::UINT32));
         case BinaryOpType::BITWISE_XOR:
-        case BinaryOpType::BITWISE_OR: 
+        case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND:
             return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16) || (a == DataType::UINT32 && b == DataType::UINT32));
-        case BinaryOpType::DIV:
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
         case BinaryOpType::POWER: return true;
+        case BinaryOpType::DIV: return fast_and_approximate_mode ? false : true;
         default: return false;
     }
     return false;
@@ -82,7 +82,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         BinaryOpType op = operation_attributes.binary_op_type;
         DataType dtype1 = tensor_args.input_tensor_a.dtype();
         DataType dtype2 = tensor_args.input_tensor_b->dtype();
-        bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
+        bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2, false);
         if(sfpu_op_check){
             return ElementWiseMultiCoreSfpu{};
         } else {
