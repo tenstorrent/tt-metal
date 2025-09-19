@@ -91,21 +91,8 @@ struct hash<tt::tt_metal::ExitNodeConnection> {
         uint8_t min_chan = std::min(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
         uint8_t max_chan = std::max(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
 
-        // Combine hashes using a method similar to boost::hash_combine
-        std::size_t seed = 0;
-
-        // Hash the sorted node IDs
-        seed ^= std::hash<uint64_t>{}(min_node) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-        seed ^= std::hash<uint64_t>{}(max_node) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-
-        // Hash the sorted channel IDs
-        seed ^= std::hash<uint8_t>{}(min_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-        seed ^= std::hash<uint8_t>{}(max_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-
-        // Hash the is_local flag (this doesn't need sorting)
-        seed ^= std::hash<bool>{}(conn.eth_conn.is_local) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-
-        return seed;
+        return tt::stl::hash::hash_objects_with_default_seed(
+            min_node, max_node, min_chan, max_chan, conn.eth_conn.is_local);
     }
 };
 }  // namespace std

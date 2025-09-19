@@ -99,6 +99,17 @@ using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id
 // it uses.
 using AnnotatedIntermeshConnections =
     std::vector<std::tuple<std::pair<uint32_t, port_id_t>, std::pair<uint32_t, port_id_t>>>;
+
+// Parsed from the Mesh Graph Descriptor. The user can specify the number of channels betweeen meshes (relaxed mode)
+// or pin connectiosn to specific exit nodes (strict mode).
+// Stores connections specified in relaxed mode. Mapping: src_mesh -> dst_mesh -> num_channels
+using RequestedIntermeshConnections = std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>;
+
+// Stores connections specified in strict mode. Mapping: src_mesh -> dst_mesh -> list of (src_device, dst_device,
+// num_channels)
+using RequestedIntermeshPorts =
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>>>;
+
 class MeshGraph {
 public:
     explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
@@ -181,9 +192,8 @@ private:
     std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 
     std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id_;
-    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> requested_intermesh_connections_;
-    std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>>>
-        requested_intermesh_ports_;
+    RequestedIntermeshConnections requested_intermesh_connections_;
+    RequestedIntermeshPorts requested_intermesh_ports_;
     bool legacy_mode_ = false;
 };
 

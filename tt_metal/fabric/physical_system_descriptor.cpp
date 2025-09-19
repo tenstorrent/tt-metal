@@ -639,7 +639,7 @@ bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t ch
         auto connected_asic = connection_it->first;
         return this->get_host_name_for_asic(connected_asic) != host;
     }
-    TT_FATAL(false, "Asic {} not found in any host's asic connectivity graph", asic_id);
+    TT_THROW("Asic {} not found in any host's asic connectivity graph", asic_id);
     return false;
 }
 

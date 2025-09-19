@@ -324,11 +324,8 @@ private:
     std::unordered_set<FabricNodeId> get_requested_exit_nodes(
         MeshId my_mesh_id,
         MeshId neighbor_mesh_id,
-        const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& requested_intermesh_connections,
-        const std::unordered_map<
-            uint32_t,
-            std::unordered_map<uint32_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>>>&
-            requested_intermesh_ports,
+        const RequestedIntermeshConnections& requested_intermesh_connections,
+        const RequestedIntermeshPorts& requested_intermesh_ports,
         const std::vector<uint64_t>& src_exit_node_chips);
 
     // Multi-Host Intermesh Connectivity Helper Function:

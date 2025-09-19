@@ -152,10 +152,8 @@ std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_
 bool check_connection_requested(
     MeshId my_mesh_id,
     MeshId neighbor_mesh_id,
-    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& requested_intermesh_connections,
-    const std::
-        unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>>>&
-            requested_intermesh_ports) {
+    const RequestedIntermeshConnections& requested_intermesh_connections,
+    const RequestedIntermeshPorts& requested_intermesh_ports) {
     if (requested_intermesh_ports.size() > 0) {
         return requested_intermesh_ports.find(*my_mesh_id) != requested_intermesh_ports.end() &&
                requested_intermesh_ports.at(*my_mesh_id).find(*neighbor_mesh_id) !=
@@ -2405,10 +2403,8 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
 std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
     MeshId my_mesh_id,
     MeshId neighbor_mesh_id,
-    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& requested_intermesh_connections,
-    const std::unordered_map<
-        uint32_t,
-        std::unordered_map<uint32_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>>>& requested_intermesh_ports,
+    const RequestedIntermeshConnections& requested_intermesh_connections,
+    const RequestedIntermeshPorts& requested_intermesh_ports,
     const std::vector<uint64_t>& src_exit_node_chips) {
     std::unordered_set<FabricNodeId> requested_exit_nodes;
     if (requested_intermesh_ports.size() > 0) {

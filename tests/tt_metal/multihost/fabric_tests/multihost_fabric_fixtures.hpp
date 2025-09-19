@@ -22,9 +22,13 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
 
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
         fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
-    const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    bool custom_mesh_graph_path_set =
+        tt::tt_metal::MetalContext::instance().rtoptions().is_custom_fabric_mesh_graph_desc_path_specified();
+    std::string custom_mesh_graph_path =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_custom_fabric_mesh_graph_desc_path();
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-        custom_fabric_mesh_graph_desc_path_str != nullptr ? std::string(custom_fabric_mesh_graph_desc_path_str) : fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
+        custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
+        chip_to_eth_coord_mapping);
     TT_FATAL(
         tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().size() > 0,
         "Multi-Host Routing tests require ethernet links to a remote host.");
