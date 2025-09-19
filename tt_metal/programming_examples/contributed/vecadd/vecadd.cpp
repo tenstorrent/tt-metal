@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
     Program program = CreateProgram();
@@ -137,8 +137,9 @@ int main(int argc, char** argv) {
 
     // We're writing to a shard allocated on MeshCoordinate 0, 0, since this is a 1x1 MeshDevice
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    distributed::WriteShard(cq, a, a_data, device_coord);
-    distributed::WriteShard(cq, b, b_data, device_coord);
+    // The last argument indicates if the operation is blocking or not.
+    distributed::WriteShard(cq, a, a_data, device_coord, false);
+    distributed::WriteShard(cq, b, b_data, device_coord, false);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
     // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kerenl for
@@ -216,6 +217,6 @@ int main(int argc, char** argv) {
     std::cout << std::flush;
 
     // Finally, we close the device.
-    mesh_device.reset();
+    mesh_device->close();
     return 0;
 }
