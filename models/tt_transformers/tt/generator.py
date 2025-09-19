@@ -375,7 +375,6 @@ class Generator:
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             logger.info("here")
             # logger.info(f"User kv cache: {user_kv_cache}")
-            import pdb; pdb.set_trace()
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
                     *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device

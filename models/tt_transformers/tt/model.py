@@ -10,7 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device, create_causal_mask, create_sliding_window_causal_mask
+from models.tt_transformers.tt.common import copy_host_to_device, create_sliding_window_causal_mask
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -174,7 +174,7 @@ class Transformer(LightweightModule):
         #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         # )
 
-
+        self.attn_mask = attn_mask
         sliding_window_max_seq_len = (
             args.max_seq_len
             if paged_attention_config is None
@@ -315,7 +315,9 @@ class Transformer(LightweightModule):
                 ),
             )
 
-        attn_mask = torch.ones(current_pos + 1).unsqueeze(0)
+        # attn_mask = torch.ones(current_pos + 1).unsqueeze(0)
+        # this won't work for different current_pos values per user - will need to pad
+        attn_mask = torch.concat([torch.ones(c + 1).unsqueeze(0) for c in current_pos], axis=0)
         sliding_window_causal_mask = create_sliding_window_causal_mask(
             attn_mask,
             current_pos,
@@ -324,14 +326,23 @@ class Transformer(LightweightModule):
             device=self.mesh_device,
             mode="decode",
         )
-        causal_mask = create_causal_mask(
-            attn_mask,
-            current_pos,
-            self.args,
-            self.paged_attention_config,
-            device=self.mesh_device,
-            mode="decode",
-        )
+        # sliding_window_causal_mask = get_decode_mask(
+        #     current_pos,
+        #     self.args.sliding_window,
+        #     self.args.n_heads,
+        #     self.mesh_device,
+        #     self.args.max_seq_len,
+        # )
+        # causal_mask = create_causal_mask(
+        #     attn_mask,
+        #     current_pos,
+        #     self.args,
+        #     self.paged_attention_config,
+        #     device=self.mesh_device,
+        #     mode="decode",
+        # )
+        causal_mask = None
+        # causal_mask = None # we don't need a causal mask for decode we can just use is_causal=True
         # ttnn.copy_host_to_device_tensor(causal_mask, self.causal_mask)
         # ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.sliding_window_causal_mask)
 
