@@ -909,8 +909,10 @@ void SetDeviceProfilerDir(const std::string& output_dir) {
 #if defined(TRACY_ENABLE)
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         tt::tt_metal::MetalContext::instance().profiler_state_manager();
-    for (auto& device_id : profiler_state_manager->device_profiler_map) {
-        profiler_state_manager->device_profiler_map.at(device_id.first).setOutputDir(output_dir);
+    if (profiler_state_manager) {
+        for (auto& device_id : profiler_state_manager->device_profiler_map) {
+            profiler_state_manager->device_profiler_map.at(device_id.first).setOutputDir(output_dir);
+        }
     }
 #endif
 }
@@ -919,8 +921,10 @@ void FreshProfilerDeviceLog() {
 #if defined(TRACY_ENABLE)
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         tt::tt_metal::MetalContext::instance().profiler_state_manager();
-    for (auto& device_id : profiler_state_manager->device_profiler_map) {
-        profiler_state_manager->device_profiler_map.at(device_id.first).freshDeviceLog();
+    if (profiler_state_manager) {
+        for (auto& device_id : profiler_state_manager->device_profiler_map) {
+            profiler_state_manager->device_profiler_map.at(device_id.first).freshDeviceLog();
+        }
     }
 #endif
 }

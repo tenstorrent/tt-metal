@@ -1585,10 +1585,14 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     ZoneScoped;
 
     if (!this->thread_pool) {
-        this->thread_pool =
-            create_device_bound_thread_pool(tt::tt_metal::MetalContext::instance()
-                                                .profiler_state_manager()
-                                                ->calculate_optimal_num_threads_for_device_profiler_thread_pool());
+        const auto& profiler_state_manager = tt::tt_metal::MetalContext::instance().profiler_state_manager();
+        if (profiler_state_manager) {
+            this->thread_pool = create_device_bound_thread_pool(
+                profiler_state_manager->calculate_optimal_num_threads_for_device_profiler_thread_pool());
+        } else {
+            // Profiler not enabled, skip thread pool creation
+            return;
+        }
     }
 
     initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
@@ -1755,7 +1759,13 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
-    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->file_write_mutex);
+
+    const auto& profiler_state_manager = tt::tt_metal::MetalContext::instance().profiler_state_manager();
+    if (!profiler_state_manager) {
+        // Profiler not enabled, skip file writing
+        return;
+    }
+    std::scoped_lock lock(profiler_state_manager->file_write_mutex);
 
     const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(device_markers_per_core_risc_map, device_arch, device_core_frequency, log_path);
