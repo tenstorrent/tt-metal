@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "isin_common.hpp"
 
-#include "../isin_common.hpp"
+#include "dataflow_api.h"
 
 #include <algorithm>
 #include <numeric>
@@ -17,6 +17,7 @@ namespace {
     is the maximal length of a stick that can fit as much L1 memory as possible - this length
     is shared betwen rows of `elements`, `test_elements` and `output` tensors.
 */
+template <typename elements_number_type>
 FORCE_INLINE void isin_subchunks(
     const uint32_t& elements_l1_read_addr,
     const uint32_t& test_elements_l1_read_addr,
@@ -28,8 +29,8 @@ FORCE_INLINE void isin_subchunks(
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(elements_l1_read_addr);
     volatile tt_l1_ptr elements_number_type* test_elements_subchunk_ptr =
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(test_elements_l1_read_addr);
-    volatile tt_l1_ptr output_number_type* output_subchunk_ptr =
-        reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_write_addr);
+    volatile tt_l1_ptr elements_number_type* output_subchunk_ptr =
+        reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
     for (uint32_t elements_index = 0; elements_index < elements_subchunk_size; ++elements_index) {
         for (uint32_t test_elements_index = 0; test_elements_index < test_elements_subchunk_size;
              ++test_elements_index) {
@@ -48,10 +49,11 @@ FORCE_INLINE void isin_subchunks(
     `test_elements` tensor, so the output chunk get later updated only with the reverted values and
     then retuened to DRAM
 */
+template <typename elements_number_type>
 FORCE_INLINE void prefill_output(
     const uint32_t& output_l1_write_addr, const uint32_t& output_subchunk_size, const bool& invert) {
-    volatile tt_l1_ptr output_number_type* output_chunk_begin_ptr =
-        reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_write_addr);
+    volatile tt_l1_ptr elements_number_type* output_chunk_begin_ptr =
+        reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
     for (uint32_t i = 0; i < output_subchunk_size; ++i) {
         output_chunk_begin_ptr[i] = invert ? 0xFFFFFFFF : 0x00000000;
     }
@@ -74,8 +76,10 @@ void kernel_main() {
     const uint32_t subchunks_per_core = get_arg_val<uint32_t>(2);
     const uint32_t subchunks_offset = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t elements_element_size = sizeof(std_type_t<get_dataformat(ctas.elements_cb)>);
-    constexpr uint32_t test_elements_element_size = sizeof(std_type_t<get_dataformat(ctas.test_elements_cb)>);
+    using elements_number_type = std_type_t<get_dataformat(ctas.elements_cb)>;
+
+    constexpr uint32_t elements_element_size = ctas.elements_tensor_datum_size;
+    constexpr uint32_t test_elements_element_size = ctas.elements_tensor_datum_size;
     const auto elements_addr_gtor = TensorAccessor{
         ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * elements_element_size};
     const auto test_elements_addr_gtor = TensorAccessor{
@@ -98,13 +102,14 @@ void kernel_main() {
         // either the maximal defined single fetch size or the remainder, which is less than that number
         const uint32_t elements_subchunk_size =
             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
-        load_to_cb(ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size);
+        load_to_cb(
+            ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size, elements_element_size);
         cb_wait_front(ctas.elements_cb, ONE_PAGE);
         // prepare output mask for writing
         cb_reserve_back(ctas.output_cb, ONE_PAGE);
         const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
         const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
-        prefill_output(output_l1_write_addr, elements_subchunk_size, ctas.invert);
+        prefill_output<elements_number_type>(output_l1_write_addr, elements_subchunk_size, ctas.invert);
 
         // for every subchunk of the test_elements stick
         for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
@@ -114,13 +119,17 @@ void kernel_main() {
             const uint32_t test_elements_subchunk_size =
                 std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
             load_to_cb(
-                ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset, test_elements_subchunk_size);
+                ctas.test_elements_cb,
+                test_elements_addr_gtor,
+                test_elements_offset,
+                test_elements_subchunk_size,
+                test_elements_element_size);
             cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
             const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
 
             // exhaustively perform isin on a given elements' subchunks (one elements' subchunk vs all test_elements'
             // subchunks)
-            isin_subchunks(
+            isin_subchunks<elements_number_type>(
                 elements_l1_read_addr,
                 test_elements_l1_read_addr,
                 output_l1_write_addr,

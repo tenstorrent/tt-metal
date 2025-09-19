@@ -44,17 +44,15 @@ void bind_isin_operation(py::module& module) {
                const Tensor& test_elements,
                const bool& assume_unique,
                const bool& invert,
-               const std::optional<Tensor>& optional_out,
-               const QueueId& queue_id = DefaultQueueId) -> Tensor {
-                return self(queue_id, elements, test_elements, assume_unique, invert, optional_out);
+               const std::optional<Tensor>& optional_out) -> Tensor {
+                return self(elements, test_elements, assume_unique, invert, optional_out);
             },
             py::arg("elements").noconvert(),
             py::arg("test_elements").noconvert(),
             py::kw_only(),
             py::arg("assume_unique") = false,
             py::arg("invert") = false,
-            py::arg("out") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("out") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::isin::detail

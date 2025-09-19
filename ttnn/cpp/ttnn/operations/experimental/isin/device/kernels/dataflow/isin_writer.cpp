@@ -4,11 +4,7 @@
 
 #include "dataflow_api.h"
 
-#include "../isin_common.hpp"
-
-namespace {
-
-}
+#include "isin_common.hpp"
 
 void kernel_main() {
     constexpr auto ctas = get_ctas();
@@ -17,6 +13,8 @@ void kernel_main() {
     const uint32_t subchunks_per_core = get_arg_val<uint32_t>(1);
     const uint32_t subchunks_offset = get_arg_val<uint32_t>(2);
     const auto output_addr_gtor = TensorAccessor{ctas.output_accessor_args, output_buffer_address, ctas.elements_size};
+
+    constexpr uint32_t output_element_size = ctas.elements_tensor_datum_size;
 
     /*
         this loop goes over the same range as the reader with its elements subchunk loop
@@ -28,7 +26,6 @@ void kernel_main() {
          ++output_subchunk_id, output_offset += ctas.single_fetch_subchunk_size) {
         const uint32_t output_subchunk_size =
             std::min(ctas.elements_size - output_offset, ctas.single_fetch_subchunk_size);
-        write_to_dram<decltype(output_addr_gtor)>(
-            ctas.output_cb, output_addr_gtor, output_offset, output_subchunk_size);
+        write_to_dram(ctas.output_cb, output_addr_gtor, output_offset, output_subchunk_size, output_element_size);
     }
 }
