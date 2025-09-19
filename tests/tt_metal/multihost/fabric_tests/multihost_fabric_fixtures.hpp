@@ -26,7 +26,7 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
         custom_fabric_mesh_graph_desc_path_str != nullptr ? std::string(custom_fabric_mesh_graph_desc_path_str) : fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_control_plane().system_has_intermesh_links(),
+        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().size() > 0,
         "Multi-Host Routing tests require ethernet links to a remote host.");
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,

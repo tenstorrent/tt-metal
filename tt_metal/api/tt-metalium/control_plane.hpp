@@ -175,23 +175,8 @@ public:
     // Initialize fabric tensix config (call after routing tables are configured)
     void initialize_fabric_tensix_datamover_config();
 
-    // Check if ANY managed chip supports intermesh links
-    bool system_has_intermesh_links() const;
-
-    // Check if a specific chip has intermesh links configured
-    bool has_intermesh_links(chip_id_t chip_id) const;
-
-    // Get intermesh ethernet links for a specific chip
-    // Returns: vector of (eth_core, channel)
-    const std::vector<std::pair<CoreCoord, chan_id_t>>& get_intermesh_eth_links(chip_id_t chip_id) const;
-
-    // Get all intermesh ethernet links in the system
-    // Returns: map of chip_id -> vector of (eth_core, channel)
-    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links()
-        const;
-
-    // Check if a specific ethernet core is an intermesh link
-    bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
+    // Check if the provided chip and channel is a cross-host eth link
+    bool is_cross_host_eth_link(chip_id_t chip_id, chan_id_t chan_id) const;
 
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_cores is true, will return cores that dispatch is not using,
@@ -245,9 +230,6 @@ private:
     // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
     // to the physical channel id
     std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
-    // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
-    // TODO: remove once UMD can provide all intermesh links
-    std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
@@ -303,10 +285,6 @@ private:
         chip_id_t physical_chip_id,
         chan_id_t eth_channel_id,
         eth_chan_directions router_direction) const;
-
-    // TODO: remove once UMD can provide all intermesh links
-    // Initialize internal map of physical chip_id to intermesh ethernet links
-    void initialize_intermesh_eth_links();
 
     void assign_direction_to_fabric_eth_chan(
         const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);

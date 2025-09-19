@@ -505,7 +505,6 @@ void ControlPlane::init_control_plane(
 
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
-    this->initialize_intermesh_eth_links();
 }
 
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
@@ -1395,9 +1394,9 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
             // Chan to chan within chip
             route.push_back({src_fabric_node_id, next_chan_id});
         }
-            std::tie(src_fabric_node_id, src_chan_id) =
-                this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
-            route.push_back({src_fabric_node_id, src_chan_id});
+        std::tie(src_fabric_node_id, src_chan_id) =
+            this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
+        route.push_back({src_fabric_node_id, src_chan_id});
     }
     return route;
 }
@@ -1953,51 +1952,9 @@ void ControlPlane::initialize_fabric_tensix_datamover_config() {
     this->fabric_context_->initialize_tensix_config();
 }
 
-void ControlPlane::initialize_intermesh_eth_links() {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    // Iterate over all chips in the cluster and populate the intermesh_eth_links
-    for (const auto& chip_id : cluster.all_chip_ids()) {
-        auto& intermesh_eth_links = intermesh_eth_links_[chip_id];
-        // Remote connections visible to UMD
-        auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
-        if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
-            const auto& soc_desc = cluster.get_soc_desc(chip_id);
-            for (auto [link, _] : remote_connections->second) {
-                // Find the CoreCoord for this channel
-                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                    if (channel == link) {
-                        intermesh_eth_links.push_back({core_coord, link});
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-bool ControlPlane::system_has_intermesh_links() const { return !this->get_all_intermesh_eth_links().empty(); }
-
-bool ControlPlane::has_intermesh_links(chip_id_t chip_id) const {
-    return !this->get_intermesh_eth_links(chip_id).empty();
-}
-
-bool ControlPlane::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const {
-    for (const auto& [link_eth_core, channel] : this->get_intermesh_eth_links(chip_id)) {
-        if (link_eth_core == eth_core) {
-            return true;
-        }
-    }
-    return false;
-}
-
-const std::vector<std::pair<CoreCoord, chan_id_t>>& ControlPlane::get_intermesh_eth_links(chip_id_t chip_id) const {
-    return intermesh_eth_links_.at(chip_id);
-}
-
-const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>&
-ControlPlane::get_all_intermesh_eth_links() const {
-    return intermesh_eth_links_;
+bool ControlPlane::is_cross_host_eth_link(chip_id_t chip_id, chan_id_t chan_id) const {
+    auto asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(chip_id);
+    return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
 
 std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
@@ -2355,8 +2312,6 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const std::unordered_set<FabricNodeId>& requested_exit_nodes,
     std::unordered_set<port_id_t>& assigned_port_ids) {
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto chip_unique_ids = cluster.get_unique_chip_ids();
     const auto& my_mesh_id = this->local_mesh_binding_.mesh_ids[0];
     const auto& mesh_edge_ports_to_chip_id =
         this->routing_table_generator_->mesh_graph->get_mesh_edge_ports_to_chip_id();
@@ -2418,9 +2373,6 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     // Track Direction and Logical Ports already assigned for intermesh links
     std::unordered_set<port_id_t> assigned_port_ids;
     port_descriptors[my_mesh_id] = {};
-
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto chip_unique_ids = cluster.get_unique_chip_ids();
 
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);

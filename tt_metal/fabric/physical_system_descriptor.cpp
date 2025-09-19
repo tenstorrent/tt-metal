@@ -33,7 +33,7 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
-bool using_mock_cluster_desc() { return std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") != nullptr; }
+bool using_mock_cluster_desc() { return tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(); }
 
 TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
@@ -617,6 +617,30 @@ std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const 
         }
     }
     return asics;
+}
+
+bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const {
+    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        if (this->get_host_name_for_asic(asic_id) != host) {
+            continue;
+        }
+        const auto& connections = asic_group.at(asic_id);
+        auto connection_it = std::find_if(connections.begin(), connections.end(), [&](const auto& connection) {
+            // Check if this chan_id is a src_chan in any of the eth_connections
+            return std::find_if(connection.second.begin(), connection.second.end(), [&](const auto& eth_conn) {
+                       return eth_conn.src_chan == chan_id;
+                   }) != connection.second.end();
+        });
+        TT_FATAL(
+            connection_it != connections.end(),
+            "Channel {} not found in asic connectivity graph for asic {}",
+            chan_id,
+            asic_id);
+        auto connected_asic = connection_it->first;
+        return this->get_host_name_for_asic(connected_asic) != host;
+    }
+    TT_FATAL(false, "Asic {} not found in any host's asic connectivity graph", asic_id);
+    return false;
 }
 
 std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std::string& hostname) const {
