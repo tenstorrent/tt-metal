@@ -12,8 +12,6 @@ This example builds upon the :ref:`Vector addition using SFPI<Custom_SFPI_Add>` 
 
 The ``smoothstep`` function is a non-linear interpolation function commonly used in graphics (see `GLSL smoothstep documentation <https://www.khronos.org/registry/OpenGL-Refpages/gl4/html/smoothstep.xhtml>`_ for reference). It is defined as:
 
-Although ``smoothstep`` is conceptually simple, its implementation is complex enough to demonstrate several advanced features of SFPI, such as parameter passing and vector predicates.
-
 .. math::
 
     \operatorname{smoothstep}(e_0, e_1, x) =
@@ -23,6 +21,8 @@ Although ``smoothstep`` is conceptually simple, its implementation is complex en
     \left( \dfrac{x - e_0}{e_1 - e_0} \right)^2 \bigl(3 - 2 \tfrac{x - e_0}{e_1 - e_0}\bigr),
     & e_0 < x < e_1 .
     \end{cases}
+
+Although ``smoothstep`` is conceptually simple, its implementation is complex enough to demonstrate several advanced features of SFPI, such as parameter passing and vector predicates.
 
 The full source code is available in the ``tt_metal/programming_examples/custom_sfpi_smoothstep`` directory.
 
