@@ -19,7 +19,7 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
  * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
  * This allow for a branch free (and much smaller algorithm) to compute integer value
  */
-sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
+sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
     sfpi::vInt exp = exexp(val);
     sfpi::vInt man = exman8(val);
     sfpi::vInt shift = exp - 23;
