@@ -77,9 +77,6 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     std::vector<uint32_t> zeros(n_words, 0u);
     tt::tt_metal::EnqueueWriteBuffer(cq_dst, *dst_buf, zeros, /*blocking=*/true);
 
-    std::cout << "[alloc] src_phys=" << src_phys << " dst_phys=" << dst_phys << " bytes=" << p.tensor_bytes
-              << std::endl;
-
     // ---------- Build a receiver program ----------
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
 
@@ -112,13 +109,6 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     auto cb_cfg = tt::tt_metal::CircularBufferConfig(2 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
                       .set_page_size(CB_ID, p.page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
-
-    std::cout << "[host] src_buf=0x" << std::hex << src_buf->address() << " dst_buf=0x" << dst_buf->address()
-              << " sem_addr=0x" << gsem.address() << std::dec << "\n";
-
-    std::cout << "[host] launching RX: core=(" << receiver_core.x << "," << receiver_core.y << ") expect=1\n";
-    std::cout << "[host] launching TX: pages=" << NUM_PAGES << " page_size=" << p.page_size
-              << " dst_is_dram=" << (p.use_dram_dst ? 1 : 0) << "\n";
 
     // READER kernel (DRAM->CB or L1->CB). We read from src_buf (DRAM).
     std::vector<uint32_t> reader_cta;
@@ -162,29 +152,6 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         (uint32_t)gsem.address()       // 5: receiver L1 semaphore addr
     };
 
-    auto dir_opt = get_eth_forwarding_direction(src, dst);
-
-    auto dir_to_str = [](eth_chan_directions d) {
-        switch (d) {
-            case eth_chan_directions::NORTH: return "NORTH";
-            case eth_chan_directions::SOUTH: return "SOUTH";
-            case eth_chan_directions::EAST: return "EAST";
-            case eth_chan_directions::WEST: return "WEST";
-            default: return "UNKNOWN";
-        }
-    };
-
-    if (dir_opt.has_value()) {
-        std::cout << "[host] CP forwarding dir = " << dir_to_str(*dir_opt) << "\n";
-    } else {
-        std::cout << "[host] CP forwarding dir = <none>\n";
-    }
-
-    std::cout << "[host] logical src(mesh=" << p.mesh_id << ", dev=" << p.src_chip << ") -> dst(mesh=" << p.mesh_id
-              << ", dev=" << p.dst_chip << ")\n";
-
-    std::cout << "[host] physical src=" << src_phys << " -> dst=" << dst_phys << "\n";
-
     // Append fabric connection RT args so WorkerToFabricEdmSender can open the link
     auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
     if (links.empty()) {
@@ -192,13 +159,7 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
                       << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
         return PerfPoint{};
     }
-
     uint32_t link_idx = links[0];
-    std::cout << "[host] forwarding links:";
-    for (auto li : links) {
-        std::cout << " " << li;
-    }
-    std::cout << " (using " << link_idx << ")\n";
 
     tt::tt_fabric::append_fabric_connection_rt_args(
         src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
@@ -223,7 +184,6 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     if (rx.size() != tx.size()) {
         ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
     } else {
-        // Compare content
         size_t first_bad = rx.size();
         for (size_t i = 0; i < rx.size(); ++i) {
             if (rx[i] != tx[i]) {
@@ -234,8 +194,6 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         if (first_bad != rx.size()) {
             ADD_FAILURE() << "Data mismatch at word " << first_bad << " (got 0x" << std::hex << rx[first_bad]
                           << ", exp 0x" << tx[first_bad] << std::dec << ")";
-        } else {
-            std::cout << "[verify] payload OK (" << rx.size() * 4 << " bytes)\n";
         }
     }
 
@@ -245,10 +203,6 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     const double gb = static_cast<double>(bytes) / 1e9;
     const double gbps = (e2e_sec > 0.0) ? (gb / e2e_sec) : 0.0;
     const double ms = e2e_sec * 1000.0;
-
-    std::cout << "[perf] E2E: bytes=" << static_cast<uint64_t>(bytes) << " time=" << e2e_sec << " s"
-              << " (" << ms << " ms)"
-              << " throughput=" << gbps << " GB/s\n";
 
     return PerfPoint{
         .bytes = bytes,
