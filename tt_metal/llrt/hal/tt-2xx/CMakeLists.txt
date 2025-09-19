@@ -24,7 +24,6 @@ target_include_directories(
     PRIVATE
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/quasar
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
 )
 target_link_libraries(
     qa_hal
