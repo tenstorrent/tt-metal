@@ -42,6 +42,8 @@ public:
 
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const override;
 
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_addresses() const override;
+
     std::optional<DeviceAddr> allocate(
         DeviceAddr size_bytes, bool bottom_up = true, DeviceAddr address_limit = 0) override;
 
@@ -75,8 +77,8 @@ private:
 
     // Caches so most operations don't need to scan the entire free list. The allocated block table
     // will not rehash as I find the cost to not be worth it
-    inline static constexpr size_t n_alloc_table_buckets = 512;          // Number of buckets in the hash table
-    inline static constexpr size_t n_alloc_table_init_bucket_size = 10;  // Initial size of each bucket
+    static constexpr size_t n_alloc_table_buckets = 512;          // Number of buckets in the hash table
+    static constexpr size_t n_alloc_table_init_bucket_size = 10;  // Initial size of each bucket
     std::vector<std::vector<std::pair<DeviceAddr, size_t>>> allocated_block_table_;
 
     // Size segregated list of free blocks. Idea comes from the TLSF paper, but instead of aiming for realtime
@@ -86,7 +88,7 @@ private:
 
     // Size class index is calculated by taking the log2 of the block size divided by the base size
     // ex: size = 2048, base = 1024, log2(2048/1024) = 1, so size class index = 1
-    inline static constexpr size_t size_segregated_base = 1024;  // in bytes
+    static constexpr size_t size_segregated_base = 1024;         // in bytes
     const size_t size_segregated_count;                          // Number of size classes
     std::vector<std::vector<size_t>> free_blocks_segregated_by_size_;
 
@@ -96,7 +98,7 @@ private:
     // NOTE: This function DOES NOT remove block_index from the segregated list. Caller should do that
     size_t allocate_in_block(size_t block_index, DeviceAddr alloc_size, size_t offset);
 
-    inline size_t get_size_segregated_index(DeviceAddr size_bytes) const {
+    size_t get_size_segregated_index(DeviceAddr size_bytes) const {
         // std::log2 is SLOW, so we use a simple log2 implementation for integers. I assume GCC compiles this to a
         // count leading zeros instruction then a subtraction.
         size_t lg = 0;

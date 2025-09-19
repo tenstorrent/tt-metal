@@ -11,7 +11,6 @@ namespace ttnn::operations::experimental::ssm {
 
 struct ExecuteHCSumReduce {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> dtype = std::nullopt,

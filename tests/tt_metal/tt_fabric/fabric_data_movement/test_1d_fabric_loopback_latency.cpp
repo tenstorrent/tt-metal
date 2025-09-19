@@ -4,6 +4,8 @@
 
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_fabric/common/test_fabric_edm_common.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <cstdint>
 #include <cstddef>
 #include <optional>
@@ -27,10 +29,9 @@ struct WriterSpec {
 
 using LatencyTestWriterSpecs = std::vector<std::optional<WriterSpec>>;
 
-template <typename MESH_DEVICE_OR_VIEW_T>
-static std::vector<IDevice*> get_test_devices_impl(
-    const MESH_DEVICE_OR_VIEW_T& mesh_device_or_view, size_t line_size, bool is_6u) {
-    std::vector<IDevice*> devices_;
+static std::vector<std::shared_ptr<MeshDevice>> get_test_devices_impl(
+    const std::shared_ptr<MeshDevice>& mesh_device, size_t line_size, bool is_6u) {
+    std::vector<std::shared_ptr<MeshDevice>> devices_;
     if (is_6u) {
         // on 6u galaxy systems, we can form a 2D torus so we can just use a full row or column
         devices_.reserve(line_size);
@@ -46,34 +47,37 @@ static std::vector<IDevice*> get_test_devices_impl(
                 "Invalid line size for 6u system. Supported line sizes are 4 and 8 but {} was specified.", line_size);
         }
         for (; *loop_var < line_size; (*loop_var)++) {
-            devices_.push_back(mesh_device_or_view.get_device(MeshCoordinate(r, c)));
+            devices_.push_back(mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(r, c)));
         }
     } else {
         if (line_size == 2) {
-            devices_ = {mesh_device_or_view.get_device(MeshCoordinate(0, 0)), mesh_device_or_view.get_device(MeshCoordinate(0, 1))};
+            devices_ = {
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1))};
         } else if (line_size == 4) {
             devices_ = {
-                mesh_device_or_view.get_device(MeshCoordinate(0, 0)),
-                mesh_device_or_view.get_device(MeshCoordinate(0, 1)),
-                mesh_device_or_view.get_device(MeshCoordinate(0, 2)),
-                mesh_device_or_view.get_device(MeshCoordinate(0, 3))};
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3))};
         } else {
             devices_ = {
-                mesh_device_or_view.get_device(MeshCoordinate(0, 0)),
-                mesh_device_or_view.get_device(MeshCoordinate(0, 1)),
-                mesh_device_or_view.get_device(MeshCoordinate(0, 2)),
-                mesh_device_or_view.get_device(MeshCoordinate(0, 3)),
-                mesh_device_or_view.get_device(MeshCoordinate(1, 3)),
-                mesh_device_or_view.get_device(MeshCoordinate(1, 2)),
-                mesh_device_or_view.get_device(MeshCoordinate(1, 1)),
-                mesh_device_or_view.get_device(MeshCoordinate(1, 0))};
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 3)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 2)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1)),
+                mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0))};
         }
     }
     return devices_;
 }
 template <typename TEST_FIXTURE_T>
-static std::vector<IDevice*> get_test_devices(const TEST_FIXTURE_T& test_fixture, size_t line_size, bool is_6u) {
-    return get_test_devices_impl(*test_fixture.mesh_device_, line_size, is_6u);
+static std::vector<std::shared_ptr<MeshDevice>> get_test_devices(
+    const TEST_FIXTURE_T& test_fixture, size_t line_size, bool is_6u) {
+    return get_test_devices_impl(test_fixture.mesh_device_, line_size, is_6u);
 }
 
 template <typename TEST_FIXTURE_T>
@@ -141,8 +145,9 @@ inline void RunPersistent1dFabricLatencyTest(
 
     DEVICE_FIXTURE_T test_fixture;
 
-    std::vector<IDevice*> devices = get_test_devices<DEVICE_FIXTURE_T>(test_fixture, line_size, is_6u);
-    std::vector<IDevice*> devices_with_workers;
+    std::vector<std::shared_ptr<MeshDevice>> devices =
+        get_test_devices<DEVICE_FIXTURE_T>(test_fixture, line_size, is_6u);
+    std::vector<std::shared_ptr<MeshDevice>> devices_with_workers;
     devices.reserve(line_size);
     for (size_t i = 0; i < line_size; i++) {
         if (writer_specs.size() > i && writer_specs.at(i).has_value()) {
@@ -255,9 +260,9 @@ inline void RunPersistent1dFabricLatencyTest(
     size_t program_device_index = 0;
 
     auto build_connection_args = [is_ring](
-                                     IDevice* device,
-                                     IDevice* forward_device,
-                                     IDevice* backward_device,
+                                     const std::shared_ptr<MeshDevice>& device,
+                                     const std::shared_ptr<MeshDevice>& forward_device,
+                                     const std::shared_ptr<MeshDevice>& backward_device,
                                      Program& program,
                                      CoreCoord worker_core_logical,
                                      bool is_connected_in_direction,
@@ -266,10 +271,11 @@ inline void RunPersistent1dFabricLatencyTest(
         rt_args_out.push_back(is_connected_in_direction);
 
         if (is_connected_in_direction) {
-            const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+            const auto device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
             chip_id_t connected_chip_id = direction == tt::tt_fabric::EdmLineFabricOpInterface::FORWARD
-                                              ? forward_device->id()
-                                              : backward_device->id();
+                                              ? forward_device->get_devices()[0]->id()
+                                              : backward_device->get_devices()[0]->id();
             const auto connected_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_chip_id);
             tt::tt_fabric::append_fabric_connection_rt_args(
@@ -285,15 +291,17 @@ inline void RunPersistent1dFabricLatencyTest(
         }
         const size_t line_index = i;
         auto& program = programs.at(program_device_index);
-        auto* device = devices_with_workers.at(program_device_index);
+        auto& device = devices_with_workers.at(program_device_index);
         const CoreCoord& worker_core_logical = writer_specs.at(i)->worker_core_logical;
         const size_t dest_noc_x = device->worker_core_from_logical_core(worker_core_logical).x;
         const size_t dest_noc_y = device->worker_core_from_logical_core(worker_core_logical).y;
 
         bool is_latency_packet_sender = std::holds_alternative<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
 
-        IDevice* backward_device = i == 0 ? is_ring ? devices.at(line_size - 1) : nullptr : devices.at(i - 1);
-        IDevice* forward_device = i == line_size - 1 ? is_ring ? devices.at(0) : nullptr : devices.at(i + 1);
+        std::shared_ptr<MeshDevice> backward_device =
+            i == 0 ? is_ring ? devices.at(line_size - 1) : nullptr : devices.at(i - 1);
+        std::shared_ptr<MeshDevice> forward_device =
+            i == line_size - 1 ? is_ring ? devices.at(0) : nullptr : devices.at(i + 1);
 
         // Initialize the fabric handle for worker connection
         bool start_of_line = line_index == 0;
@@ -433,8 +441,8 @@ inline void RunPersistent1dFabricLatencyTest(
     // create the kernel for
     // "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/1D_fabric_latency_test_ack_writer.cpp"
     if (!is_ring) {
-        auto my_device = devices[line_size - 1];
-        auto backward_device = devices[line_size - 2];
+        const auto& my_device = devices[line_size - 1];
+        const auto& backward_device = devices[line_size - 2];
         size_t num_hops_upstream_to_writer = line_size - 1 - latency_writer_index;
         auto& ack_writer_program = programs.back();
         auto& latency_writer_spec = writer_specs.at(latency_writer_index);
@@ -473,7 +481,7 @@ inline void RunPersistent1dFabricLatencyTest(
         tt_metal::SetRuntimeArgs(ack_writer_program, ack_writer_kernel, worker_cores, rt_args);
     }
 
-    for (auto d : devices_with_workers) {
+    for (const auto& d : devices_with_workers) {
         log_info(tt::LogTest, "launch on Device {}", d->id());
     }
     build_and_enqueue(devices_with_workers, programs);

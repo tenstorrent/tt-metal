@@ -11,7 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include "erisc_datamover_builder.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
@@ -207,12 +207,10 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
             (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
         const bool is_east_west = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST);
 
-        if ((fabric_type == FabricType::TORUS_X && is_north_south) ||
-            (fabric_type == FabricType::TORUS_Y && is_east_west)) {
-            // torused along one dimension, but connecting along the other dimension
-            return false;
-        }
-        return true;
+        const bool torus_mismatch = (fabric_type == FabricType::TORUS_X && is_north_south) ||
+                                    (fabric_type == FabricType::TORUS_Y && is_east_west);
+
+        return !torus_mismatch;
     }
 
     return false;

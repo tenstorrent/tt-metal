@@ -235,7 +235,6 @@ Tensor post_scatter_transform_tensor(
 // number of dimensions. It is also required that index.size(d) <= src.size(d) for all dimensions d, and that
 // index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
 Tensor ScatterOperation::invoke(
-    const QueueId& queue_id,
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
@@ -281,8 +280,7 @@ Tensor ScatterOperation::invoke(
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
-        std::nullopt,
-        queue_id);
+        std::nullopt);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
         after_transpose_shape,

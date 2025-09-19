@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <chrono>
@@ -32,8 +33,10 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "fabric.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include <array>
 #include <bit>
@@ -68,7 +71,7 @@ public:
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
-            devices_ = tt::tt_metal::detail::CreateDevices(ids);
+            devices_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(ids);
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
         }
@@ -84,10 +87,13 @@ public:
 
     void TearDown() {
         device_open = false;
-        tt::tt_metal::detail::CloseDevices(devices_);
+        for (auto& [id, device] : devices_) {
+            device->close();
+        }
+        devices_.clear();
     }
 
-    std::map<chip_id_t, tt_metal::IDevice*> devices_;
+    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -206,7 +212,7 @@ TestConfig parse_cli_config(int argc, char** argv) {
 }
 
 struct DeviceTestResources {
-    tt_metal::IDevice* device = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device = nullptr;
     CoreRangeSet worker_cores = {};
     std::vector<CoreCoord> worker_cores_vec;
     CoreCoord eth_core = {};
@@ -290,15 +296,6 @@ void build(
 
     if (config.n_workers > 0) {
         create_worker_kernels(test_resources, local_sender_worker_kernels, remote_sender_worker_kernels, config);
-    }
-
-    // Compile programs
-    try {
-        tt::tt_metal::detail::CompileProgram(test_resources.local_device.device, test_resources.local_device.program);
-        tt::tt_metal::detail::CompileProgram(test_resources.remote_device.device, test_resources.remote_device.program);
-    } catch (std::exception& e) {
-        log_error(tt::LogTest, "Failed compile: {}", e.what());
-        throw e;
     }
 }
 
@@ -471,24 +468,38 @@ void run_test(
     }
 
     log_info(tt::LogAlways, "Launching programs");
+
+    tt_metal::distributed::MeshWorkload local_workload = tt_metal::distributed::CreateMeshWorkload();
+    tt_metal::distributed::MeshWorkload remote_workload = tt_metal::distributed::CreateMeshWorkload();
+    tt_metal::distributed::AddProgramToMeshWorkload(
+        local_workload,
+        std::move(test_resources.local_device.program),
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    tt_metal::distributed::AddProgramToMeshWorkload(
+        remote_workload,
+        std::move(test_resources.remote_device.program),
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] {
-            tt_metal::detail::LaunchProgram(test_resources.local_device.device, test_resources.local_device.program);
+            tt_metal::distributed::EnqueueMeshWorkload(
+                test_resources.local_device.device->mesh_command_queue(), local_workload, true);
         });
         std::thread th1 = std::thread([&] {
-            tt_metal::detail::LaunchProgram(test_resources.remote_device.device, test_resources.remote_device.program);
+            tt_metal::distributed::EnqueueMeshWorkload(
+                test_resources.remote_device.device->mesh_command_queue(), remote_workload, true);
         });
 
         th2.join();
         th1.join();
     } else {
-        tt_metal::EnqueueProgram(
-            test_resources.local_device.device->command_queue(), test_resources.local_device.program, false);
-        tt_metal::EnqueueProgram(
-            test_resources.remote_device.device->command_queue(), test_resources.remote_device.program, false);
+        tt_metal::distributed::EnqueueMeshWorkload(
+            test_resources.local_device.device->mesh_command_queue(), local_workload, false);
+        tt_metal::distributed::EnqueueMeshWorkload(
+            test_resources.remote_device.device->mesh_command_queue(), remote_workload, false);
 
-        tt_metal::Finish(test_resources.local_device.device->command_queue());
-        tt_metal::Finish(test_resources.remote_device.device->command_queue());
+        tt_metal::distributed::Finish(test_resources.local_device.device->mesh_command_queue());
+        tt_metal::distributed::Finish(test_resources.remote_device.device->mesh_command_queue());
     }
 
     //
@@ -500,10 +511,10 @@ void run_test(
     //
     // Results Reporting
     //
-    TimingStats stats0 =
-        read_timing_stats(test_resources.local_device.device, test_resources.local_device.eth_core, handshake_addr);
-    TimingStats stats1 =
-        read_timing_stats(test_resources.remote_device.device, test_resources.remote_device.eth_core, handshake_addr);
+    TimingStats stats0 = read_timing_stats(
+        test_resources.local_device.device->get_devices()[0], test_resources.local_device.eth_core, handshake_addr);
+    TimingStats stats1 = read_timing_stats(
+        test_resources.remote_device.device->get_devices()[0], test_resources.remote_device.eth_core, handshake_addr);
     auto report_erisc_timing_stats = [](TimingStats& stats, const std::string& label) {
         log_info(tt::LogAlways, "{} Timing Stats:", label);
         log_info(tt::LogAlways, "  Acquire operations: {}", stats.acquire_count);
@@ -540,8 +551,8 @@ void run_test(
             for (size_t i = 0; i < config.n_workers; i++) {
                 auto worker_core = resources->worker_cores_vec[i];
                 uint32_t worker_timing_stats_addr = resources->worker_timing_stats_addresses[i];
-                WorkerTimingStats worker_stats =
-                    read_worker_timing_stats(resources->device, worker_core, worker_timing_stats_addr);
+                WorkerTimingStats worker_stats = read_worker_timing_stats(
+                    resources->device->get_devices()[0], worker_core, worker_timing_stats_addr);
 
                 log_info(tt::LogAlways, "  {} Device Worker {}: ", label, i);
                 log_info(tt::LogAlways, "    Idle operations: {}", worker_stats.idle_count);
@@ -573,14 +584,14 @@ void run_test(
 }
 
 TestResources create_test_resources(
-    tt_metal::IDevice* device_0,
-    tt_metal::IDevice* device_1,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_0,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     const TestConfig& config) {
     TestResources resources;
-    resources.local_device.device = device_0;
-    resources.remote_device.device = device_1;
+    resources.local_device.device = std::move(device_0);
+    resources.remote_device.device = std::move(device_1);
     resources.local_device.eth_core = eth_sender_core;
     resources.remote_device.eth_core = eth_receiver_core;
 
@@ -597,20 +608,27 @@ TestResources create_test_resources(
         device_resource.worker_new_chunk_semaphore_id =
             tt_metal::CreateSemaphore(device_resource.program, device_resource.worker_cores, 0, CoreType::WORKER);
 
-        auto worker_src_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::InterleavedBufferConfig{
-            .device = device_resource.device,
-            .size = config.n_workers * config.message_size,
+        // Create MeshBuffer for worker source data
+        tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config{
+            .size = config.n_workers * config.message_size};
+        tt::tt_metal::distributed::DeviceLocalBufferConfig local_config{
             .page_size = config.n_workers * config.message_size,
-            .buffer_type = tt::tt_metal::BufferType::L1});
+            .buffer_type = tt::tt_metal::BufferType::L1,
+            .sharding_args = tt::tt_metal::BufferShardingArgs()};
+        auto worker_src_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+            replicated_config, local_config, device_resource.device.get());
         device_resource.worker_src_buffer_address = worker_src_buffer->address();
 
         // Allocate timing stats buffers for each worker core
         device_resource.worker_timing_stats_addresses.reserve(config.n_workers);
-        auto worker_timing_stats_buffer = tt::tt_metal::CreateBuffer(tt::tt_metal::InterleavedBufferConfig{
-            .device = device_resource.device,
-            .size = config.n_workers * sizeof(WorkerTimingStats) * 2,
+        tt::tt_metal::distributed::ReplicatedBufferConfig timing_replicated_config{
+            .size = config.n_workers * sizeof(WorkerTimingStats) * 2};
+        tt::tt_metal::distributed::DeviceLocalBufferConfig timing_local_config{
             .page_size = config.n_workers * sizeof(WorkerTimingStats) * 2,
-            .buffer_type = tt::tt_metal::BufferType::L1});
+            .buffer_type = tt::tt_metal::BufferType::L1,
+            .sharding_args = tt::tt_metal::BufferShardingArgs()};
+        auto worker_timing_stats_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+            timing_replicated_config, timing_local_config, device_resource.device.get());
         for (uint32_t i = 0; i < config.n_workers; i++) {
             device_resource.worker_timing_stats_addresses.push_back(worker_timing_stats_buffer->address());
         }
@@ -668,19 +686,22 @@ void validate_test_config(const TestConfig& config) {
 int run_test_case(const TestConfig& config, N300TestDevice& test_fixture) {
     try {
         const auto& device_0 = test_fixture.devices_.at(0);
-        const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
+        const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
         auto eth_sender_core_iter = active_eth_cores.begin();
         TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
         while (eth_sender_core_iter != active_eth_cores.end() and
                not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                   device_0->id(), *eth_sender_core_iter)) {
+                   device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {
             eth_sender_core_iter++;
         }
         TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
         auto eth_sender_core = *eth_sender_core_iter;
-        TT_FATAL(device_0->is_active_ethernet_core(eth_sender_core), "Not an active ethernet core {}", eth_sender_core);
+        TT_FATAL(
+            device_0->get_devices()[0]->is_active_ethernet_core(eth_sender_core),
+            "Not an active ethernet core {}",
+            eth_sender_core);
 
-        auto [device_id, eth_receiver_core] = device_0->get_connected_ethernet_core(eth_sender_core);
+        auto [device_id, eth_receiver_core] = device_0->get_devices()[0]->get_connected_ethernet_core(eth_sender_core);
         const auto& device_1 = test_fixture.devices_.at(device_id);
 
         log_info(tt::LogAlways, "Building programs...");
