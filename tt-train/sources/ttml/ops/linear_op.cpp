@@ -12,6 +12,8 @@
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
+using namespace tt::constants;
+
 namespace ttml::ops {
 
 void ttnn_linear_backward(
