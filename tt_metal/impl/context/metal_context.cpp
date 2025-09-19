@@ -700,7 +700,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
             // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL & ~tt::umd::RiscType::ERISC0;
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         }
     }
@@ -885,7 +885,7 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL;
             if (not is_idle_eth) {
                 // On idle eth, don't assert ERISC0, which is running base firmware.
                 reset_val &= ~tt::umd::RiscType::ERISC0;
