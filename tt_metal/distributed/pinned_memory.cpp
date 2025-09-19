@@ -254,7 +254,9 @@ const void* PinnedMemory::get_host_ptr() const { return pImpl->get_host_ptr(); }
 
 uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const { return pImpl->get_device_addr(device_id); }
 
-std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(chip_id_t device_id) const { return pImpl->get_noc_addr(device_id); }
+std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(chip_id_t device_id) const {
+    return pImpl->get_noc_addr(device_id);
+}
 
 size_t PinnedMemory::get_buffer_size() const { return pImpl->get_buffer_size(); }
 
