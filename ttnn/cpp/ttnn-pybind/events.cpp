@@ -31,20 +31,6 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
-    // Single Device APIs
-    module.def(
-        "wait_for_event",
-        py::overload_cast<QueueId, const std::shared_ptr<Event>&>(&wait_for_event),
-        py::arg("cq_id"),
-        py::arg("event"),
-        R"doc(
-            Inserts a barrier - makes a CQ wait until an event is recorded.
-
-            Args:
-                cq_id (int): The Command Queue on which the barrier is being issued.
-                event (event): The Command Queue will stall until this event is completed.
-            )doc");
-
     // Multi Device APIs
     module.def(
         "record_event",

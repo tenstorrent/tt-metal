@@ -19,9 +19,6 @@ using MeshEvent = tt::tt_metal::distributed::MeshEvent;
 
 namespace events {
 
-// Single Device APIs
-void wait_for_event(QueueId cq_id, const std::shared_ptr<tt::tt_metal::Event>& event);
-
 // Multi Device APIs
 struct MultiDeviceEvent {
     std::vector<std::shared_ptr<tt::tt_metal::Event>> events;
