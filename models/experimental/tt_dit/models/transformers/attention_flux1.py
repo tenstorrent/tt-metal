@@ -35,7 +35,6 @@ class Flux1Attention:
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        init: bool = False,
         use_spatial_weights_for_prompt: bool = False,
     ) -> None:
         self.head_dim = head_dim
@@ -49,7 +48,7 @@ class Flux1Attention:
         self.padded_heads = padding_config.target_heads if padding_config is not None else heads
         self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
 
-        common_args = dict(mesh_device=mesh_device, init=init)
+        common_args = dict(mesh_device=mesh_device)
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         padded_inner_dim = head_dim * self.padded_heads
 

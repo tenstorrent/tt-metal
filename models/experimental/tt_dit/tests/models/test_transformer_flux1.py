@@ -228,7 +228,6 @@ def test_transformer_block(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 

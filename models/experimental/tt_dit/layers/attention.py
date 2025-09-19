@@ -37,7 +37,6 @@ class Attention(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        init: bool = False,
         use_spatial_weights_for_prompt: bool = False,
         added_head_scaling: bool = False,
     ) -> None:
@@ -54,7 +53,7 @@ class Attention(Module):
         self.padded_heads = padding_config.target_heads if padding_config is not None else heads
         self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
 
-        common_args = dict(mesh_device=mesh_device, init=init)
+        common_args = dict(mesh_device=mesh_device)
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         padded_inner_dim = head_dim * self.padded_heads
 
@@ -94,11 +93,7 @@ class Attention(Module):
             self.to_add_out = None
 
         self.added_head_factors = (
-            Parameter(
-                shape=[self.n_local_heads, 1],
-                device=mesh_device,
-                init=init and torch.ones([self.n_local_heads, 1]),
-            )
+            Parameter(shape=[self.n_local_heads, 1], device=mesh_device)
             if added_head_scaling and self.add_qkv_proj is not None
             else None
         )

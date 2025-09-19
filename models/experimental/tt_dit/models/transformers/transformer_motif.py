@@ -33,21 +33,19 @@ class TimeTextProjection(Module):
         pooled_projection_dim: int,
         time_embed_dim: int = 256,
         mesh_device: ttnn.MeshDevice | None = None,
-        init: bool = False,
     ) -> None:
         super().__init__()
 
         self.mesh_device = mesh_device
 
         self.timestep_embedder = FeedForward(
-            dim=time_embed_dim, inner_dim=4 * time_embed_dim, dim_out=embedding_dim, mesh_device=mesh_device, init=init
+            dim=time_embed_dim, inner_dim=4 * time_embed_dim, dim_out=embedding_dim, mesh_device=mesh_device
         )
         self.text_embedder = FeedForward(
             dim=pooled_projection_dim,
             inner_dim=4 * pooled_projection_dim,
             dim_out=embedding_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.time_proj_factor = self._create_time_proj_factor(time_embed_dim)
@@ -120,7 +118,6 @@ class MotifTransformer(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        init: bool = False,
     ) -> None:
         super().__init__()
 
@@ -145,7 +142,6 @@ class MotifTransformer(Module):
             mesh_device=mesh_device,
             tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             sp_mesh_axis=parallel_config.sequence_parallel.mesh_axis,
-            init=init,
         )
 
         self.time_text_embed = TimeTextProjection(
@@ -153,7 +149,6 @@ class MotifTransformer(Module):
             time_embed_dim=time_embed_dim,
             pooled_projection_dim=pooled_projection_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.context_embedder = ColParallelLinear(
@@ -161,7 +156,6 @@ class MotifTransformer(Module):
             inner_dim,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         self.transformer_blocks = [
@@ -175,7 +169,6 @@ class MotifTransformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                init=init,
             )
             for i in range(num_layers)
         ]
@@ -184,7 +177,6 @@ class MotifTransformer(Module):
             inner_dim,
             2 * inner_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.norm_out = DistributedLayerNorm(
@@ -194,7 +186,6 @@ class MotifTransformer(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
         # self.norm_out = AdaLayerNormContinuous(inner_dim, modulation_dim, elementwise_affine=False, eps=1e-6)
 
@@ -202,17 +193,15 @@ class MotifTransformer(Module):
             inner_dim,
             patch_size * patch_size * out_channels,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.register_tokens = Parameter(
             shape=[1, register_token_num, inner_dim],
             device=mesh_device,
-            init=init,
         )
 
         # TODO: mesh sharding?
-        self.t_token_proj = Linear(modulation_dim, inner_dim, mesh_device=mesh_device, init=init)
+        self.t_token_proj = Linear(modulation_dim, inner_dim, mesh_device=mesh_device)
 
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently

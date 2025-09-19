@@ -148,7 +148,6 @@ class Parameter:
         mesh_placements: Collection[ttnn.PlacementReplicate | ttnn.PlacementShard] | None = None,
         mesh_mapping: Mapping[int, int] | None = None,
         to_host: bool = False,
-        init: torch.Tensor | bool = False,
     ) -> None:
         assert mesh_mapping is None or mesh_placements is None, (
             "only one of mesh_mapping and mesh_placement should be supplied"
@@ -170,14 +169,6 @@ class Parameter:
         self.mesh_placements = tuple(mesh_placements)
         self.to_host = to_host
         self.data = None
-
-        if isinstance(init, torch.Tensor):
-            self.load_torch_tensor(init)
-        elif init is True:
-            self.load_torch_tensor(torch.randn(self.shape))
-        elif init is not False:
-            msg = "init should be a Torch tensor or bool"
-            raise ValueError(msg)
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)

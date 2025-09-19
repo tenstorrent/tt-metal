@@ -39,7 +39,6 @@ class TransformerBlock(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        init: bool = False,
     ) -> None:
         super().__init__()
 
@@ -62,7 +61,6 @@ class TransformerBlock(Module):
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         self.norm1_norm = DistributedLayerNorm(
@@ -73,7 +71,6 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
@@ -83,7 +80,6 @@ class TransformerBlock(Module):
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -93,7 +89,6 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.attn = Attention(
@@ -105,7 +100,6 @@ class TransformerBlock(Module):
             context_pre_only=context_pre_only,
             eps=1e-6,
             mesh_device=mesh_device,
-            init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
@@ -119,7 +113,6 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.ff = ParallelFeedForward(
@@ -129,7 +122,6 @@ class TransformerBlock(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.norm2_context = None
@@ -144,7 +136,6 @@ class TransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
-                init=init,
             )
             self.ff_context = ParallelFeedForward(
                 dim=dim,
@@ -153,7 +144,6 @@ class TransformerBlock(Module):
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                init=init,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()

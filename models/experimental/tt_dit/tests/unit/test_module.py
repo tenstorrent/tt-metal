@@ -8,11 +8,11 @@ from ...layers.module import Module, Parameter
 
 
 class TinyLinear(Module):
-    def __init__(self, in_dim: int, out_dim: int, *, device: ttnn.MeshDevice, init: bool = False) -> None:
+    def __init__(self, in_dim: int, out_dim: int, *, device: ttnn.MeshDevice) -> None:
         super().__init__()
 
-        self.weight = Parameter(shape=[in_dim, out_dim], device=device, init=init)
-        self.bias = Parameter(shape=[in_dim, out_dim], device=device, init=init)
+        self.weight = Parameter(shape=[in_dim, out_dim], device=device)
+        self.bias = Parameter(shape=[in_dim, out_dim], device=device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return x @ self.weight.data + self.bias.data
@@ -23,13 +23,11 @@ class TinyLinear(Module):
 
 
 class TinyFeedForward(Module):
-    def __init__(
-        self, in_dim: int, hidden_dim: int, out_dim: int, *, device: ttnn.MeshDevice, init: bool = False
-    ) -> None:
+    def __init__(self, in_dim: int, hidden_dim: int, out_dim: int, *, device: ttnn.MeshDevice) -> None:
         super().__init__()
 
-        self.linear1 = TinyLinear(in_dim, hidden_dim, device=device, init=init)
-        self.linear2 = TinyLinear(hidden_dim, out_dim, device=device, init=init)
+        self.linear1 = TinyLinear(in_dim, hidden_dim, device=device)
+        self.linear2 = TinyLinear(hidden_dim, out_dim, device=device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear1.forward(x)
