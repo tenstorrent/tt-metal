@@ -16,6 +16,7 @@ class TtnnConv1D:
         shard_layout=None,  # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         fp32_accum=False,
         packer_l1_acc=False,
+        activation=None,
         deallocate_activation=True,
         math_fidelity=ttnn.MathFidelity.LoFi,
     ):
@@ -32,6 +33,7 @@ class TtnnConv1D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=deallocate_activation,
+            activation=activation,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

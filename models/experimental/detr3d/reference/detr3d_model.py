@@ -20,6 +20,38 @@ import math
 import numpy as np
 from functools import partial
 
+import torch
+import torch.nn.functional as F
+
+
+class Conv1d(torch.nn.Conv1d):
+    """
+    A wrapper around :class:`torch.nn.Conv1d` to support empty inputs and more features.
+    """
+
+    def __init__(self, *args, **kwargs):
+        """
+        Extra keyword arguments supported in addition to those in `torch.nn.Conv1d`:
+        Args:
+            norm (nn.Module, optional): a normalization layer
+            activation (callable(Tensor) -> Tensor): a callable activation function
+        It assumes that norm layer is used before activation.
+        """
+        norm = kwargs.pop("norm", None)
+        activation = kwargs.pop("activation", None)
+        super().__init__(*args, **kwargs)
+
+        self.norm = norm
+        self.activation = activation
+
+    def forward(self, x):
+        x = F.conv1d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        if self.norm is not None:
+            x = self.norm(x)
+        if self.activation is not None:
+            x = self.activation(x)
+        return x
+
 
 def get_nested_list_shape(lst):
     shape = []
@@ -493,28 +525,40 @@ class GenericMLP(nn.Module):
         for idx, x in enumerate(hidden_dims):
             # print("hiii")
             if use_conv:
-                layer = nn.Conv1d(prev_dim, x, 1, bias=hidden_use_bias)
+                layer = Conv1d(
+                    prev_dim, x, 1, bias=hidden_use_bias, norm=norm(x) if norm else None, activation=activation()
+                )
+                # layer = nn.Conv1d(prev_dim, x, 1, bias=hidden_use_bias)
+                layers.append(layer)
             else:
                 layer = nn.Linear(prev_dim, x, bias=hidden_use_bias)
-            layers.append(layer)
-            if norm:
-                layers.append(norm(x))
-            layers.append(activation())
+                layers.append(layer)
+                if norm:
+                    layers.append(norm(x))
+                layers.append(activation())
             if dropout is not None:
                 layers.append(nn.Dropout(p=dropout[idx]))
             prev_dim = x
         if use_conv:
-            layer = nn.Conv1d(prev_dim, output_dim, 1, bias=output_use_bias)
+            layer = Conv1d(
+                prev_dim,
+                output_dim,
+                1,
+                bias=output_use_bias,
+                norm=norm(output_dim) if output_use_norm else None,
+                activation=activation() if output_use_activation else None,
+            )
+            # layer = nn.Conv1d(prev_dim, output_dim, 1, bias=output_use_bias)
+            layers.append(layer)
         else:
             layer = nn.Linear(prev_dim, output_dim, bias=output_use_bias)
-        layers.append(layer)
+            layers.append(layer)
+            if output_use_norm:
+                # print("iwbefiuwbefw")
+                layers.append(norm(output_dim))
 
-        if output_use_norm:
-            # print("iwbefiuwbefw")
-            layers.append(norm(output_dim))
-
-        if output_use_activation:
-            layers.append(activation())
+            if output_use_activation:
+                layers.append(activation())
 
         self.layers = nn.Sequential(*layers)
 
