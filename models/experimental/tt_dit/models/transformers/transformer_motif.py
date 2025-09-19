@@ -20,9 +20,6 @@ from ...layers.transformer_block import TransformerBlock
 from ...utils.tensor import bf16_tensor
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-    from typing import Any
-
     from ...parallel.config import DiTParallelConfig
     from ...parallel.manager import CCLManager
     from ...utils.padding import PaddingConfig
@@ -55,7 +52,7 @@ class TimeTextProjection(Module):
 
         self.time_proj_factor = self._create_time_proj_factor(time_embed_dim)
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         state["timestep_embedder"] = {
             "ff1": state.get("timestep_embedder", {}).pop("linear_1"),
             "ff2": state.get("timestep_embedder", {}).pop("linear_2"),
@@ -133,6 +130,7 @@ class MotifTransformer(Module):
         sample_size = 64
 
         self.patch_size = patch_size
+        self.num_layers = num_layers
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
@@ -300,108 +298,107 @@ class MotifTransformer(Module):
         # NOTE: While we should be able to gather on sequence after norm and proj, it leads to
         # terrible outputs for 2x2sp1tp0. Need to debug.
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
-        # First, convert Motif state dict to diffusers compatible (as far as possible) state dict.
-        def convert_ada_norm(prefix: str, *, pre_only: bool) -> None:
-            ws = state[f"{prefix}.weight"].chunk(6)
-            bs = state[f"{prefix}.bias"].chunk(6)
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        ### First, convert Motif state dict to diffusers compatible (as far as possible) state dict.
 
-            if pre_only:
-                state[f"{prefix}.weight"] = torch.concat(ws[:2])
-                state[f"{prefix}.bias"] = torch.concat(bs[:2])
-            else:
-                state[f"{prefix}.weight"] = torch.concat([ws[1], ws[0], ws[2], ws[4], ws[3], ws[5]])
-                state[f"{prefix}.bias"] = torch.concat([bs[1], bs[0], bs[2] + 1, bs[4], bs[3] - 1, bs[5]])
-
-        pos_embed = state.pop("pos_embed", {})
-        pos_embed = pos_embed.unsqueeze(0) if pos_embed is not None else None
-
-        state["pos_embed"] = {
-            "pos_embed": pos_embed,
-            "proj": state.get("patching", {}).pop("projection_SD3", {}),
+        renames = {
+            "pos_embed": "pos_embed.pos_embed",
+            "text_cond.projection.weight": "context_embedder.weight",
+            "text_cond.projection.bias": "context_embedder.bias",
+            "final_modulation.weight": "norm_out.linear.weight",
+            "final_modulation.bias": "norm_out.linear.bias",
+            "final_linear_SD3.weight": "proj_out.weight",
+            "final_linear_SD3.bias": "proj_out.bias",
+            "patching.projection_SD3.weight": "pos_embed.proj.weight",
+            "patching.projection_SD3.bias": "pos_embed.proj.bias",
+            "time_emb.time_emb.linear_1.weight": "time_text_embed.timestep_embedder.linear_1.weight",
+            "time_emb.time_emb.linear_1.bias": "time_text_embed.timestep_embedder.linear_1.bias",
+            "time_emb.time_emb.linear_2.weight": "time_text_embed.timestep_embedder.linear_2.weight",
+            "time_emb.time_emb.linear_2.bias": "time_text_embed.timestep_embedder.linear_2.bias",
+            "time_emb.pooled_text_emb.linear_1.weight": "time_text_embed.text_embedder.linear_1.weight",
+            "time_emb.pooled_text_emb.linear_1.bias": "time_text_embed.text_embedder.linear_1.bias",
+            "time_emb.pooled_text_emb.linear_2.weight": "time_text_embed.text_embedder.linear_2.weight",
+            "time_emb.pooled_text_emb.linear_2.bias": "time_text_embed.text_embedder.linear_2.bias",
         }
-        state["time_text_embed"] = {
-            "timestep_embedder": state.get("time_emb", {}).pop("time_emb", {}),
-            "text_embedder": state.get("time_emb", {}).pop("pooled_text_emb", {}),
+
+        block_renames = {
+            "attn.o_proj.weight": "attn.to_out.0.weight",
+            "attn.add_o_proj.weight": "attn.to_add_out.weight",
+            "attn.q_norm_x.weight": "attn.norm_q.weight",
+            "attn.k_norm_x.weight": "attn.norm_k.weight",
+            "attn.q_norm_c.weight": "attn.norm_added_q.weight",
+            "attn.k_norm_c.weight": "attn.norm_added_k.weight",
+            "affine_params_c.projection.weight": "norm1_context.linear.weight",
+            "affine_params_c.projection.bias": "norm1_context.linear.bias",
+            "affine_params_x.projection.weight": "norm1.linear.weight",
+            "affine_params_x.projection.bias": "norm1.linear.bias",
+            "mlp_3_c.gate_proj.weight": "ff_context.net.0.proj.weight",
+            "mlp_3_c.gate_proj.bias": "ff_context.net.0.proj.bias",
+            "mlp_3_c.down_proj.weight": "ff_context.net.2.weight",
+            "mlp_3_c.down_proj.bias": "ff_context.net.2.bias",
+            "mlp_3_x.gate_proj.weight": "ff.net.0.proj.weight",
+            "mlp_3_x.gate_proj.bias": "ff.net.0.proj.bias",
+            "mlp_3_x.down_proj.weight": "ff.net.2.weight",
+            "mlp_3_x.down_proj.bias": "ff.net.2.bias",
         }
-        state["context_embedder"] = state.get("text_cond", {}).pop("projection", {})
-        state["proj_out"] = state.pop("final_linear_SD3", {})
-        state["norm_out"] = {"linear": state.pop("final_modulation", {})}
 
-        state["transformer_blocks"] = blocks = state.pop("mmdit_blocks", {})
+        for src, dst in renames.items():
+            state[dst] = state.pop(src)
 
-        block_count = len(blocks)
+        for i in range(self.num_layers):
+            src_prefix = f"mmdit_blocks.{i}."
+            dst_prefix = f"transformer_blocks.{i}."
 
-        for i_str, block in blocks:
-            i = int(i_str)
+            for src, dst in block_renames.items():
+                state[f"{dst_prefix}{dst}"] = state.pop(f"{src_prefix}{src}")
 
-            attn = block.get("attn")
-            if attn is not None:
-                to_out_weight = attn.get("o_proj", {}).pop("weight")
-                to_add_out_weight = attn.get("add_o_proj", {}).pop("weight")
+            x_weight = state.pop(f"{src_prefix}linear_1_x.weight")
+            x_bias = state.pop(f"{src_prefix}linear_1_x.bias")
 
-                if to_out_weight is not None:
-                    attn.setdefault("to_out", {})["0"] = {
-                        "weight": to_out_weight,
-                        "bias": torch.zeros_like(to_out_weight[0]),
-                    }
-                if to_add_out_weight is not None and i != block_count - 1:  # unused in the last block
-                    attn["to_add_out"] = {
-                        "weight": to_add_out_weight,
-                        "bias": torch.zeros_like(to_add_out_weight[0]),
-                    }
+            q_weight = state.pop(f"{src_prefix}attn.q_proj.weight")
+            state[f"{dst_prefix}attn.to_q.weight"] = q_weight @ x_weight
+            state[f"{dst_prefix}attn.to_q.bias"] = q_weight @ x_bias
+            k_weight = state.pop(f"{src_prefix}attn.k_proj.weight")
+            state[f"{dst_prefix}attn.to_k.weight"] = k_weight @ x_weight
+            state[f"{dst_prefix}attn.to_k.bias"] = k_weight @ x_bias
+            v_weight = state.pop(f"{src_prefix}attn.v_proj.weight")
+            state[f"{dst_prefix}attn.to_v.weight"] = v_weight @ x_weight
+            state[f"{dst_prefix}attn.to_v.bias"] = v_weight @ x_bias
 
-                attn["norm_q"] = attn.pop("q_norm_x", {})
-                attn["norm_k"] = attn.pop("k_norm_x", {})
-                attn["norm_added_q"] = attn.pop("q_norm_c", {})
-                attn["norm_added_k"] = attn.pop("k_norm_c", {})
+            c_weight = state.pop(f"{src_prefix}linear_1_c.weight")
+            c_bias = state.pop(f"{src_prefix}linear_1_c.bias")
 
-            block["norm1_context"] = {"linear": state.get("affine_params_c", {}).pop("projection", {})}
-            block["norm1"] = {"linear": state.get("affine_params_x", {}).pop("projection", {})}
+            add_q_weight = state.pop(f"{src_prefix}attn.add_q_proj.weight")
+            state[f"{dst_prefix}attn.add_q_proj.weight"] = add_q_weight @ c_weight
+            state[f"{dst_prefix}attn.add_q_proj.bias"] = add_q_weight @ c_bias
+            add_k_weight = state.pop(f"{src_prefix}attn.add_k_proj.weight")
+            state[f"{dst_prefix}attn.add_k_proj.weight"] = add_k_weight @ c_weight
+            state[f"{dst_prefix}attn.add_k_proj.bias"] = add_k_weight @ c_bias
+            add_v_weight = state.pop(f"{src_prefix}attn.add_v_proj.weight")
+            state[f"{dst_prefix}attn.add_v_proj.weight"] = add_v_weight @ c_weight
+            state[f"{dst_prefix}attn.add_v_proj.bias"] = add_v_weight @ c_bias
 
-            convert_ada_norm(block["norm1.linear"], pre_only=False)
-            convert_ada_norm(block["norm1_context"]["linear"], pre_only=i == block_count - 1)
+            state[f"{dst_prefix}attn.to_out.0.bias"] = torch.zeros_like(state[f"{dst_prefix}attn.to_out.0.weight"][0])
+            state[f"{dst_prefix}attn.to_add_out.bias"] = torch.zeros_like(
+                state[f"{dst_prefix}attn.to_add_out.weight"][0]
+            )
 
-            ff_gate = state.get("mlp_3_x", {}).pop("gate_proj", {})
-            ff_down = state.get("mlp_3_x", {}).pop("down_proj", {})
-            ff_context_gate = state.get("mlp_3_c", {}).pop("gate_proj", {})
-            ff_context_down = state.get("mlp_3_c", {}).pop("down_proj", {})
+            _convert_ada_norm(state, f"{dst_prefix}norm1.linear", pre_only=False)
+            _convert_ada_norm(state, f"{dst_prefix}norm1_context.linear", pre_only=i == self.num_layers - 1)
 
-            block["ff"] = {"net": {"0": {"proj": ff_gate}, "2": ff_down}}
-            if i != block_count - 1:  # unused in the last block
-                block["ff_context"] = {"net": {"0": {"proj": ff_context_gate}, "2": ff_context_down}}
+        state["pos_embed.pos_embed"] = state["pos_embed.pos_embed"].unsqueeze(0)
 
-            x_weight = block.get("linear_1_x", {}).pop("weight")
-            x_bias = block.get("linear_1_x", {}).pop("bias")
+        # Unused since we can set context_pre_only=True in the last block.
+        last_block_prefix = f"transformer_blocks.{self.num_layers - 1}"
+        del state[f"{last_block_prefix}.attn.to_add_out.weight"]
+        del state[f"{last_block_prefix}.attn.to_add_out.bias"]
+        del state[f"{last_block_prefix}.ff_context.net.0.proj.weight"]
+        del state[f"{last_block_prefix}.ff_context.net.0.proj.bias"]
+        del state[f"{last_block_prefix}.ff_context.net.2.weight"]
+        del state[f"{last_block_prefix}.ff_context.net.2.bias"]
 
-            if x_weight is not None and x_bias is not None:
-                q_weight = attn.get("q_proj", {}).pop("weight")
-                k_weight = attn.get("k_proj", {}).pop("weight")
-                v_weight = attn.get("v_proj", {}).pop("weight")
+        ### Second, convert diffusers state dict to tt_dit state dict.
 
-                if q_weight is not None:
-                    attn["to_q"] = {"weight": q_weight @ x_weight, "bias": q_weight @ x_bias}
-                if k_weight is not None:
-                    attn["to_k"] = {"weight": k_weight @ x_weight, "bias": k_weight @ x_bias}
-                if v_weight is not None:
-                    attn["to_v"] = {"weight": v_weight @ x_weight, "bias": v_weight @ x_bias}
-
-            c_weight = block.get("linear_1_c", {}).pop("weight")
-            c_bias = block.get("linear_1_c", {}).pop("bias")
-
-            if c_weight is not None and c_bias is not None:
-                add_q_weight = attn.get("add_q_proj", {}).pop("weight")
-                add_k_weight = attn.get("add_k_proj", {}).pop("weight")
-                add_v_weight = attn.get("add_v_proj", {}).pop("weight")
-
-                if add_q_weight is not None:
-                    attn["add_q_proj"] = {"weight": add_q_weight @ c_weight, "bias": add_q_weight @ c_bias}
-                if add_k_weight is not None:
-                    attn["add_k_proj"] = {"weight": add_k_weight @ c_weight, "bias": add_k_weight @ c_bias}
-                if add_v_weight is not None:
-                    attn["add_v_proj"] = {"weight": add_v_weight @ c_weight, "bias": add_v_weight @ c_bias}
-
-        # Second, convert diffusers state dict to tt_dit state dict.
         state["time_embed_out"] = state.get("norm_out", {}).pop("linear", {})  # chunks=2 if sharded
         state["norm_out"] = state.get("norm_out", {}).pop("norm", {})
 
@@ -409,3 +406,15 @@ class MotifTransformer(Module):
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
+
+
+def _convert_ada_norm(state: dict[str, torch.Tensor], prefix: str, *, pre_only: bool) -> None:
+    ws = state[f"{prefix}.weight"].chunk(6)
+    bs = state[f"{prefix}.bias"].chunk(6)
+
+    if pre_only:
+        state[f"{prefix}.weight"] = torch.concat(ws[:2])
+        state[f"{prefix}.bias"] = torch.concat(bs[:2])
+    else:
+        state[f"{prefix}.weight"] = torch.concat([ws[1], ws[0], ws[2], ws[4], ws[3], ws[5]])
+        state[f"{prefix}.bias"] = torch.concat([bs[1], bs[0], bs[2] + 1, bs[4], bs[3] - 1, bs[5]])

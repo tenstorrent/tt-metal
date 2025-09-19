@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 import ttnn
 
-from .module import Module, Parameter, TorchStateTree
+from .module import Module, Parameter
 
 
 class Linear(Module):
@@ -40,9 +39,9 @@ class Linear(Module):
             packer_l1_acc=True,
         )
 
-    def _prepare_torch_state(self, state: TorchStateTree) -> None:
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            state["weight"] = state["weight"].transpose(0, 1)
+            state["weight"].transpose_(0, 1)
 
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -119,7 +118,7 @@ class ColParallelLinear(Module):
             packer_l1_acc=True,
         )
 
-    def _prepare_torch_state(self, state: TorchStateTree) -> None:
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def permute_for_swiglu(tensor):
             assert self.activation_fn == "swiglu"
             ndev = self.mesh_device.shape[self.mesh_axis]
@@ -250,9 +249,9 @@ class RowParallelLinear(Module):
             packer_l1_acc=True,
         )
 
-    def _prepare_torch_state(self, state: TorchStateTree) -> None:
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            state["weight"] = state["weight"].transpose(0, 1)
+            state["weight"].transpose_(0, 1)
 
         if "bias" in state:
             bias = state["bias"].reshape(1, -1)

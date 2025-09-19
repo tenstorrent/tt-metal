@@ -5,20 +5,16 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections import defaultdict
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Generic, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
-
 import ttnn
 
+from ..utils.substate import pop_substate
+
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterator
-    from typing import Any, DefaultDict
-
-
-TorchStateTree = DefaultDict[str, "TorchStateTree | torch.Tensor"]
+    from collections.abc import Collection, Iterator, Mapping
+    from typing import Any
 
 
 class IncompatibleKeys(NamedTuple):
@@ -31,6 +27,7 @@ class Module:
         self._children = {}
         self._parameters = {}
 
+    # TODO: change "Any" to "Module" as soon as all modules are migrated
     def named_children(self) -> Iterator[tuple[str, Any]]:
         yield from self._children.items()
 
@@ -56,9 +53,11 @@ class Module:
                 msg = "cannot assign parameter before Module.__init__() call"
                 raise AttributeError(msg)
             self._parameters[name] = value
-        elif children is not None:
-            children.pop(name, None)
-            parameters.pop(name, None)
+        else:
+            if children is not None:
+                children.pop(name, None)
+            if parameters is not None:
+                parameters.pop(name, None)
 
     def __delattr__(self, name: str) -> None:
         children = self.__dict__.get("_children")
@@ -71,41 +70,33 @@ class Module:
 
         super().__delattr__(name)
 
-    def _prepare_torch_state(self, state: TorchStateTree) -> None:
-        """Prepare Torch state before loading.
-
-        This method is meant to be overridden by the inheriting class to modify the Torch state
-        before loading. The `state` argument is not a PyTorch state dict but a hierarchically nested
-        defaultdict of defaultdict's containing the same data.
-        """
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Prepare Torch state dict before loading."""
 
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
-        state = _unflatten_state_dict(state_dict)
-
-        self._prepare_torch_state(state)
+        state_dict = dict(state_dict)
+        self._prepare_torch_state(state_dict)
 
         unexpected_keys = []
         missing_keys = []
 
         for name, child in self.named_children():
-            child_state = state.pop(name, {})
+            child_state = pop_substate(state_dict, name)
 
             if isinstance(child, Module):
                 child_missing, child_unexpected = child.load_torch_state_dict(child_state, strict=False)
                 missing_keys.extend(f"{name}.{k}" for k in child_missing)
                 unexpected_keys.extend(f"{name}.{k}" for k in child_unexpected)
             else:  # legacy
-                child.load_state_dict(_flatten_state_dict(child_state))
+                child.load_state_dict(child_state)
 
         for name, parameter in self.named_parameters():
-            if name in state:
-                tensor = state.pop(name)
-                assert isinstance(tensor, torch.Tensor)
-                parameter.load_torch_tensor(tensor)
+            if name in state_dict:
+                parameter.load_torch_tensor(state_dict.pop(name))
             else:
                 missing_keys.append(name)
 
-        unexpected_keys.extend(_flatten_state_dict(state).keys())
+        unexpected_keys.extend(state_dict.keys())
 
         error_msg = ""
         if strict and missing_keys:
@@ -117,14 +108,14 @@ class Module:
 
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
-    def save_to_cache(self, path_prefix: str):
+    def save_to_cache(self, path_prefix: str) -> None:
         for name, child in self.named_children():
             child.save_to_cache(f"{path_prefix}{name}.")
 
         for name, parameter in self.named_parameters():
             ttnn.dump_tensor(f"{path_prefix}{name}.ext", parameter.data)
 
-    def load_from_cache(self, path_prefix: str):
+    def load_from_cache(self, path_prefix: str) -> None:
         for name, child in self.named_children():
             child.load_from_cache(f"{path_prefix}{name}.")
 
@@ -197,36 +188,6 @@ class Parameter:
         )
 
 
-def _unflatten_state_dict(state_dict: Mapping[str, torch.Tensor]) -> TorchStateTree:
-    """Turns a PyTorch state dict into a nested defaultdict of defaultdicts."""
-    root = torch_state_tree()
-
-    for key, value in state_dict.items():
-        *parts, leaf = key.split(".")
-
-        node = root
-        for p in parts:
-            node = node[p]
-
-        node[leaf] = value
-
-    return root
-
-
-def _flatten_state_dict(state: TorchStateTree, *, prefix: str = "") -> dict[str, torch.Tensor]:
-    """Turns a nested defaultdict of defaultdicts back into a PyTorch state dict."""
-    state_dict = {}
-
-    for k, v in state.items():
-        child_key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, Mapping):
-            state_dict.update(_flatten_state_dict(v, prefix=child_key))
-        elif v is not None:
-            state_dict[child_key] = v
-
-    return state_dict
-
-
 def _mesh_placements_from_mapping(
     mapping: Mapping[int, int], *, mesh_rank: int
 ) -> list[ttnn.PlacementReplicate | ttnn.PlacementShard]:
@@ -234,24 +195,8 @@ def _mesh_placements_from_mapping(
 
     for k, v in mapping.items():
         if k is None:
-            assert False, "success"
             continue
         assert k < mesh_rank
         placements[k] = ttnn.PlacementShard(v)
 
     return placements
-
-
-def torch_state_tree() -> TorchStateTree:
-    """Return a recursively autovivifying mapping.
-
-    This is a `defaultdict` that creates nested dicts on demand, letting you write deep assignments
-    without pre-creating parents:
-
-        t = tree()
-        t["a"]["b"]["c"] = torch.randn([10])
-
-    Caveat: indexing (e.g. t["x"]) creates nodes. Use `get`/`in` if you *don't* want to create
-    branches during reads.
-    """
-    return defaultdict(torch_state_tree)
