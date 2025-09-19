@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config, load_we
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
+    get_test_weight_config,
     load_reference_io_tensors_for_module,
     load_state_dict,
     run_module_forward,
@@ -128,10 +129,12 @@ def test_forward_pass(
     mode,
     seq_len,
     hf_config,
-    tmp_path,
     mesh_device,
-    model_path,
     ccl,
+    model_path,
+    tmp_path,
+    cache_path,
+    force_recalculate_weight_config,
     set_deterministic_env,
 ):
     num_module_layers, _ = mesh_device.shape
@@ -150,8 +153,14 @@ def test_forward_pass(
             mode, module_path, seq_len, num_module_layers
         )
 
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
+
     # Generate module configs and state
-    weight_config = MLPClass.convert_weights(hf_config, [state_dict] * num_module_layers, tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config
+    )
     model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
