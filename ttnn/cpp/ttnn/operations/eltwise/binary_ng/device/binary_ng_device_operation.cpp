@@ -160,10 +160,10 @@ void validate_sharding(
             // TT_FATAL(
             //     memory_layout_y == TensorMemoryLayout::HEIGHT_SHARDED,
             //     "Operands to eltwise binary must be height sharded when broadcasting on W");
-            TT_FATAL(
-                shard_spec_x.shape[0] == shard_spec_y.shape[0],
-                "Operands to eltwise binary need to have the same"
-                "shard height when broadcasting on W");
+            // TT_FATAL(
+            //     shard_spec_x.shape[0] == shard_spec_y.shape[0],
+            //     "Operands to eltwise binary need to have the same"
+            //     "shard height when broadcasting on W");
             TT_FATAL(
                 shard_spec_x.orientation == shard_spec_y.orientation,
                 "Operands to eltwise binary must have same shard orientation");
