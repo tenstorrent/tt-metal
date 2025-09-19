@@ -652,7 +652,7 @@ def test_max_pool2d_output_formats_and_layouts(
     )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape",
+    "input_shape_nchw",
     (([1, 128, 256, 512],)),
 )
 @pytest.mark.parametrize(
@@ -672,14 +672,7 @@ def test_max_pool2d_output_formats_and_layouts(
     ((2, 2),),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_panoptic_maxpool_sliced(device, input_shape, kernel_size, padding, dilation, stride, dtype, tensor_map):
-    input_shape_nchw = input_shape
-    kernel_size = kernel_size
-    padding = padding
-    stride = stride
-    dilation = dilation
-    dtype = ttnn.bfloat16
-
+def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding, dilation, stride, dtype, tensor_map):
     num_slices = 4
 
     batch_size, channels, input_h, input_w = input_shape_nchw
