@@ -44,6 +44,7 @@ def test_rms_norm_inference(
     reset_seeds,
     ensure_gc,
 ):
+    # from models.demos.gemma3.tt.model_config import ModelArgs
     dtype = ttnn.bfloat16
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
@@ -52,18 +53,22 @@ def test_rms_norm_inference(
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + "attention_norm."
+    # first_layer_prefix = state_dict_prefix + "attention.q_norm."
 
     # Create the inner RMSNormxw
     tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
         dim=model_args.dim,
+        # dim=128,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_key="attention_norm",
+        # weight_key="attention.q_norm",
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
+        # is_distributed=False,
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         tt_ccl=tt_ccl,
@@ -80,6 +85,7 @@ def test_rms_norm_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)
+    # input = torch.rand(1, 1, 32, 128)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
