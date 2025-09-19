@@ -1368,7 +1368,6 @@ void bind_binary_operation_with_fast_approx(
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1419,10 +1418,8 @@ void bind_binary_operation_with_fast_approx(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               QueueId queue_id) -> ttnn::Tensor {
+               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
                 return self(
-                    queue_id,
                     input_tensor_a,
                     input_tensor_b,
                     dtype,
@@ -1444,8 +1441,7 @@ void bind_binary_operation_with_fast_approx(
             py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId},
+            py::arg("use_legacy") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
@@ -1458,10 +1454,8 @@ void bind_binary_operation_with_fast_approx(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               QueueId queue_id) -> ttnn::Tensor {
+               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
                 return self(
-                    queue_id,
                     input_tensor_a,
                     value,
                     dtype,
@@ -1483,8 +1477,7 @@ void bind_binary_operation_with_fast_approx(
             py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+            py::arg("use_legacy") = std::nullopt});
 }
 
 template <typename binary_operation_t>
@@ -1767,7 +1760,6 @@ void bind_inplace_operation_with_fast_approx(
 
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1812,10 +1804,8 @@ void bind_inplace_operation_with_fast_approx(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const QueueId queue_id) {
+               const std::optional<bool>& use_legacy) {
                 return self(
-                    queue_id,
                     input_tensor_a,
                     input_tensor_b,
                     activations,
@@ -1831,8 +1821,7 @@ void bind_inplace_operation_with_fast_approx(
             py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId},
+            py::arg("use_legacy") = std::nullopt},
 
         // tensor and scalar
         ttnn::pybind_overload_t{
@@ -1843,10 +1832,8 @@ void bind_inplace_operation_with_fast_approx(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const QueueId queue_id) {
+               const std::optional<bool>& use_legacy) {
                 return self(
-                    queue_id,
                     input_tensor_a,
                     value,
                     activations,
@@ -1862,8 +1849,7 @@ void bind_inplace_operation_with_fast_approx(
             py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("use_legacy") = std::nullopt});
 }
 
 template <typename binary_operation_t>
