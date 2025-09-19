@@ -71,6 +71,15 @@ struct KernelSource {
         }
         return name;
     }
+
+    // Generate ELF path for a specific processor configuration
+    // For BINARY_PATH: constructs path as device_prefix/kernel_name/kernel_hash/processor_dir/processor_dir.elf
+    // For other types: uses JIT build system to get target path
+    std::string generate_elf_path(
+        const IDevice* device,
+        const KernelImpl* kernel,
+        int processor_index,
+        const std::string& jit_target_path = "") const;
 };
 
 class Kernel {
