@@ -628,28 +628,24 @@ class ttnn_yolov7:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["45"],
             height_sharding=False,
-            num_cores_nhw=64,
         )
         self.conv38 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["46"],
             height_sharding=False,
-            num_cores_nhw=64,
         )
         self.conv39 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["47"],
             height_sharding=False,
-            num_cores_nhw=64,
         )
         self.conv40 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["48"],
             height_sharding=False,
-            num_cores_nhw=64,
         )
 
         self.conv41 = Conv(
