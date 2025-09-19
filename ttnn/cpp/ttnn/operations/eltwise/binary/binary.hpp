@@ -31,7 +31,8 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        bool fast_and_approximate_mode = false);
 
     static Tensor invoke(
         const ttnn::Tensor& lhs,
@@ -42,7 +43,8 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        bool fast_and_approximate_mode = false);
 };
 
 template <BinaryOpType binary_op_type>
@@ -116,7 +118,8 @@ struct InplaceBinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        bool fast_and_approximate_mode = false);
 
     static Tensor invoke(
         const Tensor& lhs,
@@ -124,7 +127,8 @@ struct InplaceBinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        bool fast_and_approximate_mode = false);
 };
 
 template <BinaryOpType binary_op_type>
