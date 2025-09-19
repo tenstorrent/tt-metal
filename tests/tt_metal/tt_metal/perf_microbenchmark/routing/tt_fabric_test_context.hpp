@@ -559,8 +559,6 @@ private:
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
         bandwidth_results_.clear();
-        comparison_results_.clear();
-        failed_tests_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
     }
@@ -1412,7 +1410,6 @@ private:
             entry.bandwidth_GB_s = std::stod(tokens[10]);
             // Skip min, max, std dev
             entry.tolerance_percent = std::stod(tokens[14]);
-            std::cout << "entry.tolerance_percent: " << entry.tolerance_percent << std::endl;
             golden_csv_entries_.push_back(entry);
         }
 
@@ -1450,11 +1447,6 @@ private:
     }
 
     void compare_summary_results_with_golden() {
-        // Clear previous results
-        comparison_results_.clear();
-        failed_tests_.clear();
-        // Load golden CSV (will warn if not found)
-        // load_golden_csv();
         if (golden_csv_entries_.empty()) {
             log_warning(tt::LogTest, "Skipping golden CSV comparison - no golden file found");
             return;
@@ -1478,7 +1470,6 @@ private:
             }
             num_devices_str += "]";
             // Verify that the current result matches the golden entry
-            // TODO: Should we add num iterations to check?
             if (test_result.test_name != golden_result.test_name
              || test_result.ftype != golden_result.ftype
              || test_result.ntype != golden_result.ntype
@@ -1502,19 +1493,11 @@ private:
             int bandwidth_stat_index = std::distance(stat_names_.begin(), bandwidth_stat_location);
             double test_result_avg_bandwidth = test_result.statistics_vector[bandwidth_stat_index];
 
-            // TODO: Handle case where there's no golden entry for this test (will that happen?)
             // Compare the test result with the golden entry
             double acceptable_tolerance = golden_result.tolerance_percent;
             double difference_percent = ((test_result_avg_bandwidth - golden_result.bandwidth_GB_s) / golden_result.bandwidth_GB_s) * 100.0;
             bool within_tolerance = std::abs(difference_percent) <= acceptable_tolerance;
 
-            // else {
-            // double test_tolerance = 1.0;  // Default tolerance for no golden
-            //     comp_result.golden_bandwidth_GB_s = 0.0;
-            //     comp_result.difference_percent = 0.0;
-            //     comp_result.within_tolerance = false;
-            //     comp_result.status = "NO_GOLDEN";
-            
             // Store the results of this comparison
             ComparisonResult comp_result;
             comp_result.test_name = test_result.test_name;
@@ -1563,7 +1546,7 @@ private:
                     std::to_string(test_result.packet_size) + "," + std::to_string(test_result.num_iterations) + "," + std::to_string(test_result_avg_cycles) + "," +
                     std::to_string(test_result_avg_bandwidth) + "," +
                     std::to_string(test_result_avg_packets_per_second) + "," + tolerance_stream.str();
-                failed_tests_.push_back(csv_format_string);
+                all_failed_tests_.push_back(csv_format_string);
             }
         }
 
@@ -1603,12 +1586,11 @@ private:
             return;
         }
 
-        if (!failed_tests_.empty()) {
+        if (!all_failed_tests_.empty()) {
             has_test_failures_ = true;
             log_error(tt::LogTest, "The following tests failed golden comparison (using per-test tolerance):");
-            for (const auto& failed_test : failed_tests_) {
+            for (const auto& failed_test : all_failed_tests_) {
                 log_error(tt::LogTest, "  - {}", failed_test);
-                all_failed_tests_.push_back(failed_test);  // Accumulate for final summary
             }
         } else {
             log_info(tt::LogTest, "All tests passed golden comparison using per-test tolerance values");
@@ -1654,7 +1636,6 @@ private:
     // Golden CSV comparison data
     std::vector<GoldenCsvEntry> golden_csv_entries_;
     std::vector<ComparisonResult> comparison_results_;
-    std::vector<std::string> failed_tests_;      // Per-test failed tests (reset each test)
     std::vector<std::string> all_failed_tests_;  // Accumulates all failed tests across test run
     std::filesystem::path diff_csv_file_path_;
     bool has_test_failures_ = false;  // Track if any tests failed validation
