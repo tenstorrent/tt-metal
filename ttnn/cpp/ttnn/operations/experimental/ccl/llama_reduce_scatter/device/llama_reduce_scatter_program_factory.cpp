@@ -77,7 +77,11 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, t
 std::string cores_to_string(const std::vector<CoreCoord>& cores) {
     std::string result = "{";
     for (const auto& core : cores) {
-        result += "{" + std::to_string(core.x) + ", " + std::to_string(core.y) + "}, ";
+        result += "{";
+        result += std::to_string(core.x);
+        result += ", ";
+        result += std::to_string(core.y);
+        result += "}, ";
     }
     result += "}";
     return result;
@@ -198,9 +202,13 @@ std::string schedule_to_string(const std::vector<std::vector<ReadRequest>>& sche
     auto flattened_schedule = flatten_schedule(schedule);
     std::string result = "{";
     for (uint32_t i = 0; i < flattened_schedule.size(); ++i) {
-        result += "{" + std::to_string(flattened_schedule[i].bank_id) + ", " +
-                  std::to_string(flattened_schedule[i].read_offset) + ", " +
-                  std::to_string(flattened_schedule[i].read_size) + "}, ";
+        result += "{";
+        result += std::to_string(flattened_schedule[i].bank_id);
+        result += ", ";
+        result += std::to_string(flattened_schedule[i].read_offset);
+        result += ", ";
+        result += std::to_string(flattened_schedule[i].read_size);
+        result += "}, ";
     }
     result += "}";
     return result;

@@ -738,7 +738,7 @@ GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(
 }
 
 GlobalNodeId MeshGraphDescriptor::populate_device_instance(LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy) {
-    const std::string name = "D" + std::to_string(local_id);
+    const std::string name = std::string("D") + std::to_string(local_id);
     InstanceData data{
         .local_id = local_id,
         .name = name,

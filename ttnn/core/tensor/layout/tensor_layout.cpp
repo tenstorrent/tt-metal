@@ -30,9 +30,10 @@ Alignment legacyShapeToAlignment(
         return Alignment{};
     }
 
-    const int padded_rank = legacy_padded_shape.rank();
+    const size_t padded_rank = legacy_padded_shape.rank();
+    const int padded_rank_i = static_cast<int>(padded_rank);
     bool alignment_can_be_2D = true;
-    for (int i = -3; i >= -padded_rank; i--) {
+    for (int i = -3; i >= -padded_rank_i; i--) {
         alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
     }
 
@@ -55,7 +56,7 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
-        ttnn::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
+        ttnn::SmallVector<uint32_t> values(std::min<size_t>(padded_rank, static_cast<size_t>(2)));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
             values[alignment_size - 1] = legacy_padded_shape[-1];
@@ -69,11 +70,11 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
-    ttnn::SmallVector<uint32_t> values(padded_rank);
-    values[padded_rank - 1] = legacy_padded_shape[-1];
-    values[padded_rank - 2] = legacy_padded_shape[-2];
+    ttnn::SmallVector<uint32_t> values(static_cast<size_t>(padded_rank));
+    values[padded_rank_i - 1] = legacy_padded_shape[-1];
+    values[padded_rank_i - 2] = legacy_padded_shape[-2];
 
-    for (int i = padded_rank - 3; i >= 0; i--) {
+    for (int i = padded_rank_i - 3; i >= 0; i--) {
         values[i] = legacy_padded_shape[i] * values[i + 1];
     }
 

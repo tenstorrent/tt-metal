@@ -922,7 +922,8 @@ std::map<std::string, std::string> get_block_defines(
 
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
-    defines[get_macro_definition(op_type)] = "1";
+    auto key = get_macro_definition(op_type);
+    defines[key] = std::string("1");
 }
 
 std::string get_compute_kernel_path(
