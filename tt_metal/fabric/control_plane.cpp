@@ -146,6 +146,25 @@ std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_
         MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
 }
 
+std::string print_peer_intermesh_link_tables(
+    const std::
+        unordered_map<MeshId, std::unordered_map<MeshHostRankId, std::map<EthChanDescriptor, EthChanDescriptor>>>&
+            peer_intermesh_link_tables) {
+    std::stringstream ss;
+    ss << "Peer Intermesh Link Tables:" << std::endl;
+    for (const auto& [mesh_id, mesh_host_rank_id_to_link_table] : peer_intermesh_link_tables) {
+        ss << "Mesh ID: " << *mesh_id << std::endl;
+        for (const auto& [mesh_host_rank_id, link_table] : mesh_host_rank_id_to_link_table) {
+            ss << "Mesh Host Rank ID: " << *mesh_host_rank_id << std::endl;
+            for (const auto& [local_chan, remote_chan] : link_table) {
+                ss << "Local Chan: " << local_chan.board_id << " " << local_chan.chan_id << std::endl;
+                ss << "Remote Chan: " << remote_chan.board_id << " " << remote_chan.chan_id << std::endl;
+            }
+        }
+    }
+    return ss.str();
+}
+
 }  // namespace
 
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
@@ -1003,10 +1022,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                                                       .value();
                     auto unique_chip_id =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
+
+                    auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
                     // Look up connected chip's intermesh link table and grab local desc channel
                     // TODO: need to add validate to make sure there is bidrectional traffic
                     for (const auto& [local_desc, peer_desc] :
                          peer_intermesh_link_tables_[mesh_id][connected_host_rank_id]) {
+                        log_critical(tt::LogFabric, "{} {}", peer_desc.board_id, unique_chip_id);
                         if (peer_desc.board_id == unique_chip_id) {
                             tt::umd::CoreCoord eth_core =
                                 tt::tt_metal::MetalContext::instance()
@@ -2049,9 +2071,17 @@ void ControlPlane::exchange_intermesh_link_tables() {
                     reinterpret_cast<std::byte*>(&local_table_size_bytes), sizeof(local_table_size_bytes)),
                 distributed_context.rank());
 
+            // log_critical(tt::LogFabric, "Size of serialized local table: {}", local_table_size_bytes);
+
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
                 distributed_context.rank());
+
+            // for (const auto& [local_chan, remote_chan] : intermesh_link_table_.intermesh_links) {
+            //     log_critical(tt::LogFabric, "Rank {} sent intermesh link: {} -> {}", my_rank, local_chan,
+            //     remote_chan);
+            // }
+
         } else {
             // Acknowledge the broadcast issued by the root
             int remote_table_size_bytes = 0;  // Receive the size of the serialized descriptor
@@ -2059,6 +2089,9 @@ void ControlPlane::exchange_intermesh_link_tables() {
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_table_size_bytes), sizeof(remote_table_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
+
+            // log_critical(tt::LogFabric, "Size of serialized remote table: {}", remote_table_size_bytes);
+
             serialized_remote_table.clear();
             serialized_remote_table.resize(remote_table_size_bytes);
             distributed_context.broadcast(
@@ -2067,6 +2100,12 @@ void ControlPlane::exchange_intermesh_link_tables() {
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
             tt_fabric::IntermeshLinkTable deserialized_remote_table =
                 tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
+
+            // for (const auto& [local_chan, remote_chan] : deserialized_remote_table.intermesh_links) {
+            //     log_critical(
+            //         tt::LogFabric, "Rank {} received intermesh link: {} -> {}", my_rank, local_chan, remote_chan);
+            // }
+
             peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id]
                                        [deserialized_remote_table.local_host_rank_id] =
                                            std::move(deserialized_remote_table.intermesh_links);

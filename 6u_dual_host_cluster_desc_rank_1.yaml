@@ -34,38 +34,38 @@ arch:
 chips:
   {}
 chip_unique_ids:
-  31: 591434117207306841
-  30: 591434117207306823
-  29: 591434117207306803
-  12: 303203741055594801
-  11: 231146147017667161
-  10: 231146147017667143
-  9: 231146147017667123
-  8: 231146147017666865
-  7: 159088552979739225
-  6: 159088552979739207
-  5: 159088552979739187
-  4: 159088552979738929
-  3: 87030958941811289
-  2: 87030958941811271
-  1: 87030958941811251
-  0: 87030958941810993
-  13: 303203741055595059
-  14: 303203741055595079
-  15: 303203741055595097
-  16: 375261335093522737
-  17: 375261335093522995
-  18: 375261335093523015
-  19: 375261335093523033
-  20: 447318929131450673
-  21: 447318929131450931
-  22: 447318929131450951
-  23: 447318929131450969
-  24: 519376523169378609
-  25: 519376523169378867
-  26: 519376523169378887
-  27: 519376523169378905
-  28: 591434117207306545
+  31: 591434112912339275
+  30: 591433047760449622
+  29: 591433047760449617
+  12: 303202671608737859
+  11: 231146142722699595
+  10: 231145077570809942
+  9: 231145077570809937
+  8: 231145077570809923
+  7: 159088548684771659
+  6: 159087483532882006
+  5: 159087483532882001
+  4: 159087483532881987
+  3: 87030954646843723
+  2: 87029889494954070
+  1: 87029889494954065
+  0: 87029889494954051
+  13: 303202671608737873
+  14: 303202671608737878
+  15: 303203736760627531
+  16: 375260265646665795
+  17: 375260265646665809
+  18: 375260265646665814
+  19: 375261330798555467
+  20: 447317859684593731
+  21: 447317859684593745
+  22: 447317859684593750
+  23: 447318924836483403
+  24: 519375453722521667
+  25: 519375453722521681
+  26: 519375453722521686
+  27: 519376518874411339
+  28: 591433047760449603
 ethernet_connections:
   -
     - chip: 0
@@ -690,64 +690,64 @@ ethernet_connections:
   -
     - chip: 16
       chan: 12
-    - chip: 19
+    - chip: 18
       chan: 12
   -
     - chip: 16
       chan: 13
-    - chip: 19
+    - chip: 18
       chan: 13
   -
     - chip: 16
       chan: 14
-    - chip: 19
+    - chip: 18
       chan: 14
   -
     - chip: 16
       chan: 15
+    - chip: 18
+      chan: 15
+  -
+    - chip: 17
+      chan: 8
+    - chip: 21
+      chan: 4
+  -
+    - chip: 17
+      chan: 9
+    - chip: 21
+      chan: 5
+  -
+    - chip: 17
+      chan: 10
+    - chip: 21
+      chan: 6
+  -
+    - chip: 17
+      chan: 11
+    - chip: 21
+      chan: 7
+  -
+    - chip: 17
+      chan: 12
+    - chip: 19
+      chan: 12
+  -
+    - chip: 17
+      chan: 13
+    - chip: 19
+      chan: 13
+  -
+    - chip: 17
+      chan: 14
+    - chip: 19
+      chan: 14
+  -
+    - chip: 17
+      chan: 15
     - chip: 19
       chan: 15
   -
-    - chip: 17
-      chan: 8
-    - chip: 21
-      chan: 4
-  -
-    - chip: 17
-      chan: 9
-    - chip: 21
-      chan: 5
-  -
-    - chip: 17
-      chan: 10
-    - chip: 21
-      chan: 6
-  -
-    - chip: 17
-      chan: 11
-    - chip: 21
-      chan: 7
-  -
-    - chip: 17
-      chan: 12
-    - chip: 18
-      chan: 12
-  -
-    - chip: 17
-      chan: 13
-    - chip: 18
-      chan: 13
-  -
-    - chip: 17
-      chan: 14
-    - chip: 18
-      chan: 14
-  -
-    - chip: 17
-      chan: 15
-    - chip: 18
-      chan: 15
-  -
     - chip: 18
       chan: 8
     - chip: 22
@@ -810,64 +810,64 @@ ethernet_connections:
   -
     - chip: 20
       chan: 12
-    - chip: 23
+    - chip: 22
       chan: 12
   -
     - chip: 20
       chan: 13
-    - chip: 23
+    - chip: 22
       chan: 13
   -
     - chip: 20
       chan: 14
-    - chip: 23
+    - chip: 22
       chan: 14
   -
     - chip: 20
       chan: 15
+    - chip: 22
+      chan: 15
+  -
+    - chip: 21
+      chan: 8
+    - chip: 25
+      chan: 4
+  -
+    - chip: 21
+      chan: 9
+    - chip: 25
+      chan: 5
+  -
+    - chip: 21
+      chan: 10
+    - chip: 25
+      chan: 6
+  -
+    - chip: 21
+      chan: 11
+    - chip: 25
+      chan: 7
+  -
+    - chip: 21
+      chan: 12
+    - chip: 23
+      chan: 12
+  -
+    - chip: 21
+      chan: 13
+    - chip: 23
+      chan: 13
+  -
+    - chip: 21
+      chan: 14
+    - chip: 23
+      chan: 14
+  -
+    - chip: 21
+      chan: 15
     - chip: 23
       chan: 15
   -
-    - chip: 21
-      chan: 8
-    - chip: 25
-      chan: 4
-  -
-    - chip: 21
-      chan: 9
-    - chip: 25
-      chan: 5
-  -
-    - chip: 21
-      chan: 10
-    - chip: 25
-      chan: 6
-  -
-    - chip: 21
-      chan: 11
-    - chip: 25
-      chan: 7
-  -
-    - chip: 21
-      chan: 12
-    - chip: 22
-      chan: 12
-  -
-    - chip: 21
-      chan: 13
-    - chip: 22
-      chan: 13
-  -
-    - chip: 21
-      chan: 14
-    - chip: 22
-      chan: 14
-  -
-    - chip: 21
-      chan: 15
-    - chip: 22
-      chan: 15
-  -
     - chip: 22
       chan: 8
     - chip: 26
@@ -930,22 +930,22 @@ ethernet_connections:
   -
     - chip: 24
       chan: 12
-    - chip: 27
+    - chip: 26
       chan: 12
   -
     - chip: 24
       chan: 13
-    - chip: 27
+    - chip: 26
       chan: 13
   -
     - chip: 24
       chan: 14
-    - chip: 27
+    - chip: 26
       chan: 14
   -
     - chip: 24
       chan: 15
-    - chip: 27
+    - chip: 26
       chan: 15
   -
     - chip: 25
@@ -970,22 +970,22 @@ ethernet_connections:
   -
     - chip: 25
       chan: 12
-    - chip: 26
+    - chip: 27
       chan: 12
   -
     - chip: 25
       chan: 13
-    - chip: 26
+    - chip: 27
       chan: 13
   -
     - chip: 25
       chan: 14
-    - chip: 26
+    - chip: 27
       chan: 14
   -
     - chip: 25
       chan: 15
-    - chip: 26
+    - chip: 27
       chan: 15
   -
     - chip: 26
@@ -1050,42 +1050,42 @@ ethernet_connections:
   -
     - chip: 28
       chan: 12
-    - chip: 31
+    - chip: 30
       chan: 12
   -
     - chip: 28
       chan: 13
-    - chip: 31
+    - chip: 30
       chan: 13
   -
     - chip: 28
       chan: 14
-    - chip: 31
+    - chip: 30
       chan: 14
   -
     - chip: 28
       chan: 15
+    - chip: 30
+      chan: 15
+  -
+    - chip: 29
+      chan: 12
     - chip: 31
-      chan: 15
-  -
-    - chip: 29
-      chan: 12
-    - chip: 30
       chan: 12
   -
     - chip: 29
       chan: 13
-    - chip: 30
+    - chip: 31
       chan: 13
   -
     - chip: 29
       chan: 14
-    - chip: 30
+    - chip: 31
       chan: 14
   -
     - chip: 29
       chan: 15
-    - chip: 30
+    - chip: 31
       chan: 15
   -
     - chip: 30
@@ -1111,196 +1111,196 @@ ethernet_connections_to_remote_devices:
   -
     - chip: 14
       chan: 3
-    - remote_chip_id: 303202671608737878
+    - remote_chip_id: 303203741055595079
       chan: 3
   -
     - chip: 14
       chan: 2
-    - remote_chip_id: 303202671608737878
+    - remote_chip_id: 303203741055595079
       chan: 2
   -
     - chip: 14
       chan: 1
-    - remote_chip_id: 303202671608737878
+    - remote_chip_id: 303203741055595079
       chan: 1
   -
     - chip: 14
       chan: 0
-    - remote_chip_id: 303202671608737878
+    - remote_chip_id: 303203741055595079
       chan: 0
   -
     - chip: 11
       chan: 3
-    - remote_chip_id: 231146142722699595
+    - remote_chip_id: 231146147017667161
       chan: 3
   -
     - chip: 11
       chan: 2
-    - remote_chip_id: 231146142722699595
+    - remote_chip_id: 231146147017667161
       chan: 2
   -
     - chip: 11
       chan: 1
-    - remote_chip_id: 231146142722699595
+    - remote_chip_id: 231146147017667161
       chan: 1
   -
     - chip: 11
       chan: 0
-    - remote_chip_id: 231146142722699595
+    - remote_chip_id: 231146147017667161
       chan: 0
   -
     - chip: 10
       chan: 3
-    - remote_chip_id: 231145077570809942
+    - remote_chip_id: 231146147017667143
       chan: 3
   -
     - chip: 10
       chan: 2
-    - remote_chip_id: 231145077570809942
+    - remote_chip_id: 231146147017667143
       chan: 2
   -
     - chip: 10
       chan: 1
-    - remote_chip_id: 231145077570809942
+    - remote_chip_id: 231146147017667143
       chan: 1
   -
     - chip: 10
       chan: 0
-    - remote_chip_id: 231145077570809942
+    - remote_chip_id: 231146147017667143
       chan: 0
   -
     - chip: 7
       chan: 3
-    - remote_chip_id: 159088548684771659
+    - remote_chip_id: 159088552979739225
       chan: 3
   -
     - chip: 7
       chan: 2
-    - remote_chip_id: 159088548684771659
+    - remote_chip_id: 159088552979739225
       chan: 2
   -
     - chip: 7
       chan: 1
-    - remote_chip_id: 159088548684771659
+    - remote_chip_id: 159088552979739225
       chan: 1
   -
     - chip: 7
       chan: 0
-    - remote_chip_id: 159088548684771659
+    - remote_chip_id: 159088552979739225
       chan: 0
   -
     - chip: 6
       chan: 3
-    - remote_chip_id: 159087483532882006
+    - remote_chip_id: 159088552979739207
       chan: 3
   -
     - chip: 6
       chan: 2
-    - remote_chip_id: 159087483532882006
+    - remote_chip_id: 159088552979739207
       chan: 2
   -
     - chip: 6
       chan: 1
-    - remote_chip_id: 159087483532882006
+    - remote_chip_id: 159088552979739207
       chan: 1
   -
     - chip: 6
       chan: 0
-    - remote_chip_id: 159087483532882006
+    - remote_chip_id: 159088552979739207
       chan: 0
   -
     - chip: 3
       chan: 3
-    - remote_chip_id: 87030954646843723
+    - remote_chip_id: 87030958941811289
       chan: 3
   -
     - chip: 3
       chan: 2
-    - remote_chip_id: 87030954646843723
+    - remote_chip_id: 87030958941811289
       chan: 2
   -
     - chip: 3
       chan: 1
-    - remote_chip_id: 87030954646843723
+    - remote_chip_id: 87030958941811289
       chan: 1
   -
     - chip: 3
       chan: 0
-    - remote_chip_id: 87030954646843723
+    - remote_chip_id: 87030958941811289
       chan: 0
   -
     - chip: 15
       chan: 3
-    - remote_chip_id: 303203736760627531
+    - remote_chip_id: 303203741055595097
       chan: 3
   -
     - chip: 15
       chan: 2
-    - remote_chip_id: 303203736760627531
+    - remote_chip_id: 303203741055595097
       chan: 2
   -
     - chip: 15
       chan: 1
-    - remote_chip_id: 303203736760627531
+    - remote_chip_id: 303203741055595097
       chan: 1
   -
     - chip: 15
       chan: 0
-    - remote_chip_id: 303203736760627531
+    - remote_chip_id: 303203741055595097
       chan: 0
   -
     - chip: 2
       chan: 3
-    - remote_chip_id: 87029889494954070
+    - remote_chip_id: 87030958941811271
       chan: 3
   -
     - chip: 2
       chan: 2
-    - remote_chip_id: 87029889494954070
+    - remote_chip_id: 87030958941811271
       chan: 2
   -
     - chip: 2
       chan: 1
-    - remote_chip_id: 87029889494954070
+    - remote_chip_id: 87030958941811271
       chan: 1
   -
     - chip: 2
       chan: 0
-    - remote_chip_id: 87029889494954070
+    - remote_chip_id: 87030958941811271
       chan: 0
 chips_with_mmio:
-  - 0: 22
-  - 1: 0
-  - 2: 12
-  - 3: 24
-  - 4: 17
-  - 5: 4
-  - 6: 9
-  - 7: 28
-  - 8: 18
-  - 9: 5
-  - 10: 11
-  - 11: 26
-  - 12: 16
-  - 13: 2
-  - 14: 10
-  - 15: 23
-  - 16: 19
-  - 17: 3
-  - 18: 14
-  - 19: 27
-  - 20: 25
-  - 21: 7
-  - 22: 15
-  - 23: 31
-  - 24: 21
-  - 25: 1
-  - 26: 13
-  - 27: 29
-  - 28: 20
-  - 29: 6
-  - 30: 8
-  - 31: 30
+  - 0: 10
+  - 1: 28
+  - 2: 5
+  - 3: 15
+  - 4: 8
+  - 5: 24
+  - 6: 1
+  - 7: 19
+  - 8: 13
+  - 9: 27
+  - 10: 6
+  - 11: 18
+  - 12: 12
+  - 13: 30
+  - 14: 3
+  - 15: 16
+  - 16: 9
+  - 17: 25
+  - 18: 4
+  - 19: 20
+  - 20: 17
+  - 21: 31
+  - 22: 7
+  - 23: 23
+  - 24: 14
+  - 25: 26
+  - 26: 2
+  - 27: 21
+  - 28: 11
+  - 29: 29
+  - 30: 0
+  - 31: 22
 harvesting:
   0:
     noc_translation: true
