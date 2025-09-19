@@ -3,6 +3,7 @@
 
 import pytest
 
+from conftest import skip_for_blackhole
 from helpers.format_arg_mapping import DestAccumulation, Transpose
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats, parametrize
@@ -13,6 +14,7 @@ from helpers.perf import (
 )
 
 
+@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     test_name="math_transpose_perf",
