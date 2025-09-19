@@ -1850,7 +1850,6 @@ class ModelArgs:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
         if getattr(self, "is_mixture_of_experts", False):
-            self.num_experts_per_tok = self.num_experts_per_tok
             self.initialize_mixture_of_experts_configs()
             self.moe = True
             self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
