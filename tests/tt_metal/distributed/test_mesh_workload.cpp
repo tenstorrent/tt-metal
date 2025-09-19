@@ -197,8 +197,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
                 IDevice* device = mesh_device_->get_device(device_coord);
                 auto programs = utils::create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-                AddProgramToMeshWorkload(
-                    *workload, std::move(*programs[0]), MeshCoordinateRange(device_coord, device_coord));
+                workload->add_program(MeshCoordinateRange(device_coord, device_coord), std::move(*programs[0]));
             }
         }
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
@@ -225,9 +224,9 @@ TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
     MeshCoordinate zero_coord = MeshCoordinate::zero_coordinate(mesh_device_->shape().dims());
     MeshCoordinateRange devices_range = MeshCoordinateRange(zero_coord, zero_coord);
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_range);
+    mesh_workload.add_program(devices_range, std::move(*programs[0]));
     EXPECT_THAT(
-        ([&]() { AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_range); }),
+        ([&]() { mesh_workload.add_program(devices_range, std::move(*programs[1])); }),
         ThrowsMessage<std::runtime_error>(HasSubstr("overlaps with the previously added range")));
 }
 
@@ -252,13 +251,13 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         if (i % 2) {
             MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
             MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, 3});
-            AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-            AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+            random_workload->add_program(devices_0, std::move(*programs[i]));
+            random_workload->add_program(devices_1, std::move(*programs[i + 1]));
         } else {
             MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{1, 1});
             MeshCoordinateRange devices_1(MeshCoordinate{0, 2}, MeshCoordinate{1, 3});
-            AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-            AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+            random_workload->add_program(devices_0, std::move(*programs[i]));
+            random_workload->add_program(devices_1, std::move(*programs[i + 1]));
         }
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
@@ -271,10 +270,10 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         MeshCoordinateRange devices_1(MeshCoordinate{0, 1}, MeshCoordinate{1, 1});
         MeshCoordinateRange devices_2(MeshCoordinate{0, 2}, MeshCoordinate{1, 2});
         MeshCoordinateRange devices_3(MeshCoordinate{0, 3}, MeshCoordinate{1, 3});
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 2]), devices_2);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 3]), devices_3);
+        random_workload->add_program(devices_0, std::move(*programs[i]));
+        random_workload->add_program(devices_1, std::move(*programs[i + 1]));
+        random_workload->add_program(devices_2, std::move(*programs[i + 2]));
+        random_workload->add_program(devices_3, std::move(*programs[i + 3]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
@@ -291,14 +290,14 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         MeshCoordinateRange devices_6(MeshCoordinate{1, 2}, MeshCoordinate{1, 2});
         MeshCoordinateRange devices_7(MeshCoordinate{1, 3}, MeshCoordinate{1, 3});
 
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 2]), devices_2);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 3]), devices_3);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 4]), devices_4);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 5]), devices_5);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 6]), devices_6);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 7]), devices_7);
+        random_workload->add_program(devices_0, std::move(*programs[i]));
+        random_workload->add_program(devices_1, std::move(*programs[i + 1]));
+        random_workload->add_program(devices_2, std::move(*programs[i + 2]));
+        random_workload->add_program(devices_3, std::move(*programs[i + 3]));
+        random_workload->add_program(devices_4, std::move(*programs[i + 4]));
+        random_workload->add_program(devices_5, std::move(*programs[i + 5]));
+        random_workload->add_program(devices_6, std::move(*programs[i + 6]));
+        random_workload->add_program(devices_7, std::move(*programs[i + 7]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
@@ -336,8 +335,8 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{1, 7});
         MeshCoordinateRange devices_1(MeshCoordinate{2, 0}, MeshCoordinate{3, 7});
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+        random_workload->add_program(devices_0, std::move(*programs[i]));
+        random_workload->add_program(devices_1, std::move(*programs[i + 1]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
@@ -349,8 +348,8 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{3, 3});
         MeshCoordinateRange devices_1(MeshCoordinate{0, 4}, MeshCoordinate{3, 7});
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
+        random_workload->add_program(devices_0, std::move(*programs[i]));
+        random_workload->add_program(devices_1, std::move(*programs[i + 1]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
@@ -365,10 +364,10 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         MeshCoordinateRange devices_2(MeshCoordinate{2, 0}, MeshCoordinate{2, 7});
         MeshCoordinateRange devices_3(MeshCoordinate{3, 0}, MeshCoordinate{3, 7});
 
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 2]), devices_2);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 3]), devices_3);
+        random_workload->add_program(devices_0, std::move(*programs[i]));
+        random_workload->add_program(devices_1, std::move(*programs[i + 1]));
+        random_workload->add_program(devices_2, std::move(*programs[i + 2]));
+        random_workload->add_program(devices_3, std::move(*programs[i + 3]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
@@ -386,14 +385,14 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         MeshCoordinateRange devices_6(MeshCoordinate{0, 6}, MeshCoordinate{3, 6});
         MeshCoordinateRange devices_7(MeshCoordinate{0, 7}, MeshCoordinate{3, 7});
 
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), devices_0);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 1]), devices_1);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 2]), devices_2);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 3]), devices_3);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 4]), devices_4);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 5]), devices_5);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 6]), devices_6);
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i + 7]), devices_7);
+        random_workload->add_program(devices_0, std::move(*programs[i]));
+        random_workload->add_program(devices_1, std::move(*programs[i + 1]));
+        random_workload->add_program(devices_2, std::move(*programs[i + 2]));
+        random_workload->add_program(devices_3, std::move(*programs[i + 3]));
+        random_workload->add_program(devices_4, std::move(*programs[i + 4]));
+        random_workload->add_program(devices_5, std::move(*programs[i + 5]));
+        random_workload->add_program(devices_6, std::move(*programs[i + 6]));
+        random_workload->add_program(devices_7, std::move(*programs[i + 7]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
@@ -430,7 +429,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
         // Choose a grid of random dimensions and run a MeshWorkload on it
         MeshCoordinateRange device_range(MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
         auto random_workload = std::make_shared<MeshWorkload>();
-        AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), device_range);
+        random_workload->add_program(device_range, std::move(*programs[i]));
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
@@ -465,8 +464,8 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     MeshCoordinateRange devices_1(
         MeshCoordinate{0, num_cols_in_workload},
         MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
+    mesh_workload.add_program(devices_0, std::move(*programs[0]));
+    mesh_workload.add_program(devices_1, std::move(*programs[1]));
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
     std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->size(), 3);
 
@@ -576,8 +575,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     MeshCoordinateRange devices_1(
         MeshCoordinate{0, mesh_device_->num_cols() - 1},
         MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), devices_0);
-    AddProgramToMeshWorkload(mesh_workload, std::move(*program_1), devices_1);
+    mesh_workload.add_program(devices_0, std::move(program));
+    mesh_workload.add_program(devices_1, std::move(*program_1));
 
     std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1);
 
@@ -638,7 +637,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     auto mesh_workload = CreateMeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(*program), devices);
+    mesh_workload.add_program(devices, std::move(*program));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
     verify_cb_config(mesh_device_, mesh_workload, cb_config_vector, cr_set);
@@ -667,7 +666,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     }
     auto mesh_workload = CreateMeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), devices);
+    mesh_workload.add_program(devices, std::move(program));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
 
@@ -700,8 +699,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     MeshCoordinateRange devices_1(
         {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(program0), devices_0);
-    AddProgramToMeshWorkload(mesh_workload, std::move(program1), devices_1);
+    mesh_workload.add_program(devices_0, std::move(program0));
+    mesh_workload.add_program(devices_1, std::move(program1));
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
 
@@ -749,7 +748,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkloadMultiThread) {
                 MeshCoordinateRange device_range(
                     MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
                 auto random_workload = std::make_shared<MeshWorkload>();
-                AddProgramToMeshWorkload(*random_workload, std::move(*programs[i]), device_range);
+                random_workload->add_program(device_range, std::move(*programs[i]));
                 EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
                 mesh_workloads.push_back(random_workload);
             }

@@ -88,7 +88,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);

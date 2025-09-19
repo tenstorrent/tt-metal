@@ -216,7 +216,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         auto device = mesh_device->get_devices()[0];
 
@@ -282,7 +282,7 @@ TEST_F(MeshDeviceFixture, TensixIncrementStreamRegWrite) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         CoreCoord logical_grid_size = mesh_device->compute_with_storage_grid_size();
@@ -347,7 +347,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
@@ -391,7 +391,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
@@ -447,7 +447,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
@@ -503,7 +503,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
