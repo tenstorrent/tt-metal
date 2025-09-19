@@ -1,0 +1,141 @@
+# This is a template workflow for running Ops Sanity pipeline tests.
+# These tests are meant to run after every commit and are meant to replace the existing APC pipeline.
+
+
+# The following parameters can be controlled in the tests.yaml file by the developer:
+
+# name: The name of the test
+# cmd: The command to run the test
+# sku: the sku of the test (N150, N300, P100, P150b, llmbox, galaxy, etc)
+# owner_id: The owner of the test
+
+
+name: "[testing] Ops Sanity pipeline"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+  push:
+    branches:
+      ["roseli/28975-pipeline-reorg-apc-ops"]
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ./tests/pipeline_reorg/ops/sanity/tests.yaml \
+            ./.github/time_budget.yaml
+
+      - name: Load test matrix
+        id: load-test-matrix
+        # the tests.yaml file is currently hardcoded
+        # Install yq to parse the tests.yaml file
+        # TODO: move yq install out to install dependencies step.
+        env:
+          TESTS_YAML_PATH: ./tests/pipeline_reorg/ops/sanity/tests.yaml
+        run: |
+          set -e
+          # Install yq
+          YQ_VERSION="v4.44.1"
+          wget "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          # Check if the file exists
+          if [ ! -f "$TESTS_YAML_PATH" ]; then
+            echo "::error::Test matrix file not found at: $TESTS_YAML_PATH"
+            exit 1
+          fi
+          # Sanitize line endings
+          sanitized_yaml=$(sed 's/\r$//' $TESTS_YAML_PATH)
+          # Convert to JSON
+          json_output=$(echo "${sanitized_yaml}" | yq '. | to_json(0)')
+          # Print the JSON output
+          echo "Read contents of $TESTS_YAML_PATH and converted to JSON:"
+          echo "${json_output}"
+          echo "matrix=${json_output}" >> $GITHUB_OUTPUT
+
+  build-artifact:
+    # This job will ONLY run if the build-artifact-name input is NOT provided.
+    if: ${{ inputs.build-artifact-name == '' }}
+    needs: load-test-matrix
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+
+  tests:
+    # If the build-artifact-name input is NOT provided, we need to run the build-artifact job first.
+    needs: [load-test-matrix, build-artifact]
+    # Always run this job even if build-artifact job is not run.
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: >-
+      ${{
+        (matrix.test-group.sku == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', matrix.test-group.sku))
+        || ((matrix.test-group.sku == 'P150b') && format('tt-ubuntu-2204-{0}-metal', matrix.test-group.sku))
+        || format('tt-ubuntu-2204-{0}-viommu-metal', matrix.test-group.sku)
+      }}
+    container:
+      image: ${{ inputs.docker-image || needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name || needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          echo ${{ matrix.test-group.cmd }}
+          ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
