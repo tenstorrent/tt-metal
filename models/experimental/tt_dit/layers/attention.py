@@ -125,20 +125,17 @@ class Attention(Module):
             state["add_qkv_proj.bias"] = bias
 
         if "to_out.0.weight" in state:
-            weight = state.pop("to_out.0.weight")
-            if self.padding_config is not None:
-                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
-            state["to_out.weight"] = weight
+            state["to_out.weight"] = state.pop("to_out.0.weight")
         if "to_out.0.bias" in state:
             state["to_out.bias"] = state.pop("to_out.0.bias")
 
-        if "to_add_out.weight" in state:
-            weight = state.pop("to_add_out.weight")
-            if self.padding_config is not None:
-                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
-            state["to_add_out.weight"] = weight
-        if "to_add_out.bias" in state:
-            state["to_add_out.bias"] = state.pop("to_add_out.bias")
+        if self.padding_config is not None:
+            if "to_out.weight" in state:
+                weight = state["to_out.weight"]
+                state["to_out.weight"] = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+            if "to_add_out.weight" in state:
+                weight = state["to_add_out.weight"]
+                state["to_add_out.weight"] = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
 
         if "added_head_factors" in state:
             factors = state["added_head_factors"].reshape([-1, 1])
