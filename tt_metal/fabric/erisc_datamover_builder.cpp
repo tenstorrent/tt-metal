@@ -956,8 +956,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
 
         if (requires_forced_assignment_to_noc1()) {
-            this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
-            this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+            this->sender_channel_ack_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
         }
     }
     this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
