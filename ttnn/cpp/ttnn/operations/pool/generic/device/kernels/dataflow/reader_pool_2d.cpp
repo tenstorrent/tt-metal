@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -347,8 +347,6 @@ void kernel_main() {
             init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
         }
 
-        // DPRINT << "init_index: " << init_index << ENDL();
-
         // initialize the right inc tile
         cb_reserve_back(right_inc_tmp_cb_id, 1);
         volatile tt_l1_ptr uint16_t* right_ptr =
@@ -396,8 +394,6 @@ void kernel_main() {
             }
             kernel_idx += in_w - window_w;
         }
-        // DPRINT << "INIT TILE IDX CB" << ENDL();
-        // tt::data_movement::common::print_u16_pages(get_write_ptr(idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
         cb_push_back(idx_tmp_cb_id, 1);
     }
 

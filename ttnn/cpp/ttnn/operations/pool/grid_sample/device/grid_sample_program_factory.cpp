@@ -171,16 +171,21 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             max_rows_for_reduction,                              // 6: Max rows
             input_cb_index,                                      // 7: Input CB
             dummy_cb_id,                                         // 8: Input CB 1 (unused)
-            dummy_cb_id,                                         // 9: Index Input CB (unused)
-            dummy_cb_id,                                         // 10: Index Input CB 1 (unused)
-            scalar_cb_index,                                     // 11: Scalar CB
-            dummy_cb_id,                                         // 12: Scalar CB 1 (unused)
-            dummy_cb_id,                                         // 13: Tile Temp CB (unused)
-            dummy_cb_id,                                         // 14: Index Tile Temp CB (unused)
-            output_cb_index,                                     // 15: Output CB
-            dummy_cb_id,                                         // 16: Index Output CB (unused)
-            one_scalar_per_core,                                 // 17: Scalar mode
-            false,                                               // 18: Return Indices (unused)
+            scalar_cb_index,                                     // 9: Scalar CB
+            dummy_cb_id,                                         // 10: Scalar CB 1 (unused)
+            dummy_cb_id,                                         // 11: Idx Temp CB (unused)
+            dummy_cb_id,                                         // 12: right inc tmp CB (unused)
+            dummy_cb_id,                                         // 13: down left wrap inc tmp CB (unused)
+            output_cb_index,                                     // 14: Output CB
+            dummy_cb_id,                                         // 15: Index Output CB (unused)
+            one_scalar_per_core,                                 // 16: Scalar mode
+            false,                                               // 17: Return Indices (unused)
+            0,                                                   // 18: right inc (unused)
+            0,                                                   // 19: down left wrap inc (unused)
+            0,                                                   // 20: in_w_padded (unused)
+            0,                                                   // 21: kernel_w (unused)
+            0,                                                   // 22: pad_l (unused)
+            dummy_cb_id                                          // 23: sync CB (unused)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -207,16 +212,21 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             max_rows_for_reduction,                              // 6: Max rows
             input_cb_index,                                      // 7: Input CB
             dummy_cb_id,                                         // 8: Input CB 1 (unused)
-            dummy_cb_id,                                         // 9: Index Input CB (unused)
-            dummy_cb_id,                                         // 10: Index Input CB 1 (unused)
-            scalar_cb_index,                                     // 11: Scalar CB
-            dummy_cb_id,                                         // 12: Scalar CB 1 (unused)
-            dummy_cb_id,                                         // 13: Tile Temp CB (unused)
-            dummy_cb_id,                                         // 14: Index Tile Temp CB (unused)
-            output_cb_index,                                     // 15: Output CB
-            dummy_cb_id,                                         // 16: Index Output CB (unused)
-            one_scalar_per_core,                                 // 17: Scalar mode
-            false,                                               // 18: Return Indices (unused)
+            scalar_cb_index,                                     // 9: Scalar CB
+            dummy_cb_id,                                         // 10: Scalar CB 1 (unused)
+            dummy_cb_id,                                         // 11: Idx Temp CB (unused)
+            dummy_cb_id,                                         // 12: right inc tmp CB (unused)
+            dummy_cb_id,                                         // 13: down left wrap inc tmp CB (unused)
+            output_cb_index,                                     // 14: Output CB
+            dummy_cb_id,                                         // 15: Index Output CB (unused)
+            one_scalar_per_core,                                 // 16: Scalar mode
+            false,                                               // 17: Return Indices (unused)
+            0,                                                   // 18: right inc (unused)
+            0,                                                   // 19: down left wrap inc (unused)
+            0,                                                   // 20: in_w_padded (unused)
+            0,                                                   // 21: kernel_w (unused)
+            0,                                                   // 22: pad_l (unused)
+            dummy_cb_id                                          // 23: sync CB (unused)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
