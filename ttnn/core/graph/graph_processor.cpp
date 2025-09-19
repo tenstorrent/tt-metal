@@ -13,7 +13,6 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/reflection.hpp>
-#include <typeindex>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
@@ -56,37 +55,7 @@ nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& d
 
 namespace ttnn::graph {
 
-GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
-    begin_capture(mode);
-    begin_function_any_map[typeid(std::reference_wrapper<std::vector<Tensor>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->begin_function_process_ref_vector(val); };
-    begin_function_any_map[typeid(std::reference_wrapper<std::vector<std::optional<Tensor>>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->begin_function_process_ref_vector_optional(val); };
-    begin_function_any_map[typeid(std::reference_wrapper<std::vector<std::optional<const Tensor>>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->begin_function_process_ref_vector_optional_const(val); };
-    begin_function_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this](const std::any& val) mutable {
-        ptr->begin_function_process_ref_tensor(val);
-    };
-    begin_function_any_map[typeid(std::reference_wrapper<const Tensor>)] = [ptr = this](const std::any& val) mutable {
-        ptr->begin_function_process_ref_const_tensor(val);
-    };
-    begin_function_any_map[typeid(std::reference_wrapper<std::optional<Tensor>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->begin_function_process_ref_optional_tensor(val); };
-    begin_function_any_map[typeid(std::reference_wrapper<const std::optional<Tensor>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->begin_function_process_ref_optional_tensor_const(val); };
-    begin_function_any_map[typeid(std::reference_wrapper<std::optional<const Tensor>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->begin_function_process_ref_optional_const_tensor(val); };
-
-    end_function_any_map[typeid(std::reference_wrapper<std::vector<Tensor>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->end_function_process_vector(val); };
-    end_function_any_map[typeid(std::reference_wrapper<std::vector<std::optional<Tensor>>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->end_function_process_vector_optional(val); };
-    end_function_any_map[typeid(std::reference_wrapper<std::vector<std::optional<const Tensor>>>)] =
-        [ptr = this](const std::any& val) mutable { ptr->end_function_process_vector_optional_const(val); };
-    end_function_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this](const std::any& val) mutable {
-        ptr->end_function_process_tensor(val);
-    };
-}
+GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) { begin_capture(mode); }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
@@ -103,8 +72,11 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
         {kDeviceId, std::to_string(buffer->device()->id())}};
     {
-        graph.push_back(
-            Vertex{.counter = counter, .node_type = kNodeBufferAllocate, .params = params, .connections = {buffer_id}});
+        graph.push_back(Vertex{
+            .counter = counter,
+            .node_type = kNodeBufferAllocate,
+            .params = std::move(params),
+            .connections = {buffer_id}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -122,7 +94,10 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
         {kDeviceId, std::to_string(buffer->device()->id())}};
     {
         graph.push_back(Vertex{
-            .counter = counter, .node_type = kNodeBufferDeallocate, .params = params, .connections = {buffer_id}});
+            .counter = counter,
+            .node_type = kNodeBufferDeallocate,
+            .params = std::move(params),
+            .connections = {buffer_id}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -143,7 +118,8 @@ void GraphProcessor::track_allocate_cb(
         {kDeviceId, std::to_string(device->id())}};
     auto counter = graph.size();
     {
-        graph.push_back({.counter = counter, .node_type = kNodeCBAllocate, .params = params, .connections = {}});
+        graph.push_back(
+            {.counter = counter, .node_type = kNodeCBAllocate, .params = std::move(params), .connections = {}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -178,7 +154,31 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
     }
 }
 
+template <typename T>
+using ProcessFunc = void (GraphProcessor::*)(const T&);
+
+template <typename T, ProcessFunc<T> Process>
+static void process(GraphProcessor& self, const std::any& any_val) {
+    (self.*Process)(std::any_cast<std::reference_wrapper<T>>(any_val).get());
+}
+
+template <typename T, ProcessFunc<T> Process>
+consteval std::pair<const std::type_info&, void (*)(GraphProcessor&, const std::any&)> make_process() {
+    return {typeid(std::reference_wrapper<T>), &process<T, Process>};
+}
+
 void GraphProcessor::track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {
+    static constexpr std::array begin_function_any_map = {
+        make_process<std::vector<Tensor>, &GraphProcessor::begin_function_process>(),
+        make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::begin_function_process>(),
+        make_process<std::vector<std::optional<const Tensor>>, &GraphProcessor::begin_function_process>(),
+        make_process<Tensor, &GraphProcessor::begin_function_process>(),
+        make_process<const Tensor, &GraphProcessor::begin_function_process>(),
+        make_process<std::optional<Tensor>, &GraphProcessor::begin_function_process>(),
+        make_process<const std::optional<Tensor>, &GraphProcessor::begin_function_process>(),
+        make_process<std::optional<const Tensor>, &GraphProcessor::begin_function_process>(),
+    };
+
     const std::lock_guard<std::mutex> lock(mutex);
     log_debug(tt::LogAlways, "Begin op: {}", function_name);
     std::unordered_map<std::string, std::string> params = {
@@ -194,7 +194,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         graph.push_back(Vertex{
             .counter = counter,
             .node_type = kNodeFunctionStart,
-            .params = params,
+            .params = std::move(params),
             .arguments = serialized_arguments,
             .connections = {/*current_op_id.top()*/}});
         if (last_finished_op_id != -1) {
@@ -206,11 +206,11 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     }
 
     for (auto& any : input_parameters) {
-        std::type_index any_type = any.type();
-        auto it = begin_function_any_map.find(any_type);
+        const auto it = std::ranges::find(
+            begin_function_any_map, any.type(), [](const auto& pair) -> const auto& { return pair.first; });
 
         if (it != begin_function_any_map.end()) {
-            it->second(any);
+            it->second(*this, any);
         } else {
             log_debug(tt::LogAlways, "input any type name ignored: {}", graph_demangle(any.type().name()));
         }
@@ -238,14 +238,21 @@ void GraphProcessor::track_function_end() {
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {
+    static constexpr std::array end_function_any_map{
+        make_process<std::vector<Tensor>, &GraphProcessor::end_function_process>(),
+        make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::end_function_process>(),
+        make_process<std::vector<std::optional<const Tensor>>, &GraphProcessor::end_function_process>(),
+        make_process<Tensor, &GraphProcessor::end_function_process>(),
+    };
+
     const std::lock_guard<std::mutex> lock(mutex);
     this->track_function_end_impl();
 
-    std::type_index any_type = output_tensors.type();
-    auto it = end_function_any_map.find(any_type);
+    const auto it = std::ranges::find(
+        end_function_any_map, output_tensors.type(), [](const auto& pair) -> const auto& { return pair.first; });
 
     if (it != end_function_any_map.end()) {
-        it->second(output_tensors);
+        it->second(*this, output_tensors);
     } else {
         log_debug(tt::LogAlways, "output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
     }
@@ -290,8 +297,8 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     };
 
     if (tensor_id_to_counter.count(tensor_id) == 0) {
-        graph.push_back(
-            Vertex{.counter = tensor_counter, .node_type = kNodeTensor, .params = params, .connections = {}});
+        graph.push_back(Vertex{
+            .counter = tensor_counter, .node_type = kNodeTensor, .params = std::move(params), .connections = {}});
         tensor_id_to_counter[tensor_id] = tensor_counter;
     }
 
@@ -309,116 +316,61 @@ int GraphProcessor::add_tensor(const Tensor& t) {
 }
 
 int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
-    auto buffer_id = buffer->unique_id();
-    auto counter = buffer_id_to_counter.count(buffer_id) > 0 ? buffer_id_to_counter[buffer_id] : graph.size();
-    if (buffer_id_to_counter.count(buffer_id) == 0) {
-        std::unordered_map<std::string, std::string> params = {
-            {kSize, std::to_string(buffer->size())},
-            {kType, buffer->is_dram() ? "DRAM" : "L1"},
-            {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
-            {kDeviceId, std::to_string(buffer->device()->id())}};
+    const auto buffer_id = buffer->unique_id();
 
-        graph.push_back(Vertex{.counter = counter, .node_type = kNodeBuffer, .params = params, .connections = {}});
-        graph[current_op_id.top()].connections.push_back(counter);
-        buffer_id_to_counter[buffer_id] = counter;
-        return counter;
+    if (const auto it = buffer_id_to_counter.find(buffer_id); it != buffer_id_to_counter.end()) {
+        return it->second;
     }
-    return buffer_id_to_counter[buffer_id];
+
+    const auto counter = graph.size();
+    std::unordered_map<std::string, std::string> params = {
+        {kSize, std::to_string(buffer->size())},
+        {kType, buffer->is_dram() ? "DRAM" : "L1"},
+        {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
+        {kDeviceId, std::to_string(buffer->device()->id())}};
+
+    graph.push_back(
+        Vertex{.counter = counter, .node_type = kNodeBuffer, .params = std::move(params), .connections = {}});
+    graph[current_op_id.top()].connections.push_back(counter);
+    buffer_id_to_counter.emplace(buffer_id, counter);
+    return counter;
 }
 
-void GraphProcessor::begin_function_process_ref_vector(const std::any& any_val) {
-    const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<Tensor>>>(any_val).get();
-    for (auto& it : tensor_vec) {
-        int tensor_id = add_tensor(it);
-        graph[tensor_id].connections.push_back(current_op_id.top());
-    }
-}
-void GraphProcessor::begin_function_process_ref_vector_optional(const std::any& any_val) {
-    const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<Tensor>>>>(any_val).get();
-    for (auto& it : tensor_vec) {
-        if (it.has_value()) {
-            int tensor_id = add_tensor(it.value());
-            graph[tensor_id].connections.push_back(current_op_id.top());
-        }
-    }
-}
-void GraphProcessor::begin_function_process_ref_vector_optional_const(const std::any& any_val) {
-    const auto& tensor_vec =
-        std::any_cast<std::reference_wrapper<std::vector<std::optional<const Tensor>>>>(any_val).get();
-    for (auto& it : tensor_vec) {
-        if (it.has_value()) {
-            int tensor_id = add_tensor(it.value());
-            graph[tensor_id].connections.push_back(current_op_id.top());
-        }
-    }
-}
-void GraphProcessor::begin_function_process_ref_tensor(const std::any& any_val) {
-    const auto& tensor = std::any_cast<std::reference_wrapper<Tensor>>(any_val).get();
+void GraphProcessor::begin_function_process(const Tensor& tensor) {
     int tensor_id = add_tensor(tensor);
     graph[tensor_id].connections.push_back(current_op_id.top());
 }
-void GraphProcessor::begin_function_process_ref_const_tensor(const std::any& any_val) {
-    const auto& tensor = std::any_cast<std::reference_wrapper<const Tensor>>(any_val).get();
-    int tensor_id = add_tensor(tensor);
-    graph[tensor_id].connections.push_back(current_op_id.top());
-}
-void GraphProcessor::begin_function_process_ref_optional_tensor(const std::any& any_val) {
-    const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<Tensor>>>(any_val).get();
-    if (tensor.has_value()) {
-        int tensor_id = add_tensor(tensor.value());
-        graph[tensor_id].connections.push_back(current_op_id.top());
+
+template <typename T>
+void GraphProcessor::begin_function_process(const std::optional<T>& tensor_opt) {
+    if (tensor_opt.has_value()) {
+        begin_function_process(*tensor_opt);
     }
 }
-void GraphProcessor::begin_function_process_ref_optional_tensor_const(const std::any& any_val) {
-    const auto& tensor = std::any_cast<std::reference_wrapper<const std::optional<Tensor>>>(any_val).get();
-    if (tensor.has_value()) {
-        int tensor_id = add_tensor(tensor.value());
-        graph[tensor_id].connections.push_back(current_op_id.top());
-    }
-}
-void GraphProcessor::begin_function_process_ref_optional_const_tensor(const std::any& any_val) {
-    const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<const Tensor>>>(any_val).get();
-    if (tensor.has_value()) {
-        int tensor_id = add_tensor(tensor.value());
-        graph[tensor_id].connections.push_back(current_op_id.top());
-    }
-}
-void GraphProcessor::end_function_process_vector(const std::any& any_val) {
-    const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<Tensor>>>(any_val).get();
+
+template <typename T>
+void GraphProcessor::begin_function_process(const std::vector<T>& tensor_vec) {
     for (auto& it : tensor_vec) {
-        int tensor_id = add_tensor(it);
-        graph[last_finished_op_id].connections.push_back(tensor_id);
+        begin_function_process(it);
     }
 }
-void GraphProcessor::end_function_process_vector_optional(const std::any& any_val) {
-    const auto& tensor_vec = std::any_cast<std::reference_wrapper<std::vector<std::optional<Tensor>>>>(any_val).get();
-    for (auto& it : tensor_vec) {
-        if (it.has_value()) {
-            int tensor_id = add_tensor(it.value());
-            graph[last_finished_op_id].connections.push_back(tensor_id);
-        }
-    }
-}
-void GraphProcessor::end_function_process_vector_optional_const(const std::any& any_val) {
-    const auto& tensor_vec =
-        std::any_cast<std::reference_wrapper<std::vector<std::optional<const Tensor>>>>(any_val).get();
-    for (auto& it : tensor_vec) {
-        if (it.has_value()) {
-            int tensor_id = add_tensor(it.value());
-            graph[last_finished_op_id].connections.push_back(tensor_id);
-        }
-    }
-}
-void GraphProcessor::end_function_process_tensor(const std::any& any_val) {
-    const auto& tensor = std::any_cast<std::reference_wrapper<Tensor>>(any_val).get();
+
+void GraphProcessor::end_function_process(const Tensor& tensor) {
     int tensor_id = add_tensor(tensor);
     graph[last_finished_op_id].connections.push_back(tensor_id);
 }
-void GraphProcessor::end_function_process_optional_tensor(const std::any& any_val) {
-    const auto& tensor = std::any_cast<std::reference_wrapper<std::optional<Tensor>>>(any_val).get();
-    if (tensor.has_value()) {
-        int tensor_id = add_tensor(tensor.value());
-        graph[last_finished_op_id].connections.push_back(tensor_id);
+
+template <typename T>
+void GraphProcessor::end_function_process(const std::optional<T>& tensor_opt) {
+    if (tensor_opt.has_value()) {
+        end_function_process(*tensor_opt);
+    }
+}
+
+template <typename T>
+void GraphProcessor::end_function_process(const std::vector<T>& tensor_vec) {
+    for (auto& it : tensor_vec) {
+        end_function_process(it);
     }
 }
 
