@@ -35,7 +35,8 @@ struct DirectWriteConfig {
 /// @param mesh_device MeshDevice to run on
 /// @param test_config Test configuration
 /// @return Success status
-bool run_dm(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device, const DirectWriteConfig& test_config) {
+bool run_dm(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, const DirectWriteConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
 
@@ -184,7 +185,7 @@ bool run_dm(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device, 
 }
 
 void performance_comparison_test(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 0},
     CoreCoord receiver_core = {1, 1}) {
@@ -211,7 +212,7 @@ void performance_comparison_test(
 }
 
 void address_pattern_test(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 0},
     CoreCoord receiver_core = {1, 1}) {
