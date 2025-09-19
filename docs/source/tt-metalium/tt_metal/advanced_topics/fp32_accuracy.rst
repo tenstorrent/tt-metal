@@ -5,7 +5,11 @@ Achieving FP32 Accuracy for Computation
 
 Tensix provides two main compute engines: the matrix engine (FPU) and the vector engine (SFPU). Each has distinct strengths and limitations that affect numerical accuracy and throughput. For a detailed overview of these engines, see :ref:`Compute Engines and Data Flow within Tensix <compute_engines_and_dataflow_within_tensix>`.
 
-The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, ...) properly. For detailed information about FPU numerical accuracy characteristics, see the `FPU FMA Numerical Accuracy <https://github.com/tenstorrent/tt-isa-documentation/blob/main/Miscellaneous/FMA/README.md#correctness-of-fma_model_ieee>`_. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy.
+The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, ...) properly. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy. For detailed information about FPU and SFPU numerical accuracy characteristics, please review the follwoing documentations:
+
+* `SFPU FMA Numerical Accuracy <https://github.com/tenstorrent/tt-isa-documentation/blob/main/Miscellaneous/FMA/README.md#correctness-of-fma_model_ieee>`_
+* `Floaring Point Bit Patterns <https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/FloatBitPatterns.md>`_
+* `FPU SrcA/B and Fidelity Phases <https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/SrcASrcB.md>`_
 
 The vector engine, on the other hand, supports full 32-bit floating-point (FP32) arithmetic and is more IEEE 754-compliant (though not 100%). This makes it suitable for computations where precision is critical. However, as a vector unit, it processes data in smaller batches and at lower throughput—behavior similar to SIMD units found in conventional CPUs and GPUs.
 
@@ -53,6 +57,10 @@ Inside the compute kernel, you must use the vector engine (SFPU) for computation
 
     * Call ``copy_tile_init()`` before unpacking data from a circular buffer into the Dst registers. This function reconfigures the unpacker to correctly interpret the 32-bit data from the circular buffer.
     * Call ``pack_reconfig_data_format()`` before packing data from Dst registers to an output circular buffer. This ensures the packer formats the data correctly for the destination.
+
+.. warning::
+
+    If you are unpcking or packing to multiple circular buffers of different data formats, you must call ``copy_tile_init()`` and ``pack_reconfig_data_format()`` each time you switch between circular buffers with different formats. Otherwise the data may be misinterpreted, leading to incorrect results.
 
 The following example demonstrates a typical compute kernel structure for achieving FP32 accuracy.
 

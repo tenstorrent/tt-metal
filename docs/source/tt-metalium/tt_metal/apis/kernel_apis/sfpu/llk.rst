@@ -115,7 +115,7 @@ The following data types are visible to the programmer:
   * ``vUInt``
   * enum ``LRegs``
 
-Each of the ``v`` types is a strongly typed wrapper around the weakly typed compiler data type ``__rvtt_vec_t``. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32-bit values. Users should take consideration of the changing width when writing code and avoid running on architectures with a different width.
+Each of the ``v`` types is a strongly typed wrapper around the weakly typed compiler data type ``__rvtt_vec_t``. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32-bit values. Users should be aware that vector length may change with future architectures
 
 LRegs are the SFPU's general purpose vector registers.  ``LRegs`` enumerates these registers.
 
@@ -224,7 +224,7 @@ vUInt
   * Operators: ``&``, ``&=``, ``|``, ``|=``, ``~``, ``^``, ``^=``, ``<<`` (Wormhole only), ``>>`` (Wormhole only) and ``+``, ``-``, ``+=``, ``-=``, ``++``, ``--``
   * Conditionals: all 6 (``<``, ``<=``, ``==``, ``!=``, ``>=``, ``>``) are supported.  Note that ``<=`` and ``>`` pay a performance penalty relative to the others
 
-Note that, the destination register format is always determined by the run time. So, for example, reading a vInt when the format is set to float32 gives unexpected results.
+Note that, the destination register format is always determined by the runtime. So, for example, reading a vInt when the format is set to float32 gives unexpected results.
 
 Library
 -------
@@ -509,7 +509,7 @@ implemented.  The optimizer will handle the following items:
   * Swapping the order of arguments to instructions that use the destination-as-source, e.g., SFPOR to minimize the need for register moves
   * CC enables (PUSHC, POPC, etc.)
   * Instruction combining for comparison operations.  For example, a subtract of 5 followed by a compare against 0 gets combined into one operation
-  * NOP insertion for instructions which must be followed by an independent instruction or NOP.  Note that this pass (presently) does not move instructions to fill the slot but will skip adding a NOP if the next instruction is independent.  In other words, reordering your code to reduce dependent chains of instructions may improve performance
+  * NOP insertion for instructions which must be followed by an independent instruction or ``SFPNOP``. Note that this pass (presently) does not move instructions to fill the slot but will skip adding a ``SFPNOP`` if the next instruction is independent. In other words, reordering your code to reduce dependent chains of instructions may improve performance
 
 There is a potential pitfall in the above in that the MAD generator could
 change code which would not run out of registers with, say, a MULI followed by
