@@ -8,15 +8,15 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
-#include <api/tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 namespace nanobind::detail {
 template <>
 struct dtype_traits<bfloat16> {
     static constexpr dlpack::dtype value{
-        (uint8_t)dlpack::dtype_code::Float,  // type code
-        16,                                  // size in bits
-        1                                    // lanes (simd), usually set to 1
+        static_cast<uint8_t>(dlpack::dtype_code::Float),  // type code
+        16,                                               // size in bits
+        1                                                 // lanes (simd), usually set to 1
     };
     static constexpr auto name = const_name("bfloat16");
 };

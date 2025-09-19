@@ -68,7 +68,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
 
     const auto& tensor_spec = t.tensor_spec();
     const auto tensor_type = tensor_spec.data_type();
-    if (!new_type) {
+    if (!new_type.has_value()) {
         switch (tensor_type) {
             case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
             case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
@@ -80,10 +80,12 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
             case tt::tt_metal::DataType::UINT16: TT_THROW("Unsupported type: UINT16"); break;
             case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
         }
+
+        TT_THROW("Unsupported type: unknown");
     }
     switch (tensor_type) {
         case tt::tt_metal::DataType::INT32:
-            switch (*new_type) {
+            switch (new_type.value()) {
                 case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
                 case tt::tt_metal::DataType::UINT32: return impl.template operator()<int32_t, uint32_t>(t);
                 case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<int32_t, float>(t);
@@ -95,7 +97,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
                 case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
             }
         case tt::tt_metal::DataType::UINT32:
-            switch (*new_type) {
+            switch (new_type.value()) {
                 case tt::tt_metal::DataType::INT32: return impl.template operator()<uint32_t, int32_t>(t);
                 case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
                 case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<uint32_t, float>(t);
@@ -107,7 +109,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
                 case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
             }
         case tt::tt_metal::DataType::FLOAT32:
-            switch (*new_type) {
+            switch (new_type.value()) {
                 case tt::tt_metal::DataType::INT32: return impl.template operator()<float, int32_t>(t);
                 case tt::tt_metal::DataType::UINT32: return impl.template operator()<float, uint32_t>(t);
                 case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(t);
@@ -119,7 +121,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
                 case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported type: INVALID"); break;
             }
         case tt::tt_metal::DataType::BFLOAT16:
-            switch (*new_type) {
+            switch (new_type.value()) {
                 case tt::tt_metal::DataType::INT32: return impl.template operator()<bfloat16, int32_t>(t);
                 case tt::tt_metal::DataType::UINT32: return impl.template operator()<bfloat16, uint32_t>(t);
                 case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<bfloat16, float>(t);

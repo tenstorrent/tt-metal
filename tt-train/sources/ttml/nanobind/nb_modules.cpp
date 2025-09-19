@@ -8,6 +8,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
 
+#include <ttnn/operations/experimental/dropout/dropout.hpp>
+
 #include "autograd/autocast_tensor.hpp"
 #include "models/base_transformer.hpp"
 #include "models/gpt2.hpp"
@@ -68,18 +70,31 @@ void py_module(nb::module_& m) {
     {
         auto py_gpt2_transformer_config =
             static_cast<nb::class_<models::gpt2::TransformerConfig>>(m.attr("GPT2TransformerConfig"));
-        py_gpt2_transformer_config.def(
-            nb::init<
-                uint32_t,
-                uint32_t,
-                float,
-                uint32_t,
-                uint32_t,
-                uint32_t,
-                models::gpt2::RunnerType,
-                models::gpt2::WeightTyingType,
-                models::gpt2::PositionalEmbeddingType,
-                bool>(),
+        py_gpt2_transformer_config.def_static(
+            "create",
+            [](uint32_t num_heads,
+               uint32_t embedding_dim,
+               float dropout_prob,
+               uint32_t num_blocks,
+               uint32_t vocab_size,
+               uint32_t max_sequence_length,
+               models::gpt2::RunnerType runner_type,
+               models::gpt2::WeightTyingType weight_tying,
+               models::gpt2::PositionalEmbeddingType positional_embedding_type,
+               bool use_composite_layernorm) {
+                return models::gpt2::TransformerConfig{
+                    .num_heads = num_heads,
+                    .embedding_dim = embedding_dim,
+                    .dropout_prob = dropout_prob,
+                    .num_blocks = num_blocks,
+                    .vocab_size = vocab_size,
+                    .max_sequence_length = max_sequence_length,
+                    .runner_type = runner_type,
+                    .weight_tying = weight_tying,
+                    .positional_embedding_type = positional_embedding_type,
+                    .experimental = models::gpt2::TransformerConfig::Experimental{
+                        .use_composite_layernorm = use_composite_layernorm}};
+            },
             nb::arg("num_heads") = 6,
             nb::arg("embedding_dim") = 384,
             nb::arg("dropout_prob") = 0.2F,
@@ -112,23 +127,39 @@ void py_module(nb::module_& m) {
 
     {
         auto py_llama_config = static_cast<nb::class_<models::llama::LlamaConfig>>(m.attr("LlamaConfig"));
-        py_llama_config.def(
-            nb::init<
-                uint32_t,
-                uint32_t,
-                uint32_t,
-                std::optional<uint32_t>,
-                float,
-                float,
-                uint32_t,
-                uint32_t,
-                uint32_t,
-                models::llama::RunnerType,
-                models::llama::WeightTyingType,
-                float,
-                float,
-                float,
-                uint32_t>(),
+        py_llama_config.def_static(
+            "create",
+            [](uint32_t num_heads,
+               uint32_t num_groups,
+               uint32_t embedding_dim,
+               std::optional<uint32_t> intermediate_dim,
+               float dropout_prob,
+               float theta,
+               uint32_t num_blocks,
+               uint32_t vocab_size,
+               uint32_t max_sequence_length,
+               models::llama::RunnerType runner_type,
+               models::llama::WeightTyingType weight_tying,
+               float scaling_factor,
+               float high_freq_factor,
+               float low_freq_factor,
+               uint32_t original_context_length) {
+                return models::llama::LlamaConfig{
+                    .num_heads = num_heads,
+                    .num_groups = num_groups,
+                    .embedding_dim = embedding_dim,
+                    .intermediate_dim = intermediate_dim,
+                    .dropout_prob = dropout_prob,
+                    .theta = theta,
+                    .num_blocks = num_blocks,
+                    .vocab_size = vocab_size,
+                    .max_sequence_length = max_sequence_length,
+                    .runner_type = runner_type,
+                    .weight_tying = weight_tying,
+                    .scaling_factor = scaling_factor,
+                    .high_freq_factor = high_freq_factor,
+                    .low_freq_factor = low_freq_factor};
+            },
             nb::arg("num_heads") = 6U,
             nb::arg("num_groups") = 3U,
             nb::arg("embedding_dim") = 384U,
