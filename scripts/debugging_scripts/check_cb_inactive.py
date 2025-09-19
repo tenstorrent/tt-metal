@@ -41,7 +41,7 @@ def check_cb_inactive(location: OnChipCoordinate, noc_id: int):
         log_check(
             value == 0,
             f"Device {location._device._id} {location._device.get_block_type(location)} "
-            f"[{location.to_str('logical')}] at {location.to_str(noc_str)}: {noc_str} CB{cb_index} active (0x{value:08X})",
+            f"[{location.to_str('logical')}] at {location.to_str(noc_str)}: {noc_str} CB{cb_index} active (0x{value:08X}). NoC is likely hung.",
         )
 
 
