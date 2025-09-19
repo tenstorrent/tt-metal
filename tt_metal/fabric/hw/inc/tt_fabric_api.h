@@ -235,18 +235,17 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 bool fabric_set_unicast_route(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
-    uint16_t dst_mesh_id = MAX_NUM_MESHES + 1) {
+    uint16_t dst_mesh_id = MAX_NUM_MESHES) {
     tt_l1_ptr intra_mesh_routing_path_t<2, true>* routing_info =
         reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (routing_table->my_mesh_id != dst_mesh_id) {
-        // inter-mesh routing: update dst_dev_id to be exit node dev id for the target mesh
-        tt_l1_ptr exit_node_table_t* exit_node_table =
-            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
-
-        // TODO : update hybrid header's dst_start_chip_id and dst_start_mesh_id
+        // TODO: inter-mesh routing: update dst_dev_id to be exit node dev id for the target mesh
+        // ASSERT(dst_mesh_id < MAX_NUM_MESHES); // dst_mesh_id must be valid if specified
+        // tt_l1_ptr exit_node_table_t* exit_node_table =
+        //     reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+        // dst_dev_id = exit_node_table->nodes[dst_mesh_id];
     }
 
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);

@@ -1756,11 +1756,8 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
             physical_chip_id);
 
         // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip
-        tt::tt_fabric::exit_node_table_t exit_table{};
-        for (std::size_t i = 0; i < tt::tt_fabric::MAX_NUM_MESHES; ++i) {
-            exit_table.nodes[i] =
-                static_cast<std::uint8_t>(tt::tt_fabric::eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
-        }
+        exit_node_table_t exit_table{};
+        std::fill_n(exit_table.nodes, MAX_NUM_MESHES, eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
         const auto& inter_mesh_table = this->routing_table_generator_->get_inter_mesh_table();
         for (const auto& dst_mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
             auto direction = inter_mesh_table[*mesh_id][src_chip_id][*dst_mesh_id];

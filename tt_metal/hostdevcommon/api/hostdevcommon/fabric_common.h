@@ -178,7 +178,7 @@ static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed ro
 static_assert(sizeof(intra_mesh_routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
 
 struct exit_node_table_t {
-    // mesh_id:chip_id mapping
+    // Lookup table: nodes[mesh_id] returns the exit chip_id for that mesh
     std::uint8_t nodes[MAX_NUM_MESHES];  // 1024 meshes * 1 byte = 1024 bytes
 };
 

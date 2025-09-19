@@ -53,7 +53,6 @@ enum class HalL1MemAddrType : uint8_t {
     TENSIX_ROUTING_PATH_1D,
     TENSIX_ROUTING_PATH_2D,
     TENSIX_EXIT_NODE_TABLE,
-    LITE_FABRIC_CONFIG,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
