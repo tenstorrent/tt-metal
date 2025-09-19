@@ -36,7 +36,7 @@ function renderErrorsTable(errorSnippets) {
   const rows = errorSnippets.map(obj => {
     const label = escapeHtml(obj.label || '');
     const snippet = escapeHtml(obj.snippet || '');
-    return `<tr><td style="vertical-align:top;">${label}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
+    return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
   }).join('\n');
   return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
