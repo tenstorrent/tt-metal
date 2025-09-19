@@ -149,7 +149,7 @@ void kernel_main() {
                  weight_tile_h_outer_i < weight_block_height_num_outer * num_blocks_weight_h;
                  weight_tile_h_outer_i++) {
 #ifdef SPLIT_READER
-                if (weight_tile_h_outer_i < num_blocks_weight_h) {
+                if (weight_tile_h_outer_i % weight_block_height_num_outer == 0) {
                     // Read activation data using block sharded pattern (for second reader)
                     uint32_t reader_offset = act_l1_read_addr;
                     for (uint32_t outer = 0; outer < window_outer; outer++) {
