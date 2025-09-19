@@ -574,21 +574,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         num_tiles_per_cb,
         output_data_format);  // output
 
-    // Handle DRAM flags based on variant and tensor availability
-    uint32_t value_true_is_dram = 0, value_false_is_dram = 0;
-    if (variant == WhereVariant::TTS) {
-        value_true_is_dram =
-            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    } else if (variant == WhereVariant::TST) {
-        value_false_is_dram =
-            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    } else {
-        value_true_is_dram =
-            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-        value_false_is_dram =
-            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    }
-
     // BROADCAST DETECTION - Common for both reader and compute kernels
     // Variables are declared at function level, just initialize them here
     pred_is_bcast = false;
@@ -991,14 +976,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
         kernel_defines["BCAST_TRUE"] = "0";  // True is scalar for TST
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
-    } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TTS row broadcast configuration
-        kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";  // Predicate (CB0)
-        kernel_defines["BCAST_B"] = true_is_bcast ? "1" : "0";  // True tensor (CB1)
-    } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TST row broadcast configuration
-        kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";   // Predicate (CB0)
-        kernel_defines["BCAST_B"] = false_is_bcast ? "1" : "0";  // False tensor (CB1)
     }
     if ((variant == WhereVariant::TTS) && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
                                            broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
