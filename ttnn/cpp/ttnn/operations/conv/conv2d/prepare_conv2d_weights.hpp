@@ -29,6 +29,11 @@ bool is_valid_device_conv_weights(
 bool is_valid_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
 
+// Converts convolution weights to interleaved MM layout [1, 1, KhKwCi, Co] and tilizes
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_interleaved_mm_layout(
+    const Tensor& conv_weight_tensor, std::optional<DataType> output_dtype = std::nullopt);
+
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
@@ -124,6 +129,7 @@ struct Conv2dWeightsBiasPrepConfig {
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
         uint32_t input_width_,
+        bool interlaved_mm_conv,
         bool has_bias_ = false,
         bool parameters_on_device_ = true,
         bool enable_kernel_stride_folding_ = false,
@@ -148,7 +154,8 @@ struct Conv2dWeightsBiasPrepConfig {
         enable_activation_reuse(enable_activation_reuse_),
         kernel_size(kernel_size_),
         stride(stride_),
-        padding_n4(padding_n4_) {}
+        padding_n4(padding_n4_),
+        interleaved_mm_conv(interlaved_mm_conv) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
@@ -171,6 +178,8 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::array<uint32_t, 2> kernel_size;
     const std::array<uint32_t, 2> stride;
     const std::array<uint32_t, 4> padding_n4;
+    // This conv will go through auto shard codepath for matmul based convs
+    const bool interleaved_mm_conv;
 };
 
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(

@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define HAL_BUILD tt::tt_metal::blackhole::tensix
 #include "dev_msgs.h"
+using namespace tt::tt_metal::blackhole::tensix;
+
 #include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
@@ -37,7 +40,7 @@ constexpr static std::uint32_t NUM_DRAM_CHANNELS = 8;
 constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
     (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
 constexpr static std::uint32_t DRAM_PROFILER_SIZE =
-    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
       DRAM_ALIGNMENT - 1) /
      DRAM_ALIGNMENT) *
     DRAM_ALIGNMENT;
@@ -187,8 +190,6 @@ void Hal::initialize_quasar() {
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
-    static_assert(MaxProcessorsPerCoreType <= MAX_RISCV_PER_CORE);
-
     HalCoreInfoType tensix_mem_map = quasar::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
@@ -264,6 +265,7 @@ void Hal::initialize_quasar() {
                offsetof(quasar::EthFwMailbox, arg) + arg_index * sizeof(((quasar::EthFwMailbox*)0)->arg[0]);
     };
 
+    this->max_processors_per_core_ = MaxProcessorsPerCoreType;
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
@@ -283,7 +285,10 @@ void Hal::initialize_quasar() {
     this->eth_fw_is_cooperative_ = false;
     this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Quasar
     this->virtualized_core_types_ = {
-        AddressableCoreType::TENSIX, AddressableCoreType::ETH, AddressableCoreType::PCIE, AddressableCoreType::DRAM};
+        dev_msgs::AddressableCoreType::TENSIX,
+        dev_msgs::AddressableCoreType::ETH,
+        dev_msgs::AddressableCoreType::PCIE,
+        dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
     this->eps_ = EPS_BH;

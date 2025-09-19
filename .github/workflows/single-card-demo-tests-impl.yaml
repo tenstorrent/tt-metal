@@ -50,6 +50,7 @@ jobs:
                     { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (vguduruTT)
                     { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
                     { name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
+                    { name: "yolov11m", runner-label: "N150", performance: false, cmd: run_yolov11m_func, owner_id: U04B9QAMM4N, civ2-compatible: true}, # Dimitri Gnidash
                     { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "mobilenetv2", runner-label: "N150", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
@@ -96,6 +97,7 @@ jobs:
                    { name: "segformer", runner-label: "N300", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (vguduruTT)
                     { name: "sentence_bert", runner-label: "N300", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
                     { name: "yolov11", runner-label: "N300", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
+                    { name: "yolov11m", runner-label: "N300", performance: false, cmd: run_yolov11m_func, owner_id: U04B9QAMM4N, civ2-compatible: true}, # Dimitri Gnidash
                     { name: "yolov8s_world", runner-label: "N300", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "vanilla_unet", runner-label: "N300", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
                     { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
@@ -218,6 +220,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
             ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
+            ${{ !matrix.test-group.civ2-compatible && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
             --security-opt seccomp=unconfined

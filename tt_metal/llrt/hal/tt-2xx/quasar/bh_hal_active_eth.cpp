@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt_common/mailbox.hpp"
+#define HAL_BUILD tt::tt_metal::quasar::active_eth
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
+using namespace tt::tt_metal::quasar::active_eth;
+
 #include <cstdint>
 
 #include "quasar/qa_hal.hpp"
@@ -16,15 +18,12 @@
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "noc/noc_parameters.h"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_AERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::quasar {
-
-// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
-#include "core_config.h"
 
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace active_eth_dev_msgs {
@@ -66,6 +65,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
                                                                          offsetof(boot_results_t, eth_live_status) +
                                                                          offsetof(eth_live_status_t, rx_link_up);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LITE_FABRIC_CONFIG)] = MEM_AERISC_LITE_FABRIC_CONFIG;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -93,6 +93,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LITE_FABRIC_CONFIG)] = MEM_AERISC_LITE_FABRIC_CONFIG_SIZE;
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =
@@ -111,14 +112,14 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-            .fw_launch_addr = 0,
+            .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
             .memory_load = ll_api::memory::Loading::CONTIGUOUS,
         };
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_AERISC_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

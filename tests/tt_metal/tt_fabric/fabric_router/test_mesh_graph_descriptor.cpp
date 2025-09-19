@@ -452,60 +452,6 @@ TEST(MeshGraphDescriptorTests, ConnectionMustHaveAtLeastTwoNodes) {
                 ::testing::HasSubstr("Connection must have at least two nodes (Graph: G0)"))));
 }
 
-TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
-    std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 1, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 2 ] }
-        }
-
-        graph_descriptors: {
-            name: "G1"
-            type: "fabric"
-            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-        }
-
-        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"))));
-}
-
-TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneConnection) {
-    std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 1, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 2 ] }
-        }
-
-        graph_descriptors: {
-            name: "G0"
-            type: "fabric"
-            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-        }
-
-        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G0)"))));
-}
-
 TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
