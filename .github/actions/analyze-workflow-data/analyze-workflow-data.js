@@ -155,6 +155,15 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   // Relaxed: match anywhere on the line (after prefix stripping)
   const infoRegex = /info:/i;
   const backtraceRegex = /backtrace:/i;
+  // Failure markers used both in primary and fallback passes
+  const failureMarkers = [
+    /\bFAILED\b/i,          // pytest summary and generic FAILED
+    /\[\s*FAILED\s*\]/i,  // gtest [  FAILED  ]
+    /\bERROR\b/i,           // generic ERROR
+    /Traceback\b/i,         // python tracebacks
+    /AssertionError\b/i,
+    /Segmentation fault/i
+  ];
 
   const collected = [];
   const stack = [rootDir];
@@ -186,6 +195,19 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
           // A) info: ... until backtrace:
           for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
             if (infoRegex.test(lines[i])) {
+              // Guardrail: only consider this an error snippet if nearby lines include
+              // a failure marker or a backtrace. Scan a small window ahead.
+              const upper = Math.min(lines.length, i + 200);
+              let windowHasFailure = false;
+              for (let k = i; k < upper; k++) {
+                const ln = lines[k];
+                if (backtraceRegex.test(ln) || failureMarkers.some(rx => rx.test(ln))) {
+                  windowHasFailure = true;
+                  break;
+                }
+              }
+              if (!windowHasFailure) continue;
+
               const block = [lines[i].trim()];
               let j = i + 1;
               while (j < lines.length && !backtraceRegex.test(lines[j]) && collected.length < maxCount) {
@@ -214,12 +236,6 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   // Fallback: if no snippets collected via primary heuristics, try to at least
   // return names (and a small context) of log files that clearly indicate failure.
   if (collected.length === 0) {
-    const fallbackMarkers = [
-      /\bFAILED\b/,            // pytest summary and generic FAILED
-      /\[\s*FAILED\s*\]/,    // gtest [  FAILED  ]
-      /\bERROR\b/,             // generic ERROR
-      /Traceback\b/            // python tracebacks
-    ];
 
     const stack2 = [rootDir];
     while (stack2.length && collected.length < maxCount) {
@@ -236,7 +252,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
             let hitIndex = -1;
             for (let i = 0; i < rawLines.length && hitIndex === -1; i++) {
               const line = rawLines[i];
-              if (fallbackMarkers.some(rx => rx.test(line))) {
+              if (failureMarkers.some(rx => rx.test(line))) {
                 hitIndex = i;
                 break;
               }
