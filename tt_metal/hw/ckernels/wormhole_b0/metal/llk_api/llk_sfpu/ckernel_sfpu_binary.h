@@ -159,6 +159,11 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
 
             sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
 
+            if constexpr (is_fp32_dest_acc_en) {
+                v_if(in1 == 1.0f) { result = in0; }
+                v_endif;
+            }
+
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
             sfpi::dst_reg++;
         }
