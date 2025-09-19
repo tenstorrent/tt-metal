@@ -68,7 +68,7 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
         }
         go_cv.wait(lk, [&] { return threads_ready == total_threads; });
 
-        intermediate_callable();
+        intermediate_fn();
     });
 
     for (auto& thread : threads) {
