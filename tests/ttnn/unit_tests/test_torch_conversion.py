@@ -27,22 +27,22 @@ TTNN_MUST_TILE_TYPES = [ttnn.bfloat8_b, ttnn.bfloat4_b]
 NUMPY_FLOAT_TYPES = [np.float16, np.float32, np.float64]
 
 
-def get_expected_conversion_pcc(ttnn_dtype, torch_dtype):
+def get_expected_conversion_pcc(ttnn_dtype, other_dtype):
     ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
-    torch_is_float = torch_dtype in TORCH_FLOAT_TYPES
+    other_is_float = other_dtype in TORCH_FLOAT_TYPES or other_dtype in NUMPY_FLOAT_TYPES
 
-    if (ttnn_dtype == ttnn.float32 and torch_dtype == torch.float32) or (
-        ttnn_dtype == ttnn.int32 and torch_dtype == torch.int32
+    if (ttnn_dtype == ttnn.float32 and other_dtype == torch.float32) or (
+        ttnn_dtype == ttnn.int32 and other_dtype == torch.int32
     ):
         return 1
 
     elif ttnn_dtype == ttnn.bfloat4_b:
         return 0.960
 
-    elif ttnn_is_float != torch_is_float:
+    elif ttnn_is_float != other_is_float:
         return 0.98
 
-    elif torch_dtype == torch.bfloat16:
+    elif other_dtype == torch.bfloat16:
         if ttnn_dtype == ttnn.bfloat16 or ttnn_dtype == ttnn.bfloat8_b:
             return 0.9999
         elif ttnn_dtype == ttnn.bfloat4_b:
