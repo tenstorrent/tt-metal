@@ -604,39 +604,20 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             auto true_shape = value_true_tensor.value().logical_shape();
             auto pred_w = pred_shape[pred_shape.rank() - 1];
             auto true_w = true_shape[true_shape.rank() - 1];
-            auto pred_h = pred_shape[pred_shape.rank() - 2];
-            auto true_h = true_shape[true_shape.rank() - 2];
 
             // Check for width or height broadcasting
-            pred_is_bcast = (pred_w == 1 && true_w > 1) || (pred_h == 1 && true_h > 1);
-            true_is_bcast = (true_w == 1 && pred_w > 1) || (true_h == 1 && pred_h > 1);
-
-            // Determine if this is height broadcasting
-            is_height_bcast = true_is_bcast && (true_h == 1 && pred_h > 1);
-
-            // Check for multi-dimensional broadcasting: if ranks differ, true tensor needs broadcasting
-            if (pred_shape.rank() != true_shape.rank()) {
-                true_is_bcast = true;
-            }
-
+            pred_is_bcast = (pred_w == 1 && true_w > 1);
+            true_is_bcast = (true_w == 1 && pred_w > 1);
             false_is_bcast = false;  // False is scalar for TTS
         } else if (variant == WhereVariant::TST) {
             // For TST: only predicate and false tensor, true is scalar
             auto false_shape = value_false_tensor.value().logical_shape();
             auto pred_w = pred_shape[pred_shape.rank() - 1];
             auto false_w = false_shape[false_shape.rank() - 1];
-            auto pred_h = pred_shape[pred_shape.rank() - 2];
-            auto false_h = false_shape[false_shape.rank() - 2];
 
             // Check for width or height broadcasting
-            pred_is_bcast = (pred_w == 1 && false_w > 1) || (pred_h == 1 && false_h > 1);
-            false_is_bcast = (false_w == 1 && pred_w > 1) || (false_h == 1 && pred_h > 1);
-
-            // Check for multi-dimensional broadcasting: if ranks differ, false tensor needs broadcasting
-            if (pred_shape.rank() != false_shape.rank()) {
-                false_is_bcast = true;
-            }
-
+            pred_is_bcast = (pred_w == 1 && false_w > 1);
+            false_is_bcast = (false_w == 1 && pred_w > 1);
             true_is_bcast = false;  // True is scalar for TST
         } else {
             // TTT case
@@ -667,8 +648,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             // TST case
             auto false_shape = value_false_tensor.value().logical_shape();
             auto pred_h = pred_shape[pred_shape.rank() - 2];
-            auto false_h =
-                value_false_tensor.value().logical_shape()[value_false_tensor.value().logical_shape().rank() - 2];
+            auto false_h = false_shape[false_shape.rank() - 2];
 
             pred_is_bcast = (pred_h == 1 && false_h > 1);
             true_is_bcast = false;  // True is scalar for TST
