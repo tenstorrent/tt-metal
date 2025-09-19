@@ -226,10 +226,10 @@ def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, widt
     sliced_results = []
     for slice_idx in range(num_slices):
         start_ch = slice_idx * slice_channels
-        end_ch_inclusive = (slice_idx + 1) * slice_channels
+        end_ch_exclusive = (slice_idx + 1) * slice_channels
 
         x_slice_nhwc = ttnn.slice(
-            ttnn_input_nhwc, [0, 0, 0, start_ch], [batch_size, input_h, input_w, end_ch_inclusive]
+            ttnn_input_nhwc, [0, 0, 0, start_ch], [batch_size, input_h, input_w, end_ch_exclusive]
         )
 
         x_slice_upsampled = ttnn.upsample(
