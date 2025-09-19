@@ -190,25 +190,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        // Slow dispatch conservatively flushes all work since there's no cq.
-        Synchronize(event->device);
-        return;
-    }
-    detail::DispatchStateCheck(true);
-    event->wait_until_ready();  // Block until event populated. Worker thread.
-    log_trace(
-        tt::LogMetal,
-        "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
-        event->device->id(),
-        event->cq_id,
-        event->event_id,
-        cq.device()->id(),
-        cq.id());
-    cq.enqueue_wait_for_event(event);
-}
-
 bool EventQuery(const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.

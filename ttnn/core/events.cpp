@@ -14,21 +14,9 @@
 
 namespace ttnn::events {
 
-using ::tt::tt_metal::EnqueueWaitForEvent;
 using ::tt::tt_metal::distributed::EnqueueRecordEventToHost;
 using ::tt::tt_metal::distributed::EnqueueWaitForEvent;
 using ::tt::tt_metal::distributed::EventSynchronize;
-
-void wait_for_event(QueueId cq_id, const std::shared_ptr<tt::tt_metal::Event>& event) {
-    tt::tt_metal::IDevice* device = event->device;
-    EnqueueWaitForEvent(device->command_queue(*cq_id), event);
-}
-
-void wait_for_event(QueueId cq_id, const MultiDeviceEvent& multi_device_event) {
-    for (auto& event : multi_device_event.events) {
-        wait_for_event(cq_id, event);
-    }
-}
 
 MeshEvent record_mesh_event(
     MeshDevice* mesh_device,
