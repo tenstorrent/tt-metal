@@ -42,7 +42,6 @@ class TtSeparableConvNormAct:
             conv_params=[1, 1, 0, 0],
             fused_op=True,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            seperable_conv_norm_act=True,
             pw=True,
             parameters=parameters,
         )

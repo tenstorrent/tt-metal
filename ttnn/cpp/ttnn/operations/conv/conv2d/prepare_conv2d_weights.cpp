@@ -1000,9 +1000,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
         has_bias,
         compute_config);
 
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
@@ -1016,6 +1013,9 @@ static OptimizedConvBlockConfig get_opt_block_config(
             .shard_scheme = input_memory_config.memory_layout(),
             .shard_orientation = input_memory_config.shard_spec().value().orientation};
     } else {
+        ShardOrientation shard_orientation =
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+
         parallel_config = determine_parallel_config(
             conv_config.shard_layout.value(),
             batch_size,
@@ -1031,8 +1031,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
             true,
             conv_config.act_block_h_override);
     }
-    ParallelConfig output_parallel_config =
-        determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, shard_orientation, mm_conv);
+    ParallelConfig output_parallel_config = determine_output_parallel_config(
+        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
 
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
@@ -1169,9 +1169,6 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         input_memory_config,
         has_bias);
 
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
@@ -1185,6 +1182,9 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             .shard_scheme = input_memory_config.memory_layout(),
             .shard_orientation = input_memory_config.shard_spec().value().orientation};
     } else {
+        ShardOrientation shard_orientation =
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+
         parallel_config = determine_parallel_config(
             conv_config.shard_layout.value(),
             batch_size,
@@ -1202,7 +1202,11 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     }
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, device->compute_with_storage_grid_size(), out_channels, shard_orientation, mm_conv);
+        parallel_config,
+        device->compute_with_storage_grid_size(),
+        out_channels,
+        parallel_config.shard_orientation,
+        mm_conv);
 
     const bool auto_shard = !input_memory_config.is_sharded() && !conv_config.shard_layout.has_value();
     return Conv2dWeightsBiasPrepConfig(

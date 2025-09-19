@@ -6,7 +6,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -19,7 +18,6 @@ namespace ttnn::operations::experimental {
 
 template <typename T>
 ttnn::Tensor PaddedSliceOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const T> begins,
     tt::stl::Span<const T> ends,
@@ -132,8 +130,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
                 ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
             {input_tensor},
             {},
-            {optional_output_tensor},
-            queue_id)
+            {optional_output_tensor})
             .at(0);
 
     // If padded_slice should return a sharded tensor, then the op must created the sharded tensor in the requested
@@ -153,7 +150,6 @@ ttnn::Tensor PaddedSliceOperation::invoke(
 }
 
 template ttnn::Tensor PaddedSliceOperation::invoke<int>(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int> begins,
     tt::stl::Span<const int> ends,
@@ -163,7 +159,6 @@ template ttnn::Tensor PaddedSliceOperation::invoke<int>(
     const std::optional<float>& pad_value);
 
 template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const uint32_t> begins,
     tt::stl::Span<const uint32_t> ends,

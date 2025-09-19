@@ -55,15 +55,14 @@ def test_graph_capture_with_all_parameters(device):
 
     node1 = captured_graph[1]["arguments"]
     # ttnn:transpose
-    assert node1[0] == "\x00"
     assert (
-        node1[1]
+        node1[0]
         == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([1]))))"
     )
-    assert node1[2] == "1"
-    assert node1[3] == "2"
-    assert node1[4] == "nullopt"
-    assert node1[5] == "0"
+    assert node1[1] == "1"
+    assert node1[2] == "2"
+    assert node1[3] == "nullopt"
+    assert node1[4] == "0"
 
     # ttnn::prim::permute
     node4 = captured_graph[4]["arguments"]
@@ -257,14 +256,10 @@ def test_graph_capture_with_all_parameters_json_output(device):
 
     item0 = data["content"][0]
     assert item0["operation"] == "ttnn::transpose"
-    assert len(item0["arguments"]) == 6
+    assert len(item0["arguments"]) == 5
 
-    # arg0
-    assert item0["arguments"][0]["arg0"] == "\u0000"
-
-    # arg1
-    arg1 = item0["arguments"][1]["arg1"]
-    tensor = arg1["Tensor"]
+    # arg0 is now the tensor argument
+    tensor = item0["arguments"][0]["arg0"]["Tensor"]
 
     tspec = tensor["tensor_spec"]
     assert tspec["logical_shape"] == [1, 2048, 4, 128]
@@ -280,11 +275,11 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert mem_config_tensor["shard_spec"] == "std::nullopt"
     assert tlayout["alignment"] == [1]
 
-    # arg2 to arg5
-    assert item0["arguments"][2]["arg2"] == "1"
-    assert item0["arguments"][3]["arg3"] == "2"
-    assert item0["arguments"][4]["arg4"] == "nullopt"
-    assert item0["arguments"][5]["arg5"] == "0"
+    # arg1 to arg4 (previously arg2 to arg5)
+    assert item0["arguments"][1]["arg1"] == "1"
+    assert item0["arguments"][2]["arg2"] == "2"
+    assert item0["arguments"][3]["arg3"] == "nullopt"
+    assert item0["arguments"][4]["arg4"] == "0"
 
     # Content item 1
     item1 = data["content"][1]

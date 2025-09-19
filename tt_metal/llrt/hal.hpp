@@ -248,6 +248,7 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
+    uint32_t max_processors_per_core_{};
     uint32_t num_nocs_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
@@ -410,6 +411,7 @@ public:
     HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
+    uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
@@ -565,6 +567,7 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
         num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
                          .get_processor_types_count(processor_class_idx);
     }
+    TT_ASSERT(num_riscs <= max_processors_per_core_);
     return num_riscs;
 }
 inline uint32_t Hal::get_processor_index(

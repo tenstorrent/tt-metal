@@ -13,7 +13,6 @@
 namespace ttnn::operations::rand {
 
 Tensor Rand::invoke(
-    QueueId queue_id,
     const ttnn::Shape& shape,
     MeshDevice& device,
     const DataType dtype,

@@ -44,7 +44,7 @@ tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
 }
 
 tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b) {
-    auto inv_b = ttnn::reciprocal(ttnn::DefaultQueueId, b);
+    auto inv_b = ttnn::reciprocal(b);
     return ttnn::multiply(a, inv_b);
 }
 

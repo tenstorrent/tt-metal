@@ -14,7 +14,6 @@ namespace operations::experimental::ccl {
 
 struct ExecuteLlamaReduceScatter {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
         int32_t dim,

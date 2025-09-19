@@ -13,12 +13,14 @@
 // to update the generated files.
 //
 // Only a subset of the C++ language can be used:
-// - Only enum and struct definitions are allowed.
 // - Structs can only have scalars, structs, and 1-d array fields.
+// - Constants and enums will be copied to tt::tt_metal::dev_msgs namespace.
+//   - Do not define arch- or core-specific constants/enums here.  Use those in core_config.h.
 // - #includes are copied to the generated interface, so make sure
 //   those files are not arch- or core- specific.
 // - #if... always evaluates to the false branch, so you can use
 //   that to hide code from code generator.
+// - Other C++ constructs are not supported.
 
 #pragma once
 
@@ -28,22 +30,15 @@
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
-// TODO: w/ the hal, this can come from core specific defines
-constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
-
-#ifndef CODEGEN
-// TODO: can't codegen for templates / 2d arrays
-// To be fixed by making RiscCount a per-core constant, and let
-// HAL handle the host side access.
-template <uint32_t RiscCount>
-struct profiler_msg_template_t {
-    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
-    uint32_t buffer[RiscCount][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
-};  // struct profiler_msg_template_t
+#ifdef HAL_BUILD
+// HAL will include this file for different arch/cores, resulting in conflicting definitions that
+// compiler will complain (ODR violation when compiling with LTO).
+// Wrap the definitions in a unique namespace to avoid that.
+namespace HAL_BUILD {
 #endif
 
 // TODO: move these to processor specific files
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
 
 // Several firmware/kernel files depend on this file for dev_mem_map.h and/or noc_parameters.h inclusion
 // We don't want to pollute host code with those
@@ -68,17 +63,25 @@ struct profiler_msg_template_t {
 // TODO: Review if this should  be 2 for BH (the number of eth processors)
 // Hardcode to 1 to keep size as before
 #ifdef ARCH_BLACKHOLE
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+constexpr uint32_t PROFILER_RISC_COUNT = 1;
 #else
-static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #endif
 #else
-static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
-using profiler_msg_t = profiler_msg_template_t<PROFILER_RISC_COUNT>;
-#elif !defined(CODEGEN)
-using profiler_msg_t = profiler_msg_template_t<MAX_RISCV_PER_CORE>;
+#else
+#error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
 #endif
+
+struct profiler_msg_buffer_t {
+    uint32_t data[kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+};
+
+struct profiler_msg_t {
+    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
+    profiler_msg_buffer_t buffer[PROFILER_RISC_COUNT];
+};
 
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
@@ -309,7 +312,7 @@ constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 
 struct watcher_msg_t {
     volatile uint32_t enable;
-    struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
+    struct debug_waypoint_msg_t debug_waypoint[NUM_PROCESSORS_PER_CORE_TYPE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
@@ -331,9 +334,9 @@ struct dprint_buf_msg_t {
 #endif
 
 // NOC aligment max from BH
-static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
+constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
-static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
+constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,
@@ -356,12 +359,12 @@ struct addressable_core_t {
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
 // Currently sized for BH (first term is DRAM, second term is PCIe and last term is eth). On WH only Eth and Tensix
 // cores are virtualized BH = DRAM(8*2) + 1 PCIe + Eth(12) vs. WH = Eth(16)
-constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
+constexpr std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 29;
 // This is the max number of Non Worker Cores across BH and WH.
 // BH = DRAM(8) + 1 PCIe + Eth(12) vs. WH = DRAM(18) + 1 PCIe + Eth(16)
-constexpr static std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
-constexpr static std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
-constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
+constexpr std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 35;
+constexpr std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
+constexpr std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
     volatile uint64_t noc_pcie_addr_end;
@@ -428,3 +431,7 @@ struct routing_info_t {
     volatile uint32_t unused_arg0;
     eth_word_t fd_buffer_msgs[2];
 };
+
+#ifdef HAL_BUILD
+}  // namespace HAL_BUILD
+#endif

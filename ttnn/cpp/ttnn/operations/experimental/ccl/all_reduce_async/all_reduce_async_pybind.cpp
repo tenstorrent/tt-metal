@@ -149,7 +149,6 @@ void py_bind_all_reduce_async(pybind11::module& module) {
         module,
         ttnn::experimental::all_reduce_async,
         R"doc(
-
         Performs an all_reduce operation on multi-device :attr:`input_tensor` across all devices.  This operation requires a persistent
         fabric to be enabled in order to function.
 

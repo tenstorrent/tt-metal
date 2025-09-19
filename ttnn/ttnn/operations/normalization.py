@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional, Union
+from typing import Optional
 
 import ttnn
 
@@ -358,12 +358,54 @@ def create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channe
     return input_mask_tensor
 
 
-def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel):
+def create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid):
+    """
+    Create reciprocals tensor for group norm with welford algorithm.
+    Generates reciprocal values 1/1, 1/2, 1/3, ..., 1/N.
+    The number of elements is based on the tensor size and the number of groups.
+    The tensor is replicated for each core so that when sharded to L1 memory, each core has a complete copy.
+
+    Args:
+        N: Batch size
+        C: Number of channels
+        H: Height
+        W: Width
+        num_groups: Number of groups
+        core_grid: Core grid
+
+    Returns:
+        Row major tensor with reciprocal values
+    """
+    import torch
+
+    num_virtual_cols = dram_group_norm_virtual_columns(core_grid, C, num_groups)
+    num_virtual_rows = (core_grid.x // num_virtual_cols) * core_grid.y
+
+    # Calculate batch distribution
+    num_virtual_rows_per_group = 1 if N >= num_virtual_rows else num_virtual_rows // N
+    num_channels_per_group = C // num_groups
+    num_height_tiles_per_group = math.ceil(H * W / ttnn.TILE_SIZE)
+
+    num_reciprocals_per_group = num_channels_per_group * num_height_tiles_per_group
+    num_reciprocals_per_core = num_reciprocals_per_group // num_virtual_rows_per_group
+
+    # Create reciprocal values: 1/1, 1/2, 1/3, ..., 1/max_n
+    reciprocals_tensor = 1.0 / torch.arange(1, num_reciprocals_per_core + 1, dtype=torch.float32)
+
+    # Repeat the reciprocals tensor for each core so they all have identical copies
+    return reciprocals_tensor.repeat(core_grid.x * core_grid.y, 1)
+
+
+def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel):  #
     return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=False)
 
 
 def create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel):
     return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=True)
+
+
+def create_group_norm_reciprocals(N, C, H, W, num_groups, core_grid):
+    return create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid)
 
 
 def get_group_norm_cores_across_channel(memory_layout, core_grid):

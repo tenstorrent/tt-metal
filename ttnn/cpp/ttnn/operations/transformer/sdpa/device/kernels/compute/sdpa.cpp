@@ -51,7 +51,13 @@ void MAIN {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    const uint32_t num_phases = get_arg_val<uint32_t>(7);
+    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(8);
+    uint32_t chunked_q_chunk_offset_phase_2 = 0;
+    if (num_phases == 2) {
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(9);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -78,12 +84,20 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    uint32_t chunked_q_chunk_offset = 0;
     mm_init(cb_q_in, cb_k_in, cb_out);
 
-    for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                uint32_t q_chunk;
+    for (uint32_t phase = 0; phase < num_phases; ++phase) {
+        if (phase == 0) {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+        } else {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+        }
+
+        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                    uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
                 if (q_iter < q_chunk_div_2) {  // bottom half
@@ -267,6 +281,7 @@ void MAIN {
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
+                }
             }
         }
     }

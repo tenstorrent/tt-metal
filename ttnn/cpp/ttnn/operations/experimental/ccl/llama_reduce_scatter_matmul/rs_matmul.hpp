@@ -14,7 +14,6 @@ namespace operations::experimental::ccl {
 
 struct ExecuteLlamaReduceScatterMatmul {
     static std::vector<ttnn::Tensor> invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,               // mm0 used
         const ttnn::Tensor& weight_tensor,              // mm1 used
         ttnn::Tensor& intermediate_packet_buffer,       // rs2

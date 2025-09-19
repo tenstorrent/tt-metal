@@ -209,6 +209,7 @@ init_packages() {
                 "libopencv-contrib-dev"
                 "wget"
                 "curl"
+                "xxd"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
@@ -237,6 +238,7 @@ init_packages() {
                 "opencv-devel"
                 "wget"
                 "curl"
+                "vim-common" # Includes xxd
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")

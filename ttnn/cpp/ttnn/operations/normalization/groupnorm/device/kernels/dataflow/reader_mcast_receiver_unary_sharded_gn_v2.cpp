@@ -6,8 +6,6 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
-// #include "debug/dprint.h"
-
 // split REDUCE across cores
 void kernel_main() {
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));

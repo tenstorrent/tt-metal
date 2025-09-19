@@ -30,7 +30,6 @@ void py_bind_sdpa(py::module& module) {
             attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
             is_causal (bool): Defaults to `true`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
@@ -56,10 +55,8 @@ void py_bind_sdpa(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
@@ -79,9 +76,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
     auto chunked_doc =
         R"doc(
@@ -102,7 +97,6 @@ void py_bind_sdpa(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -124,10 +118,8 @@ void py_bind_sdpa(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
@@ -147,9 +139,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
     auto joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
@@ -175,7 +165,6 @@ void py_bind_sdpa(py::module& module) {
             program_config (ttnn.SDPAProgramConfig)
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
-            queue_id (int, optional): Command queue ID. Defaults to 0.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
@@ -200,10 +189,8 @@ void py_bind_sdpa(py::module& module) {
                const std::string& joint_strategy,
                SDPAProgramConfig program_config,
                std::optional<float> scale,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 auto outputs = self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
@@ -226,8 +213,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("joint_strategy"),
             py::arg("program_config").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
     auto ring_joint_doc = R"doc(
         RingJointAttention operation that efficiently performs non-causal attention over two
@@ -266,7 +252,6 @@ void py_bind_sdpa(py::module& module) {
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
-            queue_id (int, optional): Command queue ID. Defaults to 0.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -303,10 +288,8 @@ void py_bind_sdpa(py::module& module) {
                const MeshDevice& mesh_device,
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               CoreCoord ccl_core_grid_offset,
-               QueueId queue_id) {
+               CoreCoord ccl_core_grid_offset) {
                 auto outputs = self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
@@ -351,8 +334,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("mesh_device"),
             py::arg("topology"),
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("ccl_core_grid_offset"),
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("ccl_core_grid_offset")});
 
     auto mla_doc =
         R"doc(
@@ -369,7 +351,6 @@ void py_bind_sdpa(py::module& module) {
             attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
             is_causal (bool): Defaults to `true`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
@@ -395,10 +376,8 @@ void py_bind_sdpa(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     head_dim_v,
@@ -418,9 +397,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
     auto chunked_mla_doc =
         R"doc(
@@ -441,7 +418,6 @@ void py_bind_sdpa(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -463,10 +439,8 @@ void py_bind_sdpa(py::module& module) {
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_k,
                     head_dim_v,
@@ -487,7 +461,78 @@ void py_bind_sdpa(py::module& module) {
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
         });
+
+    auto ring_distributed_doc =
+        R"doc(
+        Ring-distributed causal scaled dot product attention for multi-device execution.
+        This optimization distributes query computation across multiple devices in a ring topology,
+        with each device computing only a subset of queries to reduce redundant computation
+        caused by causal masking. Each device gets two query chunks (one early, one late)
+        to balance computational load.
+
+        This operation is CAUSAL-ONLY and generates causal masks internally for each device's
+        non-contiguous query assignments. Custom attention masks are not supported.
+
+        Note: This operation outputs results contiguously for the device's assigned queries.
+        Model-level code must perform all-gather and reshuffling to restore sequence order.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+            input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+            ring_size (uint32_t): Number of devices in the ring topology.
+            ring_id (uint32_t, optional): This device's position in the ring (0 to ring_size-1).
+                                         If None, automatically infers from device coordinate. Defaults to `None`.
+
+        Keyword args:
+            scale (float, optional): Attention scaling factor. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Program configuration. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor with results for this device's assigned queries [b x nqh x local_s x dh].
+
+        )doc";
+
+    using RingDistributedOperationType = decltype(ttnn::transformer::ring_distributed_scaled_dot_product_attention);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::ring_distributed_scaled_dot_product_attention,
+        ring_distributed_doc,
+        ttnn::pybind_overload_t{
+            [](const RingDistributedOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
+               uint32_t ring_size,
+               std::optional<uint32_t> ring_id,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+                return self(
+                    input_tensor_q,
+                    input_tensor_k,
+                    input_tensor_v,
+                    ring_size,
+                    ring_id,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("input_tensor_v").noconvert(),
+            py::arg("ring_size").noconvert(),
+            py::arg("ring_id").noconvert() = std::nullopt,
+            py::kw_only(),
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 }
 }  // namespace ttnn::operations::transformer

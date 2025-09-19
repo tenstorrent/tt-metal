@@ -157,6 +157,17 @@ struct GoSignalState {
     uint32_t wait_count;
 };
 
+extern "C" {
+// These variables are used by triage to help report dispatcher state.
+volatile uint32_t last_wait_count = 0;
+volatile uint32_t last_wait_stream = 0;
+constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
+volatile uint32_t last_event;
+}
+
+
 static GoSignalState go_signal_state_ring_buf[4];
 static uint8_t go_signal_state_wr_ptr = 0;
 static uint8_t go_signal_state_rd_ptr = 0;
@@ -238,12 +249,16 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint64_t wlength = cmd->write_linear_host.length;
+    bool is_event = cmd->write_linear_host.is_event;
     // DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
+    if (is_event) {
+        last_event = ((uint32_t*)(data_ptr + sizeof(CQDispatchCmd)))[0];
+    }
     while (wlength != 0) {
         uint32_t length = (wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(wlength);
         wlength -= length;
@@ -973,6 +988,8 @@ static void process_wait() {
         } while (!wrap_ge(*sem_addr, count));
     }
     if (wait_stream) {
+        last_wait_count = count;
+        last_wait_stream = stream;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
         // DPRINT << " DISPATCH WAIT STREAM " << HEX() << stream << DEC() << " count " << count << ENDL();

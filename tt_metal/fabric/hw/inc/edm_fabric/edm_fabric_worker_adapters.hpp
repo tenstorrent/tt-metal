@@ -255,8 +255,9 @@ struct WorkerToFabricEdmSenderImpl {
         const uint64_t noc_sem_addr = get_noc_addr(
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, EDM_TO_DOWNSTREAM_NOC);
         noc_sem_addr_ = noc_sem_addr;
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         noc_inline_dw_write_set_state<true, true>(
-            noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
+            noc_sem_addr, packed_val, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
@@ -545,8 +546,8 @@ private:
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
                 if constexpr (vc1_has_different_downstream_dest) {
-                    noc_inline_dw_write<InlineWriteDst::REG>(
-                        noc_sem_addr_, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+                    auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+                    noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr_, packed_val, 0xf, noc);
                 } else {
                     noc_inline_dw_write_with_state<true, false, true>(
                         0,  // val unused
@@ -562,9 +563,10 @@ private:
                     noc);
             }
         } else {
+            auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)

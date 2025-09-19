@@ -6,58 +6,72 @@
 #include <enchantum/enchantum.hpp>
 #include <fstream>
 #include <filesystem>
-#include <sstream>
+#include <google/protobuf/text_format.h>
 
 #include <cabling_generator/cabling_generator.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include <node/node_types.hpp>
 
+// Include generated protobuf headers
+#include "protobuf/deployment.pb.h"
+#include "protobuf/cluster_config.pb.h"
+
 namespace tt::scaleout_tools {
 
-// Helper function to generate deployment descriptor textproto content
-std::string generate_deployment_descriptor(const std::string& node_type_string) {
-    std::ostringstream oss;
-    oss << "hosts: {\n";
-    oss << "  hall: \"0\"\n";
-    oss << "  aisle: \"0\"\n";
-    oss << "  rack: 0\n";
-    oss << "  shelf_u: 0\n";
-    oss << "  node_type: \"" << node_type_string << "\"\n";
-    oss << "  host: \"host\"\n";
-    oss << "}\n";
-    return oss.str();
+// Helper function to create deployment descriptor protobuf object
+void create_deployment_descriptor(
+    const std::string& node_type_string, tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment) {
+    deployment.set_rack_capacity(1);
+
+    auto* host = deployment.add_hosts();
+    host->set_hall("0");
+    host->set_aisle("0");
+    host->set_rack(0);
+    host->set_shelf_u(0);
+    host->set_node_type(node_type_string);
+    host->set_host("host");
 }
 
-// Helper function to generate cluster config textproto content for a single node
-std::string generate_cluster_config(const std::string& node_type_string) {
-    std::ostringstream oss;
-    oss << "graph_templates {\n";
-    oss << "  key: \"single_" << node_type_string << "\"\n";
-    oss << "  value {\n";
-    oss << "    children {\n";
-    oss << "      name: \"node1\"\n";
-    oss << "      node_ref { node_descriptor: \"" << node_type_string << "\" }\n";
-    oss << "    }\n";
-    oss << "  }\n";
-    oss << "}\n";
-    oss << "\n";
-    oss << "# Root instance with concrete host mapping\n";
-    oss << "root_instance {\n";
-    oss << "  template_name: \"single_" << node_type_string << "\"\n";
-    oss << "  child_mappings {\n";
-    oss << "    key: \"node1\"\n";
-    oss << "    value { host_id: 0 }\n";
-    oss << "  }\n";
-    oss << "}\n";
-    return oss.str();
+// Helper function to create cluster config protobuf object for a single node
+void create_cluster_config(
+    const std::string& node_type_string, tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster) {
+    // Create graph template
+    auto& graph_template = cluster.mutable_graph_templates()->operator[]("single_" + node_type_string);
+    auto* child = graph_template.add_children();
+    child->set_name("node1");
+    auto* node_ref = child->mutable_node_ref();
+    node_ref->set_node_descriptor(node_type_string);
+
+    // Create root instance
+    auto* root_instance = cluster.mutable_root_instance();
+    root_instance->set_template_name("single_" + node_type_string);
+    auto& child_mapping = root_instance->mutable_child_mappings()->operator[]("node1");
+    child_mapping.set_host_id(0);
 }
 
-// Helper function to write content to a temporary file
-std::string write_temp_file(const std::string& content, const std::string& suffix) {
+// Helper function to serialize protobuf object to a temporary file
+template <typename ProtoType>
+std::string serialize_proto_to_temp_file(const ProtoType& proto, const std::string& suffix) {
     std::string temp_path = std::filesystem::temp_directory_path() / ("temp_" + suffix);
-    std::ofstream file(temp_path);
-    file << content;
-    file.close();
+
+    std::ofstream output_file(temp_path);
+    if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + temp_path);
+    }
+
+    std::string output_string;
+    google::protobuf::TextFormat::Printer printer;
+    printer.SetUseShortRepeatedPrimitives(true);
+    printer.SetUseUtf8StringEscaping(true);
+    printer.SetSingleLineMode(false);
+    printer.SetPrintMessageFieldsInIndexOrder(true);
+
+    if (!printer.PrintToString(proto, &output_string)) {
+        throw std::runtime_error("Failed to write textproto to file: " + temp_path);
+    }
+
+    output_file << output_string;
+    output_file.close();
     return temp_path;
 }
 
@@ -65,12 +79,17 @@ TEST(Cluster, TestFactorySystemDescriptorSingleNodeTypes) {
     for (auto node_type : enchantum::values_generator<NodeType>) {
         auto node_type_string = std::string(enchantum::to_string(node_type));
 
-        // Generate temporary file names
-        std::string deployment_file = write_temp_file(
-            generate_deployment_descriptor(node_type_string), node_type_string + "_deployment.textproto");
+        // Create protobuf objects
+        tt::scaleout_tools::deployment::proto::DeploymentDescriptor deployment;
+        tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor cluster;
 
-        std::string cluster_file =
-            write_temp_file(generate_cluster_config(node_type_string), node_type_string + "_cluster.textproto");
+        create_deployment_descriptor(node_type_string, deployment);
+        create_cluster_config(node_type_string, cluster);
+
+        // Serialize to temporary files
+        std::string deployment_file =
+            serialize_proto_to_temp_file(deployment, node_type_string + "_deployment.textproto");
+        std::string cluster_file = serialize_proto_to_temp_file(cluster, node_type_string + "_cluster.textproto");
 
         std::string fsd_file = "fsd/factory_system_descriptor_" + node_type_string + ".textproto";
 

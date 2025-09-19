@@ -13,7 +13,6 @@ namespace operations::ccl {
 
 struct ExecuteAllToAllDispatch {
     static std::array<ttnn::Tensor, 2> invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,

@@ -159,7 +159,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
         tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index]);
 
-    command_sequence.add_dispatch_write_host(false, dispatch_params.size_bytes, false);
+    command_sequence.add_dispatch_write_host(false, dispatch_params.size_bytes, false, 0);
 
     command_sequence.add_prefetch_relay_linear(
         dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_params.virtual_core),

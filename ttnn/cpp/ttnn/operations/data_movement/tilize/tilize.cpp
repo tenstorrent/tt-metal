@@ -5,7 +5,6 @@
 #include "tilize.hpp"
 
 #include "device/tilize_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -36,7 +35,6 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize) {
 }
 
 ttnn::Tensor ExecuteTilize::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -69,8 +67,7 @@ ttnn::Tensor ExecuteTilize::invoke(
                 enough_space_height},
             {input_tensor},
             {},
-            {},
-            queue_id)[0];
+            {})[0];
     };
 
     return build_ndiml_tilize(base_tilize)(input_tensor);

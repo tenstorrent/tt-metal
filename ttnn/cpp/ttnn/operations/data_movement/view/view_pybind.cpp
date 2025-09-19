@@ -43,7 +43,6 @@ void py_bind_view(pybind11::module& module) {
         module,
         ttnn::view,
         R"doc(
-
         This is a 0 cost view operation that returns the same tensor that was passed to it but with a new shape
 
         Note: The following conditions must be met:
