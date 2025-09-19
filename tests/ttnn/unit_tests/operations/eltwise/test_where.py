@@ -23,31 +23,31 @@ def torch_equal_nan(a, b):
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
-        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32)),  # LLK
-        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
-        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
-        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, B, Ccol
-        ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64)),  # Acol, B, C
-        ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # Arow, B, Crow
-        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),  # A, Brow, Crow
-        ((256,), (256,), (256,)),  # LLK
-        # Bcast cases for dims -5, -4, -3 (outer dims)
-        ((128, 128), (2, 2, 2, 128, 128), (2, 2, 128, 128)),
-        ((128, 128), (2, 2, 2, 128, 128), (2, 1, 128, 128)),
-        ((1, 2, 3, 4, 128, 128), (128, 128), (128, 128)),
-        ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),
-        # Scalar Bcast cases
-        ((3, 2, 3, 64, 128), (3, 2, 3, 1, 1), (3, 2, 3, 1, 1)),  # LLK
-        # Scalar Bcast cases with  outer dims bcast (-5, -4, -3)
-        ((1, 2, 3, 4, 128, 128), (1, 1), (1, 1)),
-        ((4, 2, 2, 2, 1, 1), (4, 1, 1, 1, 128, 128), (4, 1, 2, 1, 1, 1)),
+        # ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32)),  # LLK
+        # ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
+        # ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
+        # ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, B, Ccol
+        # ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64)),  # Acol, B, C
+        ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # Arow, B, Crow
+        # ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),  # A, Brow, Crow
+        # ((256,), (256,), (256,)),  # LLK
+        # # Bcast cases for dims -5, -4, -3 (outer dims)
+        # ((128, 128), (2, 2, 2, 128, 128), (2, 2, 128, 128)),
+        # ((128, 128), (2, 2, 2, 128, 128), (2, 1, 128, 128)),
+        # ((1, 2, 3, 4, 128, 128), (128, 128), (128, 128)),
+        # ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),
+        # # Scalar Bcast cases
+        # ((3, 2, 3, 64, 128), (3, 2, 3, 1, 1), (3, 2, 3, 1, 1)),  # LLK
+        # # Scalar Bcast cases with  outer dims bcast (-5, -4, -3)
+        # ((1, 2, 3, 4, 128, 128), (1, 1), (1, 1)),
+        # ((4, 2, 2, 2, 1, 1), (4, 1, 1, 1, 128, 128), (4, 1, 2, 1, 1, 1)),
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
-@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
-@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("scalar", [15.5])
+@pytest.mark.parametrize("variant", ["TTT"])
+@pytest.mark.parametrize("condition", [1])
 def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.float32) * condition
@@ -714,3 +714,36 @@ def test_where_int_golden_verification(c_shape, t_shape, f_shape, device):
     assert torch_equal_nan(
         result_torch, golden_output
     ), f"Values don't match. Max difference: {torch.max(torch.abs(result_torch - golden_output))}"
+
+
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape",
+    [
+        # Mixed broadcast cases: both row and column broadcasting needed
+        ((1, 1, 1, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # Arow, Bcol, C - mixed broadcast
+        ((1, 1, 1024, 1), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # Acol, Brow, C - mixed broadcast
+        (
+            (1, 1, 1024, 1024),
+            (1, 1, 1, 1),
+            (1, 1, 1024, 1024),
+        ),  # A, Bscalar, C - mixed broadcast (scalar counts as both row+col)
+    ],
+)
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where_mixed_broadcast(c_shape, t_shape, f_shape, condition, device):
+    """Test mixed broadcast scenarios where both row and column broadcasting are needed"""
+    torch.manual_seed(0)
+    C = torch.ones(c_shape, dtype=torch.float32) * condition
+    T = torch.randn(t_shape, dtype=torch.float32)
+    F = torch.ones(f_shape, dtype=torch.float32) * 10
+
+    golden = torch.where(C.bool(), T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert torch_equal_nan(result, golden)

@@ -25,6 +25,10 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderRowBcastTTT;
                 compute_kernel = KernelName::ComputeNoBcastTTT;
                 writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::MIXED_BCAST) {
+                reader_kernel = KernelName::ReaderMixedBcastTTT;
+                compute_kernel = KernelName::ComputeNoBcastTTT;
+                writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::SCALAR_BCAST) {
                 reader_kernel = KernelName::ReaderScalarBcastTTT;
                 compute_kernel = KernelName::ComputeBcastTTT;
@@ -112,6 +116,9 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderScalarBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_scalar_ttt.cpp";
+        case KernelName::ReaderMixedBcastTTT:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+                   "ternary_reader_mixedbcast_ttt.cpp";
         case KernelName::ReaderColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_colbcast_ttt.cpp";
@@ -388,6 +395,24 @@ WhereBroadcastType get_broadcast_type(
         if ((is_pred_scalar || is_pred_non_bcast) && (is_true_scalar || is_true_non_bcast) &&
             (is_false_scalar || is_false_non_bcast)) {
             return WhereBroadcastType::SCALAR_BCAST;
+        }
+
+        // Check for mixed broadcast cases where we have both row and column broadcasting
+        // but not in a scalar pattern
+        bool has_row_bcast = pred_row_bcast || true_row_bcast || false_row_bcast;
+        bool has_col_bcast = pred_col_bcast || true_col_bcast || false_col_bcast;
+        bool has_mixed_pattern = has_row_bcast && has_col_bcast;
+
+        if (has_mixed_pattern) {
+            // For mixed broadcast to be valid, we need:
+            // 1. At least one tensor with full height (no row broadcast needed)
+            // 2. At least one tensor with full width (no col broadcast needed)
+            bool has_full_height_tensor = (pred_h == max_h) || (true_h == max_h) || (false_h == max_h);
+            bool has_full_width_tensor = (pred_w == max_w) || (true_w == max_w) || (false_w == max_w);
+
+            if (has_full_height_tensor && has_full_width_tensor) {
+                return WhereBroadcastType::MIXED_BCAST;
+            }
         }
 
         return WhereBroadcastType::INVALID_BCAST;

@@ -22,6 +22,7 @@ enum class WhereBroadcastType {
     OUTER_BCAST,     // bcast for outer dims -5, -4, -3, no subtile bcast.
     COL_BCAST,       // bcast for W-dim and outer dims -5, -4, -3.
     ROW_BCAST,       // Row broadcast for H-dim
+    MIXED_BCAST,     // Mixed broadcast for both H-dim and W-dim simultaneously
     SCALAR_BCAST,    // Scalar broadcast for TTT: Either A or B or C can be (1,1)
     SCALAR_A_BCAST,  // A = (1,1) B = (H,W )
     SCALAR_B_BCAST,  // A = (H,W) B = (1,1)

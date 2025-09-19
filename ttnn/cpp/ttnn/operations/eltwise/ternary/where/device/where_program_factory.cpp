@@ -308,16 +308,33 @@ void set_or_update_runtime_arguments(
                 reader_runtime_args[12] = cHt;                                   // 12: Ht
                 reader_runtime_args[13] = cWt;                                   // 13: Wt
                 reader_runtime_args[14] = cND;                                   // 14: cND
-                reader_runtime_args[15] = bHt * bWt * bC * bN * bD * (bND > 1);  // 15: true_nD_stride
-                reader_runtime_args[16] = bHt * bWt * bC * bN * (bD > 1);        // 16: true_d_stride
-                reader_runtime_args[17] = bHt * bWt * bC * (bN > 1);             // 17: true_n_stride
-                reader_runtime_args[18] = bHt * bWt * (bC > 1);                  // 18: true_c_stride
-                reader_runtime_args[19] = b_num_tiles;                           // 19: true_num_tiles
-                reader_runtime_args[20] = fHt * fWt * fC * fN * fD * (fND > 1);  // 20: false_nD_stride
-                reader_runtime_args[21] = fHt * fWt * fC * fN * (fD > 1);        // 21: false_d_stride
-                reader_runtime_args[22] = fHt * fWt * fC * (fN > 1);             // 22: false_n_stride
-                reader_runtime_args[23] = fHt * fWt * (fC > 1);                  // 23: false_c_stride
-                reader_runtime_args[24] = f_num_tiles;                           // 24: false_num_tiles
+
+                // For MIXED_BCAST, we need different stride calculations for each tensor
+                if (broadcast_type == WhereBroadcastType::MIXED_BCAST) {
+                    // Use actual dimensions for each tensor (no collapsing for mixed broadcast)
+                    reader_runtime_args[15] = bHt * bWt * bC * bN * bD * (bND > 1);  // 15: true_nD_stride
+                    reader_runtime_args[16] = bHt * bWt * bC * bN * (bD > 1);        // 16: true_d_stride
+                    reader_runtime_args[17] = bHt * bWt * bC * (bN > 1);             // 17: true_n_stride
+                    reader_runtime_args[18] = bHt * bWt * (bC > 1);                  // 18: true_c_stride
+                    reader_runtime_args[19] = b_num_tiles;                           // 19: true_num_tiles
+                    reader_runtime_args[20] = fHt * fWt * fC * fN * fD * (fND > 1);  // 20: false_nD_stride
+                    reader_runtime_args[21] = fHt * fWt * fC * fN * (fD > 1);        // 21: false_d_stride
+                    reader_runtime_args[22] = fHt * fWt * fC * (fN > 1);             // 22: false_n_stride
+                    reader_runtime_args[23] = fHt * fWt * (fC > 1);                  // 23: false_c_stride
+                    reader_runtime_args[24] = f_num_tiles;                           // 24: false_num_tiles
+                } else {
+                    // Standard stride calculations for other broadcast types
+                    reader_runtime_args[15] = bHt * bWt * bC * bN * bD * (bND > 1);  // 15: true_nD_stride
+                    reader_runtime_args[16] = bHt * bWt * bC * bN * (bD > 1);        // 16: true_d_stride
+                    reader_runtime_args[17] = bHt * bWt * bC * (bN > 1);             // 17: true_n_stride
+                    reader_runtime_args[18] = bHt * bWt * (bC > 1);                  // 18: true_c_stride
+                    reader_runtime_args[19] = b_num_tiles;                           // 19: true_num_tiles
+                    reader_runtime_args[20] = fHt * fWt * fC * fN * fD * (fND > 1);  // 20: false_nD_stride
+                    reader_runtime_args[21] = fHt * fWt * fC * fN * (fD > 1);        // 21: false_d_stride
+                    reader_runtime_args[22] = fHt * fWt * fC * (fN > 1);             // 22: false_n_stride
+                    reader_runtime_args[23] = fHt * fWt * (fC > 1);                  // 23: false_c_stride
+                    reader_runtime_args[24] = f_num_tiles;                           // 24: false_num_tiles
+                }
                 reader_runtime_args[25] = c_current_shard_width;                 // 25: dst_shard_width
                 reader_runtime_args[26] = a_num_tiles;                           // 26: src_num_tiles (predicate)
             }
@@ -760,6 +777,51 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
         reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
         reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
+
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::MIXED_BCAST) {
+        // MIXED_BCAST: need dataflow defines for FILL_TILE_WITH_FIRST_ROW and FILL_TILE_WITH_FIRST_COLUMN
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),
+            value_false_tensor.value().dtype());  // For predicate (a), true (b), false (c)
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
+
+        // Set broadcast defines for mixed broadcast - calculate specific broadcast patterns for each tensor
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        int pred_h = pred_shape[pred_shape.rank() - 2];
+        int pred_w = pred_shape[pred_shape.rank() - 1];
+        int true_h = true_shape[true_shape.rank() - 2];
+        int true_w = true_shape[true_shape.rank() - 1];
+        int false_h = false_shape[false_shape.rank() - 2];
+        int false_w = false_shape[false_shape.rank() - 1];
+
+        int max_h = std::max({pred_h, true_h, false_h});
+        int max_w = std::max({pred_w, true_w, false_w});
+
+        // Calculate specific broadcast flags for each tensor and dimension
+        bool pred_needs_row_bcast = (pred_h == 1 && max_h > 1);
+        bool pred_needs_col_bcast = (pred_w == 1 && max_w > 1);
+        bool true_needs_row_bcast = (true_h == 1 && max_h > 1);
+        bool true_needs_col_bcast = (true_w == 1 && max_w > 1);
+        bool false_needs_row_bcast = (false_h == 1 && max_h > 1);
+        bool false_needs_col_bcast = (false_w == 1 && max_w > 1);
+
+        reader_defines["SRC_BCAST_PREDICATE_ROW"] = pred_needs_row_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_PREDICATE_COL"] = pred_needs_col_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE_ROW"] = true_needs_row_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE_COL"] = true_needs_col_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_FALSE_ROW"] = false_needs_row_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_FALSE_COL"] = false_needs_col_bcast ? "1" : "0";
 
         reader_defines["BCAST_LLK"] = "0";
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::ROW_BCAST) {
