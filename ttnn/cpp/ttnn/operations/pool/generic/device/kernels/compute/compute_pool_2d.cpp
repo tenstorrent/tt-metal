@@ -262,18 +262,15 @@ void MAIN {
 
                 if (last_c_block) {
                     cb_reserve_back(idx_tmp_cb_id, 1);
-                    tensix_sync();
                     PACK((llk_pack_hw_configure_disaggregated<false>(idx_tmp_cb_id)));
 #ifdef ARCH_BLACKHOLE
                     PACK(
                         (llk_pack_init<false /*untilize*/, false /*skip_inputs*/, false /*tilize en*/>(idx_tmp_cb_id)));
 #endif
-                    tensix_sync();
                     pack_tile<true>(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
                     cb_push_back(idx_tmp_cb_id, 1);
                     cb_wait_front(idx_tmp_cb_id, 1);
                     cb_pop_front(idx_tmp_cb_id, 1);
-                    tensix_sync();
                     // pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
                     PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
                         out_cb_id, num_out_sticks, output_faces)));
@@ -281,7 +278,6 @@ void MAIN {
                     PACK((llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
                         out_cb_id, num_out_sticks, output_faces)));
 #endif
-                    tensix_sync();
                     // PACK(DPRINT << "PACKED TILE" << ENDL());
                     // PACK(tt::compute::common::print_full_tile(idx_tmp_cb_id, 0, false));
 
