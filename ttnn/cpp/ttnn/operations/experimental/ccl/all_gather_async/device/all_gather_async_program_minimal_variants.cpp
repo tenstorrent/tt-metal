@@ -149,7 +149,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    const bool reverse_order) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_async_minimal_default_helper(
@@ -171,7 +172,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         empty_fused_op_signaler,
         chunks_per_sync,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        CoreCoord(0, 0),
+        reverse_order);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
@@ -194,7 +197,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const bool reverse_order) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -202,11 +206,23 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
+    // When reverse_order is enabled, tensor width must be divisible by 32*num_devices for proper sharding
+    if (reverse_order) {
+        uint32_t tensor_width = output_tensor_shape[3];
+        uint32_t required_divisor = 32 * ring_size;
+        TT_FATAL(
+            tensor_width % required_divisor == 0,
+            "When reverse_order=true, tensor width ({}) must be divisible by 32*num_devices (32*{} = {})",
+            tensor_width,
+            ring_size,
+            required_divisor);
+    }
+
     // op hyperparams
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
     // Get worker cores
-    // 2 senders (reader + writer) per direction (forward, backward) per link
+    // 2 senders (reader + writer) per direction (forward, reverse_order) per link
     uint32_t output_data_size_bytes = output_tensor.buffer()->size();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers(
         *mesh_device,
@@ -459,6 +475,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     dir,                              // direction
                     fuse_op,                          // fused op
                     chunks_per_sync_val,
+                    reverse_order,
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -538,6 +555,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     chunks_per_sync_val,
+                    reverse_order,
                 };
                 fabric_mux_connection_ct_args(
                     worker == 0,

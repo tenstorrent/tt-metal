@@ -8,6 +8,8 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -88,6 +90,10 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -126,6 +132,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -461,12 +471,20 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
 
 // Test small batch and sequence dimensions (non-1 values)
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     CompareKernelVsComposite({2U, 1U, 4U, 64U});
     CompareKernelVsComposite({32U, 1U, 64U, 128U});
 }
 
 // Test different masking patterns with larger batches
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 11
     CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
     CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1

@@ -86,7 +86,6 @@ void py_bind_llama_all_gather_matmul_async(pybind11::module& module) {
         module,
         ttnn::experimental::llama_all_gather_matmul_async,
         R"doc(
-
         Performs an all-gather-matml operation on multi-device :attr:`input_tensor0` and :attr:`input_tensor1` across all devices.
 
         Args:
