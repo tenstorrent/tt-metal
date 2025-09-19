@@ -203,8 +203,8 @@ void validate_fsd_against_gsd(
         const std::string& hostname_1 = hosts[host_id_1].hostname();
         const std::string& hostname_2 = hosts[host_id_2].hostname();
 
-        PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-        PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+        PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};
+        PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), AsicChannel{asic_location_2, ChanId(chan_id_2)}};
 
         // Sort to ensure consistent ordering
         std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint> connection_pair_sorted;
@@ -257,8 +257,10 @@ void validate_fsd_against_gsd(
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
             uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-            PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+            PhysicalChannelEndpoint conn_1{
+                hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};
+            PhysicalChannelEndpoint conn_2{
+                hostname_2, TrayId(tray_id_2), AsicChannel{asic_location_2, ChanId(chan_id_2)}};
 
             // Sort to ensure consistent ordering
             PhysicalChannelConnection connection_pair_sorted;
@@ -297,8 +299,10 @@ void validate_fsd_against_gsd(
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
             uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-            PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+            PhysicalChannelEndpoint conn_1{
+                hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};
+            PhysicalChannelEndpoint conn_2{
+                hostname_2, TrayId(tray_id_2), AsicChannel{asic_location_2, ChanId(chan_id_2)}};
 
             // Sort to ensure consistent ordering
             PhysicalChannelConnection connection_pair_sorted;
@@ -361,8 +365,8 @@ void validate_fsd_against_gsd(
 
             Board board_a = create_board(board_type_a);
             Board board_b = create_board(board_type_b);
-            auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_location, conn.first.channel_id});
-            auto port_b = board_b.get_port_for_asic_channel({conn.second.asic_location, conn.second.channel_id});
+            auto port_a = board_a.get_port_for_asic_channel(conn.first.asic_channel);
+            auto port_b = board_b.get_port_for_asic_channel(conn.second.asic_channel);
 
             PhysicalPortEndpoint port_a_conn;
             PhysicalPortEndpoint port_b_conn;

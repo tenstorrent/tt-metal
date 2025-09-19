@@ -22,9 +22,6 @@ void bind_padded_slice(py::module& module) {
                 padded_slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
                 memory_config: Memory Config of the output tensor. This must be either height or block sharded.
 
-            Keyword Args:
-                queue_id (uint8, optional):command queue id
-
             Returns:
                 ttnn.Tensor: the output tensor.
 
@@ -53,11 +50,9 @@ void bind_padded_slice(py::module& module) {
                const std::optional<ttnn::SmallVector<int>>& step,
                const MemoryConfig& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& pad_value,
-               QueueId queue_id) {
+               const std::optional<float>& pad_value) {
                 const auto step_value = step.value_or(ttnn::SmallVector<int>(padded_slice_end.size(), 1));
                 return self(
-                    queue_id,
                     input_tensor,
                     padded_slice_start,
                     padded_slice_end,
@@ -72,8 +67,6 @@ void bind_padded_slice(py::module& module) {
             py::kw_only(),
             py::arg("memory_config"),
             py::arg("output_tensor") = std::nullopt,
-            py::arg("pad_value") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("pad_value") = std::nullopt});
 }
 }  // namespace ttnn::operations::experimental::padded_slice
