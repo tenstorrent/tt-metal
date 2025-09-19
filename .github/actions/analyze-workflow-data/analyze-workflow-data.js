@@ -137,8 +137,38 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
     const extractDir = path.join(tmpDir, 'extract');
     fs.mkdirSync(extractDir, { recursive: true });
     execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-    const snippets = findErrorSnippetsInDir(extractDir, maxSnippets);
+    let snippets = findErrorSnippetsInDir(extractDir, maxSnippets);
     core.info(`Total snippets collected: ${snippets.length}`);
+    if (!Array.isArray(snippets) || snippets.length === 0) {
+      // API fallback: identify a failing job/step without parsing logs
+      try {
+        const { data } = await octokit.rest.actions.listJobsForWorkflowRun({
+          owner,
+          repo,
+          run_id: runId,
+        });
+        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+        // Prefer a job with failing conclusion
+        let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled');
+        let failingStep = undefined;
+        if (!failingJob) {
+          // Otherwise, find any job with a failing step
+          for (const job of jobs) {
+            const step = (job.steps || []).find(s => s.conclusion === 'failure');
+            if (step) {
+              failingJob = job;
+              failingStep = step;
+              break;
+            }
+          }
+        }
+        const label = failingJob ? `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}` : 'no failing job detected';
+        snippets = [{ label, snippet: 'could not find failure in logs' }];
+      } catch (e) {
+        core.info(`API fallback failed for run ${runId}: ${e.message}`);
+        snippets = [{ label: 'no failing job detected', snippet: 'could not find failure in logs' }];
+      }
+    }
     return snippets;
   } catch (e) {
     core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
@@ -247,18 +277,21 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
           stack2.push(p);
         } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
           try {
-            // Simple fallback: Only consider lines that contain exact uppercase 'FAILED'.
+            // Simple fallback: Only consider lines where 'FAILED' is the first word after
+            // stripping leading timestamps and whitespace.
             const text = fs.readFileSync(p, 'utf8');
             const rawLines = text.split(/\r?\n/);
-            const FAILED = /\bFAILED\b/; // case-sensitive
+            const timestampPrefix = /^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/;
+            const FAILED_AT_START = /^FAILED\b/; // case-sensitive, first word
             for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) {
-              const line = rawLines[i];
-              if (FAILED.test(line)) {
+              const original = rawLines[i];
+              const stripped = original.replace(timestampPrefix, '').replace(/^\s+/, '');
+              if (FAILED_AT_START.test(stripped)) {
                 const fileBase = path.basename(p);
-                // Return just the line containing FAILED
                 collected.push({
                   label: `${fileBase}:\nFAILED line`,
-                  snippet: line.length > 600 ? line.slice(0, 600) + '…' : line,
+                  // Return the original line (full context), truncated
+                  snippet: original.length > 600 ? original.slice(0, 600) + '…' : original,
                 });
                 break; // one per file is enough
               }
