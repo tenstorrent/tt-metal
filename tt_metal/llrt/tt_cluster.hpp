@@ -37,7 +37,6 @@
 #include <umd/device/types/harvesting.hpp>
 #include <umd/device/types/cluster_types.hpp>
 
-// REVERT ME - JUST FORCING CI TO RUN
 
 namespace tt {
 namespace llrt {
