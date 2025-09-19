@@ -72,6 +72,100 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
     }
 }
 
+TEST_F(UnaryOpsTest, Tanh) {
+    // Test basic tanh functionality
+    std::vector<float> test_data = {-2.0F, -1.0F, -0.5F, 0.0F, 0.5F, 1.0F, 2.0F, 3.0F};
+    auto shape = ttnn::Shape({2, 1, 1, 4});
+    auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
+    auto tensor_ptr = autograd::create_tensor(tensor);
+
+    auto result = tanh(tensor_ptr);
+    auto result_data = core::to_vector(result->get_value());
+
+    // Expected tanh values (approximate)
+    std::vector<float> expected_data = {
+        -0.96402758F,  // tanh(-2.0)
+        -0.76159416F,  // tanh(-1.0)
+        -0.46211716F,  // tanh(-0.5)
+         0.0F,         // tanh(0.0)
+         0.46211716F,  // tanh(0.5)
+         0.76159416F,  // tanh(1.0)
+         0.96402758F,  // tanh(2.0)
+         0.99505475F   // tanh(3.0)
+    };
+
+    ASSERT_EQ(result_data.size(), expected_data.size());
+    for (uint32_t idx = 0; idx < result_data.size(); ++idx) {
+        EXPECT_NEAR(result_data[idx], expected_data[idx], 1e-2F);
+    }
+}
+
+TEST_F(UnaryOpsTest, TanhBackward) {
+    // Test tanh backward pass
+    std::vector<float> test_data = {-1.5F, -0.5F, 0.0F, 0.5F, 1.5F, 2.0F, -2.0F, -0.25F};
+    auto shape = ttnn::Shape({2, 1, 1, 4});
+    auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
+    auto tensor_ptr = autograd::create_tensor(tensor);
+
+    // Apply tanh
+    auto result = tanh(tensor_ptr);
+
+    // Create a target of zeros and compute MSE loss
+    auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
+    auto loss = mse_loss(result, target);
+
+    // Backward pass
+    loss->backward();
+
+    // Get gradients
+    auto tensor_grad = core::to_vector(tensor_ptr->get_grad());
+
+    // For MSE loss with target=0, gradient should be: 2/N * tanh(x) * (1 - tanh(x)^2)
+    // where N is the number of elements
+    ASSERT_EQ(tensor_grad.size(), test_data.size());
+
+    // Verify gradients are reasonable (non-zero for non-saturated values)
+    for (uint32_t idx = 0; idx < tensor_grad.size(); ++idx) {
+        float x = test_data[idx];
+        float tanh_x = std::tanh(x);
+        float expected_grad = (2.0F / test_data.size()) * tanh_x * (1.0F - tanh_x * tanh_x);
+        EXPECT_NEAR(tensor_grad[idx], expected_grad, 1e-2F);
+    }
+}
+
+TEST_F(UnaryOpsTest, TanhSaturation) {
+    // Test tanh behavior at saturation regions
+    std::vector<float> test_data = {
+        -10.0F, -5.0F, -3.0F, -1.0F,  // Negative saturation region
+         10.0F,  5.0F,  3.0F,  1.0F   // Positive saturation region
+    };
+    auto shape = ttnn::Shape({2, 1, 1, 4});
+    auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
+    auto tensor_ptr = autograd::create_tensor(tensor);
+
+    auto result = tanh(tensor_ptr);
+    auto result_data = core::to_vector(result->get_value());
+
+    // At extreme values, tanh should be close to ±1
+    ASSERT_EQ(result_data.size(), 8);
+
+    // Check negative saturation
+    EXPECT_NEAR(result_data[0], -1.0F, 1e-4F);  // tanh(-10)
+    EXPECT_NEAR(result_data[1], -0.99991F, 1e-3F);  // tanh(-5)
+
+    // Check positive saturation
+    EXPECT_NEAR(result_data[4], 1.0F, 1e-4F);  // tanh(10)
+    EXPECT_NEAR(result_data[5], 0.99991F, 1e-3F);  // tanh(5)
+
+    // Test gradients in saturation
+    result->backward();
+    auto tensor_grad = core::to_vector(tensor_ptr->get_grad());
+
+    // Gradients should be very small in saturation regions
+    EXPECT_NEAR(tensor_grad[0], 0.0F, 1e-3F);  // gradient at x=-10
+    EXPECT_NEAR(tensor_grad[4], 0.0F, 1e-3F);  // gradient at x=10
+}
+
 TEST_F(UnaryOpsTest, Silu) {
     auto N = 4;
     auto C = 1;
