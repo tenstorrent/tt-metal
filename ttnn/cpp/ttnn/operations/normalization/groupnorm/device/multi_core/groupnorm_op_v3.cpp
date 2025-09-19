@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks groupnorm_v3(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    auto compute_kernel = CreateKernel(
+    CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_v3.cpp",
         cores_used,

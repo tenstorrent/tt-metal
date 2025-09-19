@@ -196,10 +196,7 @@ ttnn::Tensor ExecuteGroupNormV3::invoke(
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());
 
-    const auto N = input_shape[0];
     const auto C = input_shape[1];
-    const auto H = input_shape[2];
-    const auto W = input_shape[3];
     TT_FATAL(
         C % num_groups == 0,
         "Invalid channel configuration: Number of channels ({}) must be divisible by the number of groups ({}).",
