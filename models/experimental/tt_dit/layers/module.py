@@ -109,6 +109,9 @@ class Module:
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
     def save_to_cache(self, path_prefix: str) -> None:
+        if path_prefix and path_prefix[-1] not in [".", "/"]:
+            path_prefix += "/"
+
         for name, child in self.named_children():
             child.save_to_cache(f"{path_prefix}{name}.")
 
@@ -116,6 +119,9 @@ class Module:
             ttnn.dump_tensor(f"{path_prefix}{name}.tensorbin", parameter.data)
 
     def load_from_cache(self, path_prefix: str) -> None:
+        if path_prefix and path_prefix[-1] not in [".", "/"]:
+            path_prefix += "/"
+
         for name, child in self.named_children():
             child.load_from_cache(f"{path_prefix}{name}.")
 
