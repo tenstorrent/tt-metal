@@ -1,0 +1,21 @@
+# This is a template for a developer-facing JSON file that contains specifically Ops Sanity pipeline tests.
+# These tests are meant to run after every commit and are meant to replace the existing APC pipeline.
+# This file is called by .github/workflows/ops-sanity.yaml,
+# which is then called by .github/workflows/all-post-commit-tests.yaml temporarily until we remove the APC pipeline.
+
+# The following parameters can be controlled in here by the developer:
+
+# name: The name of the test
+# cmd: The command to run the test
+# owner_id: The owner of the test
+
+# The following parameters are controlled by ops-sanity.yaml by the metal infra team:
+
+# arch: The architecture (WH, BH, etc. May be redundant with sku)
+# sku: the sku of the test (N150, N300, P100, P150b, llmbox, galaxy, etc)
+# timeout: The timeout for the whole pipeline
+
+
+[
+    { "name": "test_copy_ops", "cmd": "pytest tests/pipeline_reorg/ops/sanity/test_copy_ops.py", "owner_id": "U08DEGUJY3H" # Rose Li },
+]
