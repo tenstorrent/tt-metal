@@ -22,14 +22,13 @@ jobs:
     name: "🔍 Detect changes"
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'workflow_call' ||
+      contains('workflow_dispatch,workflow_call,schedule', github.event_name) ||
       (github.event_name == 'pull_request' &&
        contains(github.event.pull_request.labels.*.name, 'performance-tests'))
     outputs:
-      wormhole: ${{ steps.filter.outputs.wormhole }}
-      blackhole: ${{ steps.filter.outputs.blackhole }}
-      performance: ${{ steps.filter.outputs.performance }}
+      wormhole: ${{ steps.set.outputs.wormhole }}
+      blackhole: ${{ steps.set.outputs.blackhole }}
+      performance: ${{ steps.set.outputs.performance }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,6 +38,7 @@ jobs:
       - name: Detect which directories changed
         uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name != 'schedule'
         with:
           filters: |
               wormhole:
@@ -48,6 +48,19 @@ jobs:
               performance:
                 - '**/*perf**'
                 - '**/*profiler**'
+
+      - name: Resolve test triggers (nightly vs changes)
+        id: set
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "wormhole=true" >> $GITHUB_OUTPUT
+            echo "blackhole=true" >> $GITHUB_OUTPUT
+            echo "performance=true" >> $GITHUB_OUTPUT
+          else
+            echo "wormhole=${{ steps.filter.outputs.wormhole }}" >> $GITHUB_OUTPUT
+            echo "blackhole=${{ steps.filter.outputs.blackhole }}" >> $GITHUB_OUTPUT
+            echo "performance=${{ steps.filter.outputs.performance }}" >> $GITHUB_OUTPUT
+          fi
 
   build-images:
     name: "🐳️ Docker setup"
