@@ -1085,8 +1085,9 @@ uint32_t estimate_halo_output_elems(
     // When the shard begins in the middle of the tensor's width, we have two partial rows. This increases the number of
     // rows of the shard. This causes halo to bring in extra rows of unused data. When batch_boundary_multiplier > 1, we
     // can take the exact size.
-    float shard_height =
-        batch_size > 1 ? halo_input_shard_shape[0] : tt::div_up(halo_input_shard_shape[0], (float)input_width);
+    float shard_height = batch_size > 1 ? halo_input_shard_shape[0] / input_width
+                                        : tt::div_up(halo_input_shard_shape[0], (float)input_width);
+
     uint32_t shard_batches = shard_height / input_height;
     // Halo adds the overlap region of the input tensor that is needed for the convolution.
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
@@ -1104,7 +1105,8 @@ uint32_t estimate_halo_output_elems(
     uint32_t approx_max_halo_size = approx_max_halo_num_sticks * halo_input_shard_shape[1];
     log_trace(
         tt::LogOp,
-        "Halo Max Size Approximation, Shard Height: {}, Batch Multiplier: {}, Max Num Sticks : {}",
+        "Halo Max Size Approximation, Shard Shape: {}, Shard Height: {}, Batch Multiplier: {}, Max Num Sticks : {}",
+        halo_input_shard_shape,
         shard_height,
         batch_boundary_multiplier,
         approx_max_halo_num_sticks);
@@ -1297,6 +1299,8 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t max_memory_consumed = 0;
+    uint32_t old_max_memory_consumed = 0;
+    uint32_t max_memory_index = 0;
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
@@ -1410,7 +1414,13 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                      this_slice_l1_usage.CB_allocation_size,
                  this_slice_input_size + this_slice_approx_max_halo_size});
         }
+        if (max_memory_consumed > old_max_memory_consumed) {
+            old_max_memory_consumed = max_memory_consumed;
+            max_memory_index = slice_index;
+        }
     }
+    log_debug(
+        tt::LogOp, " Conv2d DRAM AutoSlicing: Max L1 usage at slice {} of {} ", max_memory_index, max_memory_consumed);
     return max_memory_consumed;
 }
 conv_op_l1_usage conv2d::calculate_L1_usage(
@@ -1452,7 +1462,6 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     for (const CBInfo& cb : cb_info) {
         if (!cb.is_globally_allocated) {
             total_CB_size += cb.cb_size_per_core();
-            log_trace(tt::LogOp, "CB: {}, size: {}", enchantum::to_string(cb.name), cb.cb_size_per_core());
         }
         if (cb.name == Conv2dCb::OUT) {
             output_size = cb.cb_size_per_core();
