@@ -147,7 +147,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const bool reverse_order = false);
+    bool reverse_order = false);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -169,7 +169,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
-    const bool reverse_order = false);
+    bool reverse_order = false);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
     IDevice* target_device,
