@@ -279,8 +279,7 @@ Tensor all_gather_async_impl(
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
-    const auto& mesh_view = mesh_device->get_view();
-    uint32_t num_devices = mesh_view.num_devices();
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), std::nullopt);
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;

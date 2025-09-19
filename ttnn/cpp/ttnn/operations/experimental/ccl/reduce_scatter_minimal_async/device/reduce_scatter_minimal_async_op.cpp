@@ -227,17 +227,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
     auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     auto target_device_coord = coord;
-    std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensors[0].device()->get_view();
-    if (this->cluster_axis.has_value()) {
-        // User specified the cluster-axis. Derive devices based on the current coordinate
-        // and the cluster-axis.
-        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                           : mesh_view.get_devices_on_row(coord[0]);
-    } else {
-        devices_to_use = devices;
-    }
-    uint32_t target_ring_size = devices_to_use.size();
+    uint32_t target_ring_size =
+        ::ttnn::ccl::get_topological_dimension(input_tensors[0].tensor_topology(), this->cluster_axis);
 
     auto tensor_topology = input_tensors[0].tensor_topology();
     log_info(tt::LogOp, "DEBUG: getting forward coord");
@@ -320,7 +311,6 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<MemoryConfig>& intermeidate_memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::vector<IDevice*>& devices,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
@@ -334,17 +324,7 @@ Tensor reduce_scatter_minimal_async_impl(
 
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
-        const auto& mesh_view = mesh_device->get_view();
-        // Use the mesh dimensions to determine the ring size
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = devices.size();
-    }
-
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), cluster_axis);
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
@@ -357,7 +337,7 @@ Tensor reduce_scatter_minimal_async_impl(
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
+    CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
@@ -369,7 +349,6 @@ Tensor reduce_scatter_minimal_async_impl(
 
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
-                   devices,
                    scatter_dim,
                    num_links,
                    num_devices,
@@ -406,7 +385,6 @@ Tensor reduce_scatter_minimal_async(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     return reduce_scatter_minimal_async_impl(
         input_tensor,
         persistent_output_buffers,
@@ -418,7 +396,6 @@ Tensor reduce_scatter_minimal_async(
         intermeidate_memory_config,
         topology,
         sub_device_id,
-        devices,
         cluster_axis,
         chunks_per_sync,
         num_workers_per_link,
