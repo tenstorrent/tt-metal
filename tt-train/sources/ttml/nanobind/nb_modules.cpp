@@ -8,7 +8,6 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
 
-#include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "models/base_transformer.hpp"
 #include "models/gpt2.hpp"
@@ -156,6 +155,7 @@ void py_module(nb::module_& m) {
     {
         auto py_mlp_params =
             static_cast<nb::class_<MultiLayerPerceptronParameters>>(m.attr("MultiLayerPerceptronParameters"));
+        py_mlp_params.def(nb::init<>());
         py_mlp_params.def(
             "create",
             [](uint32_t input_features, const std::vector<uint32_t>& hidden_features, uint32_t output_features) {
