@@ -149,19 +149,14 @@ void kernel_main() {
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
-    DPRINT << "LOOP 1: " << act_num_blocks_h << " LOOP 2: " << window_outer << ENDL();
     for (uint32_t nbh = 0; nbh < act_num_blocks_h; nbh++) {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
 
-#if ENABLE_DEBUG
             DPRINT << "READER: Before cb_reserve_back, tiles=" << act_block_num_tiles_read << ENDL();
-#endif
             cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
-#if ENABLE_DEBUG
             DPRINT << "READER: After cb_reserve_back, tiles=" << act_block_num_tiles_read << ENDL();
-#endif
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
@@ -206,21 +201,13 @@ void kernel_main() {
                     reader_idx++;
                 }
 
-#if ENABLE_DEBUG
                 DPRINT << "READER: Before noc_async_read_barrier" << ENDL();
-#endif
                 noc_async_read_barrier();
-#if ENABLE_DEBUG
                 DPRINT << "READER: After noc_async_read_barrier" << ENDL();
-#endif
             }
-#if ENABLE_DEBUG
             DPRINT << "READER: Before cb_push_back, tiles=" << act_block_num_tiles_read << ENDL();
-#endif
             cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
-#if ENABLE_DEBUG
             DPRINT << "READER: After cb_push_back, tiles=" << act_block_num_tiles_read << ENDL();
-#endif
 
             reader_offset += window_outer_offset;
 
@@ -228,37 +215,25 @@ void kernel_main() {
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
-#if ENABLE_DEBUG
                 DPRINT << "READER: Before cb_reserve_back (MCAST)" << ENDL();
-#endif
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
-#if ENABLE_DEBUG
                 DPRINT << "READER: After cb_reserve_back (MCAST)" << ENDL();
-#endif
                 if (act_w_outer_i == act_mcast_sender_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
                     // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
-#if ENABLE_DEBUG
                     DPRINT << "READER: Before noc_semaphore_wait" << ENDL();
-#endif
                     noc_semaphore_wait(
                         act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests + (is_receiver_core ? 0 : 1));
-#if ENABLE_DEBUG
                     DPRINT << "READER: After noc_semaphore_wait" << ENDL();
-#endif
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-#if ENABLE_DEBUG
                     DPRINT << "READER: Before cb_wait_front" << ENDL();
-#endif
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
-#if ENABLE_DEBUG
                     DPRINT << "READER: After cb_wait_front" << ENDL();
-#endif
 
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
@@ -308,7 +283,9 @@ void kernel_main() {
                                 act_mcast_sender_semaphore_valid_addr,
                                 act_mcast_receiver_semaphore_noc_addr,
                                 act_mcast_num_cores + 1);
+                            DPRINT << "READER: Before noc_recvsemaphore_wait (receiver)" << ENDL();
                             noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                            DPRINT << "READER: After noc_recvsemaphore_wait (receiver)" << ENDL();
                         }
                     } else {
                         noc_semaphore_set_multicast(
@@ -337,30 +314,18 @@ void kernel_main() {
                     noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
 
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-#if ENABLE_DEBUG
-                    DPRINT << "READER: Before noc_semaphore_wait (receiver)" << ENDL();
-#endif
+                    DPRINT << "READER: Before noc_recvsemaphore_wait (receiver)" << ENDL();
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-#if ENABLE_DEBUG
-                    DPRINT << "READER: After noc_semaphore_wait (receiver)" << ENDL();
-#endif
+                    DPRINT << "READER: After noc_recvsemaphore_wait (receiver)" << ENDL();
                 }
-#if ENABLE_DEBUG
                 DPRINT << "READER: Before cb_push_back (MCAST)" << ENDL();
-#endif
                 cb_push_back(cb_id_act, act_block_num_tiles);
-#if ENABLE_DEBUG
                 DPRINT << "READER: After cb_push_back (MCAST)" << ENDL();
-#endif
             }  // act_w_num_outer
 
-#if ENABLE_DEBUG
             DPRINT << "READER: Before cb_pop_front" << ENDL();
-#endif
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
-#if ENABLE_DEBUG
             DPRINT << "READER: After cb_pop_front" << ENDL();
-#endif
 #endif
         }
         start_reader_idx = reader_idx;

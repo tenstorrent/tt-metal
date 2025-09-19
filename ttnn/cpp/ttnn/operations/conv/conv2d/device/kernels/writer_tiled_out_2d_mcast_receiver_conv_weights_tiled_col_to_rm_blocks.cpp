@@ -129,14 +129,14 @@ void kernel_main() {
     if constexpr (needs_act_block_zero_out) {
         // Zero out tiles if needed - implementation TBD
     }
+
 #endif
 
 // read in bias if enabled (done only once for all batches)
 #ifdef FUSE_BIAS
     bool load_bias = true;
 #endif
-    DPRINT << "LOOP 1: " << out_num_blocks_h << " LOOP 2: " << out_num_blocks_w
-           << " LOOP 3.1: " << weight_block_height_num_outer << " LOOP 3.2: " << num_blocks_weight_h << ENDL();
+
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
@@ -145,135 +145,107 @@ void kernel_main() {
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
+
+            // Read activation data using block sharded pattern (for second reader)
+            uint32_t reader_offset = act_l1_read_addr;
             for (uint32_t weight_tile_h_outer_i = 0;
                  weight_tile_h_outer_i < weight_block_height_num_outer * num_blocks_weight_h;
                  weight_tile_h_outer_i++) {
 #ifdef SPLIT_READER
                 if (weight_tile_h_outer_i % weight_block_height_num_outer == 0) {
-                    // Read activation data using block sharded pattern (for second reader)
-                    uint32_t reader_offset = act_l1_read_addr;
-                    for (uint32_t outer = 0; outer < window_outer; outer++) {
-                        reader_idx = start_reader_idx;
+                    reader_idx = start_reader_idx;
 
-#if ENABLE_DEBUG
-                        DPRINT << "WRITER RECEIVER: Before cb_reserve_back (split reader), tiles="
-                               << act_block_num_tiles_split_last << ENDL();
-#endif
-                        cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-#if ENABLE_DEBUG
-                        DPRINT << "WRITER RECEIVER: After cb_reserve_back (split reader), tiles="
-                               << act_block_num_tiles_split_last << ENDL();
-#endif
-                        if (is_sender_core) {
-                            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+                    DPRINT << "WRITER RECEIVER: Before cb_reserve_back (split reader), tiles="
+                           << act_block_num_tiles_split_last << ENDL();
 
-                            if constexpr (sliced_inner_dim) {
-                                read_sticks<
-                                    dilation_w,
-                                    coalesced_read_bytes,
-                                    conv_act_c_read_bytes,
-                                    act_block_w_extra_align_bytes,
-                                    stride_w_bytes,
-                                    weight_size_w,
-                                    stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
-                            } else {
-                                uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                                while (num_elems--) {
-                                    reader_idx++;
-                                    uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                                    uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
-                                    for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
-                                        if constexpr (dilation_w == 1) {
-                                            read_channels(
-                                                l1_write_addr_act,
-                                                act_l1_read_addr,
-                                                ind,
-                                                conv_act_c_read_bytes,
-                                                coalesced_read_bytes,
-                                                stride_h_bytes);
-                                            if constexpr (act_block_w_extra_align_bytes) {
-                                                l1_write_addr_act += act_block_w_extra_align_bytes;
-                                            }
-                                        } else {
-                                            read_dilated_channels<weight_size_h, weight_size_w_global>(
-                                                l1_write_addr_act,
-                                                act_l1_read_addr,
-                                                ind,
-                                                conv_act_c_read_bytes,
-                                                stride_h_bytes,
-                                                stride_w_bytes);
+                    cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+
+                    DPRINT << "WRITER RECEIVER: After cb_reserve_back (split reader), tiles="
+                           << act_block_num_tiles_split_last << ENDL();
+
+                    if (is_sender_core) {
+                        uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+
+                        if constexpr (sliced_inner_dim) {
+                            read_sticks<
+                                dilation_w,
+                                coalesced_read_bytes,
+                                conv_act_c_read_bytes,
+                                act_block_w_extra_align_bytes,
+                                stride_w_bytes,
+                                weight_size_w,
+                                stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                        } else {
+                            uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                            while (num_elems--) {
+                                reader_idx++;
+                                uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                                uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+                                for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
+                                    if constexpr (dilation_w == 1) {
+                                        read_channels(
+                                            l1_write_addr_act,
+                                            act_l1_read_addr,
+                                            ind,
+                                            conv_act_c_read_bytes,
+                                            coalesced_read_bytes,
+                                            stride_h_bytes);
+                                        if constexpr (act_block_w_extra_align_bytes) {
+                                            l1_write_addr_act += act_block_w_extra_align_bytes;
                                         }
+                                    } else {
+                                        read_dilated_channels<weight_size_h, weight_size_w_global>(
+                                            l1_write_addr_act,
+                                            act_l1_read_addr,
+                                            ind,
+                                            conv_act_c_read_bytes,
+                                            stride_h_bytes,
+                                            stride_w_bytes);
                                     }
                                 }
-                                reader_idx++;
                             }
-#if ENABLE_DEBUG
-                            DPRINT << "WRITER RECEIVER: Before noc_async_read_barrier (split reader)" << ENDL();
-#endif
-                            noc_async_read_barrier();
-#if ENABLE_DEBUG
-                            DPRINT << "WRITER RECEIVER: After noc_async_read_barrier (split reader)" << ENDL();
-#endif
                         }
-#if ENABLE_DEBUG
-                        DPRINT << "WRITER RECEIVER: Before cb_push_back (split reader), tiles="
-                               << act_block_num_tiles_split_last << ENDL();
-#endif
-                        cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-#if ENABLE_DEBUG
-                        DPRINT << "WRITER RECEIVER: After cb_push_back (split reader), tiles="
-                               << act_block_num_tiles_split_last << ENDL();
-#endif
-                        reader_offset += window_outer_offset;
+                        reader_idx++;
+                        DPRINT << "WRITER SENDER: Before noc_async_read_barrier (split reader)" << ENDL();
+                        noc_async_read_barrier();
+                        DPRINT << "WRITER SENDER: After noc_async_read_barrier (split reader)" << ENDL();
                     }
+                    DPRINT << "WRITER RECEIVER: Before cb_push_back (split reader), tiles="
+                           << act_block_num_tiles_split_last << ENDL();
+                    cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                    DPRINT << "WRITER RECEIVER: After cb_push_back (split reader), tiles="
+                           << act_block_num_tiles_split_last << ENDL();
+                    reader_offset += window_outer_offset;
                     // Update reader index for next iteration (split reader increment)
                     start_reader_idx =
                         reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
                 }
 #endif
 
-#if ENABLE_DEBUG
                 DPRINT << "WRITER RECEIVER: Before cb_reserve_back (weights), tiles=" << weight_block_num_tiles
                        << ENDL();
-#endif
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-#if ENABLE_DEBUG
                 DPRINT << "WRITER RECEIVER: After cb_reserve_back (weights), tiles=" << weight_block_num_tiles
                        << ENDL();
-#endif
                 // Set weights semaphore value to INVALID
                 noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
                 // Atomic increment source core counter
                 noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
-#if ENABLE_DEBUG
                 DPRINT << "WRITER RECEIVER: Before noc_semaphore_wait" << ENDL();
-#endif
                 // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                 noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
-#if ENABLE_DEBUG
                 DPRINT << "WRITER RECEIVER: After noc_semaphore_wait" << ENDL();
-#endif
 
-#if ENABLE_DEBUG
                 DPRINT << "WRITER RECEIVER: Before cb_push_back (weights), tiles=" << weight_block_num_tiles << ENDL();
-#endif
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
-#if ENABLE_DEBUG
                 DPRINT << "WRITER RECEIVER: After cb_push_back (weights), tiles=" << weight_block_num_tiles << ENDL();
-#endif
             }  // for weight_block_height_num_outer
 
 #ifdef FUSE_BIAS
             if (load_bias) {
-#if ENABLE_DEBUG
-                DPRINT << "WRITER RECEIVER: Before cb_reserve_back (bias), tiles=" << bias_ntiles << ENDL();
-#endif
                 cb_reserve_back(bias_cb_id, bias_ntiles);
-#if ENABLE_DEBUG
-                DPRINT << "WRITER RECEIVER: After cb_reserve_back (bias), tiles=" << bias_ntiles << ENDL();
-#endif
 
                 // Set weights semaphore value to INVALID
                 noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
@@ -284,13 +256,7 @@ void kernel_main() {
                 // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                 noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-#if ENABLE_DEBUG
-                DPRINT << "WRITER RECEIVER: Before cb_push_back (bias), tiles=" << bias_ntiles << ENDL();
-#endif
                 cb_push_back(bias_cb_id, bias_ntiles);
-#if ENABLE_DEBUG
-                DPRINT << "WRITER RECEIVER: After cb_push_back (bias), tiles=" << bias_ntiles << ENDL();
-#endif
                 load_bias = false;
             }
 #endif

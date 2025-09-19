@@ -404,9 +404,9 @@ void MAIN {
                         out_subblock_h,
                         in0_block_w);
                 }
-
+                DPRINT << "WAIT ACT START" << ENDL();
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
-
+                DPRINT << "WAIT ACT END" << ENDL();
                 uint32_t in0_index_subblock_offset = 0;
                 if constexpr (check_skip_compute) {
                     if (skip_compute) {
@@ -414,9 +414,10 @@ void MAIN {
                         continue;
                     }
                 }
-
+                DPRINT << "WAIT WEIGHTS START" << ENDL();
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
-
+                DPRINT << "WAIT WEIGHTS END" << ENDL();
+                DPRINT << "BEFORE MATMUL" << ENDL();
                 if (last_out) {
 #if defined PACK_RELU and not defined FUSE_BIAS
                     // if last block we pack the final result with relu enabled
@@ -576,6 +577,8 @@ void MAIN {
 #endif
                 }
 #endif
+
+                DPRINT << "AFTER MATMUL" << ENDL();
 
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
