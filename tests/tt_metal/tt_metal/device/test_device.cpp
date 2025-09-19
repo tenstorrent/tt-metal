@@ -398,6 +398,11 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     auto mesh_device = devices_.at(0);
 
+    // Skip if mapping to NOC isn't supported on this system
+    if (!mesh_device->get_memory_pinning_parameters().can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
     // Use first device from the mesh for this test
     MeshCoordinate target_coord(0, 0);
     IDevice* device = mesh_device->get_device(target_coord);
