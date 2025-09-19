@@ -261,8 +261,9 @@ class StatsCollector:
         for i in range(len(test_case["all_bandwidths"])):
             result[test_case["all_cores"][i]] = test_case["all_bandwidths"][i]
         # consider adding aggregate_stats[risc][run_host_id]["attributes"] to result if needed to add context to heatmap image
-        # breakpoint()
-        return result
+        attrs = test_case["attributes"]
+        attrs["Risc"] = 0 if risc == "riscv_0" else 1
+        return result, attrs
 
 
 if __name__ == "__main__":
@@ -274,14 +275,6 @@ if __name__ == "__main__":
 
     file_path = sys.argv[1]
     collector = StatsCollector(file_path, test_id_to_name={}, test_type_attributes={}, verbose=True)
-    result = collector.gather_bw_per_core(16, 4096, "riscv_1")
-    dm_stats, aggregate_stats = collector.gather_analysis_stats()
-    for riscv, stats in aggregate_stats.items():
-        print(f"RISC-V Processor: {riscv}")
-        for run_host_id, data in stats.items():
-            print(f"  Run Host ID: {run_host_id}")
-            print(f"    Duration (cycles): {data['duration_cycles']}")
-            print(f"    Bandwidth (bytes/cycle): {data['bandwidth']}")
-            print(f"    Attributes: {data['attributes']}")
-            print(f"    All Durations: {data['all_durations']}")
-            print(f"    All Bandwidths: {data['all_bandwidths']}")
+    result, attrs = collector.gather_bw_per_core(16, 4096, "riscv_0", 117)
+    print(result)
+    print(attrs)
