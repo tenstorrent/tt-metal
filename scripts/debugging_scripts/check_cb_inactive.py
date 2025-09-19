@@ -26,7 +26,7 @@ script_config = ScriptConfig(
 def generate_cb_reg_name(cb_index: int) -> str:
     if not (0 <= cb_index <= 3):
         raise ValueError(f"CB index {cb_index} out of range [0, 3]")
-    
+
     return f"NOC_CMD_CTRL_CB{cb_index}"
 
 
@@ -48,8 +48,12 @@ def check_cb_inactive(location: OnChipCoordinate, noc_id: int):
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "eth"]
     run_checks = get_run_checks(args, context)
-    run_checks.run_per_block_check(lambda location: check_cb_inactive(location, noc_id=0), block_filter=BLOCK_TYPES_TO_CHECK)
-    run_checks.run_per_block_check(lambda location: check_cb_inactive(location, noc_id=1), block_filter=BLOCK_TYPES_TO_CHECK)
+    run_checks.run_per_block_check(
+        lambda location: check_cb_inactive(location, noc_id=0), block_filter=BLOCK_TYPES_TO_CHECK
+    )
+    run_checks.run_per_block_check(
+        lambda location: check_cb_inactive(location, noc_id=1), block_filter=BLOCK_TYPES_TO_CHECK
+    )
 
 
 if __name__ == "__main__":
