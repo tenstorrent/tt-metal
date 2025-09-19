@@ -31,12 +31,10 @@ void py_bind_move(pybind11::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::move)& self,
                const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) { return self(queue_id, input_tensor, memory_config); },
+               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
             pybind11::arg("input_tensor").noconvert(),
             pybind11::kw_only(),
-            pybind11::arg("memory_config") = std::nullopt,
-            pybind11::arg("queue_id") = DefaultQueueId});
+            pybind11::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

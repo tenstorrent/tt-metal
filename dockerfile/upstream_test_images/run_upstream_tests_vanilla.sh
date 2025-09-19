@@ -26,6 +26,8 @@ test_suite_bh_umd_unit_tests() {
     # so makes sense we broke it
     # ./build/test/umd/api/api_tests
     ./build/test/umd/blackhole/unit_tests
+    # Filter out the test that is failing due to local YAML files, see: https://github.com/tenstorrent/tt-metal/issues/24359
+    ./build/test/umd/api/api_tests --gtest_filter=-ApiClusterTest.DifferentConstructors
 }
 
 # Function to run BH single PCIe small ML model tests
@@ -105,6 +107,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         sleep 5
     done
     TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+    TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DMuxFixture.*"
     TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
 }

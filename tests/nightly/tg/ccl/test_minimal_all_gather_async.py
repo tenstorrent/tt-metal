@@ -50,6 +50,11 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
+@pytest.mark.parametrize(
+    "all_gather_function",
+    [ttnn.experimental.all_gather_async, ttnn.experimental.all_gather_async_reversed],
+    ids=["normal", "reversed"],
+)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_all_gather_async(
     mesh_device,
@@ -67,6 +72,7 @@ def test_all_gather_async(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
+    all_gather_function,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -87,11 +93,12 @@ def test_all_gather_async(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
+        all_gather_function=all_gather_function,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
 @pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
