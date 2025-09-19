@@ -42,11 +42,11 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t start_idx = (r * Wt) + c;
 
-            // write_cb_block_to_dram(
-            //     cb_momentum_out_idx, momentum_out_addr_generator, start_idx, block_size, tile_size_bytes);
+            write_cb_block_to_dram(
+                cb_momentum_to_dram_idx, momentum_out_addr_generator, start_idx, block_size, tile_size_bytes);
             write_cb_block_to_dram(cb_param_out_idx, param_out_addr_generator, start_idx, block_size, tile_size_bytes);
             noc_async_write_barrier();
-            // cb_pop_front(cb_momentum_out_idx, block_size);
+            cb_pop_front(cb_momentum_to_dram_idx, block_size);
             cb_pop_front(cb_param_out_idx, block_size);
         }
     }
