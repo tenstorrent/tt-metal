@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
+#include <type_traits>
 
 namespace tt::tt_fabric {
 
@@ -94,8 +96,92 @@ struct __attribute__((packed)) compressed_routing_table_t {
 #endif
 };
 
+// Compressed routing entry structures using manual bit packing
+struct __attribute__((packed)) compressed_route_2d_t {
+    // 16 bits total: ns_hops(5) + ew_hops(5) + ns_dir(1) + ew_dir(1) + turn_point(4)
+    uint16_t data;
+
+#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
+    void set(uint8_t ns_hops, uint8_t ew_hops, uint8_t ns_dir, uint8_t ew_dir, uint8_t turn_point) {
+        data = (ns_hops & 0x1F) | ((ew_hops & 0x1F) << 5) | ((ns_dir & 0x1) << 10) | ((ew_dir & 0x1) << 11) |
+               ((turn_point & 0xF) << 12);
+    }
+#else
+    uint8_t get_ns_hops() const { return data & 0x1F; }              // bits 0-4
+    uint8_t get_ew_hops() const { return (data >> 5) & 0x1F; }       // bits 5-9
+    uint8_t get_ns_direction() const { return (data >> 10) & 0x1; }  // bit 10
+    uint8_t get_ew_direction() const { return (data >> 11) & 0x1; }  // bit 11
+    uint8_t get_turn_point() const { return (data >> 12) & 0xF; }    // bits 12-15
+#endif
+};
+
+static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
+
+static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
+static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
+static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
+static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
+
+template <uint8_t dim, bool compressed>
+struct __attribute__((packed)) routing_path_t {
+    static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
+
+    // For 1D: Create LowLatencyPacketHeader pattern
+    static const uint32_t FIELD_WIDTH = 2;
+    static const uint32_t WRITE_ONLY = 0b01;
+    static const uint32_t FORWARD_ONLY = 0b10;
+    static const uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
+
+    static const uint8_t NOOP = 0b0000;
+    static const uint8_t FORWARD_EAST = 0b0001;
+    static const uint8_t FORWARD_WEST = 0b0010;
+    static const uint8_t FORWARD_NORTH = 0b0100;
+    static const uint8_t FORWARD_SOUTH = 0b1000;
+    static const uint8_t WRITE_AND_FORWARD_EAST = 0b0001;
+    static const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
+    static const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
+    static const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
+
+    // Compressed routing uses much smaller encoding
+    // 1D: 0 byte (num_hops passed from caller is the compressed info)
+    static const uint16_t COMPRESSED_ROUTE_SIZE_1D = 0;
+    // 2D: 2 bytes (ns_hops:5bits, ew_hops:5bits, ns_dir:1bit, ew_dir:1bit, turn_point:4bits)
+    static const uint16_t COMPRESSED_ROUTE_SIZE_2D = sizeof(compressed_route_2d_t);
+
+    static constexpr uint16_t MAX_CHIPS_LOWLAT = (dim == 1) ? MAX_CHIPS_LOWLAT_1D : MAX_CHIPS_LOWLAT_2D;
+    static constexpr uint16_t COMPRESSED_ROUTE_SIZE = (dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D;
+    static constexpr uint16_t SINGLE_ROUTE_SIZE =
+        compressed ? ((dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D)
+                   : ((dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D);
+
+    typename std::conditional<
+        !compressed,
+        std::uint8_t[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE],  // raw for uncompressed
+        typename std::conditional<
+            dim == 1,
+            std::uint8_t[0],                         // empty for compressed 1D (0 bytes)
+            compressed_route_2d_t[MAX_CHIPS_LOWLAT]  // two for compressed 2D
+            >::type>::type paths = {};
+
+#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
+    // Routing calculation methods
+    void calculate_chip_to_all_routing_fields(uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim = 0);
+#else
+    // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
+    inline bool decode_route_to_buffer(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const;
+#endif
+};
+// 16 chips * 4 bytes = 64
+static_assert(sizeof(routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
+static_assert(sizeof(routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
+// 256 chips * 2 bytes = 512
+static_assert(sizeof(routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
+
 struct tensix_routing_l1_info_t {
-    uint32_t mesh_id;  // Current mesh ID
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
+    //       these fabric node ids should be another struct as really commonly used data
+    uint16_t my_mesh_id;    // Current mesh ID
+    uint16_t my_device_id;  // Current chip ID
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
@@ -141,4 +227,5 @@ struct tensix_fabric_connections_l1_info_t {
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "fabric/hw/inc/fabric_routing_table_interface.h"
+#include "fabric/hw/inc/fabric_routing_path_interface.h"
 #endif

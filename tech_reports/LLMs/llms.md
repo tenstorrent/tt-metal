@@ -1724,7 +1724,7 @@ This produces a file with naming convention similar to `ops_perf_results_2024_11
 > Only use a single trace execution step when profiling. Profiler support with tracing is still a work-in-progress and more iterations will result in a `AssertionError: Device data mismatch error`.
 
 > [!Note]
-> If you see errors while running tracy, try this device-only profiling process instead: run with `TT_METAL_DEVICE_PROFILER=1 pytest path/to/test.py`. After the run completes, run `tt_metal/tools/profiler/process_ops_logs.py --date` to generate the CSV file.
+> If you see errors while running tracy, try this device-only profiling process instead: run with `TT_METAL_DEVICE_PROFILER=1 pytest path/to/test.py`. After the run completes, run `tools/tracy/process_ops_logs.py --date` to generate the CSV file.
 
 This CSV file contains information recorded from all devices during program execution. To summarize, we run the `tt-perf-report` tool:
 

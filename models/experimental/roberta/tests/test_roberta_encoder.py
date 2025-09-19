@@ -10,7 +10,7 @@ from transformers import RobertaModel
 import pytest
 
 from models.experimental.roberta.tt.roberta_encoder import TtRobertaEncoder
-from models.utility_functions import tt2torch_tensor, comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import tt2torch_tensor, comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 

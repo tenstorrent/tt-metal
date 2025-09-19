@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import ttnn
 from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -12,7 +13,7 @@ class Linear:
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None, init=False):
+    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None):
         self.in_features = in_features
         self.out_features = out_features
         if activation_fn == "swiglu":
@@ -20,12 +21,6 @@ class Linear:
             self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
         self.mesh_device = mesh_device
-        if init:
-            self.weight = bf16_tensor(torch.randn(in_features, out_features), device=self.mesh_device)
-            if bias:
-                self.bias = bf16_tensor(torch.randn(1, out_features), device=self.mesh_device)
-            else:
-                self.bias = None
 
         """
         NOTE: This is the special config which attains good correctness
@@ -39,9 +34,9 @@ class Linear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        weight_path = path_prefix + "weight" + path_suffix
+        bias_path = path_prefix + "bias" + path_suffix
         ttnn.dump_tensor(weight_path, self.weight)
         if self.bias is not None:
             ttnn.dump_tensor(bias_path, self.bias)
@@ -81,13 +76,28 @@ class Linear:
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "gelu":
-            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+            output = ttnn.gelu(output)
+        elif self.activation_fn == "decomposed_gelu":
+            output = gelu_decomposed(output)
+        elif self.activation_fn == "quick_gelu":
+            output = output * ttnn.sigmoid_accurate(1.702 * output)  # quick approx gelu
         elif self.activation_fn == "swiglu":
             output, gate = ttnn.chunk(output, 2, -1)
             output = output * ttnn.silu(gate)
         else:
             assert self.activation_fn is None, f"Unsupported activation: {self.activation_fn}"
         return output
+
+
+def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    sqrt_2 = math.sqrt(2.0)
+    x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
+    erf_x = ttnn.erf(x_div_sqrt2)
+    one_plus_erf = ttnn.add(erf_x, 1.0)
+    x_times_bracket = ttnn.multiply(x, one_plus_erf)
+    return ttnn.multiply(x_times_bracket, 0.5)
 
 
 class ColParallelLinear:
@@ -105,7 +115,6 @@ class ColParallelLinear:
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
-        init=False,
     ):
         self.in_features = in_features
         self.out_features = out_features
@@ -122,27 +131,6 @@ class ColParallelLinear:
             assert self.mesh_axis != self.fsdp_mesh_axis
             assert self.ccl_manager is not None
 
-        if init:
-            if fsdp_mesh_axis is not None:
-                self.weight = bf16_tensor_2dshard(
-                    torch.randn(in_features, out_features),
-                    device=self.mesh_device,
-                    shard_mapping={mesh_axis: 1, fsdp_mesh_axis: 0},
-                )
-            else:
-                self.weight = bf16_tensor(
-                    torch.randn(in_features, out_features),
-                    device=self.mesh_device,
-                    mesh_axis=self.mesh_axis,
-                    shard_dim=-1,
-                )
-            if bias:
-                self.bias = bf16_tensor(
-                    torch.randn(1, out_features), device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1
-                )
-            else:
-                self.bias = None
-
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -151,9 +139,9 @@ class ColParallelLinear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        weight_path = path_prefix + "weight" + path_suffix
+        bias_path = path_prefix + "bias" + path_suffix
         ttnn.dump_tensor(weight_path, self.weight)
         if self.bias is not None:
             ttnn.dump_tensor(bias_path, self.bias)
@@ -233,9 +221,11 @@ class ColParallelLinear:
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "gelu":
-            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+            output = ttnn.gelu(output)
+        elif self.activation_fn == "decomposed_gelu":
+            output = gelu_decomposed(output)
         elif self.activation_fn == "quick_gelu":
-            output = output * ttnn.sigmoid(1.702 * output)  # quick approx gelu
+            output = output * ttnn.sigmoid_accurate(1.702 * output)  # quick approx gelu
         elif self.activation_fn == "swiglu":
             output, gate = ttnn.chunk(output, 2, -1)
             output = output * ttnn.silu(gate)
@@ -261,7 +251,6 @@ class RowParallelLinear:
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
-        init=False,
     ):
         self.in_features = in_features
         self.out_features = out_features
@@ -274,30 +263,6 @@ class RowParallelLinear:
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
 
-        if init:
-            if self.fsdp_mesh_axis is not None:
-                self.weight = bf16_tensor_2dshard(
-                    torch.randn(in_features, out_features),
-                    device=self.mesh_device,
-                    shard_mapping={self.mesh_axis: 0, self.fsdp_mesh_axis: 1},
-                )
-            else:
-                self.weight = bf16_tensor(
-                    torch.randn(in_features, out_features),
-                    device=self.mesh_device,
-                    mesh_axis=self.mesh_axis,
-                    shard_dim=-2,
-                )
-            if bias:
-                # row-parallel bias must not be replicated across mesh_devices
-                rand_bias = torch.randn(1, out_features)
-                if tuple(mesh_device.shape)[mesh_axis] > 1:
-                    zero_bias = torch.zeros(1, out_features * (tuple(mesh_device.shape)[mesh_axis] - 1))
-                    rand_bias = torch.cat([rand_bias, zero_bias], dim=-1)
-                self.bias = bf16_tensor(rand_bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
-            else:
-                self.bias = None
-
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -306,9 +271,9 @@ class RowParallelLinear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        weight_path = path_prefix + "weight" + path_suffix
+        bias_path = path_prefix + "bias" + path_suffix
         ttnn.dump_tensor(weight_path, self.weight)
         if self.bias is not None:
             ttnn.dump_tensor(bias_path, self.bias)
@@ -401,6 +366,8 @@ class RowParallelLinear:
 
         if self.activation_fn is not None:
             assert self.activation_fn == "gelu"
-            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+            output = ttnn.gelu(output)
+        elif self.activation_fn == "decomposed_gelu":
+            output = gelu_decomposed(output)
 
         return output

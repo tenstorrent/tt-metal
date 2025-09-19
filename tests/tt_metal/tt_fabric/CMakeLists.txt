@@ -1,6 +1,7 @@
 set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables_mgd2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_control_plane_logical_to_physical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
@@ -190,27 +191,3 @@ target_sources(
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_1d_fabric_loopback_latency.cpp
 )
-
-add_executable(test_fabric_1d_bw)
-target_include_directories(
-    test_fabric_1d_bw
-    PRIVATE
-        ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
-)
-set_target_properties(
-    test_fabric_1d_bw
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
-)
-target_link_libraries(
-    test_fabric_1d_bw
-    PRIVATE
-        tt_metal
-        fabric
-        test_common_libs
-)
-target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric_edm.cpp)

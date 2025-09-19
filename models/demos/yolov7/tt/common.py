@@ -22,14 +22,13 @@ class TtYOLOv7Conv2D:
         dtype=ttnn.bfloat8_b,
         num_cores_nhw=None,
         is_reshape=False,
-        enable_split_reader=False,
         enable_act_double_buffer=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
         math_approx_mode=False,
         input_channels_alignment=32,
         use_1d_systolic_array=True,
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -53,7 +52,6 @@ class TtYOLOv7Conv2D:
         )
         self.num_cores_nhw = num_cores_nhw
         self.is_reshape = is_reshape
-        self.enable_split_reader = enable_split_reader
         self.enable_act_double_buffer = enable_act_double_buffer
         self.weights_dtype = weights_dtype
 
@@ -63,7 +61,6 @@ class TtYOLOv7Conv2D:
             activation=self.activation,
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
-            enable_split_reader=self.enable_split_reader,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             deallocate_activation=self.deallocate_activation,

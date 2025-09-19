@@ -829,8 +829,7 @@ void py_module(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
-               const std::optional<Tensor> optional_output_tensor,
-               QueueId queue_id) -> ttnn::Tensor {
+               const std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     mat1_tensor,
@@ -843,8 +842,7 @@ void py_module(py::module& module) {
                     compute_kernel_config,
                     core_grid,
                     output_tile,
-                    optional_output_tensor,
-                    queue_id);
+                    optional_output_tensor);
             },
             py::arg("input_tensor"),
             py::arg("mat1_tensor"),
@@ -858,9 +856,7 @@ void py_module(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
-            py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("optional_output_tensor") = std::nullopt});
 
     bind_registered_operation(
         module,

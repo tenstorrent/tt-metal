@@ -52,8 +52,8 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
     set_source_files_properties(
         ${GENERATED_CC}
         PROPERTIES
-            CXX_CLANG_TIDY
-                ""
+            SKIP_LINTING
+                TRUE
     )
 
     # Add to all_generated_files target if it exists

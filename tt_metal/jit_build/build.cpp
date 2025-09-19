@@ -32,7 +32,7 @@
 #include "profiler_state.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace fs = std::filesystem;
 
@@ -402,7 +402,7 @@ void JitBuildState::compile_one(
         // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
         // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
         settings->process_named_compile_time_args(
-            [&defines](const std::unordered_map<std::string, uint32_t> named_args) {
+            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
                 if (named_args.empty()) {
                     return;
                 }

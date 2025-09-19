@@ -22,7 +22,7 @@ namespace tt::tt_fabric {
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    if (dst_mesh_id == routing_table->mesh_id) {
+    if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
             routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
     } else {
@@ -229,6 +229,59 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
         reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
     return connection_info->read_only[eth_channel].edm_direction;
+}
+
+// Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
+bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
+    tt_l1_ptr routing_path_t<2, true>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
+
+    packet_header->routing_fields.hop_index = 0;
+    packet_header->routing_fields.branch_east_offset = 0;
+    packet_header->routing_fields.branch_west_offset = 0;
+
+    const auto& compressed_route = routing_info->paths[dst_dev_id];
+    uint8_t ns_hops = compressed_route.get_ns_hops();
+    uint8_t ew_hops = compressed_route.get_ew_hops();
+    uint8_t ew_direction = compressed_route.get_ew_direction();
+    uint8_t turn_point = compressed_route.get_turn_point();
+
+    if (ns_hops > 0 && ew_hops > 0) {
+        if (ew_direction) {
+            packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
+        } else {
+            packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
+        }
+    }
+
+    return ok;
+}
+
+// Overload: For 1D LowLatencyPacketHeader
+// 1D need to choose between target_as_dev true/false and compressed true/false
+template <bool compressed = true, bool target_as_dev = true>
+bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
+    if constexpr (compressed) {
+        if constexpr (target_as_dev) {
+            return decode_route_to_buffer_by_dev(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+        } else {
+            return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+        }
+    } else {
+        tt_l1_ptr routing_path_t<1, compressed>* routing_info =
+            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+        if constexpr (target_as_dev) {
+            tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+                reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+            uint16_t my_device_id = routing_table->my_device_id;
+            uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;
+            return routing_info->decode_route_to_buffer(hops, (volatile uint8_t*)&packet_header->routing_fields.value);
+        } else {
+            return routing_info->decode_route_to_buffer(
+                target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+        }
+    }
 }
 
 }  // namespace tt::tt_fabric

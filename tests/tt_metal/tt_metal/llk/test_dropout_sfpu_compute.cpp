@@ -68,8 +68,8 @@ bool check_dropout(
     int vec_size = src_vec.size();
     int zero_count = 0;
     for (int i = 0; i < vec_size; i++) {
-        auto srcf = src_vec[i].to_float();
-        auto resf = result_vec[i].to_float();
+        auto srcf = static_cast<float>(src_vec[i]);
+        auto resf = static_cast<float>(result_vec[i]);
         if (resf == 0.0f) {
             zero_count++;
         } else if (!is_close(resf, srcf * scale_factor)) {
@@ -96,7 +96,7 @@ bool check_dropout(
 }
 
 bool test_dropout_standalone(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     float probability,
     uint32_t seed,
     float const_bias,
@@ -242,7 +242,7 @@ bool test_dropout_standalone(
     return pass;
 }
 
-void test_dropout(std::shared_ptr<distributed::MeshDevice> mesh_device, const DropoutConfig& test_config) {
+void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const DropoutConfig& test_config) {
     bool pass = true;
     float probability = test_config.probability;
     float fill_constant = test_config.fill_constant;

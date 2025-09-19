@@ -10,12 +10,12 @@ from loguru import logger
 import models.demos.yolov7.reference.yolov7_model as yolov7_model
 import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
 import ttnn
+from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE
 from models.demos.yolov7.runner.performant_runner_infra import YOLOv7PerformanceRunnerInfra
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-from models.utility_functions import profiler, run_for_wormhole_b0
 
 sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model
@@ -119,7 +119,6 @@ def run_perf_e2e_yolov7(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV7_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
@@ -155,6 +154,7 @@ def test_e2e_performant(
 
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV7_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],

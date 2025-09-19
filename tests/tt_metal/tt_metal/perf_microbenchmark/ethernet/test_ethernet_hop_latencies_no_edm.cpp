@@ -34,9 +34,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/control_plane.hpp>
@@ -113,7 +113,7 @@ namespace tt {
 namespace tt_metal {
 
 std::vector<uint32_t> get_eth_receiver_rt_args(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -156,7 +156,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
 }
 
 std::vector<uint32_t> get_eth_sender_rt_args(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -359,7 +359,7 @@ void build_and_run_roundtrip_latency_test(
     }
 
     // Create and enqueue mesh workloads
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::distributed::MeshCoordinate zero_coord =
             tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device_ptr->shape().dims());
         tt::tt_metal::distributed::MeshCoordinateRange device_range =
@@ -371,12 +371,12 @@ void build_and_run_roundtrip_latency_test(
     }
 
     // Wait for completion
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::distributed::Finish(mesh_device_ptr->mesh_command_queue());
     }
 
     // Read profiler results
-    for (auto [mesh_device_ptr, program_ptr] : device_program_map) {
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
         tt::tt_metal::detail::ReadDeviceProfilerResults(mesh_device_ptr->get_devices()[0]);
     }
 }
@@ -396,8 +396,6 @@ std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(
         std::shared_ptr<tt::tt_metal::distributed::MeshDevice> next_device =
             i == mesh_devices.size() - 1 ? mesh_devices.at(0) : mesh_devices.at(i + 1);
         uint64_t edge = (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(next_device->id());
-        bool edge_needs_tunneling =
-            !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
 
         std::size_t conn = n_edge_visits[edge];
         std::unordered_map<uint64_t, int> edge_link_idx;

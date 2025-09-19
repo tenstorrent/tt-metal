@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt_common/mailbox.hpp"
+#define HAL_BUILD tt::tt_metal::blackhole::idle_eth
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
+using namespace tt::tt_metal::blackhole::idle_eth;
+
 #include <cstdint>
 
 #include "assert.hpp"
@@ -16,14 +18,11 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::blackhole {
-
-// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
-#include "core_config.h"
 
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace idle_eth_dev_msgs {
@@ -108,7 +107,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_IERISC_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,

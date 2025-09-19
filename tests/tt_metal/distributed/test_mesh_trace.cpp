@@ -229,7 +229,7 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
                         MeshCoordinate(logical_y, logical_x));
                     auto expected_value = expected_values[logical_x + logical_y * mesh_device_->num_cols()];
                     for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(dst_vec[i].to_float(), expected_value);
+                        EXPECT_EQ(static_cast<float>(dst_vec[i]), expected_value);
                     }
                 }
             }

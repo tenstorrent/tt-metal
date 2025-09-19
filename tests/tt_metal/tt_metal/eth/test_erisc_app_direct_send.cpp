@@ -27,7 +27,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -41,7 +41,7 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -118,11 +118,9 @@ bool eth_direct_sender_receiver_kernels(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
-    auto& sender_program_ = sender_workload.get_programs().at(device_range);
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
-        sender_program_,
+        sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{
@@ -130,7 +128,7 @@ bool eth_direct_sender_receiver_kernels(
             .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}});
 
     tt_metal::SetRuntimeArgs(
-        sender_program_,
+        sender_program,
         eth_sender_kernel,
         eth_sender_core,
         {
@@ -144,17 +142,15 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
-    auto& receiver_program_ = receiver_workload.get_programs().at(device_range);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
-        receiver_program_,
+        receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
-        receiver_program_,
+        receiver_program,
         eth_receiver_kernel,
         eth_receiver_core,
         {
@@ -167,9 +163,13 @@ bool eth_direct_sender_receiver_kernels(
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
         t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
         fixture->RunProgram(sender_mesh_device, sender_workload, true);
         fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }
@@ -197,8 +197,8 @@ bool eth_direct_sender_receiver_kernels(
 
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
 bool send_over_eth(
-    std::shared_ptr<distributed::MeshDevice> sender_mesh_device,
-    std::shared_ptr<distributed::MeshDevice> receiver_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& sender_mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh_device,
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {

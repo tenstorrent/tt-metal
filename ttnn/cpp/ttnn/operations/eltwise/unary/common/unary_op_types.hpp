@@ -24,6 +24,8 @@ enum class UnaryOpType {
     LOG10,
     SIN,
     COS,
+    COSH,
+    SINH,
     ABS,
     ABS_INT32,
     SIGN,
@@ -113,6 +115,7 @@ enum class UnaryOpType {
     SOFTSIGN,
     CELU,
     CLAMP_TSS,
+    SELU,
 };
 
 enum class VecMode {
@@ -124,32 +127,120 @@ enum class VecMode {
     Invalid = 0xFF,
 };
 
-struct UnaryWithParam {
+template <typename... Ts>
+    requires(... and (std::integral<Ts> or std::floating_point<Ts>))
+struct BasicUnaryWithParam {
+    std::variant<BasicUnaryWithParam<Ts>...> base;
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) :
+        base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, params} {}
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(UnaryOpType op_type, std::initializer_list<T> params) :
+        base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, params} {}
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(UnaryOpType op_type, T param) :
+        base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, param} {}
+
+    BasicUnaryWithParam(UnaryOpType op_type) : base{std::in_place_index<0>, op_type} {}
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(const BasicUnaryWithParam<T>& other) : base{other} {}
+
+    UnaryOpType type() const noexcept {
+        return std::visit([](const auto& activation) { return activation.type(); }, base);
+    }
+
+    bool has_parameter() const noexcept {
+        return std::visit([](const auto& activation) { return activation.has_parameter(); }, base);
+    }
+
+    bool empty() const noexcept {
+        return std::visit([](const auto& activation) { return activation.empty(); }, base);
+    }
+
+    std::variant<std::span<const Ts>...> get_params() const noexcept {
+        return std::visit<decltype(get_params())>([](const auto& activation) { return activation.get_params(); }, base);
+    }
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    std::span<const T> get_params_if() const noexcept {
+        if (const auto ptr = std::get_if<BasicUnaryWithParam<T>>(&base)) {
+            return ptr->get_params();
+        }
+
+        return {};
+    }
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    std::optional<T> get_param_if(std::size_t index = 0) const noexcept {
+        if (const auto ptr = std::get_if<BasicUnaryWithParam<T>>(&base)) {
+            return ptr->get_param_if(index);
+        }
+
+        return std::nullopt;
+    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("base");
+    auto attribute_values() const { return std::forward_as_tuple(this->base); }
+};
+
+template <typename T>
+struct BasicUnaryWithParam<T> {
     UnaryOpType op_type;
-    std::vector<float> params;
+    std::vector<T> params;
 
-    UnaryWithParam(UnaryOpType op_type, const std::vector<float>& params) : op_type{op_type}, params{params} {}
-    UnaryWithParam(UnaryOpType op_type, float param) : op_type{op_type}, params{param} {}
-    UnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
+    BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) : op_type{op_type}, params{params} {}
+    BasicUnaryWithParam(UnaryOpType op_type, std::initializer_list<T> params) : op_type{op_type}, params{params} {}
+    BasicUnaryWithParam(UnaryOpType op_type, T param) : op_type{op_type}, params{param} {}
+    BasicUnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
 
-    bool has_parameter() const { return params.size() > 0; }
+    UnaryOpType type() const noexcept { return op_type; }
+
+    bool has_parameter() const noexcept { return params.size() > 0; }
+
+    bool empty() const noexcept { return params.empty(); }
+
+    std::span<const T> get_params() const noexcept { return params; }
+
+    std::optional<T> get_param_if(std::size_t index = 0) const noexcept {
+        if (index >= params.size()) {
+            return std::nullopt;
+        }
+
+        return params[index];
+    }
 
     static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
     auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
 };
 
+using EltwiseUnaryWithParam = BasicUnaryWithParam<float, std::int32_t, std::uint32_t>;
+
+using UnaryWithParam = BasicUnaryWithParam<float>;
+
+template <typename... Ts>
+using BasicFusedActivations = std::vector<ttnn::operations::unary::BasicUnaryWithParam<Ts...>>;
+
+using EltwiseFusedActivations = std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>;
+
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 }  // namespace ttnn::operations::unary
 
-namespace ttsl::json {
-
-template <>
-struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
+template <typename T>
+struct ttsl::json::from_json_t<ttnn::operations::unary::BasicUnaryWithParam<T>> {
     auto operator()(const nlohmann::json& json_object) const {
-        return ttnn::operations::unary::UnaryWithParam{
+        return ttnn::operations::unary::BasicUnaryWithParam<T>{
             from_json<ttnn::operations::unary::UnaryOpType>(json_object["op_type"]),
-            from_json<std::vector<float>>(json_object["params"])};
+            from_json<std::vector<T>>(json_object["params"])};
     }
 };
-};  // namespace ttsl::json

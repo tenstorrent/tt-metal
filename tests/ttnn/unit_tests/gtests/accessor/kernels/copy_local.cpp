@@ -38,9 +38,10 @@ void kernel_main() {
         // For the purpose of tesing, every second shard is read, and every other is written.
         if (i % 2 == 0) {
             noc_async_read_shard(shard_id, tensor_accessor_src, noc_addr_dst);
+            noc_async_read_barrier();
         } else {
             noc_async_write_shard(shard_id, tensor_accessor_dst, noc_addr_src);
+            noc_async_write_barrier();
         }
     }
-    noc_async_read_barrier();
 }
