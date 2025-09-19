@@ -111,7 +111,8 @@ public:
         const void* data = nullptr);
 
     template <bool inline_data = false>
-    void add_dispatch_write_host(bool flush_prefetch, uint64_t data_sizeB, bool is_event, const void* data = nullptr);
+    void add_dispatch_write_host(
+        bool flush_prefetch, uint64_t data_sizeB, bool is_event, uint16_t pad1, const void* data = nullptr);
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
@@ -197,6 +198,10 @@ public:
         this->cmd_write_offsetB += size_to_writeB;
         return cmd;
     }
+
+    // This value is random, but stable for the lifetime of the program. It is used to pad the command for event
+    // commands, so we can check the value on the host side.
+    static uint32_t random_padding_value();
 
 private:
     static bool zero_init_enable;

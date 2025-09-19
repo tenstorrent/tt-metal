@@ -35,6 +35,7 @@ class Test(BaseModel):
     config: Optional[dict] = Field(None, description="Test configuration key/value " "pairs.")
     tags: Optional[dict] = Field(None, description="Tags associated with the test, as key/value pairs.")
 
+
 class Step(BaseModel):
     """
     Contains information about the execution of CI/CD steps, each one associated with a
@@ -48,7 +49,7 @@ class Step(BaseModel):
     started_at: Optional[datetime] = Field(description="Timestamp with timezone when the step execution started.")
     completed_at: Optional[datetime] = Field(description="Timestamp with timezone when the step execution ended.")
 
-    
+
 class JobStatus(str, Enum):
     success = "success"
     failure = "failure"
