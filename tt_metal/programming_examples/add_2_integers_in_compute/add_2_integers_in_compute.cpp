@@ -25,6 +25,13 @@ int main() {
     // Initialize a device
     IDevice* device = CreateDevice(0);
 
+    // Set up kernel binary path prefix if provided via environment variable
+    const char* kernel_binary_prefix = std::getenv("TT_BINARY_PATH");
+    if (kernel_binary_prefix) {
+        fmt::print("Setting kernel binary path prefix to: {}\n", kernel_binary_prefix);
+        tt::tt_metal::experimental::SetKernelBinaryPathPrefix(device, kernel_binary_prefix);
+    }
+
     // In Metalium, submitting operations to the device is done through a command queue. This includes
     // uploading/downloading data to/from the device, and executing programs.
     CommandQueue& cq = device->command_queue();
@@ -80,17 +87,13 @@ int main() {
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
     
-    // Check for environment variables to use pre-compiled binaries
-    const char* reader_binary_path = std::getenv("READER_KERNEL_BINARY_PATH");
-    const char* writer_binary_path = std::getenv("WRITER_KERNEL_BINARY_PATH");
-    const char* compute_binary_path = std::getenv("COMPUTE_KERNEL_BINARY_PATH");
-    
+    // Create kernels using binary path if prefix is set, otherwise compile from source
     KernelHandle binary_reader_kernel_id;
-    if (reader_binary_path) {
-        fmt::print("Loading pre-compiled reader kernel from: {}\n", reader_binary_path);
-        binary_reader_kernel_id = CreateKernelFromBinary(
+    if (kernel_binary_prefix) {
+        fmt::print("Loading pre-compiled reader kernel: reader_binary_1_tile\n");
+        binary_reader_kernel_id = tt::tt_metal::experimental::CreateKernelFromBinary(
             program,
-            reader_binary_path,
+            "reader_binary_1_tile",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     } else {
@@ -102,11 +105,11 @@ int main() {
     }
 
     KernelHandle unary_writer_kernel_id;
-    if (writer_binary_path) {
-        fmt::print("Loading pre-compiled writer kernel from: {}\n", writer_binary_path);
-        unary_writer_kernel_id = CreateKernelFromBinary(
+    if (kernel_binary_prefix) {
+        fmt::print("Loading pre-compiled writer kernel: writer_1_tile\n");
+        unary_writer_kernel_id = tt::tt_metal::experimental::CreateKernelFromBinary(
             program,
-            writer_binary_path,
+            "writer_1_tile",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     } else {
@@ -118,13 +121,12 @@ int main() {
     }
 
     // This kernel performs the actual addition of the two input tiles
-    // For compute kernels, binary path must point to a directory containing trisc0.elf, trisc1.elf, trisc2.elf
     KernelHandle eltwise_binary_kernel_id;
-    if (compute_binary_path) {
-        fmt::print("Loading pre-compiled compute kernel from directory: {}\n", compute_binary_path);
-        eltwise_binary_kernel_id = CreateKernelFromBinary(
+    if (kernel_binary_prefix) {
+        fmt::print("Loading pre-compiled compute kernel: add_2_tiles\n");
+        eltwise_binary_kernel_id = tt::tt_metal::experimental::CreateKernelFromBinary(
             program,
-            compute_binary_path,
+            "add_2_tiles",
             core,
             ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
     } else {

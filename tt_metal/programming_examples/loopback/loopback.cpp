@@ -34,6 +34,13 @@ int main() {
         constexpr int device_id = 0;
         IDevice* device = CreateDevice(device_id);
 
+        // Set up kernel binary path prefix if provided via environment variable
+        const char* kernel_binary_prefix = std::getenv("TT_BINARY_PATH");
+        if (kernel_binary_prefix) {
+            fmt::print("Setting kernel binary path prefix to: {}\n", kernel_binary_prefix);
+            tt::tt_metal::experimental::SetKernelBinaryPathPrefix(device, kernel_binary_prefix);
+        }
+
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
         CommandQueue& cq = device->command_queue();
@@ -78,19 +85,14 @@ int main() {
         TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
         TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
         
-        // Check if KERNEL_BINARY_PATH environment variable is set to use pre-compiled binary
-        // The path must point to the exact .elf file, which for DataMovementProcessor::RISCV_0 is:
-        // <cache_dir>/<git_hash>/<build_key>/kernels/<kernel_full_name>/brisc/brisc.elf
-        // Example: export KERNEL_BINARY_PATH=/home/prybicki/.cache/tt-metal-cache/5a70c1f7b9/4096/kernels/loopback_dram_copy_<hash>/brisc/brisc.elf
-        const char* binary_path = std::getenv("KERNEL_BINARY_PATH");
-        
+        // Create kernel using binary path if prefix is set, otherwise compile from source
         KernelHandle dram_copy_kernel_id;
-        if (binary_path) {
-            fmt::print("Loading pre-compiled kernel from: {}\n", binary_path);
+        if (kernel_binary_prefix) {
+            fmt::print("Loading pre-compiled kernel: loopback_dram_copy\n");
             // Use the new CreateKernelFromBinary API to load pre-compiled kernel
-            dram_copy_kernel_id = CreateKernelFromBinary(
+            dram_copy_kernel_id = tt::tt_metal::experimental::CreateKernelFromBinary(
                 program,
-                binary_path,
+                "loopback_dram_copy",
                 core,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0,
