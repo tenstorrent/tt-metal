@@ -572,23 +572,6 @@ Tensor create_device_tensor(
 }
 
 void memcpy(
-    CommandQueue& queue, void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
-    ZoneScoped;
-    TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
-
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    if (!region.has_value()) {
-        EnqueueReadBuffer(queue, *src.buffer(), dst, blocking);
-    } else {
-        EnqueueReadSubBuffer(queue, *src.buffer(), dst, region.value(), blocking);
-    }
-}
-
-void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
