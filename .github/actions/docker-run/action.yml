@@ -97,6 +97,7 @@ runs:
           -v /etc/shadow:/etc/shadow:ro
           -v /etc/bashrc:/etc/bashrc:ro
           -v ${{ github.workspace }}:${{ github.workspace }}
+          -w ${{ github.workspace }}
           --net=host
           --log-driver local
           --log-opt max-size=50m
@@ -112,6 +113,7 @@ runs:
           -e GITHUB_RUN_ID=${{ github.run_id }}
           -e GITHUB_TRIGGERING_ACTOR=${{ github.github_triggering_actor }}
           -e RUNNER_NAME=${{ runner.name }}
+          -e PIP_CACHE_DIR=/tmp/pip-cache
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e HTTP_PROXY={0}', env.CIV2_HTTP_PROXY)) || '' }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e http_proxy={0}', env.CIV2_http_proxy)) || '' }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e HTTPS_PROXY={0}', env.CIV2_HTTPS_PROXY)) || '' }}
@@ -119,8 +121,6 @@ runs:
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e NO_PROXY={0}', env.CIV2_NO_PROXY)) || '' }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e no_proxy={0}', env.CIV2_no_proxy)) || '' }}
           ${{ inputs.device }}
-          -w ${{ github.workspace }}
-          -e PIP_CACHE_DIR=/pip-cache
         run: |
           set -eu
 
