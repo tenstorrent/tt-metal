@@ -142,9 +142,28 @@ class Model1D(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
+        mlp_is_padding_layer, _ = cls.get_meta_layer_mapping(mesh_device.shape[0], hf_config.first_k_dense_replace)
+        moe_is_padding_layer, _ = cls.get_meta_layer_mapping(
+            mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
+        )
         return {
             "embedding": Embedding1D.prefill_model_config(hf_config, mesh_device),
-            "mlp_decoder_block": [DecoderBlock.prefill_model_config(hf_config, mesh_device)],
+            "mlp_decoder_block": [
+                DecoderBlock.prefill_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=is_padding_layer,
+                )
+                for is_padding_layer in mlp_is_padding_layer
+            ],
+            "moe_decoder_block": [
+                MoEDecoderBlock.prefill_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=is_padding_layer,
+                )
+                for is_padding_layer in moe_is_padding_layer
+            ],
             "transfer_row": {"topology": ttnn.Topology.Linear},
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
             "lm_head": LMHead.prefill_model_config(hf_config, mesh_device, input_row_idx=0),
@@ -429,6 +448,31 @@ class Model1D(SharedStateAddOn, AbstractModule):
                     user_id,
                     row_idx,
                     cfg["mlp_decoder_block"][meta_layer_idx],
+                    rope_tensors,
+                    page_tables[layer_idx],
+                )
+
+            # Transfer rows
+            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+
+        # Stage 2: MOE Decoder Block
+        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
+            cfg["num_rows"], cfg["num_mlp_layers"], cfg["num_mlp_layers"] + cfg["num_moe_layers"]
+        )
+
+        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
+            zip(moe_is_padding_layer.transpose(0, 1), moe_meta_layer_indices.transpose(0, 1), strict=True)
+        ):
+            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
+                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
+            ):
+                if is_padding_layer:
+                    continue
+                x = MoEDecoderBlock.forward_prefill(
+                    x,
+                    user_id,
+                    row_idx,
+                    cfg["moe_decoder_block"][meta_layer_idx],
                     rope_tensors,
                     page_tables[layer_idx],
                 )
