@@ -9,7 +9,7 @@ This article covers installation of the Tenstorrent software stack on Arch Linux
 
 ## Prerequisites
 
-An [AUR helper](/index.php/AUR_helpers) is required to install packages from the [AUR](/index.php/Arch_User_Repository). This guide uses [yay](/index.php/Yay).
+An [AUR helper](/index.php/AUR_helpers) is required to install packages from the [AUR](https://aur.archlinux.org/). This guide uses [yay](/index.php/Yay).
 
 ### Installing yay
 
