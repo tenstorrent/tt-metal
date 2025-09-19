@@ -108,7 +108,9 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
 
     // Create test data - use uint16_t for easy verification
     auto num_elements = tensor_size / ElementSize;
-    ASSERT_TRUE(num_elements <= max_num_elements_);
+    if (num_elements > max_num_elements_) {
+        TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
+    }
     std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -340,10 +342,10 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_buffer = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device_.get());
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
 
-    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
     if (num_elements > max_num_elements_) {
         TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
     }
+    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);

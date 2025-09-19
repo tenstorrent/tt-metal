@@ -30,7 +30,7 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
     void add_prefetch_relay_linear() {
-        this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmdLarge);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -39,12 +39,20 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_data(uint32_t cmd_write_offset_incrementB) { this->cmd_write_offsetB += cmd_write_offset_incrementB; }
+    template <bool pcie_aligned = true>
+    void add_data(uint32_t cmd_write_offset_incrementB) {
+        this->cmd_write_offsetB += cmd_write_offset_incrementB;
+        if constexpr (not pcie_aligned) {
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    }
+
+    void add_alignment() { this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment); }
 
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(uint32_t data_sizeB) {
         this->add_prefetch_relay_inline();
-        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB += sizeof(CQDispatchCmdLarge);
 
         if constexpr (flush_prefetch) {
             if constexpr (inline_data) {
@@ -55,6 +63,23 @@ public:
             }
         } else {
             // Need to make sure next command that flushes prefetch is written to correctly aligned location
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    }
+
+    // Calculator sizing for CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h linear write)
+    // Mirrors add_dispatch_write_linear for sizing/alignment purposes.
+    template <bool flush_prefetch = true, bool inline_data = false>
+    void add_dispatch_write_linear_h(uint32_t data_sizeB) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmdLarge);
+
+        if constexpr (flush_prefetch) {
+            if constexpr (inline_data) {
+                this->add_data(data_sizeB);
+                this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+            }
+        } else {
             this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
     }
@@ -109,11 +134,12 @@ public:
 
     template <bool inline_data = false>
     void add_dispatch_write_paged(uint32_t page_size, uint32_t pages) {
-        uint32_t data_sizeB = page_size * pages;
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);
         if constexpr (inline_data) {
-            this->add_data(tt::align(data_sizeB, this->pcie_alignment));
+            uint32_t data_sizeB = page_size * pages;
+            this->add_data(data_sizeB);
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
     }
 
@@ -232,6 +258,9 @@ public:
 
     // Clear calculator state
     void clear() { this->cmd_write_offsetB = 0; }
+
+    // Update state
+    void update_write_offset_bytes(uint32_t update_valueB) { this->cmd_write_offsetB += update_valueB; }
 
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }

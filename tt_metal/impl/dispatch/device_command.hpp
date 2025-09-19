@@ -33,7 +33,7 @@ public:
     DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB);
 
     template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
-    DeviceCommand(uint32_t cmd_sequence_sizeB);
+    DeviceCommand(const uint32_t cmd_sequence_sizeB);
 
     DeviceCommand& operator=(const DeviceCommand& other);
     DeviceCommand& operator=(DeviceCommand&& other) noexcept;
@@ -82,6 +82,16 @@ public:
 
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(
+        uint8_t num_mcast_dests,
+        uint32_t noc_xy_addr,
+        DeviceAddr addr,
+        DeviceAddr data_sizeB,
+        const void* data = nullptr,
+        uint32_t write_offset_index = 0);
+
+    // Like add_dispatch_write_linear, but emits CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h variant).
+    template <bool flush_prefetch = true, bool inline_data = false>
+    void add_dispatch_write_linear_h(
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
         uint32_t addr,
@@ -133,6 +143,8 @@ public:
 
     void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB)
         __attribute((nonnull(2)));
+
+    void align_write_offset(void);
 
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
