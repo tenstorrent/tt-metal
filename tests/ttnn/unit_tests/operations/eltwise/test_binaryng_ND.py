@@ -68,6 +68,9 @@ import ttnn
 def test_ND_subtile_bcast(device, shapes, ttnn_fn):
     torch.manual_seed(0)
 
+    if ttnn_fn == "divide":
+        pytest.skip("divide does not support row-col bcast due to being SFPU-only by default (Issue #28961)")
+
     torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16) * 100 - 50
     torch_input_tensor_b = None
     if ttnn_fn == ttnn.divide:
