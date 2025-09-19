@@ -469,7 +469,7 @@ class TtnnSPPELAN:
         x = self.cv1(x)
         x1 = x
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x)
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         TILE_WIDTH = 32
         in_c = self.conv_parameter.cv1.conv.out_channels
@@ -984,7 +984,7 @@ class YoloV9:
         x = ttnn.upsample(x, scale_factor=2)  # 13
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x = concat(-1, True, x, x4)  # 14
-        x = ttnn.sharded_to_interleaved(x)
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x4)
 
         x = interleaved_to_sharded(x)
