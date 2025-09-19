@@ -523,7 +523,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        false);
+        /*fast_and_approximate_mode*/ false);
 }
 
 template <BinaryOpType binary_op_type>
@@ -548,7 +548,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        false);
+        /*fast_and_approximate_mode*/ false);
 }
 
 template <BinaryOpType binary_op_type>
@@ -625,7 +625,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        false);
+        /*fast_and_approximate_mode*/ false);
 }
 
 template <BinaryOpType binary_op_type>
@@ -658,7 +658,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        false);
+        /*fast_and_approximate_mode*/ false);
 }
 // scalar - tensor combination not available on Pytorch for this op
 template <BinaryOpType binary_op_type>
@@ -797,7 +797,7 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        false);
+        /*fast_and_approximate_mode*/ false);
 }
 
 template <BinaryOpType binary_op_type>
