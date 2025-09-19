@@ -64,6 +64,14 @@ class TtnnDetect:
         # y1 no longer needed after x4 is computed
         ttnn.deallocate(y1)
 
+        x1_sharded = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x1)
+        x4_sharded = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x4)
+        # Concatenate and deallocate intermediate tensors immediately after use
+        y1_result = ttnn.concat((x1_sharded, x4_sharded), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        deallocate_tensors(x1_sharded, x4_sharded)  # Free x1, x4 immediately after concat
+
         x5 = self.cv3_1_0_0(device, y2)
         x5 = self.cv3_1_0_1(device, x5)
         x5 = self.cv3_1_1_0(device, x5)
@@ -71,6 +79,14 @@ class TtnnDetect:
         x5 = self.cv3_1_2_0(x5)
         # y2 no longer needed after x5 is computed
         ttnn.deallocate(y2)
+
+        x2_sharded = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x2)
+        x5_sharded = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x5)
+        y2_result = ttnn.concat((x2_sharded, x5_sharded), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x2_sharded)
+        ttnn.deallocate(x5_sharded)
 
         x6 = self.cv3_2_0_0(device, y3)
         x6 = self.cv3_2_0_1(device, x6)
@@ -80,20 +96,12 @@ class TtnnDetect:
         # y3 no longer needed after x6 is computed
         ttnn.deallocate(y3)
 
-        x1 = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
         x3 = ttnn.sharded_to_interleaved(x3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
         x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
         
-        # Concatenate and deallocate intermediate tensors immediately after use
-        y1_result = ttnn.concat((x1, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        deallocate_tensors(x1, x4)  # Free x1, x4 immediately after concat
+
         
-        y2_result = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        deallocate_tensors(x2, x5)  # Free x2, x5 immediately after concat
-        
+ 
         y3_result = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         deallocate_tensors(x3, x6)  # Free x3, x6 immediately after concat
         
