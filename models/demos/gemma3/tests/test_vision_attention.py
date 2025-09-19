@@ -62,9 +62,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
         configuration=model_args,
     )
 
-    reference_output = reference_model(
-        pt_attention_input, attention_mask=None
-    )  
+    reference_output = reference_model(pt_attention_input, attention_mask=None)
 
     # Extract tensor from tuple if needed (reference model returns (tensor, None))
     if isinstance(reference_output, tuple):
