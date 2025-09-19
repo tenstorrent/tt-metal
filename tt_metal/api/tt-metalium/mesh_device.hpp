@@ -125,7 +125,10 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+
+    uint32_t submesh_state_id_ = 0;
     std::shared_ptr<SubmeshManager> submesh_manager_;
+
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
@@ -143,7 +146,9 @@ public:
     MeshDevice(
         std::shared_ptr<ScopedDevices> scoped_devices,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh = {});
+        std::shared_ptr<MeshDevice> parent_mesh = {},
+        std::shared_ptr<SubmeshManager> submesh_manager = {},
+        uint32_t submesh_state_id = 0);
     ~MeshDevice() override;
 
     MeshDevice(const MeshDevice&) = delete;

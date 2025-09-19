@@ -218,19 +218,18 @@ void MeshDevice::mark_allocations_safe() { this->allocator()->mark_allocations_s
 MeshDevice::MeshDevice(
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
-    std::shared_ptr<MeshDevice> parent_mesh) :
+    std::shared_ptr<MeshDevice> parent_mesh,
+    std::shared_ptr<SubmeshManager> submesh_manager,
+    uint32_t submesh_state_id) :
     scoped_devices_(std::move(mesh_handle)),
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
+    submesh_manager_(std::move(submesh_manager)),
+    submesh_state_id_(submesh_state_id),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
-    if (parent_mesh_) {
-        submesh_manager_ = parent_mesh_->submesh_manager_;
-    } else {
-        submesh_manager_ = std::make_shared<SubmeshManager>();
-    }
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -472,6 +471,8 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_overlapped_submeshes(
     const std::vector<MeshCoordinateRange>& submesh_ranges) {
     auto lock_api = this->lock_api();
+
+    auto submesh_manager = std::make_shared<SubmeshManager>();
 
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
     for (const auto& submesh_range : submesh_ranges) {
