@@ -275,7 +275,7 @@ FORCE_INLINE bool is_link_up() {
         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
     } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_DONE);
 
-    auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_STATUS);
+    auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
     return link_status->rx_link_up == 1;
 }
 
