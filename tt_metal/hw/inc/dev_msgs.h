@@ -317,18 +317,15 @@ struct watcher_msg_t {
 };
 
 #ifndef CODEGEN
-// TODO: DebugPrintMemLayout not visible by codegen
-// To be fixed by HAL work on dprint buffers.
+// Host code does not need to use dprint_buf_msg_t (it uses DebugPrintMemLayout directly), skip because codegen can't
+// see DebugPrintMemLayout.
 struct dprint_buf_msg_t {
     DebugPrintMemLayout data[PROCESSOR_COUNT];
-    uint32_t pad;  // to 1024 bytes
 };
 #endif
 
 // NOC aligment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
-
-constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,
@@ -390,11 +387,9 @@ struct mailboxes_t {
     uint32_t pads_1[3];                  // CODEGEN:skip
     volatile uint32_t go_message_index;  // Index into go_messages to use. Always 0 on unicast cores.
     struct watcher_msg_t watcher;
-    struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
-    // Keep profiler last since it's size is dynamic per core type
-    uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];  // CODEGEN:skip
-    profiler_msg_t profiler;                            // CODEGEN:skip
+    profiler_msg_t profiler;
+    struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
