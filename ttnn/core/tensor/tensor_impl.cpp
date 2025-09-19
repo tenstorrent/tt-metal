@@ -737,14 +737,14 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
                 try {
                     fmt::println(stderr, "Pinning memory");
                 
-                    pinned_memory = device->pin_memory(range_set, shard->view_bytes().data(), shard->view_bytes().size(), /*map_to_noc=*/true);
+                    pinned_memory = device->pin_memory(range_set, *shard, /*map_to_noc=*/true);
                 } catch (const std::exception& e) {
                     pinned_memories_cache.clear();
                 }
                 if (pinned_memory == nullptr) {
                     try {
                         fmt::println(stderr, "Retry pinning memory");
-                        pinned_memory = device->pin_memory(range_set, shard->view_bytes().data(), shard->view_bytes().size(), /*map_to_noc=*/true);
+                        pinned_memory = device->pin_memory(range_set, *shard, /*map_to_noc=*/true);
                     } catch (const std::exception& e) {
                     }
                 }

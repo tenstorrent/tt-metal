@@ -831,8 +831,8 @@ void issue_read_buffer_dispatch_command_sequence(
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
                 dispatch_params.device->id());
         auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
-        if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->second == mmio_device_id) {
-            const uint64_t pinned_noc_base = noc_addr_pair_opt->first;
+        if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->device_id == mmio_device_id) {
+            const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(dispatch_params.pinned_memory->get_host_ptr());
             const uint8_t* dst_ptr = static_cast<const uint8_t*>(dispatch_params.dst);
             const uint64_t dst_offset_base =
