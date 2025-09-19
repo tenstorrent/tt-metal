@@ -30,9 +30,9 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace stl {
@@ -118,18 +118,14 @@ struct ShardSpecBuffer {
         const ShardOrientation& shard_orientation_,
         const std::array<uint32_t, 2>& page_shape,
         const std::array<uint32_t, 2>& tensor2d_shape_in_pages) :
-        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_) {
-        this->page_shape = page_shape;
-        this->tensor2d_shape_in_pages = tensor2d_shape_in_pages;
-    }
+        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_),
+        page_shape(page_shape),
+        tensor2d_shape_in_pages(tensor2d_shape_in_pages) {}
     ShardSpecBuffer(
         const ShardSpec& shard_spec,
         const std::array<uint32_t, 2>& page_shape,
         const std::array<uint32_t, 2>& tensor2d_shape_in_pages) :
-        tensor_shard_spec(shard_spec) {
-        this->page_shape = page_shape;
-        this->tensor2d_shape_in_pages = tensor2d_shape_in_pages;
-    }
+        tensor_shard_spec(shard_spec), page_shape(page_shape), tensor2d_shape_in_pages(tensor2d_shape_in_pages) {}
     CoreRangeSet grid() const { return tensor_shard_spec.grid; }
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }

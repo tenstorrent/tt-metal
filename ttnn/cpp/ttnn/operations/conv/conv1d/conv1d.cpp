@@ -36,7 +36,6 @@ using sliding_window::SlidingWindowConfig;
 namespace conv1d {
 
 Result conv1d(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -79,7 +78,6 @@ Result conv1d(
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
         std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
-            queue_id,
             input_tensor_4d,
             weight_tensor,
             device,
@@ -93,8 +91,8 @@ Result conv1d(
             conv2d_padding,
             std::array<uint32_t, 2>{dilation, 1},
             groups,
-            std::move(dtype),
-            std::move(bias_tensor),
+            dtype,
+            bias_tensor,
             conv_config,
             compute_config,
             memory_config,
@@ -113,7 +111,6 @@ Result conv1d(
     };
 }
 Result Conv1dOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -134,7 +131,6 @@ Result Conv1dOperation::invoke(
     bool return_output_dim,
     bool return_weights_and_bias) {
     return conv1d(
-        queue_id,
         input_tensor,
         weight_tensor,
         device,
@@ -147,10 +143,10 @@ Result Conv1dOperation::invoke(
         padding,
         dilation,
         groups,
-        std::move(dtype),
-        std::move(bias_tensor),
-        std::move(conv_config),
-        std::move(compute_config),
+        dtype,
+        bias_tensor,
+        conv_config,
+        compute_config,
         memory_config,
         return_output_dim,
         return_weights_and_bias);

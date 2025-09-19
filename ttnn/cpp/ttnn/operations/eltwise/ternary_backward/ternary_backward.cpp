@@ -69,7 +69,6 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
 }
 
 std::vector<OptionalTensor> WhereBackwardOperation::invoke(
-    QueueId queue_id,
     const Tensor& grad,
     const Tensor& condition,
     const Tensor& input,
@@ -81,9 +80,9 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
     std::vector<OptionalTensor> result;
     if (are_required_outputs.at(0)) {
         if (input_grad.has_value()) {
-            where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
+            where(condition, grad, 0.0f, output_mem_config, input_grad);
         } else {
-            input_grad = where(queue_id, condition, grad, 0.0f, output_mem_config);
+            input_grad = where(condition, grad, 0.0f, output_mem_config);
         }
         result.emplace_back(input_grad);
     } else {
@@ -91,9 +90,9 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
     }
     if (are_required_outputs.at(1)) {
         if (other_grad.has_value()) {
-            where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
+            where(condition, 0.0f, grad, output_mem_config, other_grad);
         } else {
-            other_grad = where(queue_id, condition, 0.0f, grad, output_mem_config);
+            other_grad = where(condition, 0.0f, grad, output_mem_config);
         }
         result.emplace_back(other_grad);
     } else {

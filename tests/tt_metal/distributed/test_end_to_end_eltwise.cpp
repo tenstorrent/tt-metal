@@ -16,6 +16,7 @@
 
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -67,19 +68,28 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
             .set_page_size(output_cb_index, single_tile_size);
     CreateCircularBuffer(*program, cores_for_program, cb_output_config);
 
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(src0_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src1_buf).append_to(reader_compile_time_args);
     auto binary_reader_kernel = CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
         cores_for_program,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
     auto unary_writer_kernel = CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         cores_for_program,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> compute_kernel_args = {};
 
@@ -230,13 +240,13 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
+    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (std::size_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
+        EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
     }
 }
 
@@ -303,14 +313,14 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
+    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
 
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (std::size_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
+        EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
     }
 }
 
@@ -373,11 +383,11 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (std::size_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
+        EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
     }
 }
 
-MATCHER_P(Bfloat16Eq, calculated, "") { return arg.to_float() == calculated; }
+MATCHER_P(Bfloat16Eq, calculated, "") { return static_cast<float>(arg) == calculated; }
 
 TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     using tt::constants::TILE_HEIGHT;

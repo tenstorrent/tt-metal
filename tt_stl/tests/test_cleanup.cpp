@@ -71,6 +71,7 @@ TEST(CleanupTest, PerfectForwarding) {
         auto cleanup = make_cleanup([captured = std::move(captured)]() {
             // captured should be moved into the lambda
         });
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_TRUE(captured.empty());  // Should be moved from
     }
 }

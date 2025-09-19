@@ -9,6 +9,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::detail {
 
@@ -59,6 +60,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
         W,
         H,
     };
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
 
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

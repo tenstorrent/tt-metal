@@ -8,10 +8,10 @@ from loguru import logger
 import numpy as np
 import pandas as pd
 import csv
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
@@ -52,7 +52,7 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
     setup.deviceInputLog = profiler_log_path
     main_test_body_string = "MAIN-TEST-BODY"
     devices_data = import_log_run_stats(setup)
-
+    DEVICE_ID_NUM_BITS = 10
     arch = get_arch()
 
     if arch == "wormhole_b0":
@@ -84,6 +84,9 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
 
                 if metadata["zone_name"] == main_test_body_string:
                     run_host_id = metadata["run_host_id"]
+                    # if fast dispatch, run_host_id encapsulates the device id, need to decode it
+                    if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") is None:
+                        run_host_id = run_host_id >> DEVICE_ID_NUM_BITS
                     if metadata["type"] == "ZONE_START":
                         starts[run_host_id] = ts
                     if metadata["type"] == "ZONE_END":

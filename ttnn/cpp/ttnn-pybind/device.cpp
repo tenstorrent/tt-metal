@@ -19,6 +19,7 @@
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "tools/profiler/op_profiler.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include <tt-metalium/device.hpp>
@@ -485,7 +486,7 @@ void device_module(py::module& m_device) {
     m_device.def(
         "synchronize_device",
         [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+            Synchronize(device, raw_optional(cq_id), sub_device_ids);
         },
         synchronize_device_doc.data(),
         py::arg("device"),
@@ -494,8 +495,7 @@ void device_module(py::module& m_device) {
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            tt::tt_metal::distributed::Synchronize(
-                device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+            tt::tt_metal::distributed::Synchronize(device, raw_optional(cq_id), sub_device_ids);
         },
         synchronize_device_doc.data(),
         py::arg("device"),
@@ -518,7 +518,10 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def("get_arch_name", &tt::tt_metal::hal::get_arch_name, "Return the name of the architecture present.");
+    m_device.def(
+        "get_arch_name",
+        &tt::tt_metal::detail::get_physical_architecture_name,
+        "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
@@ -528,8 +531,6 @@ void device_module(py::module& m_device) {
         "get_max_worker_l1_unreserved_size",
         &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
         "Return the maximum size of the worker L1 unreserved memory.");
-
-    m_device.attr("DefaultQueueId") = ttnn::DefaultQueueId;
 }
 
 void py_device_module(py::module& module) {

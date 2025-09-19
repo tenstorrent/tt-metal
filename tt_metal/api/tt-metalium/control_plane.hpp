@@ -21,6 +21,13 @@
 #include <vector>
 
 namespace tt::tt_fabric {
+// TODO: remove this once UMD provides API for UBB ID
+ struct UbbId {
+     std::uint32_t tray_id;
+     std::uint32_t asic_id;
+ };
+
+ UbbId get_ubb_id(chip_id_t chip_id);
 
 class FabricContext;
 
@@ -44,9 +51,9 @@ enum class MeshScope {
 
 class ControlPlane {
 public:
-    explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
+    explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
+        const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     ~ControlPlane();
@@ -277,7 +284,8 @@ private:
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
-        tt::tt_fabric::fabric_connection_info_t& connection_info,
+        tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
+        tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
         tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
         chip_id_t physical_chip_id,
         chan_id_t eth_channel_id,
@@ -304,6 +312,9 @@ private:
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
+
+    template <uint8_t dim, bool compressed>
+    void write_all_to_all_routing_fields(MeshId mesh_id) const;
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;

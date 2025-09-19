@@ -10,8 +10,8 @@ from functools import partial
 
 import ttnn
 
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
+from models.common.helper_funcs import Linear as TTLinear
+from models.common.utility_functions import (
     pad_by_zero,
 )
 

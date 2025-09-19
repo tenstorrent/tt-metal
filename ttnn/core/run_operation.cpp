@@ -72,14 +72,13 @@ OutputTensors run(
     DeviceOperation<OutputTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    QueueId cq_id) {
+    const OptionalTensors& optional_output_tensors) {
     if constexpr (std::is_same_v<OutputTensors, Tensors>) {
         return ttnn::prim::old_infra_device_operation(
-            cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+            std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
     } else {
         return ttnn::prim::old_infra_device_operation_with_optional_output_tensors(
-            cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+            std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
     }
 }
 
@@ -87,23 +86,20 @@ template Tensors run(
     DeviceOperation<Tensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    QueueId cq_id);
+    const OptionalTensors& optional_output_tensors);
 
 template OptionalTensors run(
     DeviceOperation<OptionalTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    QueueId cq_id);
+    const OptionalTensors& optional_output_tensors);
 
 template <class OutputTensors>
 OutputTensors run_without_autoformat(
     DeviceOperation<OutputTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    QueueId cq_id) {
+    const OptionalTensors& optional_output_tensors) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -127,22 +123,20 @@ OutputTensors run_without_autoformat(
         }
     }
     return run<OutputTensors>(
-        std::move(operation), input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors, cq_id);
+        std::move(operation), input_tensors_on_dev, optional_input_tensors_on_dev, optional_output_tensors);
 }
 
 template Tensors run_without_autoformat<Tensors>(
     DeviceOperation<Tensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    QueueId cq_id);
+    const OptionalTensors& optional_output_tensors);
 
 template OptionalTensors run_without_autoformat<OptionalTensors>(
     DeviceOperation<OptionalTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    QueueId cq_id);
+    const OptionalTensors& optional_output_tensors);
 
 std::vector<Shape> extract_padded_shapes(
     const std::vector<ttnn::TensorSpec>& tensor_specs,
@@ -166,8 +160,7 @@ Tensors run_with_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    const float pad_value,
-    QueueId cq_id) {
+    const float pad_value) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -205,14 +198,10 @@ Tensors run_with_autoformat(
 
     auto output_specs = operation.compute_output_specs(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
-        std::move(operation),
-        formatted_input_tensors,
-        formatted_optional_input_tensors,
-        optional_output_tensors,
-        cq_id);
+        std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors);
 
     auto padded_output_shapes = extract_padded_shapes(
-        std::move(output_specs),
+        output_specs,
         [&](size_t idx) {
             const auto& tensor = output_tensors[idx];
             return TensorLayout(tensor.dtype(), Layout::TILE, tensor.memory_config());
@@ -238,8 +227,7 @@ Tensors run_with_autoformat(
     const std::vector<Layout>& output_layouts,
     const OptionalConstTensors& optional_input_tensors,
     const std::vector<std::optional<FormatParams>>& optional_input_formatting,
-    const OptionalTensors& optional_output_tensors,
-    ttnn::QueueId cq_id) {
+    const OptionalTensors& optional_output_tensors) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -278,14 +266,10 @@ Tensors run_with_autoformat(
 
     auto output_specs = operation.compute_output_specs(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
-        std::move(operation),
-        formatted_input_tensors,
-        formatted_optional_input_tensors,
-        optional_output_tensors,
-        cq_id);
+        std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors);
 
     auto legacy_output_shapes = extract_padded_shapes(
-        std::move(output_specs),
+        output_specs,
         [&](size_t idx) {
             const auto& tensor = output_tensors[idx];
             return TensorLayout(tensor.dtype(), output_layouts[idx], tensor.memory_config());

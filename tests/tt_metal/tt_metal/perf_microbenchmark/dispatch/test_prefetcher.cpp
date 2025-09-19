@@ -44,10 +44,9 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_io.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/tt_io.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE \
@@ -325,7 +324,7 @@ void add_prefetcher_linear_read_cmd(IDevice* device,
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
 
     cmd.relay_linear.pad1 = 0;
-    cmd.relay_linear.pad2 = 0;
+    cmd.relay_linear.length_hi = 0;
     cmd.relay_linear.noc_xy_addr =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.relay_linear.addr = addr;
@@ -1617,9 +1616,6 @@ void gen_relay_linear_h_test(
 
             // Add the CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH with the dispatch command as payload
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
-
-            // Now generate the CQ_PREFETCH_CMD_RELAY_LINEAR_H command to fetch data from NOC
-            auto prior_end = prefetch_cmds.size();
 
             // Create the relay linear H command
             CQPrefetchCmd cmd{};

@@ -71,7 +71,6 @@ class TtGemmaImageFeedForward:
         else:
             self.mlp_config = args
 
-        # Create the underlying llama MLP - just like siglip does
         self.llama_mlp = TtLlamaImageFeedForward(
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,

@@ -10,9 +10,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <vector>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <optional>
 
 namespace tt {
@@ -29,6 +29,7 @@ class MeshShape;
 namespace tt::tt_fabric {
 class FabricNodeId;
 enum class RoutingDirection;
+struct FabricEriscDatamoverConfig;
 size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
@@ -70,7 +71,7 @@ void append_fabric_connection_rt_args(
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
-    const std::vector<FabricNodeId>& next_hop_nodes,
+    const std::vector<FabricNodeId>& dst_nodes,
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
@@ -132,9 +133,9 @@ size_t get_number_of_available_routing_planes(
 enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_CHANNEL = 1 };
 
 class FabricMuxConfig {
-    inline static constexpr uint8_t default_num_buffers = 8;
-    inline static constexpr size_t default_num_full_size_channel_iters = 1;
-    inline static constexpr size_t default_num_iters_between_teardown_checks = 32;
+    static constexpr uint8_t default_num_buffers = 8;
+    static constexpr size_t default_num_full_size_channel_iters = 1;
+    static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
 public:
     FabricMuxConfig(
@@ -150,6 +151,8 @@ public:
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
     // Returns the base compile time args without stream IDs (for custom stream ID override)
+    std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
+        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args() const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router

@@ -8,7 +8,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>                   // FabricType
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <llrt/tt_cluster.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
@@ -31,12 +31,6 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config);
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction);
 
-void get_optimal_noc_for_edm(
-    FabricEriscDatamoverBuilder& edm_builder1,
-    FabricEriscDatamoverBuilder& edm_builder2,
-    uint32_t num_links,
-    Topology topology);
-
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<chip_id_t, std::vector<chip_id_t>>;
 struct IntraMeshAdjacencyMap {
@@ -50,7 +44,7 @@ struct IntraMeshAdjacencyMap {
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func,
+    const std::function<std::vector<chip_id_t>(chip_id_t)>& get_adjacent_chips_func,
     std::optional<chip_id_t> start_chip_id = std::nullopt);
 
 // Helper: Convert 1D mesh adjacency map to row-major vector representation

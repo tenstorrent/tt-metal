@@ -17,16 +17,16 @@ from framework.statuses import VectorValidity, TestStatus
 import framework.tt_smi_util as tt_smi_util
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from framework.serialize import deserialize
+from framework.serialize import deserialize, deserialize_vector_structured
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
 from framework.result_destination import ResultDestinationFactory
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from tracy.process_ops_logs import get_device_data_generate_report
+from tracy.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
-
-PROCESS_TERMINATION_TIMEOUT_SECONDS = 5
+from framework.device_fixtures import default_device
+from time import sleep
 
 
 @dataclass
@@ -46,15 +46,18 @@ class SweepsConfig:
     sweeps_tag: Optional[str] = None
     skip_modules: Optional[str] = None
     skip_on_timeout: bool = False
+    keep_invalid: bool = False
     elastic_connection_string: Optional[str] = None
     elastic_username: Optional[str] = None
     elastic_password: Optional[str] = None
     summary: bool = False
     run_contents: str = None
+    arch_name: Optional[str] = None
 
 
 def create_config_from_args(args) -> SweepsConfig:
     """Create configuration object from parsed arguments"""
+
     config = SweepsConfig(
         module_name=args.module_name,
         suite_name=args.suite_name,
@@ -69,19 +72,36 @@ def create_config_from_args(args) -> SweepsConfig:
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
         skip_on_timeout=args.skip_on_timeout,
+        keep_invalid=args.keep_invalid,
         summary=args.summary,
     )
 
-    if config.vector_source == "elastic" or config.result_destination == "elastic":
+    if args.vector_source == "elastic" or args.result_dest == "elastic":
         from framework.elastic_config import get_elastic_url
 
-        config.elastic_connection_string = get_elastic_url("corp")
+        elastic_connection_string = get_elastic_url("corp")
 
         # Acquire once
-        config.elastic_username = os.getenv("ELASTIC_USERNAME")
-        config.elastic_password = os.getenv("ELASTIC_PASSWORD")
-        if not config.elastic_username or not config.elastic_password:
-            raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
+        elastic_username = os.getenv("ELASTIC_USERNAME")
+        elastic_password = os.getenv("ELASTIC_PASSWORD")
+        if not elastic_username or not elastic_password:
+            logger.error("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
+            exit(1)
+        config.elastic_connection_string = elastic_connection_string
+        config.elastic_username = elastic_username
+        config.elastic_password = elastic_password
+
+    # Validate and set ARCH_NAME
+    allowed_arch = {"blackhole", "wormhole_b0"}
+    arch_env = os.getenv("ARCH_NAME") or os.getenv("IRD_ARCH_NAME")
+    if not arch_env:
+        logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    arch_env = arch_env.strip()
+    if arch_env not in allowed_arch:
+        logger.error(f"Invalid ARCH_NAME '{arch_env}'. Must be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    config.arch_name = arch_env
 
     return config
 
@@ -134,11 +154,8 @@ def get_all_modules():
         yield sweep_name
 
 
-def get_timeout(test_module):
-    try:
-        timeout = test_module.TIMEOUT
-    except:
-        timeout = 30
+def get_timeout():
+    timeout = 30
     return timeout
 
 
@@ -170,7 +187,7 @@ def gather_single_test_perf(device, test_passed):
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     # Read profiler data from device
-    ttnn.ReadDeviceProfiler(device)
+    # ttnn.ReadDeviceProfiler(device)
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
@@ -255,7 +272,7 @@ def get_github_pipeline_id() -> Optional[int]:
     Prefer GitHub Actions run id if present; otherwise fall back to generic CI_PIPELINE_ID.
     Returns an int when available, otherwise None.
     """
-    run_id = os.getenv("GITHUB_RUN_ID") or os.getenv("CI_PIPELINE_ID")
+    run_id = os.getenv("GITHUB_RUN_NUMBER") or os.getenv("GITHUB_RUN_ID")
     if not run_id:
         return None
     try:
@@ -265,7 +282,8 @@ def get_github_pipeline_id() -> Optional[int]:
         return None
 
 
-def run(test_module, input_queue, output_queue, config: SweepsConfig):
+def run(module_name, input_queue, output_queue, config: SweepsConfig):
+    test_module = importlib.import_module("sweeps." + module_name)
     device_generator = get_devices(test_module)
     try:
         device, device_name = next(device_generator)
@@ -277,7 +295,7 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
     try:
         try:
             while True:
-                test_vector = input_queue.get(block=True, timeout=1)
+                test_vector = input_queue.get(block=True, timeout=5)
                 test_vector = deserialize_vector_structured(test_vector)
                 try:
                     results = test_module.run(**test_vector, device=device)
@@ -310,18 +328,21 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
             logger.warning(f"Error during device cleanup: {e}")
 
 
-def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
+def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
+    # runs a single suite in a test vector
     results = []
+    invalid_vectors_count = 0
     input_queue = Queue()
     output_queue = Queue()
     p = None
-    timeout = get_timeout(test_module)
+    timeout = get_timeout()
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
-    arch = ttnn.get_arch_name()
-    reset_util = tt_smi_util.ResetUtil(arch)
+    reset_util = tt_smi_util.ResetUtil(config.arch_name)
+    child_mode = not config.dry_run and not config.vector_id
+    timeout_before_rejoin = 5
 
-    if len(test_vectors) > 1 and not config.dry_run:
-        p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+    if child_mode:
+        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
         p.start()
 
     for i, test_vector in enumerate(test_vectors):
@@ -333,17 +354,22 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
             continue
         result = dict()
 
-        result["start_time_ts"] = dt.datetime.now()
-
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
 
         validity = deserialize(test_vector["validity"])
-
-        if validity == VectorValidity.INVALID:
-            result["status"] = TestStatus.NOT_RUN
-            result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
-            result["e2e_perf"] = None
+        result["start_time_ts"] = dt.datetime.now()
+        if validity.value == "INVALID":
+            invalid_vectors_count += 1
+            if not config.keep_invalid:
+                # Skip this vector entirely - don't add to results
+                suite_pbar.update()
+                continue
+            else:
+                # Include invalid vector in results with NOT_RUN status
+                result["status"] = TestStatus.NOT_RUN
+                result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
+                result["e2e_perf"] = None
         else:
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
@@ -352,19 +378,26 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
             try:
                 if config.measure_perf:
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                    # Ensure a worker process is running if we're in child mode
+                    if child_mode and (p is None or not p.is_alive()):
+                        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                        p.start()
                     input_queue.put(test_vector)
                     if p is None:
                         logger.info(
                             "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                         )
-                        run(test_module, input_queue, output_queue, config)
+                        run(module_name, input_queue, output_queue, config)
                     output_queue.get(block=True, timeout=timeout)
+                if child_mode and (p is None or not p.is_alive()):
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
                 input_queue.put(test_vector)
                 if p is None:
                     logger.info(
-                        "Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                        "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
                     )
-                    run(test_module, input_queue, output_queue, config)
+                    run(module_name, input_queue, output_queue, config)
                 response = output_queue.get(block=True, timeout=timeout)
                 status, message, e2e_perf, device_perf = (
                     response[0],
@@ -372,45 +405,53 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     response[2],
                     response[3],
                 )
-                if status and config.measure_device_perf and device_perf is None:
-                    result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
-                    result["message"] = message
-                elif status and config.measure_device_perf:
-                    result["status"] = TestStatus.PASS
-                    result["message"] = message
-                    result["device_perf"] = device_perf
-                elif status:
-                    result["status"] = TestStatus.PASS
-                    result["message"] = message
+                # Set base result message
+                result["message"] = message
+
+                # Determine test status
+                if status:
+                    # Test passed - check device perf requirements
+                    if config.measure_device_perf:
+                        if device_perf is None:
+                            result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+                        else:
+                            result["status"] = TestStatus.PASS
+                            result["device_perf"] = device_perf
+                    else:
+                        result["status"] = TestStatus.PASS
                 else:
+                    # Test failed - categorize the failure
+                    result["exception"] = message
+
+                    # Log device exceptions
                     if "DEVICE EXCEPTION" in message:
                         logger.error(
-                            "DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: "
-                            + message,
+                            f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
                         )
                         logger.info("Device error detected. The suite will be aborted after this test.")
+
+                    # Set failure status based on error type
                     if "Out of Memory: Not enough space to allocate" in message:
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
                     elif "Watcher" in message:
                         result["status"] = TestStatus.FAIL_WATCHER
                     else:
                         result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
-                    result["exception"] = message
-                if e2e_perf and config.measure_perf:
-                    result["e2e_perf"] = e2e_perf
-                else:
-                    result["e2e_perf"] = None
+
+                # Set performance metrics if available
+                result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
                     p.terminate()
-                    p.join(PROCESS_TERMINATION_TIMEOUT_SECONDS)  # Wait for graceful process termination
+                    p.join(timeout_before_rejoin)  # Wait for graceful process termination
                     if p.is_alive():
                         logger.error(f"Child process {p.pid} did not terminate, killing it.")
                         p.kill()
                         p.join()
                     p = None
                     reset_util.reset()
+                    sleep(5)
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
@@ -449,7 +490,6 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data
-
         result["end_time_ts"] = dt.datetime.now()
         result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
@@ -470,7 +510,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         p.join()
 
     suite_pbar.close()
-    return results
+    return results, invalid_vectors_count
 
 
 def run_sweeps(
@@ -502,10 +542,6 @@ def run_sweeps(
             "username": config.elastic_username,
             "password": config.elastic_password,
         }
-    elif config.result_destination == "results_export":
-        # Optionally: pass a custom export_dir via config if you add it later
-        # result_kwargs = {"export_dir": pathlib.Path("...")}
-        pass
 
     result_dest = ResultDestinationFactory.create_destination(config.result_destination, **result_kwargs)
 
@@ -517,7 +553,7 @@ def run_sweeps(
         run_metadata = {
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
-            "card_type": ttnn.get_arch_name(),
+            "card_type": config.arch_name,
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),
@@ -535,14 +571,16 @@ def run_sweeps(
     # Summary counters
     total_vectors_run = 0  # total number of test cases (vectors)
     total_tests_run = 0  # total number of suites executed
+    total_invalid_vectors = 0  # total number of invalid vectors (skipped)
     module_suite_test_count = {}  # module_name -> {suite_name: count}
     max_test_cases_module = None  # find the module with the most test cases
     max_test_cases_per_module = 0
+    # Track test status counts across the entire run (only meaningful for non-dry runs)
+    status_counts = {}
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
         for module_name in module_names:
-            test_module = importlib.import_module("sweeps." + module_name)
             if config.suite_name:
                 # Filter to only the specified suite
                 all_suites = vector_source.get_available_suites(module_name)
@@ -558,7 +596,7 @@ def run_sweeps(
             for suite in suites:
                 suite_start_time = dt.datetime.now()
 
-                vectors = vector_source.load_vectors(module_name, suite)
+                vectors = vector_source.load_vectors(module_name, suite, config.vector_id)
                 # Update summary counters
                 total_vectors_run += len(vectors)
                 total_tests_run += 1
@@ -571,16 +609,30 @@ def run_sweeps(
                 if module_total > max_test_cases_per_module:
                     max_test_cases_per_module = module_total
                     max_test_cases_module = module_name
+                if not vectors:
+                    logger.warning(f"No vectors found for module {module_name}, suite {suite}")
+                    continue
                 header_info, test_vectors = sanitize_inputs(vectors)
-                results = execute_suite(
-                    test_module, test_vectors, pbar_manager, suite, module_name, header_info, config
+                results, invalid_vectors_count = execute_suite(
+                    test_vectors, pbar_manager, suite, module_name, header_info, config
                 )
-
+                total_invalid_vectors += invalid_vectors_count
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
                 # Export results
                 if not config.dry_run and results:
+                    if config.summary:
+                        # Aggregate status counts for summary
+                        for res in results:
+                            st = res.get("status")
+                            if st is not None:
+                                key = getattr(st, "name", None)
+                                if key is None:
+                                    val = getattr(st, "value", None)
+                                    key = str(val) if val is not None else str(st)
+                                status_counts[key] = status_counts.get(key, 0) + 1
+
                     run_context = {
                         "run_id": run_id,
                         "test_start_time": suite_start_time,
@@ -617,6 +669,15 @@ def run_sweeps(
                 logger.info("=== EXECUTION SUMMARY ===")
                 logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
                 logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+                if config.keep_invalid:
+                    logger.info(f"Total invalid vectors (included in results as NOT_RUN): {total_invalid_vectors}")
+                else:
+                    logger.info(f"Total invalid vectors (excluded from results): {total_invalid_vectors}")
+                # Status breakdown across all executed tests
+                if status_counts:
+                    logger.info("\n=== TEST STATUS COUNTS ===")
+                    for status_name in sorted(status_counts.keys()):
+                        logger.info(f"{status_name}: {status_counts[status_name]}")
 
             # Detailed breakdown by module and suite
             if module_suite_test_count:
@@ -739,8 +800,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "postgres", "results_export"],
-        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export']",
+        choices=["elastic", "postgres", "results_export", "superset"],
+        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export', 'superset']",
     )
 
     parser.add_argument(
@@ -788,6 +849,13 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--keep-invalid",
+        action="store_true",
+        required=False,
+        help="Include invalid vectors in results with NOT_RUN status. Default behavior is to exclude invalid vectors from results entirely.",
+    )
+
+    parser.add_argument(
         "--summary",
         action="store_true",
         required=False,
@@ -801,11 +869,6 @@ if __name__ == "__main__":
 
     # Create sweeps config object
     config = create_config_from_args(args)
-
-    # Import Elasticsearch if using elastic database
-    if config.vector_source == "elastic" or config.result_destination == "elastic":
-        from elasticsearch import Elasticsearch, NotFoundError
-        from framework.elastic_config import *
 
     if config.watcher:
         enable_watcher()
@@ -827,10 +890,6 @@ if __name__ == "__main__":
 
     # Parse modules for running specific tests
     module_names = get_module_names(config)
-
-    from ttnn import *
-    from framework.serialize import *
-    from framework.device_fixtures import default_device
 
     run_sweeps(
         module_names,

@@ -36,7 +36,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -45,7 +44,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -478,7 +477,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::add,
@@ -513,7 +512,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::subtract,
@@ -548,7 +547,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::multiply,
@@ -583,7 +582,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::maximum,
@@ -618,7 +617,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::minimum,
@@ -821,8 +820,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const std::array<uint32_t, 2> padding{3, 3};
     const std::array<uint32_t, 2> dilation{1, 1};
     const uint32_t groups = 1;
-
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
 
     // Run the test
     {

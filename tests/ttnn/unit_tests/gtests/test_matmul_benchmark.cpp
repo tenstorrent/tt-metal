@@ -37,7 +37,6 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/trace.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -320,7 +319,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     // Performance measurement iterations
     if (use_trace) {
-        auto tid = ttnn::operations::trace::begin_trace_capture(device_, ttnn::DefaultQueueId);
+        auto tid = ttnn::operations::trace::begin_trace_capture(device_, QueueId(0));
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
             output_tensor = ttnn::operations::matmul::matmul(
                 input_tensor_0,
@@ -329,12 +328,12 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 /*parameters=*/matmul_params);
             output_tensor.deallocate();
         }
-        ttnn::operations::trace::end_trace_capture(device_, tid, ttnn::DefaultQueueId);
+        ttnn::operations::trace::end_trace_capture(device_, tid, QueueId(0));
 
         auto start_time = std::chrono::high_resolution_clock::now();
         {
             ZoneScopedN("Matmul trace iterations");
-            ttnn::operations::trace::execute_trace(device_, tid, ttnn::DefaultQueueId, false);
+            ttnn::operations::trace::execute_trace(device_, tid, QueueId(0), false);
             Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
         }
 
