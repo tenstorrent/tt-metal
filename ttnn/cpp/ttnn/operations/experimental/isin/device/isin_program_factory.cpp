@@ -65,7 +65,8 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
         elements_tensor.logical_volume(),
         test_elements_tensor.logical_volume(),
         single_fetch_subchunk_size,
-        static_cast<uint32_t>(invert)};
+        static_cast<uint32_t>(invert),
+        elements_tensor.element_size()};
     TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*output_buffer).append_to(compile_time_args);

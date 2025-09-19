@@ -60,8 +60,7 @@ uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_ele
            static_cast<uint32_t>(~(31U));
 }
 
-IsInPreprocessingResult isin_preprocessing(
-    const QueueId& queue_id, const Tensor& elements, const Tensor& test_elements) {
+IsInPreprocessingResult isin_preprocessing(const Tensor& elements, const Tensor& test_elements) {
     IsInPreprocessingResult is_in_preprocessing_result;
     is_in_preprocessing_result.preprocessed_elements_tensor = elements;
     is_in_preprocessing_result.preprocessed_test_elements_tensor = test_elements;
@@ -113,7 +112,6 @@ Tensor isin_postprocessing(Tensor& output_tensor, const IsInPreprocessingResult&
 }  // namespace
 
 Tensor IsInOperation::invoke(
-    const QueueId& queue_id,
     const Tensor& elements,
     const Tensor& test_elements,
     const bool& assume_unique,
@@ -123,7 +121,7 @@ Tensor IsInOperation::invoke(
 
     validate_inputs(elements, test_elements);
 
-    const auto is_in_preprocessing_result = isin_preprocessing(queue_id, elements, test_elements);
+    const auto is_in_preprocessing_result = isin_preprocessing(elements, test_elements);
 
     Tensor output_tensor = ttnn::prim::isin(
         is_in_preprocessing_result.preprocessed_elements_tensor,
@@ -131,8 +129,7 @@ Tensor IsInOperation::invoke(
         is_in_preprocessing_result.single_fetch_elements_number,
         assume_unique,
         invert,
-        opt_out,
-        queue_id);
+        opt_out);
 
     return isin_postprocessing(output_tensor, is_in_preprocessing_result);
 }
