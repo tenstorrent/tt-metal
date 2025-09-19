@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
 from dataclasses import dataclass
-from pyexpat import model
-import token
-import trace
 
 import torch
 from loguru import logger
@@ -61,9 +59,9 @@ class Generator:
         self.tokenizer = tokenizer
         self.data_parallel = len(self.model)
         self.prev_page_table = None
-        self.trace_id_prefill = {}
-        self.trace_inputs_prefill = {}
-        self.trace_output_prefill = {}
+        self.trace_id_prefill = defaultdict(lambda: None)
+        self.trace_inputs_prefill = defaultdict(lambda: None)
+        self.trace_output_prefill = defaultdict(lambda: None)
 
     def _capture_trace_prefill(
         self,
@@ -75,35 +73,34 @@ class Generator:
         model_id=-1,
         **kwargs,
     ):
-        
-        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table, enable_trace=True)
-        
+        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x = transformed_inputs[0],
-            tt_rot_mats_prefill_global = transformed_inputs[1],
-            tt_rot_mats_prefill_local = transformed_inputs[2],
-            tt_page_table = transformed_inputs[3],
-            tt_chunk_page_table = transformed_inputs[4],
+            x=transformed_inputs[0],
+            rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
+            rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
             user_id=user_id,
             kv_cache=kv_cache,
-            get_last_token=last_token_idx,
-        )      
+            get_last_token=(last_token_idx // 32) * 32,
+        )
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x = transformed_inputs[0],
-            tt_rot_mats_prefill_global = transformed_inputs[1],
-            tt_rot_mats_prefill_local = transformed_inputs[2],
-            tt_page_table = transformed_inputs[3],
-            tt_chunk_page_table = transformed_inputs[4],
+            x=transformed_inputs[0],
+            rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
+            rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
             user_id=user_id,
             kv_cache=kv_cache,
-            get_last_token=last_token_idx,
+            get_last_token=(last_token_idx // 32) * 32,
         )
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
@@ -113,20 +110,19 @@ class Generator:
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
         transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x = transformed_inputs[0],
-            tt_rot_mats_prefill_global = transformed_inputs[1],
-            tt_rot_mats_prefill_local = transformed_inputs[2],
-            tt_page_table = transformed_inputs[3],
-            tt_chunk_page_table = transformed_inputs[4],
+            x=transformed_inputs[0],
+            rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
+            rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
             user_id=user_id,
             kv_cache=kv_cache,
-            get_last_token=last_token_idx,
+            get_last_token=(last_token_idx // 32) * 32,
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Capturing Prefill Trace")
         return trace_id, tt_out_trace, *device_inputs
-
 
     def _easy_trace_prefill(
         self,
@@ -139,16 +135,23 @@ class Generator:
         prefill_seq_len=None,
         **kwargs,
     ):
-        trace_key = f"{prefill_seq_len}"
+        # Extract batch_size from prefill_ids to create unique trace keys per batch size
+        batch_size = prefill_ids.shape[0]
+        trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
-                prefill_ids, page_table=page_table, user_id=user_id, last_token_idx=last_token_idx, kv_cache=kv_cache, model_id=model_id, **kwargs
+                prefill_ids,
+                page_table=page_table,
+                user_id=user_id,
+                last_token_idx=last_token_idx,
+                kv_cache=kv_cache,
+                model_id=model_id,
+                **kwargs,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
 
-        
         tt_out_trace = self._prefill_forward_trace_prefill(
             self.trace_id_prefill[trace_key],
             self.trace_inputs_prefill[trace_key],
@@ -159,12 +162,12 @@ class Generator:
             model_id=model_id,
         )
 
-        #oco mi ne treba jer se ovo radi u prefill_forward_text
-        '''toks = self.model[model_id].process_output_prefill(
+        # oco mi ne treba jer se ovo radi u prefill_forward_text
+        """toks = self.model[model_id].process_output_prefill(
             tt_out_trace, last_token_idx=last_token_idx
-        )'''
+        )"""
 
-        #they are logits here
+        # they are logits here
         return tt_out_trace
 
     def _prefill_forward_trace_prefill(
@@ -177,8 +180,7 @@ class Generator:
         page_table=None,
         model_id=-1,
     ):
-        
-        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table, enable_trace=True)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
 
         device_inputs = copy_host_to_device(host_inputs, device_tensors=device_inputs)
 
@@ -194,7 +196,7 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
-        enable_trace=False,
+        enable_trace=True,
         **kwargs,
     ):
         if page_table is not None:
@@ -240,6 +242,10 @@ class Generator:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
             if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
+                enable_trace = False
+            seq_len = tokens.shape[-1]
+            use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
+            if use_chunked_prefill:
                 enable_trace = False
 
             if enable_trace:
@@ -1035,7 +1041,7 @@ class Generator:
         tokens,
         prefill_cross_attention_masks,
         prefill_full_text_row_masked_out_mask,
-        decode_cross_attention_masks,   
+        decode_cross_attention_masks,
         decode_full_text_row_masked_out_mask,
         xattn_caches,
         page_table=None,

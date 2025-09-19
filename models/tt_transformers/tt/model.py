@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import trace
 import torch
 from tqdm import tqdm
 
@@ -42,6 +41,8 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.tt_rot_mats_prefill_global = None
+        self.tt_rot_mats_prefill_local = None
 
         self.tt_ccl = TT_CCL(self.mesh_device)
 
@@ -134,22 +135,16 @@ class Transformer(LightweightModule):
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
-        host_inputs = self.prepare_inputs_prefill(tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True)
+        host_inputs = self.prepare_inputs_prefill(
+            tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+        )
         return host_inputs
 
-
-    def transform_prefill_inputs_device(
-        self,
-        tokens,
-        tt_rot_mats_prefill_global,
-        tt_rot_mats_prefill_local,
-        tt_page_table,
-        tt_chunk_page_table
-    ):
+    def transform_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
-    
+        return tt_tokens, tt_page_table, tt_chunk_page_table
+
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -168,30 +163,30 @@ class Transformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        #we do it this way because we want to run this when all our inputs are on the device
+        # we do it this way because we want to run this when all our inputs are on the device
         if trace_enabled:
+            tokens_embd = tokens
+        else:
             tokens_embd = self.embd(tokens)
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-        else:
-            tokens_embd = tokens
 
         # Slice the rot mats to the prefill seqlen
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
-        tt_rot_mats_prefill_global = [
+        self.tt_rot_mats_prefill_global = [
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
 
         if hasattr(self, "rope_local_setup"):
-            tt_rot_mats_prefill_local = [
+            self.tt_rot_mats_prefill_local = [
                 self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
                 self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
             ]
         else:
-            tt_rot_mats_prefill_local = None
+            self.tt_rot_mats_prefill_local = None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -215,7 +210,16 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        if trace_enabled:
+            return tokens_embd, tt_page_table, tt_chunk_page_table
+        else:
+            return (
+                tokens_embd,
+                self.tt_rot_mats_prefill_global,
+                self.tt_rot_mats_prefill_local,
+                tt_page_table,
+                tt_chunk_page_table,
+            )
 
     def prepare_inputs_decode(self, *inputs):
         """
