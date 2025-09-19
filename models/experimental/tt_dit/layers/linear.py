@@ -49,8 +49,8 @@ class Linear(Module):
     def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
         output = ttnn.linear(
             x,
-            self.weight,
-            bias=self.bias,
+            self.weight.data,
+            bias=self.bias.data,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
@@ -150,7 +150,7 @@ class ColParallelLinear(Module):
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = ttnn.experimental.all_gather_async(
                 unsqueezed_weight,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
@@ -165,12 +165,12 @@ class ColParallelLinear(Module):
             )
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
-            weight = self.weight
+            weight = self.weight.data
 
         output = ttnn.linear(
             x,
             weight,
-            bias=self.bias,
+            bias=self.bias.data,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
@@ -268,7 +268,7 @@ class RowParallelLinear(Module):
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = ttnn.experimental.all_gather_async(
                 unsqueezed_weight,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
@@ -283,12 +283,12 @@ class RowParallelLinear(Module):
             )
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
-            weight = self.weight
+            weight = self.weight.data
 
         output = ttnn.linear(
             x,
             weight,
-            bias=self.bias,
+            bias=self.bias.data,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
