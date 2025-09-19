@@ -225,7 +225,7 @@ class DispatcherData:
             pass
         try:
             waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
-            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8")
+            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
             pass
 
