@@ -22,12 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: LLMBox unit tests
-            runner-label: BH-LLMBox
-          - name: DeskBox unit tests
-            runner-label: BH-DeskBox
-          # - name: RackBox unit tests
-          #   runner-label: BH-RackBox
+          # - name: LLMBox unit tests
+          #   runner-label: BH-LLMBox
+          # - name: DeskBox unit tests
+          #   runner-label: BH-DeskBox
+          - name: RackBox unit tests
+            runner-label: BH-RackBox
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}
