@@ -145,6 +145,9 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
     ),
 )
 def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
+    if ttnn_fn == "divide":
+        pytest.skip("divide does not support row-col bcast due to being SFPU-only by default (Issue #28961)")
+
     torch.manual_seed(0)
     ttnn_op = getattr(ttnn, ttnn_fn)
     lhs, rhs, post = ([getattr(ttnn.UnaryOpType, op) for op in ops] for ops in activations)
