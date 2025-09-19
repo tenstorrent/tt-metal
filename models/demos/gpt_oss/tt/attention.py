@@ -201,18 +201,26 @@ class Attention:
     def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None):
         batch_size, seq_len, hidden_size = x.shape
 
-        tt_q = ttnn.matmul(x, self.q_proj, dtype=ttnn.bfloat8_b) + self.q_proj_bias
+        tt_q = ttnn.matmul(x, self.q_proj)
+        tt_q = ttnn.add(tt_q, self.q_proj_bias, output_tensor=tt_q)
         tt_q = ttnn.reshape(tt_q, [1, seq_len * batch_size, -1, self.head_dim])
 
-        tt_k = ttnn.matmul(x, self.k_proj, dtype=ttnn.bfloat8_b) + self.k_proj_bias
+        tt_k = ttnn.matmul(x, self.k_proj)
+        tt_k = ttnn.add(tt_k, self.k_proj_bias, output_tensor=tt_k)
         tt_k = ttnn.reshape(tt_k, [1, seq_len * batch_size, -1, self.head_dim])
 
-        tt_v = ttnn.matmul(x, self.v_proj, dtype=ttnn.bfloat8_b) + self.v_proj_bias
+        tt_v = ttnn.matmul(x, self.v_proj)
+        tt_v = ttnn.add(tt_v, self.v_proj_bias, output_tensor=tt_v)
         tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
+        x.deallocate(True)
 
         apply_rope, tt_cos, tt_sin = rope_stuff
-        tt_q = apply_rope(tt_q, tt_cos, tt_sin)
-        tt_k = apply_rope(tt_k, tt_cos, tt_sin)
+        tt_q_rope = apply_rope(tt_q, tt_cos, tt_sin)
+        tt_q.deallocate(True)
+        tt_q = tt_q_rope
+        tt_k_rope = apply_rope(tt_k, tt_cos, tt_sin)
+        tt_k.deallocate(True)
+        tt_k = tt_k_rope
         # print("batch_size", batch_size)
         # print("seq_len", seq_len)
         if batch_size * seq_len == 1:
@@ -234,7 +242,7 @@ class Attention:
                 update_idxs_tensor=position_idx,
             )
             tt_v.deallocate(True)
-            tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention_decode(
+            tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
                 tt_q,
                 k_cache,
                 v_cache,
@@ -249,10 +257,11 @@ class Attention:
             )
             tt_q.deallocate(True)
 
-            tt_sdpa_out = ttnn.transpose(tt_sdpa_out, 1, 2)
+            tt_sdpa_tensor = ttnn.transpose(tt_sdpa_tensor, 1, 2)
             tt_sdpa_out = ttnn.experimental.nlp_concat_heads(
-                tt_sdpa_out, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                tt_sdpa_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )  # [1, 1, num_tokens, dim * nh]
+            tt_sdpa_tensor.deallocate(True)
         else:
             # Fill cache
             assert batch_size == 1, f"Only batch 1 supported, but got {batch_size=}"
@@ -299,7 +308,10 @@ class Attention:
             tt_k.deallocate(True)
             tt_v.deallocate(True)
 
-        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16) + self.o_proj_bias
+        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16)
+        tt_sdpa_out.deallocate(True)
+        tt_out = ttnn.add(tt_out, self.o_proj_bias, output_tensor=tt_out)
+
         tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         if self.mesh_device.shape[1] > 1:
@@ -317,6 +329,7 @@ class Attention:
                 cluster_axis=1,
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             )
+            tt_out.deallocate(True)
             tt_out = ttnn.experimental.all_gather_async(
                 tt_out_scattered,
                 dim=3,
@@ -328,6 +341,7 @@ class Attention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             )
+            tt_out_scattered.deallocate(True)
             if tt_out.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
                 tt_out = tt_out[:, :, :, : self.hidden_size]
             tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
