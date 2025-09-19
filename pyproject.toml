@@ -17,11 +17,10 @@ dependencies = [
   "loguru>=0.6.0",
   "networkx>=3.1",
   "graphviz>=0.20.3",
-  # The following dependencies are only needed when ENABLE_TRACY=ON (profiler builds)
-  # "pyyaml>=5.4",
-  # "click>=8.0",
-  # "pandas>=2.0.3",
-  # "seaborn>=0.13.2",
+  "pyyaml>=5.4",
+  "click>=8.1.7",
+  "pandas>=2.0.3",
+  "seaborn>=0.13.2",
 ]
 requires-python = ">=3.10"
 keywords = ["metalium", "ttnn", "tt-metal", "machine learning", "tenstorrent", "libnuma", "libhwloc"]
