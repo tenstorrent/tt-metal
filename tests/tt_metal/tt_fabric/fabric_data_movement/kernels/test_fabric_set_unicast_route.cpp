@@ -21,7 +21,7 @@ void kernel_main() {
     auto actual_packet_header = PacketHeaderPool::allocate_header();
 
 #ifdef FABRIC_2D
-    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = 24;  // 2D: store 24 bytes (24 packed command bytes)
+    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = 26;  // 2D: store 24 bytes (24 packed command bytes)
     volatile uint8_t* actual_route_buffer = actual_packet_header->route_buffer;
     volatile uint8_t* expected_route_buffer = expected_packet_header->route_buffer;
 #else

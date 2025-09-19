@@ -656,12 +656,24 @@ static_assert(
 struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     LowLatencyMeshRoutingFieldsV2 routing_fields;  // 2B
     uint8_t padding0[2];                           // 2B, this is needed for now
-    // WARN: 12x12 mesh. want 16x16 yet
-    uint8_t route_buffer[24];
+    // WARN: 13x13 mesh. want 16x16
+    uint8_t route_buffer[26];
     union {
-        // used for inter-mesh multicast
-        uint8_t mcast_params[4];
-        uint32_t mcast_params_32;
+        union {
+            struct {
+                uint8_t mcast_params_south : 4;
+                uint8_t mcast_params_north : 4;
+            };
+            uint8_t mcast_params_ns;
+        };
+        union {
+            struct {
+                uint8_t mcast_params_west : 4;
+                uint8_t mcast_params_east : 4;
+            };
+            uint8_t mcast_params_ew;
+        };
+        uint16_t mcast_params_16;
     };
     union {
         struct {
