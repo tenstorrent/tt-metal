@@ -24,6 +24,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     constexpr uint32_t num_bytes_copy_to_combine = get_compile_time_arg_val(15);
+    constexpr uint32_t num_combine_tiles_needed = get_compile_time_arg_val(16);
 
     const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
     const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
@@ -120,15 +121,13 @@ void kernel_main() {
     const uint64_t reduce_second_stage_receiver_semaphore_noc_addr =
         remote_noc_addrs_second_stage[0] | reduce_second_stage_semaphore_addr;
 
-    // wait for local partial E[x]data ready
+    // wait for local partial data ready
     cb_wait_front(cb_ex_partial, block_h);
+    cb_wait_front(cb_varx_partial, block_h);
 
     // Sync with sender
-    // Invalidate semaphore so receiver waits
     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-    // Sync with sender
     noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-    // Wait for sender to signal readiness
     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
     if constexpr (is_all_to_all_worker) {
@@ -143,85 +142,36 @@ void kernel_main() {
         auto l1_write_addr_varx_combine = get_write_ptr(cb_varx_combine);
         for (uint32_t i = 0; i < num_tiles_to_read; i++) {
             // Copy partial E[x]
-            noc_async_read_one_packet(l1_read_addr_ex_par, l1_write_addr_ex_combine, num_bytes_copy_to_combine);
+            noc_async_read(l1_read_addr_ex_par, l1_write_addr_ex_combine, num_bytes_copy_to_combine);
             l1_read_addr_ex_par += single_tile_size_bytes;
             l1_write_addr_ex_combine += num_bytes_copy_to_combine;
 
             // Copy partial Var[x]
-            noc_async_read_one_packet(l1_read_addr_varx_par, l1_write_addr_varx_combine, num_bytes_copy_to_combine);
+            noc_async_read(l1_read_addr_varx_par, l1_write_addr_varx_combine, num_bytes_copy_to_combine);
             l1_read_addr_varx_par += single_tile_size_bytes;
             l1_write_addr_varx_combine += num_bytes_copy_to_combine;
         }
         noc_async_read_barrier();
-        cb_push_back(cb_ex_combine, num_combine_tiles_needed);
-        cb_push_back(cb_varx_combine, num_combine_tiles_needed);
-
-        // Signal to sender that combine results are ready and wait for sender to complete
-        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-
-        // read data from other cores - second stage reduce
-        uint32_t l1_read_addr_ex = 0;
-        for (uint32_t i = 0; i < num_tiles_to_read; i++) {
-            cb_reserve_back(cb_external, num_blocks_first_stage);
-            uint32_t l1_write_addr_external = get_write_ptr(cb_external);
-            for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
-                uint64_t noc_addr_ex_par = remote_noc_addrs_first_stage[block] | l1_read_addr_ex_par;
-                noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
-                l1_write_addr_external += single_tile_size_bytes;
-            }
-            l1_read_addr_ex_par += single_tile_size_bytes;
-            noc_async_read_barrier();
-            cb_push_back(cb_external, num_blocks_first_stage);
-
-            // read data from other cores - reduce first stage
-            if constexpr (use_two_stage_reduce) {
-                if (is_second_stage_reader) {  // gather data from a column of cores (if row major)
-                    if (i == 0) {
-                        noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
-                        noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
-                    }
-
-                    // read data from other cores - second stage reduce
-                    cb_reserve_back(cb_external, num_blocks_second_stage - 1);
-                    for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                        uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
-                        noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
-                        l1_write_addr_external += single_tile_size_bytes;
-                    }
-                    l1_read_addr_ex += single_tile_size_bytes;
-                    noc_async_read_barrier();
-                    cb_push_back(cb_external, num_blocks_second_stage - 1);
-                } else {
-                    cb_reserve_back(cb_external, num_blocks_second_stage - 1);
-                    cb_push_back(cb_external, num_blocks_second_stage - 1);
-                }
-            }
-        }
-
-        // read data from other cores - reduce first stage
-        if constexpr (use_two_stage_reduce) {
-            if (is_second_stage_reader) {  // gather data from a column of cores (if row major)
-                // sync with the mcast sender
-                cb_wait_front(cb_ex, num_tiles_to_read);
-                noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-            } else {
-                // sync with the gather worker
-                cb_wait_front(cb_reduce_first_stage, num_tiles_to_read);
-                noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
-            }
-        } else {
-            // send result to other cores
-            cb_wait_front(cb_ex, num_tiles_to_read);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
+        // TODO RM: Do we need to push back if we're syncing via semaphores?
+        // cb_push_back(cb_ex_combine, num_combine_tiles_needed);
+        // cb_push_back(cb_varx_combine, num_combine_tiles_needed);
     }
 
-    for (uint32_t block = 0; block < num_all_to_all_workers; ++block) {
-        uint32_t num_tiles = block == num_all_to_all_workers - 1 ? num_tiles_per_worker_last : num_tiles_per_worker;
-        cb_reserve_back(cb_ex_global, num_tiles);
-        noc_semaphore_wait_min(reduce_sender_semaphore_addr_ptr, block + 2);
-        cb_push_back(cb_ex_global, num_tiles);
-    }
+    cb_pop_front(cb_ex_partial, block_h);
+    cb_pop_front(cb_varx_partial, block_h);
+
+    // Signal to sender that combine buffers are ready
+    noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+    noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+    noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+
+    // Make space for the global results
+    cb_reserve_back(cb_ex_global, num_tiles_to_read);
+    cb_reserve_back(cb_varx_global, num_tiles_to_read);
+
+    // Read the global combine results from sender when sender
+    // signals that it is ready
+    noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+    cb_push_back(cb_ex_global, num_tiles_to_read);
+    cb_push_back(cb_varx_global, num_tiles_to_read);
 }

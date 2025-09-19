@@ -1066,8 +1066,21 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         // into the combine buffer. Since Welford's stores the valid tile data
         // at every other element, we need to copy over 2 times the tile height
         // worth of data at a time.
-        const auto cb_datum_size_bytes = cb_data_format == tt::DataFormat::Float32 ? 4 : /*Float16_b*/ 2;
-        reader_mcast_receiver_compile_time_args.push_back(2 * tt::constants::TILE_HEIGHT * cb_datum_size_bytes);
+        uint32_t cb_datum_size_bytes = cb_data_format == tt::DataFormat::Float32 ? 4 : /*Float16_b*/ 2;
+        uint32_t num_bytes_copy_to_combine = 2 * tt::constants::TILE_HEIGHT * cb_datum_size_bytes;
+        reader_mcast_receiver_compile_time_args.push_back(num_bytes_copy_to_combine);
+        reader_mcast_sender_compile_time_args.push_back(num_bytes_copy_to_combine);
+
+        // The number of tiles needed to pack block_ht tiles into combine buffer.
+        // Each mean/var tile will have 32 valid entries, which means normally
+        // 32 tiles could be packed into a combine buffer tile. However, since Welford's
+        // puts the valid tile data at every other element, only 16 mean/var
+        // tiles can be packed into a single combine buffer tile.
+        uint32_t num_combine_tiles_needed = tt::div_up(block_ht, 16);
+        reader_mcast_receiver_compile_time_args.push_back(num_combine_tiles_needed);
+        reader_mcast_sender_compile_time_args.push_back(num_combine_tiles_needed);
+        reader_mcast_sender_compile_time_args.push_back(tt::constants::TILE_HEIGHT);
+        reader_mcast_sender_compile_time_args.push_back(tt::constants::TILE_WIDTH);
     }
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
