@@ -54,7 +54,7 @@ namespace utils {
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
         case BinaryOpType::POWER: return true;
-        case BinaryOpType::DIV: return fast_and_approximate_mode ? false : true;
+        case BinaryOpType::DIV: return !fast_and_approximate_mode || (a == DataType::FLOAT32 && b == DataType::FLOAT32);
         default: return false;
     }
     return false;
