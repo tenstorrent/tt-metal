@@ -13,10 +13,8 @@
 #include "debug/dprint_pages.h"
 #endif
 
-// Function definitions copied from block sharded reader
-// (reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp)
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);         // Input filter window height
-constexpr uint32_t weight_size_w_global = get_compile_time_arg_val(8);  // Input filter window width
+constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
+constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);  // Input filter window width
 
 template <int window_height, int window_width>
 FORCE_INLINE void read_dilated_channels(
@@ -30,7 +28,7 @@ FORCE_INLINE void read_dilated_channels(
 #pragma GCC unroll weight_size_h
     for (uint32_t outer = 0; outer < window_height; outer++) {
         uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
-#pragma GCC unroll weight_size_w_global
+#pragma GCC unroll weight_size_w
         for (uint32_t inner = 0; inner < window_width; inner++) {
             // Read the partial depth.
             noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
@@ -99,7 +97,7 @@ void kernel_main() {
     const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
-    const bool is_sender_core = get_arg_val<uint32_t>(i++) == 1;
+    const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
 
     volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
@@ -127,7 +125,7 @@ void kernel_main() {
     const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
     if constexpr (needs_act_block_zero_out) {
-        // Zero out tiles if needed - implementation TBD
+        zero_out_tiles<cb_id_act_second_reader>();
     }
 
 #endif
@@ -194,7 +192,7 @@ void kernel_main() {
                                             l1_write_addr_act += act_block_w_extra_align_bytes;
                                         }
                                     } else {
-                                        read_dilated_channels<weight_size_h, weight_size_w_global>(
+                                        read_dilated_channels<weight_size_h, weight_size_w>(
                                             l1_write_addr_act,
                                             act_l1_read_addr,
                                             ind,
