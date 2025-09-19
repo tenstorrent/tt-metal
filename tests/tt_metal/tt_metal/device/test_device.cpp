@@ -421,8 +421,7 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     // Allocate and pin host memory
-    auto aligned_buf =
-        std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
+    auto aligned_buf = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
     tt::tt_metal::HostBuffer host_buffer_view(
         tt::stl::Span<uint32_t>(aligned_buf->data(), aligned_buf->size()), tt::tt_metal::MemoryPin(aligned_buf));
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(target_coord, target_coord));

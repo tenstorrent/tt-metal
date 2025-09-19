@@ -148,7 +148,6 @@ private:
     MemoryPinningParameters memory_pinning_params_{};
 
 public:
-
     MeshDevice(
         std::shared_ptr<ScopedDevices> scoped_devices,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
@@ -335,9 +334,7 @@ public:
      * @return Unique pointer to the created PinnedMemory instance
      */
     std::unique_ptr<PinnedMemory> pin_memory(
-        const MeshCoordinateRangeSet& coordinate_range_set,
-        HostBuffer& host_buffer,
-        bool map_to_noc = false);
+        const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc = false);
 
     MemoryPinningParameters get_memory_pinning_parameters() const;
 
