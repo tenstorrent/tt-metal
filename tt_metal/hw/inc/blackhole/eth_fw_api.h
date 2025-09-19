@@ -213,29 +213,31 @@ FORCE_INLINE bool is_link_up() {
 
     volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, msg));
-    volatile tt_l1_ptr uint32_t* risc1_mailbox_arg0_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, arg[0]));
-    uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    // Make sure mailbox is free to accept a new message
-    do {
-        invalidate_l1_cache();
-        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while (risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK == MEM_SYSENG_ETH_MSG_CALL);
+
+    // volatile tt_l1_ptr uint32_t* risc1_mailbox_arg0_ptr =
+    //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, arg[0]));
+    // uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    // // Make sure mailbox is free to accept a new message
+    // do {
+    //     invalidate_l1_cache();
+    //     risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    // } while (risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK == MEM_SYSENG_ETH_MSG_CALL);
 
     // This tells link status check to avoid copying results into another location in L1
-    *risc1_mailbox_arg0_ptr = 0xFFFFFFFF;
+    // *risc1_mailbox_arg0_ptr = 0xFFFFFFFF;
 
     // Send msg to get the link status
     *risc1_mailbox_msg_ptr = MEM_SYSENG_ETH_MSG_CALL | MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
 
     // Wait until the msg was serviced
-    do {
-        invalidate_l1_cache();
-        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while (risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK == MEM_SYSENG_ETH_MSG_DONE);
+    // do {
+    //     invalidate_l1_cache();
+    //     risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    // } while (risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK == MEM_SYSENG_ETH_MSG_DONE);
 
-    volatile eth_live_status_t* link_status =
-        (volatile eth_live_status_t*)(MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status));
-    return link_status->rx_link_up == 1;
+    // volatile eth_live_status_t* link_status =
+    //     (volatile eth_live_status_t*)(MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status));
+    // return link_status->rx_link_up == 1;
+    return 1;
 }
 #endif

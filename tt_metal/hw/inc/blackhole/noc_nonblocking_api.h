@@ -712,6 +712,15 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
         while (!ncrisc_noc_posted_writes_sent(noc));
     }
 
+    invalidate_l1_cache();
+    volatile tt_l1_ptr uint32_t* test_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        32);  // 32, 64, 128, 192, 224 all trigger the assert, 256 wont trigger
+    *test_addr_ptr = val;
+    asm volatile("fence" ::: "memory");
+    invalidate_l1_cache();
+    volatile uint32_t dummy = *test_addr_ptr;
+    ASSERT(dummy == val);
+
     volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
     *interim_addr_ptr = val;
 
