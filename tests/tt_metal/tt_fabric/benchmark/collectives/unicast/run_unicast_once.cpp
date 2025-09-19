@@ -165,7 +165,8 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
 
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
     const uint32_t CB_ID = tt::CBIndex::c_0;
-    auto cb_cfg = tt::tt_metal::CircularBufferConfig(2 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
+    // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
                       .set_page_size(CB_ID, p.page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
