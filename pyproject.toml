@@ -80,11 +80,12 @@ exclude = ["ttnn/examples", "ttnn/examples/**"]
 
 [tool.scikit-build.install]
 # Use CMake install components for packaging
-components = ["umd-runtime", "metalium-runtime", "ttnn-runtime"]
+components = ["umd-runtime", "metalium-runtime", "ttnn-runtime", "tracy"]
 
 # Conditionally add tracy component when enabled
 [[tool.scikit-build.overrides]]
-if.env.CIBW_ENABLE_TRACY = "ON"
+# if.env.CIBW_ENABLE_TRACY = "ON"
+if.env.FIXME_TODO = "ON"
 install.components = ["umd-runtime", "metalium-runtime", "ttnn-runtime", "tracy"]
 
 # Handle version from git via setuptools-scm-like behavior
