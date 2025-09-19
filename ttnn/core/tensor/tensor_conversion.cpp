@@ -309,7 +309,18 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
     Tensor output;
     py_log("entry");
 
-    HostBuffer host_data = get_host_data(strategy ? strategy->host_convert_data_type : tensor_spec.data_type());
+    DataType on_device_conversion_target;
+    if (strategy) {
+        on_device_conversion_target = strategy->host_convert_data_type;
+    } else {
+        if (tensor_spec.data_type() == DataType::BFLOAT4_B || tensor_spec.data_type() == DataType::BFLOAT8_B) {
+            on_device_conversion_target = DataType::FLOAT32;
+        } else {
+            on_device_conversion_target = tensor_spec.data_type();
+        }
+    }
+
+    HostBuffer host_data = get_host_data(on_device_conversion_target);
 
     TT_FATAL(
         get_element_count(host_data) == tensor_spec.logical_shape().volume(),

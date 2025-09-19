@@ -380,9 +380,21 @@ std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) 
     auto builtins = pybind11::module_::import("builtins");
     auto str_func = builtins.attr("str");
 
-    if (pybind11::hasattr(tensor, "to_list")) {
+    if (py::isinstance(tensor, np.attr("ndarray"))) {
         header = fmt::format(
-            "layout: {} padded_shape: {} shape: {} dtype: {} volume: {}",
+            "torch.Tensor: shape: {} dtype: {} size: {}",
+            str_func(tensor.attr("shape")).cast<std::string>(),
+            str_func(tensor.attr("dtype")).cast<std::string>(),
+            str_func(tensor.attr("size")).cast<std::string>());
+    } else if (py::isinstance(tensor, torch.attr("Tensor"))) {
+        header = fmt::format(
+            "numpy.ndarray: shape: {} dtype: {} numel: {}",
+            str_func(tensor.attr("shape")).cast<std::string>(),
+            str_func(tensor.attr("dtype")).cast<std::string>(),
+            str_func(tensor.attr("numel")()).cast<std::string>());
+    } else if (pybind11::hasattr(tensor, "to_list")) {
+        header = fmt::format(
+            "ttnn.tensor: layout: {} padded_shape: {} shape: {} dtype: {} volume: {}",
             str_func(tensor.attr("layout")).cast<std::string>(),
             str_func(tensor.attr("padded_shape")).cast<std::string>(),
             str_func(tensor.attr("shape")).cast<std::string>(),
@@ -866,7 +878,7 @@ host_buffer_data_type get_py_tensor_type_info(const py::handle& py_tensor) {
 }
 
 HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataType target_dtype) {
-    auto get_host_buffer =
+    auto to_buffer =
         []<typename T>(
             const void* py_data_ptr, std::size_t num_elements, const py::object& contiguous_py_tensor) -> HostBuffer {
         // Important: `py::object` copying and destruction must be done while holding GIL, which pybind ensures for a
@@ -879,6 +891,8 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
         return HostBuffer(tt::stl::Span<T>(typed_py_ptr, typed_py_ptr + num_elements), pydata_pin);
     };
 
+    py_log("converting py tensor to host buffer", target_dtype);
+
     if (target_dtype == DataType::BFLOAT4_B || target_dtype == DataType::BFLOAT8_B) {
         TT_THROW("BFLOAT4_B and BFLOAT8_B data types are not supported for tensor conversion!");
     }
@@ -888,89 +902,73 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
     }
 
     if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
-        py::object contiguous_py_tensor = py_tensor.attr("contiguous")();
-        const auto py_dtype = contiguous_py_tensor.attr("dtype");
+        py::object cont_tensor = py_tensor.attr("contiguous")();
+        const auto py_dtype = cont_tensor.attr("dtype");
 
-        auto maybe_convert_pytorch_tensor = [&contiguous_py_tensor, &py_dtype, &torch](const char* target_py_dtype) {
+        auto maybe_convert = [&cont_tensor, &py_dtype, &torch](const char* target_py_dtype) {
             if (not py_dtype.equal(torch.attr(target_py_dtype))) {
-                contiguous_py_tensor = contiguous_py_tensor.attr("to")(torch.attr(target_py_dtype));
+                cont_tensor = cont_tensor.attr("to")(torch.attr(target_py_dtype));
             }
         };
 
         // Convert to target dtype
         switch (target_dtype) {
-            case DataType::BFLOAT16: maybe_convert_pytorch_tensor("bfloat16"); break;
-            case DataType::FLOAT32: maybe_convert_pytorch_tensor("float32"); break;
-            case DataType::UINT32:
-                maybe_convert_pytorch_tensor("int32");  // Use int32 for uint32
-                break;
-            case DataType::UINT8: maybe_convert_pytorch_tensor("uint8"); break;
-            case DataType::UINT16:
-                maybe_convert_pytorch_tensor("int16");  // Use int16 for uint16
-                break;
-            case DataType::INT32: maybe_convert_pytorch_tensor("int32"); break;
+            case DataType::BFLOAT16: maybe_convert("bfloat16"); break;
+            case DataType::FLOAT32: maybe_convert("float32"); break;
+            case DataType::UINT32: maybe_convert("int32"); break;
+            case DataType::UINT8: maybe_convert("uint8"); break;
+            case DataType::UINT16: maybe_convert("int16"); break;
+            case DataType::INT32: maybe_convert("int32"); break;
             default: TT_THROW("Unsupported target DataType!");
         }
 
-        auto num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")());
-        auto py_data_ptr = reinterpret_cast<const void*>(py::cast<uintptr_t>(contiguous_py_tensor.attr("data_ptr")()));
+        auto numel = py::cast<std::size_t>(cont_tensor.attr("numel")());
+        auto ptr = reinterpret_cast<const void*>(py::cast<uintptr_t>(cont_tensor.attr("data_ptr")()));
 
         switch (target_dtype) {
-            case DataType::BFLOAT16:
-                return get_host_buffer.operator()<bfloat16>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::FLOAT32:
-                return get_host_buffer.operator()<float>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::UINT32:
-                return get_host_buffer.operator()<uint32_t>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::UINT8:
-                return get_host_buffer.operator()<uint8_t>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::UINT16:
-                return get_host_buffer.operator()<uint16_t>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::INT32:
-                return get_host_buffer.operator()<int32_t>(py_data_ptr, num_elements, contiguous_py_tensor);
+            case DataType::BFLOAT16: return to_buffer.operator()<bfloat16>(ptr, numel, cont_tensor);
+            case DataType::FLOAT32: return to_buffer.operator()<float>(ptr, numel, cont_tensor);
+            case DataType::UINT32: return to_buffer.operator()<uint32_t>(ptr, numel, cont_tensor);
+            case DataType::UINT8: return to_buffer.operator()<uint8_t>(ptr, numel, cont_tensor);
+            case DataType::UINT16: return to_buffer.operator()<uint16_t>(ptr, numel, cont_tensor);
+            case DataType::INT32: return to_buffer.operator()<int32_t>(ptr, numel, cont_tensor);
             default: TT_THROW("Unsupported target DataType!");
         }
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
-        py::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
-        const auto py_dtype = contiguous_py_tensor.attr("dtype");
+        if (target_dtype == DataType::BFLOAT16) {
+            return convert_py_tensor_to_host_buffer(torch.attr("from_numpy")(py_tensor), target_dtype);
+        }
 
-        auto maybe_convert_numpy_tensor = [&contiguous_py_tensor, &py_dtype, &np](const char* target_py_dtype) {
+        py::object cont_tensor = np.attr("ascontiguousarray")(py_tensor);
+        const auto py_dtype = cont_tensor.attr("dtype");
+
+        auto maybe_convert = [&cont_tensor, &py_dtype, &np](const char* target_py_dtype) {
             if (not py_dtype.equal(np.attr(target_py_dtype))) {
-                contiguous_py_tensor = contiguous_py_tensor.attr("astype")(np.attr(target_py_dtype));
+                cont_tensor = cont_tensor.attr("astype")(np.attr(target_py_dtype));
             }
         };
 
         // Convert to target dtype
         switch (target_dtype) {
-            case DataType::BFLOAT16:
-                // NumPy doesn't have native bfloat16, convert to float32 first
-                maybe_convert_numpy_tensor("float32");
-                break;
-            case DataType::FLOAT32: maybe_convert_numpy_tensor("float32"); break;
-            case DataType::UINT32: maybe_convert_numpy_tensor("uint32"); break;
-            case DataType::UINT8: maybe_convert_numpy_tensor("uint8"); break;
-            case DataType::UINT16: maybe_convert_numpy_tensor("uint16"); break;
-            case DataType::INT32: maybe_convert_numpy_tensor("int32"); break;
+            case DataType::FLOAT32: maybe_convert("float32"); break;
+            case DataType::UINT32: maybe_convert("uint32"); break;
+            case DataType::UINT8: maybe_convert("uint8"); break;
+            case DataType::UINT16: maybe_convert("uint16"); break;
+            case DataType::INT32: maybe_convert("int32"); break;
             default: TT_THROW("Unsupported target DataType!");
         }
 
-        auto num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("size"));
-        auto py_data_ptr = reinterpret_cast<const void*>(py::cast<uintptr_t>(py::cast<py::tuple>(
-            py::cast<py::dict>(contiguous_py_tensor.attr("__array_interface__"))[py::str("data")])[0]));
+        auto size = py::cast<std::size_t>(cont_tensor.attr("size"));
+        auto ptr = reinterpret_cast<const void*>(py::cast<uintptr_t>(
+            py::cast<py::tuple>(py::cast<py::dict>(cont_tensor.attr("__array_interface__"))[py::str("data")])[0]));
 
         switch (target_dtype) {
-            case DataType::BFLOAT16:
-                return get_host_buffer.operator()<bfloat16>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::FLOAT32:
-                return get_host_buffer.operator()<float>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::UINT32:
-                return get_host_buffer.operator()<uint32_t>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::UINT8:
-                return get_host_buffer.operator()<uint8_t>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::UINT16:
-                return get_host_buffer.operator()<uint16_t>(py_data_ptr, num_elements, contiguous_py_tensor);
-            case DataType::INT32:
-                return get_host_buffer.operator()<int32_t>(py_data_ptr, num_elements, contiguous_py_tensor);
+            case DataType::BFLOAT16: return to_buffer.operator()<bfloat16>(ptr, size, cont_tensor);
+            case DataType::FLOAT32: return to_buffer.operator()<float>(ptr, size, cont_tensor);
+            case DataType::UINT32: return to_buffer.operator()<uint32_t>(ptr, size, cont_tensor);
+            case DataType::UINT8: return to_buffer.operator()<uint8_t>(ptr, size, cont_tensor);
+            case DataType::UINT16: return to_buffer.operator()<uint16_t>(ptr, size, cont_tensor);
+            case DataType::INT32: return to_buffer.operator()<int32_t>(ptr, size, cont_tensor);
             default: TT_THROW("Unsupported target DataType!");
         }
     } else {
@@ -1047,6 +1045,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     ZoneScoped;
 
+    py_log(optional_data_type);
+    py_log(optional_layout);
     py_log("input tensor", format_tensor_as_string(py::reinterpret_borrow<py::object>(py_tensor)));
 
     GraphTracker::instance().track_function_start(

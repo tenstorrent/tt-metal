@@ -6,6 +6,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc, tt_dtype_to_
 import torch
 import ttnn
 import pytest
+import numpy as np
 
 
 torch.manual_seed(0)
@@ -23,6 +24,7 @@ TORCH_FLOAT_TYPES = [torch.float16, torch.float32, torch.float64]
 ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
 FLOAT_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if is_ttnn_float_type(dtype)]
 TTNN_MUST_TILE_TYPES = [ttnn.bfloat8_b, ttnn.bfloat4_b]
+NUMPY_FLOAT_TYPES = [np.float16, np.float32, np.float64]
 
 
 def get_expected_conversion_pcc(ttnn_dtype, torch_dtype):
@@ -87,7 +89,7 @@ def create_from_torch_test_tensors(
 @pytest.mark.parametrize(
     "shape",
     [
-        (8, 8),
+        (32, 32),
     ],
 )
 @pytest.mark.parametrize(
@@ -314,3 +316,97 @@ def test_dtype_conversion_pcc(device, shape, dtype):
     torch_tensor = random_torch_tensor(dtype, shape)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     assert_with_pcc(torch_tensor, torch.Tensor(input_tensor.to_list()), 0.999999)
+
+
+def create_from_numpy_test_tensors(
+    device,
+    shape,
+    ttnn_dtype,
+    numpy_dtype,
+    ttnn_layout,
+    convert_with_device,
+    min_range=0,
+    max_range=100,
+    memory_config=None,
+):
+    if numpy_dtype in NUMPY_FLOAT_TYPES:
+        numpy_input_tensor = np.random.rand(*shape).astype(numpy_dtype) * max_range
+    else:
+        numpy_input_tensor = np.random.randint(min_range, max_range, shape, dtype=numpy_dtype)
+
+    ttnn_result_tensor = ttnn.from_torch(
+        numpy_input_tensor,
+        device=device if convert_with_device else None,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT if (ttnn_dtype in TTNN_MUST_TILE_TYPES) else ttnn_layout,
+        memory_config=memory_config,
+    )
+
+    assert (
+        ttnn_result_tensor.dtype == ttnn_dtype
+    ), f"Expected result {ttnn_dtype}, got result tensor {ttnn_result_tensor.dtype} when converting numpy tensor {numpy_input_tensor.dtype}"
+
+    return numpy_input_tensor, ttnn_result_tensor
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (4, 4),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
+        ttnn.float32,
+        ttnn.uint8,
+        ttnn.uint16,
+        ttnn.uint32,
+        ttnn.int32,
+    ],
+)
+@pytest.mark.parametrize(
+    "numpy_dtype",
+    [
+        np.float16,
+        np.float32,
+        np.float64,
+        np.uint8,
+        np.uint16,
+        np.uint32,
+        np.uint64,
+        np.int8,
+        np.int16,
+        np.int32,
+        np.int64,
+    ],
+)
+@pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("convert_with_device", [True, False])
+def test_from_numpy_conversion(device, shape, ttnn_dtype, numpy_dtype, ttnn_layout, convert_with_device):
+    np.random.seed(205)
+    numpy_input_tensor, ttnn_result_tensor = create_from_numpy_test_tensors(
+        device,
+        shape,
+        ttnn_dtype,
+        numpy_dtype,
+        ttnn_layout,
+        convert_with_device,
+        min_range=0,
+        max_range=10 if numpy_dtype in NUMPY_FLOAT_TYPES else 100,
+    )
+
+    # Convert numpy tensor to torch for comparison
+    torch_input_tensor = torch.from_numpy(numpy_input_tensor)
+    torch_computed = ttnn_result_tensor.cpu().to_torch()
+
+    assert isinstance(torch_input_tensor, torch.Tensor)
+    assert isinstance(torch_computed, torch.Tensor)
+
+    assert_with_pcc(
+        expected_pytorch_result=torch_input_tensor.to(torch.float64),
+        actual_pytorch_result=torch_computed.to(torch.float64),
+        pcc=get_expected_conversion_pcc(ttnn_dtype, numpy_dtype),
+    )
