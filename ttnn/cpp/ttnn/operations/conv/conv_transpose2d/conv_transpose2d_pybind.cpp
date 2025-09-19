@@ -67,7 +67,6 @@ void py_bind_conv_transpose2d(py::module& module) {
         :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
         :param bool mirror_kernel: Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.
-        :param int queue_id: the queue id to use for the operation. Default: `0`.
         :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
         :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
 
@@ -102,10 +101,8 @@ void py_bind_conv_transpose2d(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                bool mirror_kernel,
                const bool return_output_dim,
-               const bool return_weights_and_bias,
-               QueueId queue_id) -> Result {
+               const bool return_weights_and_bias) -> Result {
                 return self(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -151,8 +148,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
             py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("return_weights_and_bias") = false});
 
     module.def(
         "prepare_conv_transpose2d_weights",

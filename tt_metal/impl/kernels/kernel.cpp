@@ -278,7 +278,7 @@ uint8_t ComputeKernel::expected_num_binaries() const {
 
 const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_key) const {
     auto iter = binaries_.find(build_key);
-    TT_ASSERT(iter != binaries_.end(), "binary not found");
+    TT_FATAL(iter != binaries_.end(), "binary not found");
     if (iter->second.size() != expected_num_binaries()) {
         TT_THROW(
             "Expected {} binaries but have {} for kernel {}",

@@ -26,6 +26,7 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6))
 constexpr bool direction = get_compile_time_arg_val(7);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(8);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(9);
+constexpr uint32_t reverse = get_compile_time_arg_val(10) == 1;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -48,7 +49,7 @@ void kernel_main() {
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 10;
+    constexpr uint32_t ct_idx = 11;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -175,7 +176,9 @@ void kernel_main() {
             sender_chip_id = my_chip_id - (slices_received + 1);
             actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
         }
-
+        if (reverse) {
+            actual_sender_chip_id = (ring_size - 1) - actual_sender_chip_id;
+        }
         // Direction == backward: Should I forward what I got from the left to my right?
         // In the linear case, if I have any targets to my right, always forward
         // In the ring case, if I have received on the left less than my targets on the right, forward

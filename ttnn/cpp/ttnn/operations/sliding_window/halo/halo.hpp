@@ -12,7 +12,6 @@ namespace ttnn::operations::sliding_window::halo {
 struct HaloOperation {
     // This how the user can call the operation
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const SlidingWindowConfig& config,
         uint32_t pad_val = 0x0,

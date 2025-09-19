@@ -177,7 +177,7 @@ class TransformerBlock(nn.Module):
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.args = args
         self.feed_forward: nn.Module
-        if args.moe is not None:
+        if args.is_mixture_of_experts is not None:
             self.feed_forward = MoeLayer(
                 experts=[FeedForward(args=args) for _ in range(args.num_experts)],
                 gate=nn.Linear(args.dim, args.num_experts, bias=False),

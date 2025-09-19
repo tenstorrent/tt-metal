@@ -11,7 +11,6 @@ namespace operations::data_movement {
 
 struct ExecuteUntilizeWithUnpadding {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,

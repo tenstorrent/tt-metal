@@ -19,7 +19,7 @@ graph_templates {
     }
     # Internal superpod connections
     internal_connections {
-      key: "QSFP"
+      key: "QSFP_DD"
       value {
         connections {
           port_a { path: ["node1"] tray_id: 1 port_id: 2 }
@@ -72,7 +72,7 @@ graph_templates {
     }
     # Inter-superpod connections
     internal_connections {
-      key: "QSFP"
+      key: "QSFP_DD"
       value {
         connections {
           port_a { path: ["superpod1", "node1"] tray_id: 2 port_id: 1 }

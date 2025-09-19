@@ -10,7 +10,6 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -91,9 +90,8 @@ void bind_reduction_cumsum_operation(py::module& module) {
                std::optional<DataType>& dtype,
                const bool& reverse_order,
                std::optional<Tensor> preallocated_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, dim, dtype, reverse_order, preallocated_tensor, memory_config);
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, dim, dtype, reverse_order, preallocated_tensor, memory_config);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),
@@ -101,8 +99,7 @@ void bind_reduction_cumsum_operation(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("reverse_order") = false,
             py::arg("out") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

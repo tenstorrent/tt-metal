@@ -20,8 +20,7 @@ struct BatchNorm {
         const std::optional<Tensor>& bias = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-        QueueId queue_id = DefaultQueueId);
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 };
 }  // namespace operations::normalization
 
