@@ -209,34 +209,6 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
     cq.enqueue_wait_for_event(event);
 }
 
-void EventSynchronize(const std::shared_ptr<Event>& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        // Slow dispatch conservatively flushes all work since there's no cq.
-        Synchronize(event->device);
-        return;
-    }
-    detail::DispatchStateCheck(true);
-    event->wait_until_ready();  // Block until event populated. Parent thread.
-    log_trace(
-        tt::LogMetal,
-        "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})",
-        event->device->id(),
-        event->cq_id,
-        event->event_id);
-
-    while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled() &&
-            MetalContext::instance().watcher_server()->killed_due_to_error()) {
-            TT_FATAL(
-                false,
-                "Command Queue could not complete EventSynchronize. See {} for details.",
-                MetalContext::instance().watcher_server()->log_file_name());
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(5));
-    }
-}
-
 bool EventQuery(const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.

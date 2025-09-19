@@ -658,17 +658,6 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**
- * Blocking function for host to synchronize (wait) on an event completion on device.
- * Return value: void
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | event        | The event object that host will wait on for completion.                | std::shared_ptr<Event>        |                                    | Yes      |
- */
-// clang-format on
-void EventSynchronize(const std::shared_ptr<Event>& event);
-
-// clang-format off
-/**
  * Host will query an event for completion status on device.
  * Return value: bool.  True if event is completed, false otherwise.
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
