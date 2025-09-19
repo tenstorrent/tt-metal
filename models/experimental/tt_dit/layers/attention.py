@@ -10,14 +10,12 @@ import torch
 import ttnn
 
 from ..utils.padding import PaddingConfig, pad_weight_tensor
+from ..utils.substate import pop_substate
 from .linear import ColParallelLinear
 from .module import Module, Parameter
 from .normalization import RMSNorm
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-    from typing import Any
-
     from ..parallel.config import DiTParallelConfig, ParallelFactor
     from ..parallel.manager import CCLManager
 
@@ -105,37 +103,45 @@ class Attention(Module):
             else None
         )
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
-        def pad_dense_out(state):
-            # Pad dense output weights and biases to match the padded heads
-            weight = state["weight"].T
-            bias = state["bias"]
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        weight, bias = self._reshape_and_merge_qkv(
+            pop_substate(state, "to_q"),
+            pop_substate(state, "to_k"),
+            pop_substate(state, "to_v"),
+        )
+        if weight is not None:
+            state["to_qkv.weight"] = weight
+        if bias is not None:
+            state["to_qkv.bias"] = bias
+
+        weight, bias = self._reshape_and_merge_qkv(
+            pop_substate(state, "add_q_proj"),
+            pop_substate(state, "add_k_proj"),
+            pop_substate(state, "add_v_proj"),
+        )
+        if weight is not None:
+            state["add_qkv_proj.weight"] = weight
+        if bias is not None:
+            state["add_qkv_proj.bias"] = bias
+
+        if "to_out.0.weight" in state:
+            weight = state.pop("to_out.0.weight")
             if self.padding_config is not None:
                 weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
-            weight = weight.T
-            return {"weight": weight, "bias": bias}
+            state["to_out.weight"] = weight
+        if "to_out.0.bias" in state:
+            state["to_out.bias"] = state.pop("to_out.0.bias")
 
-        state["to_qkv"] = self._reshape_and_merge_qkv(
-            state.pop("to_q"),
-            state.pop("to_k"),
-            state.pop("to_v"),
-        )
-
-        if "add_q_proj" in state:
-            state["add_qkv_proj"] = self._reshape_and_merge_qkv(
-                state.pop("add_q_proj"),
-                state.pop("add_k_proj"),
-                state.pop("add_v_proj"),
-            )
-
-        if "to_out" in state:
-            state["to_out"] = pad_dense_out(state.get("to_out", {}).pop("0"))
-
-        if "to_add_out" in state:
-            state["to_add_out"] = pad_dense_out(state.pop("to_add_out"))
+        if "to_add_out.weight" in state:
+            weight = state.pop("to_add_out.weight")
+            if self.padding_config is not None:
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+            state["to_add_out.weight"] = weight
+        if "to_add_out.bias" in state:
+            state["to_add_out.bias"] = state.pop("to_add_out.bias")
 
         if "added_head_factors" in state:
-            factors = state.pop("added_head_factors").reshape([-1, 1])
+            factors = state["added_head_factors"].reshape([-1, 1])
             if self.padding_config is not None:
                 pad = (0, 0, 0, self.padding_config.self.head_padding)
                 factors = torch.nn.functional.pad(factors, pad)
@@ -146,7 +152,7 @@ class Attention(Module):
         q_state: dict[str, torch.Tensor],
         k_state: dict[str, torch.Tensor],
         v_state: dict[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         # Rearrange QKV projections such column-fracturing shards the heads
         def _merge_tensors(q, k, v):
             n_dev = self.parallel_config.tensor_parallel.factor
@@ -164,16 +170,20 @@ class Attention(Module):
             qkv = qkv.T
             return qkv
 
-        weight = _merge_tensors(q_state["weight"], k_state["weight"], v_state["weight"])
+        if "weight" in q_state and "weight" in k_state and "weight" in v_state:
+            weight = _merge_tensors(q_state["weight"], k_state["weight"], v_state["weight"])
+        else:
+            weight = None
 
-        out_state = {"weight": weight}
-        if "bias" in q_state:
+        if "bias" in q_state and "bias" in k_state and "bias" in v_state:
             bias = _merge_tensors(
                 q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)
             )
             bias = bias.squeeze(-1)
-            out_state["bias"] = bias
-        return out_state
+        else:
+            bias = None
+
+        return weight, bias
 
     def forward(
         self,
