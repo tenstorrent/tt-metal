@@ -29,6 +29,21 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 constexpr uint32_t momentum = get_compile_time_arg_val(3);
 
+inline void pack_and_push_two_cbs(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
+    cb_reserve_back(cb_output_1, block_size);
+    cb_reserve_back(cb_output_2, block_size);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_output_1);
+    pack_reconfig_data_format(cb_output_2);
+    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        pack_tile(block_idx, cb_output_1);
+        pack_tile(block_idx, cb_output_2);
+    }
+    tile_regs_release();
+    cb_push_back(cb_output_1, block_size);
+    cb_push_back(cb_output_2, block_size);
+};
+
 void MAIN {
     uint32_t runtime_args_counter = 0;
     uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -58,7 +73,8 @@ void MAIN {
                 add_binary_tile(update_register, momentum_register, update_register);
             }
             tile_regs_commit();
-            pack_and_push_block(cb_momentum_out_idx, block_size);
+            // pack_and_push_block(cb_momentum_out_idx, block_size);
+            pack_and_push_two_cbs(cb_momentum_out_idx, cb_momentum_to_dram_idx, block_size);
 
             cb_pop_front(cb_grad_idx, block_size);
             cb_pop_front(cb_momentum_in_idx, block_size);
