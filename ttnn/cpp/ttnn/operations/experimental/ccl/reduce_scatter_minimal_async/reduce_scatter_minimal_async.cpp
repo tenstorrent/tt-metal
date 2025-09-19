@@ -54,9 +54,18 @@ ttnn::Tensor composite_reduce_scatter(
         input_tensor = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);
     }
 
-    // Broadcast each tensor to all other devices in the mesh
+    // If input to all_broadcast is interleaved DRAM and output of op is interleaved L1 (or vice-versa), do the
+    // conversion during the all_broadcast Otherwise if the output of the op is sharded, we do the conversion at the end
+    // of the composite
+    auto all_broadcast_output_memory_config =
+        output_memory_config.is_sharded() ? input_tensor.memory_config() : output_memory_config;
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, std::nullopt, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+        input_tensor,
+        num_links,
+        all_broadcast_output_memory_config,
+        ttnn::ccl::Topology::Linear,
+        cluster_axis,
+        subdevice_id);
 
     // Reduce broadcasted tensors into a single reduced tensor
     ttnn::Tensor all_reduced_tensor = broadcasted_tensors[0];

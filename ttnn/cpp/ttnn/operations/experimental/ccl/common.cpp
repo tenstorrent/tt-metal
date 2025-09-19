@@ -189,11 +189,6 @@ ttnn::Tensor composite_all_gather(
         "config to the input sharded memory config will break the op as the input and output shapes are different.");
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
-    /*
-     * Concat does not fully support sharding. Inserting s2i and i2s at either ends of
-     * the composite ensures the concat always executes with an interleaved memory config,
-     * and also means the other ops used in the composite don't need to support sharding.
-     */
     if (input_memory_config.is_sharded()) {
         input_tensor = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG);
     }
@@ -207,8 +202,18 @@ ttnn::Tensor composite_all_gather(
         input_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
     }
 
+    // If input to all_broadcast is interleaved DRAM and output of op is interleaved L1 (or vice-versa), do the
+    // conversion during the all_broadcast Otherwise if the output of the op is sharded, we do the conversion at the end
+    // of the composite
+    auto all_broadcast_output_memory_config =
+        output_memory_config.is_sharded() ? input_tensor.memory_config() : output_memory_config;
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, std::nullopt, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+        input_tensor,
+        num_links,
+        all_broadcast_output_memory_config,
+        ttnn::ccl::Topology::Linear,
+        cluster_axis,
+        subdevice_id);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
