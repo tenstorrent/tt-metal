@@ -335,7 +335,7 @@ void send_msg_to_eth_mailbox(
     std::vector<uint32_t> args,
     bool wait_for_ack,
     int timeout_ms) {
-    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
@@ -440,7 +440,7 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     uint32_t heartbeat_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
 
-    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
     std::this_thread::sleep_for(k_sleep_time);
 
     uint32_t previous_heartbeat_val = 0;

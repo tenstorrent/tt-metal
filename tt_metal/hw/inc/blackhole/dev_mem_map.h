@@ -192,8 +192,6 @@
 // This is now the maximum size available for your application
 #define MEM_ERISC_MAX_SIZE MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE
 
-// For your static assert, use the base of the lowest reserved section
-#define MEM_ERISC_TOP MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE
 // Common Misc
 #define MEM_RETRAIN_COUNT_ADDR 0x7CC10
 #define MEM_RETRAIN_FORCE_ADDR 0x1EFC
