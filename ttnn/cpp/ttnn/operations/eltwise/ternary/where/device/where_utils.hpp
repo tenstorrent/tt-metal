@@ -28,7 +28,8 @@ enum class KernelName {
     ReaderScalarBcastTTT,
     WriterNoBcast,
     ReaderRowBcastTTT,
-    ReaderRowBcastTST_TTS,
+    ReaderRowBcastTST,
+    ReaderRowBcastTTS,
     WriterColBcastTTT,
     ComputeNoBcastTTT,  // TTT: no bcast, outer dim and row bcast cases
     ComputeNoBcastTST,

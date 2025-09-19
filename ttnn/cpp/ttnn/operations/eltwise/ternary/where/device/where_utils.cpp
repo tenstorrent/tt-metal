@@ -42,7 +42,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 compute_kernel = KernelName::ComputeColBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
-                reader_kernel = KernelName::ReaderRowBcastTST_TTS;
+                reader_kernel = KernelName::ReaderRowBcastTTS;
                 compute_kernel = KernelName::ComputeNoBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
@@ -68,7 +68,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 compute_kernel = KernelName::ComputeColBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
-                reader_kernel = KernelName::ReaderRowBcastTST_TTS;
+                reader_kernel = KernelName::ReaderRowBcastTST;
                 compute_kernel = KernelName::ComputeNoBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
@@ -124,7 +124,8 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderRowBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_rowbcast_ttt.cpp";
-        case KernelName::ReaderRowBcastTST_TTS:
+        case KernelName::ReaderRowBcastTST:
+        case KernelName::ReaderRowBcastTTS:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "tts_tst_reader_row_bcast.cpp";
 
