@@ -37,8 +37,7 @@ struct IsInDeviceOperation {
         const uint32_t& single_fetch_subchunk_size,
         const bool& assume_unique,
         const bool& invert,
-        const std::optional<Tensor>& optional_out,
-        const QueueId& queue_id = DefaultQueueId);
+        const std::optional<Tensor>& optional_out);
 };
 
 }  // namespace ttnn::operations::experimental::isin
