@@ -124,6 +124,8 @@ runs:
         run: |
           set -eu
 
+          git config --global --add safe.directory ${{ github.workspace }}
+
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
             WHEEL_FILENAME=$(ls -1 *.whl)
