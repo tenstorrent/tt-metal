@@ -57,9 +57,9 @@ void kernel_main() {
             for (uint32_t w = 0; w < block_width_tiles; w++) {
                 uint64_t dst_noc_addr = get_noc_addr(tile_id, s);
                 // nonposted
-                //  noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
+                noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
                 // posted
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1_read_addr, dst_noc_addr, tile_bytes);
+                // noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1_read_addr, dst_noc_addr, tile_bytes);
                 tile_id++;
                 l1_read_addr += tile_bytes;
             }
@@ -67,9 +67,9 @@ void kernel_main() {
             row_start_tile_id += output_width_tiles;
         }
         // nonposted
-        // noc_async_write_barrier();
+        noc_async_write_barrier();
         // posted
-        noc_async_posted_writes_flushed();
+        // noc_async_posted_writes_flushed();
     }
     cb_pop_front(cb_id_out, block_width_padded_num_tiles);
 }

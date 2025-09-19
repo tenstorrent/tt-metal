@@ -37,18 +37,18 @@ void kernel_main() {
             for (uint32_t j = 0; j < total_num_sticks; ++j) {
                 // DPRINT << "write_size: " << write_size << ENDL();
                 // nonposted
-                noc_async_write(l1_read_addr, noc_write_addr, write_size);
+                // noc_async_write(l1_read_addr, noc_write_addr, write_size);
                 // posted
-                // noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1_read_addr, noc_write_addr, write_size);
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1_read_addr, noc_write_addr, write_size);
                 transaction_size_bytes += write_size;
                 l1_read_addr += local_stride_bytes;
                 noc_write_addr += remote_stride_bytes;
             }
         }
         // nonposted
-        noc_async_write_barrier();
+        // noc_async_write_barrier();
         // posted
-        // noc_async_posted_writes_flushed();
+        noc_async_posted_writes_flushed();
     }
 
     constexpr uint32_t test_id = 501;
