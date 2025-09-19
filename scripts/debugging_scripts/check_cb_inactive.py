@@ -8,7 +8,7 @@ Usage:
     check_cb_inactive
 
 Description:
-    Checks that no command buffers (CB0..CB3) are currently inactive by reading
+    Checks that no command buffers (CB0..CB3) are currently active by reading
     NOC_CMD_CTRL_CB0..3 on both NoCs for tensix and eth blocks. If any is nonzero,
     it prints an error with the device, location, NoC, and CB index.
 """
@@ -30,7 +30,7 @@ def generate_cb_reg_name(cb_index: int) -> str:
     return f"NOC_CMD_CTRL_CB{cb_index}"
 
 
-def check_cb_inactive(location: OnChipCoordinate, noc_id: int):
+def check_cb_idle(location: OnChipCoordinate, noc_id: int):
     noc_str = f"noc{noc_id}"
     noc_block = location._device.get_block(location)
     register_store = noc_block.get_register_store(noc_id)
@@ -49,10 +49,10 @@ def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "eth"]
     run_checks = get_run_checks(args, context)
     run_checks.run_per_block_check(
-        lambda location: check_cb_inactive(location, noc_id=0), block_filter=BLOCK_TYPES_TO_CHECK
+        lambda location: check_cb_idle(location, noc_id=0), block_filter=BLOCK_TYPES_TO_CHECK
     )
     run_checks.run_per_block_check(
-        lambda location: check_cb_inactive(location, noc_id=1), block_filter=BLOCK_TYPES_TO_CHECK
+        lambda location: check_cb_idle(location, noc_id=1), block_filter=BLOCK_TYPES_TO_CHECK
     )
 
 
