@@ -153,7 +153,8 @@ class Parameter:
         if mesh_placements is None:
             mesh_placements = _mesh_placements_from_mapping(mesh_mapping or {}, mesh_rank=mesh_rank)
         else:
-            assert len(mesh_placements) == mesh_rank
+            length = len(mesh_placements)
+            assert length == mesh_rank, f"mesh_placements should have length {mesh_rank} instead of {length}"
 
         self.shape = tuple(shape)
         self.device = device
@@ -173,7 +174,8 @@ class Parameter:
             raise ValueError(msg)
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
-        assert torch_tensor.shape == self.shape
+        shape = tuple(torch_tensor.shape)
+        assert shape == self.shape, f"expected tensor shape {self.shape}, got {shape}"
 
         self.data = ttnn.from_torch(
             torch_tensor,
@@ -196,7 +198,7 @@ def _mesh_placements_from_mapping(
     for k, v in mapping.items():
         if k is None:
             continue
-        assert k < mesh_rank
+        assert k < mesh_rank, f"mesh mapping keys should be smaller than {mesh_rank}, got {k}"
         placements[k] = ttnn.PlacementShard(v)
 
     return placements
