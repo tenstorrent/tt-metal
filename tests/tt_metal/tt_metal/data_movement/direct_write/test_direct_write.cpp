@@ -154,7 +154,7 @@ bool run_dm(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device, 
         // Different destinations - check first few values
 
         uint32_t check_count =
-            std::min(static_cast<uint32_t>(output_data.size()), std::min(test_config.num_writes, 10u));
+            std::min({static_cast<uint32_t>(output_data.size()), test_config.num_writes, 10u});
         for (uint32_t i = 0; i < check_count; i++) {
             uint32_t expected_value;
             if (test_config.same_value) {
