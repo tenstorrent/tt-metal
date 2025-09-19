@@ -4,6 +4,8 @@
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
+#include <unordered_map>
+
 static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
     constexpr uint32_t bytes_per_eth_word = 16;
     return (total_words * bytes_per_eth_word) / static_cast<double>(cycles);
@@ -17,14 +19,30 @@ void TestContext::read_telemetry() {
 
     const auto telemetry_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
+    std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>> results;
+    auto results_num_elements = tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t));
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
         auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
-        auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
-        auto freq_mhz = cluster.get_device_aiclk(physical_chip_id);
-        double freq_ghz = double(freq_mhz) / 1000.0;
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
+            const auto& eth_cores =
+                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
+            for (const auto& link_index : link_indices) {
+                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
+                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                results[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
+            }
+        }
+    }
+
+    for (const auto& [coord, test_device] : test_devices_) {
+        auto device_id = test_device.get_node_id();
+        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
+        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+
         for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
             const auto& eth_cores =
                 control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
@@ -38,15 +56,42 @@ void TestContext::read_telemetry() {
                     eth_core);
 
                 std::vector<CoreCoord> cores = {eth_core};
-                auto data = fixture_->read_buffer_from_ethernet_cores(
-                    coord, cores, telemetry_addr, sizeof(LowResolutionBandwidthTelemetryResult));
+                fixture_->read_buffer_from_ethernet_cores(
+                    coord, cores, telemetry_addr, sizeof(LowResolutionBandwidthTelemetryResult), false, results[fabric_node_id]);
+            }
+        }
+    }
 
-                const auto& core_data = data.at(eth_core);
+    fixture_->barrier_reads();
+    for (const auto& [coord, test_device] : test_devices_) {
+        auto device_id = test_device.get_node_id();
+        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
+        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+        auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        auto freq_mhz = get_device_frequency_mhz(device_id);
+        double freq_ghz = double(freq_mhz) / 1000.0;
+        // Wait for reads to complete
+        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
+            const auto& eth_cores =
+                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
+            for (const auto& link_index : link_indices) {
+                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
+                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                const auto& core_data = results.at(fabric_node_id).at(eth_core);
 
-                std::array<std::byte, sizeof(LowResolutionBandwidthTelemetryResult)> staging_buf{};
-                memcpy(staging_buf.data(), core_data.data(), sizeof(LowResolutionBandwidthTelemetryResult));
-                LowResolutionBandwidthTelemetryResult tel =
-                    std::bit_cast<LowResolutionBandwidthTelemetryResult>(staging_buf);
+                LowResolutionBandwidthTelemetryResult tel{};
+                if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) == 0) {
+                    constexpr size_t NUM_ELEMENTS = tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
+                    const std::array<uint32_t, NUM_ELEMENTS>& data_array = 
+                        *reinterpret_cast<const std::array<uint32_t, NUM_ELEMENTS>*>(core_data.data());
+                    tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(data_array);
+                } else {
+                    // Fall back to memcpy approach
+                    std::array<std::byte, sizeof(LowResolutionBandwidthTelemetryResult)> staging_buf{};
+                    memcpy(staging_buf.data(), core_data.data(), sizeof(LowResolutionBandwidthTelemetryResult));
+                    tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(staging_buf);
+                }
 
                 uint64_t cycles = tel.duration.full;
                 double bytes_per_cycle = calc_bw_bytes_per_cycle(tel.num_words_sent, cycles);
