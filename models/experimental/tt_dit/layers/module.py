@@ -113,14 +113,14 @@ class Module:
             child.save_to_cache(f"{path_prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            ttnn.dump_tensor(f"{path_prefix}{name}.ext", parameter.data)
+            ttnn.dump_tensor(f"{path_prefix}{name}.tensorbin", parameter.data)
 
     def load_from_cache(self, path_prefix: str) -> None:
         for name, child in self.named_children():
             child.load_from_cache(f"{path_prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            parameter.data = ttnn.load_tensor(f"{path_prefix}{name}.ext")
+            parameter.data = ttnn.load_tensor(f"{path_prefix}{name}.tensorbin")
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
