@@ -282,7 +282,7 @@ void wait_until_cores_done(
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
                 for (const auto& core : not_done_phys_cores) {
-                    if (internal_::is_active_eth_core(device_id, core)) {
+                    if (get_core_type(device_id, core) == tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
                         print_aerisc_training_status(device_id, core);
                     }
                 }
