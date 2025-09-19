@@ -171,7 +171,7 @@ def create_tt_model(
     ids=[
         "batch-1",  # latency
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only-bert-score",  # ci_only batch-bleu-score for testing coverage in CI pipelines
+        "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
         "real-world-test",  # real-world test for 300DPI scanned document
     ],
@@ -225,8 +225,6 @@ def test_demo(
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
-    if is_ci_env and "bleu-score" in test_id and mesh_device.get_num_devices() <= 2:
-        pytest.skip("BLEU score is only supported for T3K for now")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
