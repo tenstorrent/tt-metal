@@ -143,7 +143,7 @@ example: `http://10.250.37.37:4242`, for port ``4242``.
 
 If you forwarded your port, navigate to `http://localhost:8888`.
 
-`http://<ip address>:<port>` will redirect you to the tt-metallium docs at `http://<ip address>:<port>/tt-metalium/`.
+`http://<ip address>:<port>` will redirect you to the tt-metalium docs at `http://<ip address>:<port>/tt-metalium/`.
 
 To view the ttnn docs, navigate to `http://<ip address>:<port>/ttnn`.
 
@@ -550,7 +550,7 @@ To set up pre-commit on your local machine, follow these steps:
   and without CI failure.
 
 ### Skipping CI/CD for documentation updates
-- CI/CD can be skipped for *documentation only* updates that incur no functional change. Modifying `.rst` files in `docs/` is *not a documentation only* update, as the CI step for building documentation needs to run.
+- CI/CD can be skipped for *documentation only* updates that incur no functional change. However, note that modifying `.rst` files in `docs/` is *not a documentation only* update, as the CI step for building documentation needs to run.
 - Upon submitting a PR and getting the necessary approvals:
   - Click Squash and Merge
   - Before confirming, edit the top level commit message by prepending the token `[skip ci]`
