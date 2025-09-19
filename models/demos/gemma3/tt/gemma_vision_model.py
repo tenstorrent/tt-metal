@@ -42,7 +42,7 @@ class TtGemmaTransformerVision(LightweightModule):
             state_dict=state_dict,
             tt_ccl=tt_ccl,
             state_dict_prefix=f"{state_dict_prefix}",
-            weight_cache_path=configuration.weight_cache_path(dtype),
+            weight_cache_path=weight_cache_path,
             dtype=dtype,
             configuration=configuration,
             return_intermediate=return_intermediate,
@@ -56,7 +56,7 @@ class TtGemmaTransformerVision(LightweightModule):
             patch_size=configuration.vision_patch_size,
             hidden_size=configuration.vision_hidden_dim,
             mm_tokens_per_image=configuration.mm_tokens_per_image,
-            weight_cache_path=configuration.weight_cache_path(dtype),
+            weight_cache_path=weight_cache_path,
             layer_norm_eps=1e-06,  # layer_norm_eps
             dtype=dtype,
             configuration=configuration,

@@ -71,8 +71,10 @@ class TtGemma3MultiModalProjector(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix="",
             weight_key=weight_key,
+            weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
             is_distributed=False,
+            eps=layer_norm_eps,
             # sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
             # sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )

@@ -61,7 +61,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             state_dict=state_dict,
             tt_ccl=tt_ccl,
             state_dict_prefix=f"{state_dict_prefix}encoder.",
-            weight_cache_path=configuration.weight_cache_path(dtype),
+            weight_cache_path=weight_cache_path,
             dtype=dtype,
             configuration=configuration,
             layers=self.layers,
@@ -75,7 +75,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             dim=self.width,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}ln_post.",
-            weight_cache_path=configuration.weight_cache_path(dtype),
+            weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
             eps=configuration.norm_eps,
         )

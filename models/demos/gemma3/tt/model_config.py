@@ -375,10 +375,8 @@ class ModelArgs:
     }
 
     LOCAL_HF_PARAMS = {
-        "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
-        "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
-        "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
-        "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        "gemma-3-4b-it": "models/demos/gemma3/model_params/gemma-3-4b-it",
+        "gemma-3-27b-it": "models/demos/gemma3/model_params/gemma-3-27b-it",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -1741,6 +1739,9 @@ class ModelArgs:
         return text_prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
+        if self.dummy_weights:
+            return None
+
         # Keep the weight cache separate for generative and instruct weights
         if self.instruct:
             return (
@@ -1759,13 +1760,16 @@ class ModelArgs:
     def load_state_dict(self):
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
+                from accelerate import init_empty_weights
                 from transformers import AutoConfig, AutoModelForCausalLM
 
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
-                state_dict = model.state_dict()
+                with init_empty_weights():
+                    model = AutoModelForCausalLM.from_config(config)
+                    state_dict = {
+                        name: torch.randn(param.shape, dtype=torch.float32).contiguous().to(param.dtype)
+                        for name, param in model.named_parameters()
+                    }
             else:
                 reference_model = Transformer(self)
                 state_dict = reference_model.state_dict()
