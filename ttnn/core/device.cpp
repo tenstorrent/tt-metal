@@ -11,8 +11,6 @@ void clear_pinned_memories_cache();
 
 namespace ttnn {
 
-
-
 namespace device {
 
 std::shared_ptr<MeshDevice> open_mesh_device(

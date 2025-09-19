@@ -784,7 +784,7 @@ const HostStorage& Tensor::host_storage() const& {
     return *host_storage;
 }
 
-HostStorage& Tensor::host_storage() &{
+HostStorage& Tensor::host_storage() & {
     auto* host_storage = std::get_if<HostStorage>(&this->storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return *host_storage;
