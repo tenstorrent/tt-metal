@@ -9,7 +9,6 @@ VADv2 (Video-based Autonomous Driving version 2) is a state-of-the-art multi-mod
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 - Use the following command to run the vadv2 test:

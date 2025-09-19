@@ -9,7 +9,6 @@ The VGG-UNet model performs brain tumor segmentation on MRI images. It takes an 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 ### Inference pipeline with random weights and random tensor:
