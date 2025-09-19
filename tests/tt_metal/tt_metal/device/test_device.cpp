@@ -37,6 +37,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "command_queue_fixture.hpp"
 
@@ -414,12 +415,12 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     // Allocate and pin host memory
-    std::vector<uint32_t> host_buffer(size_bytes / sizeof(uint32_t), 0);
+    auto host_buffer = std::make_shared<std::vector<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
+    tt::tt_metal::HostBuffer host_buffer_view(host_buffer);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(target_coord, target_coord));
     auto pinned_memory = mesh_device->pin_memory(
         coordinate_range_set,
-        host_buffer.data(),
-        size_bytes,
+        host_buffer_view,
         true  // map_to_noc
     );
 
@@ -450,7 +451,7 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     EnqueueMeshWorkload(mesh_cq, mesh_workload, true);  // blocking = true
 
     // Verify the data was written correctly to pinned memory
-    EXPECT_EQ(src, host_buffer);
+    EXPECT_EQ(src, *host_buffer);
 }
 
 }  // namespace tt::tt_metal
