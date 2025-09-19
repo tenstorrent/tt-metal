@@ -134,12 +134,15 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     auto buffer_type = BUFFER_TYPES[state.range(2)];
     [[maybe_unused]] auto device_id = state.range(3);
 
-    fmt::println(stderr, "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+    fmt::println(
+        stderr,
+        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
         page_size,
         transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
-    fmt::println("Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+    fmt::println(
+        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
         page_size,
         transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
@@ -163,13 +166,14 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     auto aligned_ptr = reinterpret_cast<void*>(dst_storage->data());
 
     // Create HostBuffer on top of aligned memory
-    HostBuffer host_buffer(tt::stl::Span<std::uint8_t>(dst_storage->data(), static_cast<std::size_t>(transfer_size)), MemoryPin(dst_storage));
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(dst_storage->data(), static_cast<std::size_t>(transfer_size)),
+        MemoryPin(dst_storage));
 
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = mesh_device->pin_memory(
-        coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+    auto pinned_unique = mesh_device->pin_memory(coordinate_range_set, host_buffer, /*map_to_noc=*/true);
     std::shared_ptr<PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory

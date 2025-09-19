@@ -679,9 +679,7 @@ struct PinnedMemoryWrapper {
 };
 std::deque<PinnedMemoryWrapper> pinned_memories_cache;
 
-void clear_pinned_memories_cache() {
-    pinned_memories_cache.clear();
-}
+void clear_pinned_memories_cache() { pinned_memories_cache.clear(); }
 
 template <typename T>
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<ttnn::QueueId> cq_id) {
@@ -716,18 +714,19 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     for (const auto& device_coord : device_storage.coords) {
         auto shard = distributed_host_buffer.get_shard(device_coord);
         if (shard.has_value()) {
-
-            auto range_set = distributed::MeshCoordinateRangeSet{distributed::MeshCoordinateRange{device_coord, device_coord}};
+            auto range_set =
+                distributed::MeshCoordinateRangeSet{distributed::MeshCoordinateRange{device_coord, device_coord}};
             std::shared_ptr<tt_metal::PinnedMemory> pinned_memory;
             for (auto& pinned_memory_wrapper : pinned_memories_cache) {
-                if (pinned_memory_wrapper.device_range == range_set && pinned_memory_wrapper.pinned_memory->get_host_ptr() == shard->view_bytes().data() && pinned_memory_wrapper.pinned_memory->get_buffer_size() == shard->view_bytes().size()) {
+                if (pinned_memory_wrapper.device_range == range_set &&
+                    pinned_memory_wrapper.pinned_memory->get_host_ptr() == shard->view_bytes().data() &&
+                    pinned_memory_wrapper.pinned_memory->get_buffer_size() == shard->view_bytes().size()) {
                     pinned_memory = pinned_memory_wrapper.pinned_memory;
                     break;
                 }
             }
             if (pinned_memory == nullptr) {
                 try {
-                
                     pinned_memory = device->pin_memory(range_set, *shard, /*map_to_noc=*/true);
                 } catch (const std::exception& e) {
                     pinned_memories_cache.clear();
@@ -746,7 +745,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         }
         shards.push_back({device_coord, std::move(shard)});
     }
-    
+
     for (auto& pinned_memory_wrapper : pinned_memories_to_cache) {
         pinned_memories_cache.push_back(pinned_memory_wrapper);
     }

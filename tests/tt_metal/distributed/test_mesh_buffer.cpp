@@ -627,12 +627,13 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
-    auto dst = std::make_shared<vector_aligned_32<uint32_t>>(bytes_per_device/ sizeof(uint32_t), 0);
-    uint32_t *dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
-    
+    auto dst = std::make_shared<vector_aligned_32<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
+
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
-    
+    HostBuffer host_buffer(
+        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = mesh_device_->pin_memory(
         coordinate_range_set,
