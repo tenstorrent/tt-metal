@@ -4956,7 +4956,7 @@ def test_conv2d_1kX1k(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w",
     (
-        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
+        (32, 32, 56, 56, 3, 3, 1, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
