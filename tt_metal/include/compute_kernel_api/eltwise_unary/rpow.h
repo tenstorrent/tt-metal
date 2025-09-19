@@ -31,12 +31,11 @@ ALWI void rpow_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rpow_init<APPROX>
  * | Argument       | Description                                                                 | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform the computation on  | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | log_val        | The log of the base value to raise to the power of each element in the tile | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
+ * | base_val       | The base value to raise to the power of each element in the tile            | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void rpow_tile(uint32_t idst, uint32_t log_val, int vector_mode = (int)VectorMode::RC) {
-    MATH((llk_math_eltwise_unary_sfpu_rpow<APPROX, DST_ACCUM_MODE>(idst, log_val, vector_mode)));
+ALWI void rpow_tile(uint32_t idst, uint32_t base_val, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_rpow<APPROX, DST_ACCUM_MODE>(idst, base_val, vector_mode)));
 }
 
 }  // namespace ckernel
