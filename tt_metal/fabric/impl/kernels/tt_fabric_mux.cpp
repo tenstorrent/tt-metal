@@ -144,8 +144,8 @@ void forward_data(
 void kernel_main() {
     size_t rt_args_idx = 0;
 
-    uint8_t upstream_noc_x[num_upstream_routers];
-    uint8_t upstream_noc_y[num_upstream_routers];
+    std::array<uint8_t, num_upstream_routers> upstream_noc_x;
+    std::array<uint8_t, num_upstream_routers> upstream_noc_y;
     if constexpr (num_upstream_routers > 0) {
         for (uint32_t i = 0; i < num_upstream_routers; i++) {
             upstream_noc_x[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
