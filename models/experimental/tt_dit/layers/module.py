@@ -7,7 +7,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections import defaultdict
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Generic, NamedTuple, TypeVar
 
 import torch
 
@@ -101,7 +101,7 @@ class Module:
             if name in state:
                 tensor = state.pop(name)
                 assert isinstance(tensor, torch.Tensor)
-                parameter.load_from_torch(tensor)
+                parameter.load_torch_tensor(tensor)
             else:
                 missing_keys.append(name)
 
@@ -116,6 +116,20 @@ class Module:
             raise ValueError(error_msg)
 
         return IncompatibleKeys(missing_keys, unexpected_keys)
+
+    def save_to_cache(self, path_prefix: str):
+        for name, child in self.named_children():
+            child.save_to_cache(f"{path_prefix}{name}.")
+
+        for name, parameter in self.named_parameters():
+            ttnn.dump_tensor(f"{path_prefix}{name}.ext", parameter.data)
+
+    def load_from_cache(self, path_prefix: str):
+        for name, child in self.named_children():
+            child.load_from_cache(f"{path_prefix}{name}.")
+
+        for name, parameter in self.named_parameters():
+            parameter.data = ttnn.load_tensor(f"{path_prefix}{name}.ext")
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -160,14 +174,14 @@ class Parameter:
         self.data = None
 
         if isinstance(init, torch.Tensor):
-            self.load_from_torch(init)
+            self.load_torch_tensor(init)
         elif init is True:
-            self.load_from_torch(torch.randn(self.shape))
+            self.load_torch_tensor(torch.randn(self.shape))
         elif init is not False:
             msg = "init should be a Torch tensor or bool"
             raise ValueError(msg)
 
-    def load_from_torch(self, torch_tensor: torch.Tensor, /) -> None:
+    def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         assert torch_tensor.shape == self.shape
 
         self.data = ttnn.from_torch(
@@ -185,7 +199,7 @@ class Parameter:
 
 def _unflatten_state_dict(state_dict: Mapping[str, torch.Tensor]) -> TorchStateTree:
     """Turns a PyTorch state dict into a nested defaultdict of defaultdicts."""
-    root = tree()
+    root = torch_state_tree()
 
     for key, value in state_dict.items():
         *parts, leaf = key.split(".")

@@ -40,24 +40,6 @@ class Linear(Module):
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
-        ttnn.dump_tensor(weight_path, self.weight)
-        if self.bias is not None:
-            ttnn.dump_tensor(bias_path, self.bias)
-        cache_dict = {"weight": weight_path}
-        if self.bias is not None:
-            cache_dict["bias"] = bias_path
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
-        if "bias" in cache_dict:
-            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
-        else:
-            self.bias = None
-
     def _prepare_torch_state(self, state: TorchStateTree) -> None:
         if "weight" in state:
             state["weight"] = state["weight"].transpose(0, 1)
@@ -136,24 +118,6 @@ class ColParallelLinear(Module):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
-        ttnn.dump_tensor(weight_path, self.weight)
-        if self.bias is not None:
-            ttnn.dump_tensor(bias_path, self.bias)
-        cache_dict = {"weight": weight_path}
-        if self.bias is not None:
-            cache_dict["bias"] = bias_path
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
-        if "bias" in cache_dict:
-            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
-        else:
-            self.bias = None
 
     def _prepare_torch_state(self, state: TorchStateTree) -> None:
         def permute_for_swiglu(tensor):
@@ -285,24 +249,6 @@ class RowParallelLinear(Module):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-
-    def to_cached_state_dict(self, path_prefix):
-        weight_path = path_prefix + "weight"
-        bias_path = path_prefix + "bias"
-        ttnn.dump_tensor(weight_path, self.weight)
-        if self.bias is not None:
-            ttnn.dump_tensor(bias_path, self.bias)
-        cache_dict = {"weight": weight_path}
-        if self.bias is not None:
-            cache_dict["bias"] = bias_path
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
-        if "bias" in cache_dict:
-            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
-        else:
-            self.bias = None
 
     def _prepare_torch_state(self, state: TorchStateTree) -> None:
         if "weight" in state:
