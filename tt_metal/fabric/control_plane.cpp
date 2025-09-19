@@ -1164,7 +1164,7 @@ chip_id_t ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNod
 
 std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
     FabricNodeId fabric_node_id, chan_id_t chan_id) const {
-    // TODO: simplify this and maybe have this functionality in ControlPlane
+    // TODO: simplify this and use Global Physical Desc in ControlPlane soon
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
     RoutingDirection port_direction = RoutingDirection::NONE;
@@ -1211,7 +1211,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
     for (const auto& [dst_fabric_mesh_id, edge] : inter_mesh_node) {
         if (edge.port_direction == port_direction) {
             // Get reverse port direction
-            const auto& dst_connected_fabric_chip_id = edge.connected_chip_ids[0];
+            const auto& dst_connected_fabric_chip_id = edge.connected_chip_ids[routing_plane_id];
             TT_ASSERT(
                 inter_mesh_connectivity[*dst_fabric_mesh_id][dst_connected_fabric_chip_id].contains(
                     fabric_node_id.mesh_id),
@@ -1228,6 +1228,10 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                 this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
             for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
                 if (direction == reverse_port_direction) {
+                    if (routing_plane_id >= eth_chans.size()) {
+                        // Only TG non-standard intermesh connections hits this
+                        return std::make_pair(dst_fabric_node, eth_chans[0]);
+                    }
                     return std::make_pair(dst_fabric_node, eth_chans[routing_plane_id]);
                 }
             }
