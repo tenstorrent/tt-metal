@@ -750,7 +750,7 @@ FORCE_INLINE void receiver_forward_packet(
     uint8_t transaction_id) {
     constexpr bool ENABLE_STATEFUL_NOC_APIS =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
-        true;
+        !FORCE_ALL_PATHS_TO_USE_SAME_NOC && true;
 #else
         false;
 #endif
@@ -2698,7 +2698,7 @@ void kernel_main() {
                     receiver_channel_forwarding_data_cmd_buf_ids[0],
                     receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
-                if constexpr (NUM_ACTIVE_ERISCS == 1) {
+                if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[edm_index]
                         .template setup_edm_noc_cmd_buf<
                             tt::tt_fabric::edm_to_downstream_noc,
@@ -2751,7 +2751,7 @@ void kernel_main() {
             // If there is only one active erisc, then it is guaranteed we are the receiver channel
             // servicing core. Otherwise, in multi-erisc mode, this initialization happens later due
             // to a noc dependency. See the comment for the initialization that happens later in multi-erisc mode.
-            if constexpr (NUM_ACTIVE_ERISCS == 1) {
+            if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                 downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
                     tt::tt_fabric::edm_to_downstream_noc,
                     tt::tt_fabric::forward_and_local_write_noc_vc>();
@@ -2917,17 +2917,19 @@ void kernel_main() {
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
-        for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
-            downstream_edm_noc_interfaces_vc0[edm_index]
-                .template setup_edm_noc_cmd_buf<
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc>();
-        }
-        if constexpr (enable_deadlock_avoidance) {
-            if (has_downstream_edm_vc1_buffer_connection) {
-                downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc>();
+        if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
+            for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
+                downstream_edm_noc_interfaces_vc0[edm_index]
+                    .template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+            }
+            if constexpr (enable_deadlock_avoidance) {
+                if (has_downstream_edm_vc1_buffer_connection) {
+                    downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+                }
             }
         }
     }
