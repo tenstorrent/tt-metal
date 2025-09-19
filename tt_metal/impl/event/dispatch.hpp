@@ -35,6 +35,7 @@ namespace event_dispatch {
 
 void issue_record_event_commands(
     IDevice* device,
+    chip_id_t device_id,
     uint32_t event_id,
     uint8_t cq_id,
     uint32_t num_command_queues,
@@ -50,6 +51,7 @@ void issue_wait_for_event_commands(
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
     chip_id_t mmio_device_id,
+    chip_id_t device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager);

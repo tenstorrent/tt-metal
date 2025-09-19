@@ -35,7 +35,6 @@ void bind_transpose(py::module& module) {
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
         )doc";
 
     using OperationType = decltype(ttnn::transpose);
@@ -49,16 +48,14 @@ void bind_transpose(py::module& module) {
                const int64_t& dim1,
                const int64_t& dim2,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id,
                const std::optional<float>& pad_value) {
-                return self(queue_id, input_tensor, dim1, dim2, memory_config, pad_value);
+                return self(input_tensor, dim1, dim2, memory_config, pad_value);
             },
             py::arg("input_tensor"),
             py::arg("dim1"),
             py::arg("dim2"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
             py::arg("pad_value") = 0.0f,
         });
 }
