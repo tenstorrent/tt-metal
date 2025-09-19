@@ -16,6 +16,7 @@
 #include "control_plane.hpp"
 #include "metal_soc_descriptor.h"
 #include "hostdevcommon/fabric_common.h"
+#include "persistent_kernel_cache.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 
@@ -508,8 +509,10 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             num_local_fabric_routers);
     }
 
+    tt::tt_metal::detail::EnablePersistentKernelCache();
     tt::tt_metal::detail::CompileProgram(
         device, *fabric_program_ptr, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
+    tt::tt_metal::detail::DisablePersistentKernelCache();
     return fabric_program_ptr;
 }
 
