@@ -48,6 +48,7 @@ enum class HalL1MemAddrType : uint8_t {
     LINK_UP,    // Link status - Link up status
     FABRIC_ROUTER_CONFIG,
     ETH_FW_MAILBOX,
+    ETH_METAL_RUN_FLAG,  // 1 = Run Metal Ethernet Firmware, 0 = Return to Base Firmware
     TENSIX_ROUTING_TABLE,
     TENSIX_FABRIC_CONNECTIONS,
     TENSIX_ROUTING_PATH_1D,

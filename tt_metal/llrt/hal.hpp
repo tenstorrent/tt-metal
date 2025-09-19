@@ -106,6 +106,12 @@ enum class FWMailboxMsg : uint8_t {
     ETH_MSG_RELEASE_CORE,
     // Heartbeat counter
     HEARTBEAT,
+    // Retrain Count
+    RETRAIN_COUNT,
+    // Rx Link Up
+    RX_LINK_UP,
+    // Port Status
+    PORT_STATUS,
     // Number of mailbox message types
     COUNT,
 };
