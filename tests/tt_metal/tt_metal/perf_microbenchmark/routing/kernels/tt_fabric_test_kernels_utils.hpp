@@ -376,7 +376,7 @@ struct NocUnicastScatterWriteFields {
 
 template <typename T>
 void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
-    // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
+    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
     fabric_set_unicast_route(
         (T*)packet_header_address,
         unicast_fields.src_device_id,
@@ -387,7 +387,7 @@ void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFie
 
 template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
-    // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
+    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
     fabric_set_mcast_route(
         (T*)packet_header_address,
         mcast_fields.dst_device_id,

@@ -124,9 +124,8 @@ void fabric_set_mcast_route(
     packet_header->is_mcast_active = 0;
 }
 
-template <typename PacketHeaderType>
 void fabric_set_unicast_route(
-    volatile tt_l1_ptr PacketHeaderType* packet_header,
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t my_dev_id,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
@@ -135,17 +134,15 @@ void fabric_set_unicast_route(
     uint32_t target_dev = dst_dev_id;
     uint32_t target_col = 0;
 
-    if constexpr (std::is_same_v<PacketHeaderType, HybridMeshPacketHeader>) {
-        tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-            reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-        uint16_t my_mesh_id = routing_table->my_mesh_id;
-        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-        packet_header->routing_fields.value = 0;
-        packet_header->mcast_params_16 = 0;
-        if (my_mesh_id != dst_mesh_id) {
-            // TODO
-            // dst_dev_id = exit_node;
-        }
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_mesh_id = routing_table->my_mesh_id;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->routing_fields.value = 0;
+    packet_header->mcast_params_16 = 0;
+    if (my_mesh_id != dst_mesh_id) {
+        // TODO
+        // dst_dev_id = exit_node;
     }
 
     while (target_dev >= ew_dim) {
@@ -198,9 +195,8 @@ void fabric_set_unicast_route(
     }
 }
 
-template <typename PacketHeaderType>
 void fabric_set_mcast_route(
-    volatile tt_l1_ptr PacketHeaderType* packet_header,
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,   // Ignore this, since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
     uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     uint16_t e_num_hops,
@@ -210,20 +206,18 @@ void fabric_set_mcast_route(
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
 
-    if constexpr (std::is_same_v<PacketHeaderType, HybridMeshPacketHeader>) {
-        tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-            reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-        uint16_t my_mesh_id = routing_table->my_mesh_id;
-        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-        packet_header->routing_fields.value = 0;
-        packet_header->mcast_params_16 = ((uint16_t)s_num_hops << 12) | ((uint16_t)n_num_hops << 8) |
-                                         ((uint16_t)w_num_hops << 4) | ((uint16_t)e_num_hops);
-        if (my_mesh_id != dst_mesh_id) {
-            // TODO
-            // dst_dev_id = exit_node;
-            // fabric_set_unicast_route(packet_header, my_mesh_id, dst_dev_id, dst_mesh_id, ew_dim);
-            // return;
-        }
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_mesh_id = routing_table->my_mesh_id;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->routing_fields.value = 0;
+    packet_header->mcast_params_16 = ((uint16_t)s_num_hops << 12) | ((uint16_t)n_num_hops << 8) |
+                                     ((uint16_t)w_num_hops << 4) | ((uint16_t)e_num_hops);
+    if (my_mesh_id != dst_mesh_id) {
+        // TODO
+        // dst_dev_id = exit_node;
+        // fabric_set_unicast_route(packet_header, my_mesh_id, dst_dev_id, dst_mesh_id, ew_dim);
+        // return;
     }
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
@@ -264,19 +258,18 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
-// Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
-template <typename PacketHeaderType>
+// Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
 bool fabric_set_unicast_route(
-    volatile tt_l1_ptr PacketHeaderType* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id = MAX_NUM_MESHES) {
-    if constexpr (std::is_same_v<PacketHeaderType, HybridMeshPacketHeader>) {
-        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-        packet_header->mcast_params_16 = 0;
-        tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-            reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-        if (dst_mesh_id < MAX_NUM_MESHES && dst_mesh_id != routing_table->my_mesh_id) {
-            // TODO
-            // dst_dev_id = exit_node;
-        }
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id = MAX_NUM_MESHES) {
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_16 = 0;
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    if (dst_mesh_id < MAX_NUM_MESHES && dst_mesh_id != routing_table->my_mesh_id) {
+        // TODO
+        // dst_dev_id = exit_node;
     }
 
     tt_l1_ptr routing_path_t<2, true>* routing_info =
