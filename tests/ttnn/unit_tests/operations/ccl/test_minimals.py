@@ -51,7 +51,7 @@ def run_allgather_only_with_trace(
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
-        multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
+        multi_device_global_semaphore=ccl_semaphore_handles[0],
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
@@ -68,12 +68,11 @@ def run_allgather_only_with_trace(
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
-                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=subdevice_id,
-                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
             )
             tt_out_tensor.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
@@ -83,7 +82,7 @@ def run_allgather_only_with_trace(
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+            multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
@@ -131,7 +130,7 @@ def run_all_gather_impl(
     output_shard_shape=None,
     output_shard_grid=None,
     tensor_mem_layout=None,
-    warmup_iters=2,
+    warmup_iters=20,
     use_barrier=False,
 ):
     if num_iters < 1:
@@ -153,13 +152,9 @@ def run_all_gather_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters * 2)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
     if use_barrier:
         barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
-    else:
-        barrier_semaphore_handles = None
 
     ### For sharded all gather only
     if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
@@ -254,8 +249,8 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            ccl_semaphore_handles=ccl_semaphore_handles,
-            barrier_semaphore_handles=barrier_semaphore_handles,
+            multi_device_global_semaphore=ccl_semaphore_handles,
+            barrier_semaphore=barrier_semaphore_handles,
             use_barrier=use_barrier,
             num_iter=num_iters,
             warmup_iters=warmup_iters,
@@ -267,7 +262,7 @@ def run_all_gather_impl(
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh_list[i],
                 dim,
-                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
@@ -411,19 +406,19 @@ def test_all_gather_only(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This is a blackhole test")
+@skip_for_wormhole_b0("This is a blackhole test")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
             4,
-            [1, 1, 4096, 2048],
-            3,
+            [1, 32, 32, 128],
+            1,
             ttnn.TILE_LAYOUT,
-            (64, 512),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-            (64, 2048),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
@@ -435,7 +430,7 @@ def test_all_gather_only(
         ttnn.uint32,
     ],
 )
-@pytest.mark.parametrize("warmup_iters, num_iters", [(10, 20)])
+@pytest.mark.parametrize("warmup_iters, num_iters", [(1000, 10)])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -448,7 +443,7 @@ def test_all_gather_only(
     indirect=True,
 )
 def test_bh_trace_ag(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -465,11 +460,13 @@ def test_bh_trace_ag(
     output_shard_grid,
     tensor_mem_layout,
 ):
-    if bh_1d_mesh_device.shape[0] != num_devices:
+    if bh_2d_mesh_device.shape[0] != num_devices:
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Test requires a torus but rackbox is a mesh")
     profiler = BenchmarkProfiler()
     run_all_gather_impl(
-        bh_1d_mesh_device,
+        bh_2d_mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -479,7 +476,6 @@ def test_bh_trace_ag(
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
-        use_barrier=True,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         output_shard_shape=output_shard_shape,

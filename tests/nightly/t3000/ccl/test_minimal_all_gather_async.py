@@ -42,7 +42,6 @@ def run_all_gather_impl(
     num_buffers_per_channel=None,
     allowed_pcc=1,
     skip_check=False,
-    num_l1_banks=64,
     all_gather_function=ttnn.experimental.all_gather_async,
 ):
     torch.manual_seed(0)
@@ -51,16 +50,7 @@ def run_all_gather_impl(
 
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
-        ag_output_shape,
-        dim,
-        mem_config_ag,
-        num_devices,
-        num_links,
-        ag_input_dtype,
-        layout,
-        tile,
-        num_l1_banks,
-        mem_config_input,
+        ag_output_shape, dim, mem_config_ag, num_devices, num_links, ag_input_dtype, layout, tile
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
