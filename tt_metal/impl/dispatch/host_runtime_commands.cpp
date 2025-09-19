@@ -190,30 +190,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-void EnqueueReadSubBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    void* dst,
-    const BufferRegion& region,
-    bool blocking) {
-    detail::DispatchStateCheck(true);
-    detail::ValidateBufferRegion(buffer, region);
-
-    cq.enqueue_read_buffer(buffer, dst, region, blocking);
-}
-
-void EnqueueWriteSubBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    const BufferRegion& region,
-    bool blocking) {
-    detail::DispatchStateCheck(true);
-    detail::ValidateBufferRegion(buffer, region);
-
-    cq.enqueue_write_buffer(buffer, std::move(src), region, blocking);
-}
-
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch conservatively flushes all work since there's no cq.
