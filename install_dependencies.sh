@@ -205,6 +205,8 @@ init_packages() {
                 "libcapstone-dev"
                 "libc++-17-dev"
                 "libc++abi-17-dev"
+                "libopencv-dev"
+                "libopencv-contrib-dev"
                 "wget"
                 "curl"
             )
@@ -232,6 +234,7 @@ init_packages() {
                 "boost-devel"
                 "tbb-devel"
                 "capstone-devel"
+                "opencv-devel"
                 "wget"
                 "curl"
             )
