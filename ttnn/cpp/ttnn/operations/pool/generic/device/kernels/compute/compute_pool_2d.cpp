@@ -175,7 +175,7 @@ void MAIN {
                     copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
                     copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_scratch_in_dst_idx);
 
-                    // MATH(DPRINT << "BEFORE REDUCE" << ENDL());
+                    // MATH(DPRINT << "BEFORE REDUCE n: " << n << " c_i: " << c_i << ENDL());
                     // dprint_tensix_dest_reg(index_dst_idx);
 
                     if (first_c_block) {
@@ -200,9 +200,9 @@ void MAIN {
                         }
                         add_int_tile_init();
                         add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                        // MATH(DPRINT << "AFTER INC n: " << n << " c_i: " << c_i << ENDL());
+                        // dprint_tensix_dest_reg(index_scratch_out_dst_idx);
                     }
-                    // MATH(DPRINT << "AFTER INC" << ENDL());
-                    // dprint_tensix_dest_reg(index_scratch_out_dst_idx);
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
@@ -246,6 +246,12 @@ void MAIN {
                 // PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
                 // PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
 
+                if constexpr (pack_untilize_reinit) {
+                    tensix_sync();
+                    pack_untilize_uninit(out_cb_id);
+                    tensix_sync();
+                }
+
                 if (last_c_block) {
                     PACK(tensix_sync());
                     PACK((llk_pack_hw_configure_disaggregated<false>(idx_tmp_cb_id)));
@@ -263,7 +269,7 @@ void MAIN {
                         out_cb_id, num_out_sticks, output_faces)));
 #endif
                     PACK(tensix_sync());
-                    // PACK(DPRINT << "PACKED TILE" << ENDL());
+                    // PACK(DPRINT << "PACKED TILE n: " << n << " c_i: " << c_i << ENDL());
                     // PACK(tt::compute::common::print_full_tile(idx_tmp_cb_id, 0, false));
 
                     // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
@@ -274,12 +280,6 @@ void MAIN {
                     cb_reserve_back(sync_cb_id, 1);
                     cb_wait_front(sync_cb_id, 1);
                     cb_pop_front(sync_cb_id, 1);
-                }
-
-                if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
-                    pack_untilize_uninit(out_cb_id);
-                    tensix_sync();
                 }
             }
             cb_push_back(out_cb_id, output_faces);
