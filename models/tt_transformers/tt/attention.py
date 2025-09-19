@@ -501,6 +501,9 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         if page_table:
+            import pdb
+
+            pdb.set_trace()
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
@@ -825,6 +828,7 @@ class Attention(LightweightModule):
                 page_table,
                 chunk_start_idx,
                 attn_mask=attn_mask,
+                is_causal=True,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
