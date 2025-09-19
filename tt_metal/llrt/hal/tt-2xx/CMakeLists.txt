@@ -1,4 +1,4 @@
-# HAL_2xx - Hardware Abstraction Layer for Wormhole and Blackhole
+# HAL_2xx - Hardware Abstraction Layer for Quasar
 
 # FIXME: Don't want to be reaching above to project dir
 # Prefer a library target to be explicit about the dependency in CMake

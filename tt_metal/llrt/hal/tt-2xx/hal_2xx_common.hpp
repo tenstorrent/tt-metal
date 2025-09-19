@@ -8,8 +8,6 @@
 
 namespace tt::tt_metal::hal_2xx {
 
-// Wormhole and Blackhole share many common build options.
-// This class has the options shared between the two to avoid duplication.
 class HalJitBuildQueryBase : public HalJitBuildQueryInterface {
 public:
     std::vector<std::string> defines(const Params& params) const override;
