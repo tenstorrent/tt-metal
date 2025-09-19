@@ -19,6 +19,79 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_fabric::bench {
+
+// ---------- helpers (validation / utilities) ----------
+
+namespace {
+
+// Validate workload
+inline bool validate_workload_or_fail(const PerfParams& p) {
+    if ((p.tensor_bytes % 4) != 0) {
+        ADD_FAILURE() << "tensor_bytes must be a multiple of 4 (word-aligned) for verification.";
+        return false;
+    }
+    return true;
+}
+
+// Resolve forwarding link and fail early if none found.
+inline bool pick_forwarding_link_or_fail(
+    const tt::tt_fabric::FabricNodeId& /*src*/,
+    const tt::tt_fabric::FabricNodeId& /*dst*/,
+    uint32_t& out_link_idx,
+    const PerfParams& p) {
+    auto links = tt::tt_fabric::get_forwarding_link_indices(
+        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
+        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
+
+    if (links.empty()) {
+        ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
+                      << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
+        return false;
+    }
+    out_link_idx = links[0];
+    return true;
+}
+
+// Device lookup and basic existence check.
+inline bool lookup_devices_or_fail(
+    chip_id_t src_phys, chip_id_t dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
+    src_dev = find_device_by_id(src_phys);
+    dst_dev = find_device_by_id(dst_phys);
+    if (!src_dev || !dst_dev) {
+        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
+        return false;
+    }
+    return true;
+}
+
+// Generate deterministic TX pattern.
+inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
+    std::vector<uint32_t> tx(n_words);
+    for (size_t i = 0; i < n_words; ++i) {
+        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
+    }
+    return tx;
+}
+
+// Validate RX payload equals TX payload.
+inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vector<uint32_t>& tx) {
+    if (rx.size() != tx.size()) {
+        ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
+        return;
+    }
+    for (size_t i = 0; i < rx.size(); ++i) {
+        if (rx[i] != tx[i]) {
+            ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << rx[i] << ", exp 0x" << tx[i]
+                          << std::dec << ")";
+            return;
+        }
+    }
+    // OK -> no failure emitted
+}
+
+}  // anonymous namespace
+
+// ----------------------------------- program -----------------------------------
 PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -28,24 +101,25 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     chip_id_t src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    // Get IDevice*
-    auto* src_dev = find_device_by_id(src_phys);
-    auto* dst_dev = find_device_by_id(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
+    tt::tt_metal::IDevice* src_dev = nullptr;
+    tt::tt_metal::IDevice* dst_dev = nullptr;
+    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
+        return PerfPoint{};
+    }
+
+    if (!validate_workload_or_fail(p)) {
         return PerfPoint{};
     }
 
     tt::tt_metal::CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
-    // Allocate simple flat buffers
+    // --- IO buffers & initialization ---
     tt::tt_metal::BufferConfig src_cfg{
         .device = src_dev,
         .size = p.tensor_bytes,
         .page_size = p.page_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM  // or L1 if it fits
-    };
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
     tt::tt_metal::BufferConfig dst_cfg{
         .device = dst_dev,
         .size = p.tensor_bytes,
@@ -55,32 +129,20 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     auto src_buf = tt::tt_metal::CreateBuffer(src_cfg);
     auto dst_buf = tt::tt_metal::CreateBuffer(dst_cfg);
 
-    // ---- Initialize source buffer with a deterministic pattern; clear dest ----
     auto& cq_src = src_dev->command_queue();
     auto& cq_dst = dst_dev->command_queue();
 
-    if ((p.tensor_bytes % 4) != 0) {
-        ADD_FAILURE() << "tensor_bytes must be a multiple of 4 for word-wise verification";
-        return PerfPoint{};
-    }
     const size_t n_words = p.tensor_bytes / 4;
+    auto tx = make_tx_pattern(n_words);
+    std::vector<uint32_t> zeros(n_words, 0u);
 
-    std::vector<uint32_t> tx(n_words);
-    for (size_t i = 0; i < n_words; ++i) {
-        // simple deterministic pattern
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
-    }
     // Blocking writes so data is resident before kernels run
     tt::tt_metal::EnqueueWriteBuffer(cq_src, *src_buf, tx, /*blocking=*/true);
-
-    // clear dst so we can detect partial/corrupt writes
-    std::vector<uint32_t> zeros(n_words, 0u);
     tt::tt_metal::EnqueueWriteBuffer(cq_dst, *dst_buf, zeros, /*blocking=*/true);
 
-    // ---------- Build a receiver program ----------
+    // ---------------------------- PROGRAM FACTORY ----------------------------
+    // Receiver program waits on a global semaphore bump from sender.
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
-
-    // create a global semaphore on the dst device
     auto gsem = tt::tt_metal::CreateGlobalSemaphore(
         dst_dev,
         dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
@@ -88,29 +150,26 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         tt::tt_metal::BufferType::L1);
 
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
-
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/kernels/";
+
     auto rx_wait_k = tt::tt_metal::CreateKernel(
         receiver_prog,
         std::string(KDIR) + "unicast_rx.cpp",
         receiver_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-
-    // expected_value = 1  -> return after sender bumps the sem once
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
 
-    // ---------------- Sender program: READER (RISCV_0) + WRITER (RISCV_1) ----------------
+    // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
 
-    // Compute how many pages we need to send for the requested tensor size.
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
     const uint32_t CB_ID = tt::CBIndex::c_0;
     auto cb_cfg = tt::tt_metal::CircularBufferConfig(2 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
                       .set_page_size(CB_ID, p.page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
-    // READER kernel (DRAM->CB or L1->CB). We read from src_buf (DRAM).
+    // Reader kernel (DRAM->CB)
     std::vector<uint32_t> reader_cta;
     tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
     reader_cta.push_back(1u /*SRC_IS_DRAM*/);
@@ -127,10 +186,10 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
             .compile_args = reader_cta});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // WRITER kernel (CB->Fabric->dst + final sem INC)
+    // Writer kernel (CB->Fabric->dst + final sem INC)
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(NUM_PAGES);  // == TOTAL_PAGES in kernel
+    writer_cta.push_back(NUM_PAGES);
     writer_cta.push_back(p.page_size);
 
     auto writer_k = tt::tt_metal::CreateKernel(
@@ -142,7 +201,12 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = writer_cta});
 
-    // Writer runtime args
+    // Resolve forwarding and append fabric connection args
+    uint32_t link_idx = 0;
+    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
+        return PerfPoint{};
+    }
+
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
         (uint32_t)p.mesh_id,           // 1: dst_mesh_id (logical)
@@ -152,52 +216,26 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         (uint32_t)gsem.address()       // 5: receiver L1 semaphore addr
     };
 
-    // Append fabric connection RT args so WorkerToFabricEdmSender can open the link
-    auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
-    if (links.empty()) {
-        ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
-                      << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
-        return PerfPoint{};
-    }
-    uint32_t link_idx = links[0];
-
     tt::tt_fabric::append_fabric_connection_rt_args(
         src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
-
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
+    // -------------------------- end PROGRAM FACTORY --------------------------
 
-    // ---------------- Run order: receiver first (waits), then sender ----------------
+    // Execution & timing
     fixture->RunProgramNonblocking(dst_dev, receiver_prog);
-
     auto t0 = std::chrono::steady_clock::now();
     fixture->RunProgramNonblocking(src_dev, sender_prog);
     fixture->WaitForSingleProgramDone(dst_dev, receiver_prog);
     auto t1 = std::chrono::steady_clock::now();
-
     fixture->WaitForSingleProgramDone(src_dev, sender_prog);
 
-    // ---- Read back destination buffer and verify ----
+    // Read back and verify
     tt::tt_metal::Finish(cq_dst);
     std::vector<uint32_t> rx;
     tt::tt_metal::EnqueueReadBuffer(cq_dst, *dst_buf, rx, /*blocking=*/true);
+    verify_payload_words(rx, tx);
 
-    if (rx.size() != tx.size()) {
-        ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
-    } else {
-        size_t first_bad = rx.size();
-        for (size_t i = 0; i < rx.size(); ++i) {
-            if (rx[i] != tx[i]) {
-                first_bad = i;
-                break;
-            }
-        }
-        if (first_bad != rx.size()) {
-            ADD_FAILURE() << "Data mismatch at word " << first_bad << " (got 0x" << std::hex << rx[first_bad]
-                          << ", exp 0x" << tx[first_bad] << std::dec << ")";
-        }
-    }
-
-    // Compute E2E metrics
+    // Perf point
     const double e2e_sec = std::chrono::duration<double>(t1 - t0).count();
     const uint64_t bytes = static_cast<uint64_t>(p.tensor_bytes);
     const double gb = static_cast<double>(bytes) / 1e9;
@@ -211,4 +249,5 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         .gbps = gbps,
     };
 }
+
 }  // namespace tt::tt_fabric::bench
