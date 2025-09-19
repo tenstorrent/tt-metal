@@ -90,10 +90,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    env:
-      civ1-runner-labels: ${{ format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label) }}
-      civ2-runner-labels: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
-    runs-on: ${{ env.civ2-runner-labels || env.civ1-runner-labels }}
+    runs-on: ${{ inputs.runner-label == 'N150' && 'tt-ubuntu-2204-N150-viommu-stablex' || inputs.runner-label == 'N300' && 'tt-ubuntu-2204-N300-viommu-stablex' || inputs.runner-label == 'P150' && 'tt-ubuntu-2204-P150-viommu-stablex' || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)) }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
