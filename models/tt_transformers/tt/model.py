@@ -173,25 +173,27 @@ class Transformer(LightweightModule):
         #     layout=ttnn.TILE_LAYOUT,
         #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         # )
+
+
         sliding_window_max_seq_len = (
             args.max_seq_len
             if paged_attention_config is None
-            else paged_attention_config.max_num_blocks * paged_attention_config.block_size
+            else (paged_attention_config.max_num_blocks * paged_attention_config.block_size) // args.max_batch_size
         )
-        self.sliding_window_causal_mask = ttnn.from_torch(
-            torch.zeros([1, 1, args.n_heads // self.mesh_device.shape[1], sliding_window_max_seq_len]),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        self.causal_mask = ttnn.from_torch(
-            torch.zeros([1, 1, args.n_heads // self.mesh_device.shape[1], sliding_window_max_seq_len]),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        # self.causal_mask = ttnn.from_torch(
+        #     torch.zeros([1, 1, args.n_heads // self.mesh_device.shape[1], sliding_window_max_seq_len]),
+        #     device=self.mesh_device,
+        #     dtype=ttnn.bfloat4_b,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        # )
+        # self.sliding_window_causal_mask = ttnn.from_torch(
+        #     torch.zeros([1, 1, args.n_heads // self.mesh_device.shape[1], sliding_window_max_seq_len]),
+        #     device=self.mesh_device,
+        #     dtype=ttnn.bfloat4_b,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        # )
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
@@ -330,30 +332,10 @@ class Transformer(LightweightModule):
             device=self.mesh_device,
             mode="decode",
         )
-        ttnn.copy_host_to_device_tensor(causal_mask, self.causal_mask)
-        ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.sliding_window_causal_mask)
+        # ttnn.copy_host_to_device_tensor(causal_mask, self.causal_mask)
+        # ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.sliding_window_causal_mask)
 
-        # attention_mask = [
-        #     create_sliding_window_causal_mask(
-        #         tokens,
-        #         attn_mask,
-        #         current_pos,
-        #         self.args,
-        #         self.paged_attention_config,
-        #         device=self.mesh_device,
-        #         mode="decode",
-        #     ),
-        #     create_causal_mask(
-        #         tokens,
-        #         attn_mask,
-        #         current_pos,
-        #         self.args,
-        #         self.paged_attention_config,
-        #         device=self.mesh_device,
-        #         mode="decode",
-        #     ),
-        # ]
-        return tokens, current_pos_tt, rope_idxs, page_table  # , sliding_window_causal_mask, causal_mask
+        return tokens, current_pos_tt, rope_idxs, page_table, sliding_window_causal_mask, causal_mask
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -458,10 +440,10 @@ class Transformer(LightweightModule):
         current_pos,
         rot_mat_idxs=None,
         page_table=None,
-        kv_cache=None,
-        argmax_on_device=False,
         sliding_window_attn_mask=None,
         causal_attn_mask=None,
+        kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -484,8 +466,10 @@ class Transformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
             # attn_mask=attn_mask,
-            sliding_window_attn_mask=self.sliding_window_causal_mask,
-            causal_attn_mask=self.causal_mask,
+            sliding_window_attn_mask=sliding_window_attn_mask,
+            # sliding_window_attn_mask=self.sliding_window_causal_mask,
+            causal_attn_mask=causal_attn_mask,
+            # causal_attn_mask=self.causal_mask,
         )
 
         # Gather the output across all devices and untilize the tensor (for argmax)
