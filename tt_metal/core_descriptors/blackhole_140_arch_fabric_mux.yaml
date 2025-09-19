@@ -9,6 +9,42 @@
 #     core descriptor config
 
 unharvested:
+  row:
+    1:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [13, 8]
+
+      storage_cores: # Relative to grid of tensix cores
+        []
+
+      # First half for fabric mux, second half for dispatch (14 cores total -> 8/6 each)
+      fabric_mux_cores:
+        [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1], [6, -1], [7, -1]]
+
+      dispatch_cores:
+        [[8, -1], [9, -1], [10, -1], [11, -1], [12, -1], [13, -1]]
+
+      dispatch_core_type:
+        "tensix"
+
+    2:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [13, 8]
+
+      storage_cores: # Relative to grid of tensix cores
+        []
+
+      # First half for fabric mux, second half for dispatch (14 cores total -> 8/6 each)
+      fabric_mux_cores:
+        [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1], [6, -1], [7, -1]]
+
+      dispatch_cores:
+        [[8, -1], [9, -1], [10, -1], [11, -1], [12, -1], [13, -1]]
+
+      dispatch_core_type:
+        "tensix"
   col:
     1:
       compute_with_storage_grid_range: # Logical only start and end [x, y]
@@ -20,10 +56,10 @@ unharvested:
 
       # First half for fabric mux, second half for dispatch (10 cores total -> 5 each)
       fabric_mux_cores:
-        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4]]
+        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
 
       dispatch_cores:
-        [[-1, 5], [-1, 6], [-1, 7], [-1, 8], [-1, 9]]
+        [[-1, 6], [-1, 7], [-1, 8], [-1, 9]]
 
       dispatch_core_type:
         "tensix"
@@ -38,15 +74,52 @@ unharvested:
 
       # Same allocation for 2 CQ configuration
       fabric_mux_cores:
-        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4]]
+        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
 
       dispatch_cores:
-        [[-1, 5], [-1, 6], [-1, 7], [-1, 8], [-1, 9]]
+        [[-1, 6], [-1, 7], [-1, 8], [-1, 9]]
 
       dispatch_core_type:
         "tensix"
 
 1xharvested:
+  row:
+    1:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [12, 8]
+
+      storage_cores: # Relative to grid of tensix cores
+        []
+
+      # First half for fabric mux, second half for dispatch (13 cores total -> 8/5 each)
+      fabric_mux_cores:
+        [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1], [6, -1], [7, -1]]
+
+      dispatch_cores:
+        [[8, -1], [9, -1], [10, -1], [11, -1], [12, -1]]
+
+      dispatch_core_type:
+        "tensix"
+
+    2:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [12, 8]
+
+      storage_cores: # Relative to grid of tensix cores
+        []
+
+      # First half for fabric mux, second half for dispatch (13 cores total -> 8/5 each)
+      fabric_mux_cores:
+        [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1], [6, -1], [7, -1]]
+
+      dispatch_cores:
+        [[8, -1], [9, -1], [10, -1], [11, -1], [12, -1]]
+
+      dispatch_core_type:
+        "tensix"
+
   col:
     1:
       compute_with_storage_grid_range: # Logical only start and end [x, y]
@@ -58,10 +131,10 @@ unharvested:
 
       # First half for fabric mux, second half for dispatch (10 cores total -> 5 each)
       fabric_mux_cores:
-        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4]]
+        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
 
       dispatch_cores:
-        [[-1, 5], [-1, 6], [-1, 7], [-1, 8], [-1, 9]]
+        [[-1, 6], [-1, 7], [-1, 8], [-1, 9]]
 
       dispatch_core_type:
         "tensix"
@@ -76,15 +149,52 @@ unharvested:
 
       # Same allocation for 2 CQ configuration
       fabric_mux_cores:
-        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4]]
+        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
 
       dispatch_cores:
-        [[-1, 5], [-1, 6], [-1, 7], [-1, 8], [-1, 9]]
+        [[-1, 6], [-1, 7], [-1, 8], [-1, 9]]
 
       dispatch_core_type:
         "tensix"
 
 2xharvested:
+  row:
+    1:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [11, 8]
+
+      storage_cores: # Relative to grid of tensix cores
+        []
+
+      # First half for fabric mux, second half for dispatch (12 cores total -> 6 each)
+      fabric_mux_cores:
+        [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1]]
+
+      dispatch_cores:
+        [[6, -1], [7, -1], [8, -1], [9, -1], [10, -1], [11, -1]]
+
+      dispatch_core_type:
+        "tensix"
+
+    2:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [11, 8]
+
+      storage_cores: # Relative to grid of tensix cores
+        []
+
+      # First half for fabric mux, second half for dispatch (12 cores total -> 6 each)
+      fabric_mux_cores:
+        [[0, -1], [1, -1], [2, -1], [3, -1], [4, -1], [5, -1]]
+
+      dispatch_cores:
+        [[6, -1], [7, -1], [8, -1], [9, -1], [10, -1], [11, -1]]
+
+      dispatch_core_type:
+        "tensix"
+
   col:
     1:
       compute_with_storage_grid_range: # Logical only start and end [x, y]
@@ -96,10 +206,10 @@ unharvested:
 
       # First half for fabric mux, second half for dispatch (10 cores total -> 5 each)
       fabric_mux_cores:
-        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4]]
+        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
 
       dispatch_cores:
-        [[-1, 5], [-1, 6], [-1, 7], [-1, 8], [-1, 9]]
+        [[-1, 6], [-1, 7], [-1, 8], [-1, 9]]
 
       dispatch_core_type:
         "tensix"
@@ -114,10 +224,10 @@ unharvested:
 
       # Same allocation for 2 CQ configuration
       fabric_mux_cores:
-        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4]]
+        [[-1, 0], [-1, 1], [-1, 2], [-1, 3], [-1, 4], [-1, 5]]
 
       dispatch_cores:
-        [[-1, 5], [-1, 6], [-1, 7], [-1, 8], [-1, 9]]
+        [[-1, 6], [-1, 7], [-1, 8], [-1, 9]]
 
       dispatch_core_type:
         "tensix"
