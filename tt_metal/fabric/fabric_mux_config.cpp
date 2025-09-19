@@ -216,6 +216,8 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
+    ct_args.push_back(0);  // num_upstream_routers - unused by default
+    ct_args.push_back(0);  // fabric_router_sync_address - unused by default
     append_default_stream_ids_to_ct_args(ct_args);
     append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
