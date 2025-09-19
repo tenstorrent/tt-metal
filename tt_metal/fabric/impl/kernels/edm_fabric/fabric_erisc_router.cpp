@@ -26,6 +26,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_control_channel.hpp"
+
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
@@ -37,7 +39,7 @@
 #include <type_traits>
 
 using namespace tt::tt_fabric;
-
+using namespace tt::tt_fabric::control_channel;
 /*
 
 The fabric Erisc Data Mover (EDM) is a component that can be used to build *very* simple linear topology fabrics.
@@ -1921,6 +1923,7 @@ template <
 void run_fabric_edm_main_loop(
     EthReceiverChannels& local_receiver_channels,
     EthSenderChannels& local_sender_channels,
+    FabricControlChannel& control_channel,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_noc_interfaces_vc0,
@@ -2059,6 +2062,8 @@ void run_fabric_edm_main_loop(
                     inner_loop_perf_telemetry_collector);
             }
         }
+
+        control_channel.run_control_channel_step();
 
         if constexpr (enable_context_switch) {
             // shouldn't do noc counter sync since we are not incrementing them
@@ -2455,6 +2460,8 @@ void kernel_main() {
             tt::tt_fabric::EdmFabricSenderChannelCounters();
     }
 
+    FabricControlChannel control_channel;
+
     size_t arg_idx = 0;
     ///////////////////////
     // Common runtime args:
@@ -2535,6 +2542,8 @@ void kernel_main() {
             *sender4_worker_semaphore_ptr = 0;
         }
     }
+
+    control_channel.init();
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
 
@@ -2965,6 +2974,7 @@ void kernel_main() {
     run_fabric_edm_main_loop<enable_packet_header_recording, NUM_RECEIVER_CHANNELS>(
         local_receiver_channels,
         local_sender_channels,
+        control_channel,
         local_sender_channel_worker_interfaces,
         downstream_edm_noc_interfaces_vc0,
         downstream_edm_noc_interface_vc1,
@@ -2991,6 +3001,9 @@ void kernel_main() {
 
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(termination_signal_ptr, edm_status_ptr, receiver_channel_0_trid_tracker, receiver_channel_1_trid_tracker);
+
+    // only for intial bringup - remove later
+    control_channel.teardown((uint32_t)edm_status_ptr);
 
     WAYPOINT("DONE");
 }

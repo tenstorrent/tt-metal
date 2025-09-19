@@ -14,6 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -231,6 +232,77 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_);
 }
 
+FabricControlChannelConfig::FabricControlChannelConfig() = default;
+
+// TODO: find a way to get this from the hal or somewhere else before control plane is initialized
+std::size_t get_max_num_eth_cores() {
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        return 10;
+    } else {
+        return 16;
+    }
+}
+
+std::size_t FabricControlChannelConfig::setup_addresses(std::size_t l1_start_addr) {
+    std::size_t next_l1_addr = l1_start_addr;
+
+    this->max_num_eth_cores = get_max_num_eth_cores();
+    log_info(tt::LogMetal, "Max num eth cores: {}", this->max_num_eth_cores);
+
+    log_info(tt::LogMetal, "buffer slot size: {}", FabricControlChannelConfig::buffer_slot_size);
+
+    // host buffer
+    this->host_buffer_base_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::num_host_buffer_slots * FabricControlChannelConfig::buffer_slot_size;
+    this->host_buffer_remote_write_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->host_buffer_remote_read_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+
+    // eth buffer
+    this->eth_buffer_base_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::num_eth_buffer_slots * FabricControlChannelConfig::buffer_slot_size;
+    this->eth_buffer_remote_write_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->eth_buffer_remote_read_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->eth_buffer_local_write_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->eth_buffer_local_read_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+
+    // local buffer
+    this->local_buffer_base_address = next_l1_addr;
+    next_l1_addr += this->max_num_eth_cores * FabricControlChannelConfig::num_local_buffer_slots *
+                    FabricControlChannelConfig::buffer_slot_size;
+    this->local_buffer_remote_write_counter_base_address = next_l1_addr;
+    next_l1_addr += this->max_num_eth_cores * FabricControlChannelConfig::field_size;
+    this->local_buffer_remote_read_counter_base_address = next_l1_addr;
+    next_l1_addr += this->max_num_eth_cores * FabricControlChannelConfig::field_size;
+
+    return next_l1_addr;
+}
+
+void FabricControlChannelConfig::get_compile_time_args(std::vector<uint32_t>& ct_args) const {
+    std::vector<uint32_t> control_channel_args = {
+        this->num_host_buffer_slots,
+        this->num_eth_buffer_slots,
+        this->num_local_buffer_slots,
+        this->max_num_eth_cores,
+        this->host_buffer_base_address,
+        this->eth_buffer_base_address,
+        this->local_buffer_base_address,
+        this->host_buffer_remote_write_counter_address,
+        this->host_buffer_remote_read_counter_address,
+        this->eth_buffer_remote_write_counter_address,
+        this->eth_buffer_remote_read_counter_address,
+        this->eth_buffer_local_write_counter_address,
+        this->eth_buffer_local_read_counter_address,
+        this->local_buffer_remote_write_counter_base_address,
+        this->local_buffer_remote_read_counter_base_address};
+    ct_args.insert(ct_args.end(), control_channel_args.begin(), control_channel_args.end());
+}
+
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     uint32_t num_sender_channels = get_sender_channel_count(is_2D_routing);
@@ -249,6 +321,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
+
+    // setup control channel addresses
+    const auto start_addr = next_l1_addr;
+    next_l1_addr = this->control_channel_config.setup_addresses(next_l1_addr);
+    const auto end_addr = next_l1_addr;
+    log_info(
+        tt::LogMetal, "Control channel addresses: [{}, {}), size: {}", start_addr, end_addr, end_addr - start_addr);
 
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
     if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
@@ -1436,7 +1515,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         }
     }
 
+    // Special marker 3
     ct_args.push_back(0x30c0ffee);
+
+    this->config.control_channel_config.get_compile_time_args(ct_args);
+
+    ct_args.push_back(0x40c0ffee);
     return ct_args;
 }
 

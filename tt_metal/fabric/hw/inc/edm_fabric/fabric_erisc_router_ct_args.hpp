@@ -377,7 +377,47 @@ static_assert(
     "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t CONTROL_CHANNEL_CT_ARGS_START_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+
+constexpr size_t control_channel_num_host_buffer_slots =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 0);
+constexpr size_t control_channel_num_eth_buffer_slots = get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 1);
+constexpr size_t control_channel_num_local_buffer_slots =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 2);
+constexpr size_t control_channel_max_num_eth_cores = get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 3);
+constexpr size_t control_channel_host_buffer_base_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 4);
+constexpr size_t control_channel_eth_buffer_base_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 5);
+constexpr size_t control_channel_local_buffer_base_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 6);
+constexpr size_t control_channel_host_buffer_remote_write_counter_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 7);
+constexpr size_t control_channel_host_buffer_remote_read_counter_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 8);
+constexpr size_t control_channel_eth_buffer_remote_write_counter_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 9);
+constexpr size_t control_channel_eth_buffer_remote_read_counter_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 10);
+constexpr size_t control_channel_eth_buffer_local_write_counter_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 11);
+constexpr size_t control_channel_eth_buffer_local_read_counter_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 12);
+constexpr size_t control_channel_local_buffer_remote_write_counter_base_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 13);
+constexpr size_t control_channel_local_buffer_remote_read_counter_base_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 14);
+
+constexpr size_t CONTROL_CHANNEL_CT_ARGS_END_IDX = CONTROL_CHANNEL_CT_ARGS_START_IDX + 14;
+
+constexpr size_t SPECIAL_MARKER_4_IDX = CONTROL_CHANNEL_CT_ARGS_END_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t SPECIAL_MARKER_4 = 0x40c0ffee;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_4_IDX) == SPECIAL_MARKER_4,
+    "Special marker 4 not found. This implies some arguments were misaligned between host and device. Double check the "
+    "CT args.");
+
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_4_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =

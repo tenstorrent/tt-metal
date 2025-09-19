@@ -227,6 +227,41 @@ struct FabricEriscDatamoverOptions {
     eth_chan_directions direction = eth_chan_directions::EAST;  // only used by 2D to get the correct router direction
 };
 
+struct FabricControlChannelConfig {
+    static constexpr std::size_t field_size = 16;
+    static constexpr std::size_t num_host_buffer_slots = 2;
+    static constexpr std::size_t num_eth_buffer_slots = 4;
+    static constexpr std::size_t num_local_buffer_slots = 4;
+    static constexpr std::size_t buffer_slot_size = sizeof(tt::tt_fabric::ControlPacketHeader);
+
+    std::size_t max_num_eth_cores = 0;
+
+    // buffer addresses
+    std::size_t host_buffer_base_address = 0;
+    std::size_t eth_buffer_base_address = 0;
+    std::size_t local_buffer_base_address = 0;
+
+    // flow control addresses - host buffer
+    std::size_t host_buffer_remote_write_counter_address = 0;
+    std::size_t host_buffer_remote_read_counter_address = 0;
+
+    // flow control addresses - eth buffer
+    std::size_t eth_buffer_remote_write_counter_address = 0;
+    std::size_t eth_buffer_remote_read_counter_address = 0;
+    std::size_t eth_buffer_local_write_counter_address = 0;
+    std::size_t eth_buffer_local_read_counter_address = 0;
+
+    // flow control addresses - local buffer
+    std::size_t local_buffer_remote_write_counter_base_address = 0;
+    std::size_t local_buffer_remote_read_counter_base_address = 0;
+
+    FabricControlChannelConfig();
+
+    std::size_t setup_addresses(std::size_t l1_start_address);
+
+    void get_compile_time_args(std::vector<uint32_t>& ct_args) const;
+};
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -403,6 +438,8 @@ struct FabricEriscDatamoverConfig {
 
     // emd vcs
     std::size_t edm_noc_vc = 0;
+
+    FabricControlChannelConfig control_channel_config;
 
 private:
     void configure_buffer_slots_helper(
