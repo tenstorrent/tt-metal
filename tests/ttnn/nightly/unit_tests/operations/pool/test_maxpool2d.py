@@ -650,6 +650,8 @@ def test_max_pool2d_output_formats_and_layouts(
         output_layout=output_layout,
         nightly_skips=False,
     )
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape_nchw",
