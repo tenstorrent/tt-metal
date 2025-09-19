@@ -32,33 +32,19 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [2.2. TT-routing (Layer 3)](#layer_3)
 
-[2.2.1. Routing Buffer](#routing_buffer)
+[2.2.1. Routing Tables](#routing_tables)
 
-[2.2.2. Fabric Router](#router)
+[2.2.1.1. L0 Routing (Intra-Mesh)](#intramesh)
 
-[2.2.2.1. RB Per VC Per Direction](#rb_per_vc)
+[2.2.1.1.1. L0 Routing Table Setup](#intramesh_setup)
 
-[2.2.2.2. Shared RB Per VC](#shared_rb_per_vc)
+[2.2.1.2. L1 Routing (Inter-Mesh)](#intermesh)
 
-[2.2.2.2.1. Ticketing/Mutex Implementation](#ticketing)
+[2.2.1.2.1. L1 Routing Table Setup](#intermesh_setup)
 
-[2.2.2.3. Shared RB Per VC With Gatekeeper](#rb_w_gk)
+[2.2.2. Routing Planes](#routing_planes)
 
-[2.2.2.4. Pull Model Shared RB Per VC With Gatekeeper](#rb_w_gk_pull)
-
-[2.2.3. Routing Tables](#routing_tables)
-
-[2.2.3.1. L0 Routing (Intra-Mesh)](#intramesh)
-
-[2.2.3.1.1. L0 Routing Table Setup](#intramesh_setup)
-
-[2.2.3.2. L1 Routing (Inter-Mesh)](#intermesh)
-
-[2.2.3.2.1. L1 Routing Table Setup](#intermesh_setup)
-
-[2.2.4. Routing Planes](#routing_planes)
-
-[2.2.5. Automatic Traffic Rerouting](#rerouting)
+[2.2.3. Automatic Traffic Rerouting](#rerouting)
 
 [2.3. TT-transport (Layer 4)](#layer_4)
 
@@ -68,77 +54,75 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [2.4. TT-session (Layer 5)](#layer_5)
 
-[2.4.1. Packet (RDMA) Mode](#packet_mode)
+[2.4.1. Sockets over TT-Fabric](#sockets)
 
-[2.4.2. Streaming Socket Mode](#ssocket)
+[3. Fabric Router](#router)
 
-[2.4.3. Datagram Socket Mode](#dsocket)
+[3.1. Buffers and Virtual Channels](#rb_per_vc)
 
-[2.4.4. Endpoint Flow Control Handshake Considerations](#flow_control)
+[4. Read/Write API Specification](#rw_api)
 
-[3. Read/Write API Specification](#rw_api)
+[4.1. Asynchronous Write](#async_wr)
 
-[3.1. Asynchronous Write](#async_wr)
+[4.2. Asynchronous Multicast Write](#async_mcast_wr)
 
-[3.2. Asynchronous Multicast Write](#async_mcast_wr)
+[4.3. Asynchronous Write Barrier](#async_wr_barrier)
 
-[3.3. Asynchronous Write Barrier](#async_wr_barrier)
+[4.4. Asynchronous Read](#async_rd)
 
-[3.4. Asynchronous Read](#async_rd)
+[4.5. Asynchronous Read Barrier](#async_rd_barrier)
 
-[3.5. Asynchronous Read Barrier](#async_rd_barrier)
+[4.6. Asynchronous Atomic Increment](#async_atomic_inc)
 
-[3.6. Asynchronous Atomic Increment](#async_atomic_inc)
+[4.7. Asynchronous Atomic Read and Increment](#async_atomic_rd_inc)
 
-[3.7. Asynchronous Atomic Read and Increment](#async_atomic_rd_inc)
+[5. Socket API Specification](#socket_api)
 
-[4. Socket API Specification](#socket_api)
+[5.1. Socket Open](#socket_open)
 
-[4.1. Socket Open](#socket_open)
+[5.2. Socket Close](#socket_close)
 
-[4.2. Socket Close](#socket_close)
+[5.3. Socket Connect](#socket_connect)
 
-[4.3. Socket Connect](#socket_connect)
+[5.4. Socket Send](#socket_send)
 
-[4.4. Socket Send](#socket_send)
+[6. Deadlock Avoidance and Mitigation](#deadlocks)
 
-[5. Deadlock Avoidance and Mitigation](#deadlocks)
+[6.1. Dimension Ordered Routing](#dim_order_routing)
 
-[5.1. Dimension Ordered Routing](#dim_order_routing)
+[6.2. Edge Disjoint Routing](#disjoint_routing)
 
-[5.2. Edge Disjoint Routing](#disjoint_routing)
+[6.3. Fabric Virtual Channels](#fab_vcs)
 
-[5.3. Fabric Virtual Channels](#fab_vcs)
+[6.4. Time To Live (TTL)](#ttl)
 
-[5.4. Time To Live (TTL)](#ttl)
+[6.5. Timeout](#timeout)
 
-[5.5. Timeout](#timeout)
+[6.6. Limitations](#limits)
 
-[5.6. Limitations](#limits)
+[7. TT-Fabric Model](#model)
 
-[6. TT-Fabric Model](#model)
+[7.1. Serialization and Visualization](#visualization)
 
-[6.1. Serialization and Visualization](#visualization)
+[7.2. Data Plane Simulator](#simulator)
 
-[6.2. Data Plane Simulator](#simulator)
+[7.3. Modelling External Disruptors and Buffer Limits](#disruptors)
 
-[6.3. Modelling External Disruptors and Buffer Limits](#disruptors)
+[8. System Specification](#system_spec)
 
-[7. System Specification](#system_spec)
+[8.1. System Components](#system_components)
 
-[7.1. System Components](#system_components)
+[8.2. TG](#tg)
 
-[7.2. TG](#tg)
+[8.3. Multi-Host TGG](#tgg)
 
-[7.3. Multi-Host TGG](#tgg)
+[8.4. Quanta 2 Galaxy System](#ubb_galaxy)
 
-[7.4. Quanta 2 Galaxy System](#ubb_galaxy)
+[9. Resource Allocation](#resource_alloc)
 
-[8. Resource Allocation](#resource_alloc)
+[9.1. Available Dispatch Cores](#available_cores)
 
-[8.1. Available Dispatch Cores](#available_cores)
-
-[8.2. Fast Dispatch and Fabric Kernel Resouces](#fd_and_fabric)
+[9.2. Fast Dispatch and Fabric Kernel Resouces](#fd_and_fabric)
 
 # 1 Overview <a id="overview"></a>
 
@@ -268,48 +252,12 @@ A packet's route can be determined by looking up routing tables in a router, or 
 
 When there are multiple meshes in fabric, then a packet's source route is set by the sending worker as well as at every other mesh entry point. For an inter-mesh packet the sending worker sets the packet source route to its local mesh's exit node. When the packet crosses the mesh boundary, the entry node fabric router in the next mesh calculates a new source route and updates the packet header. The new source route determines how the packet will traverse the new mesh. If the packet is destined for current mesh, the source route is the path to destination device in the current mesh. If the packet is destined for yet another mesh, the source route generated by the mesh entry node router is to an exit node of the current mesh. This exit node is along the path to the destination mesh specified in the packet header.
 
-TT-Routing also implements automatic rerouting incase of an ethernet link failure. Rerouting is implemented within the TT-routing layer and is invisible to the upper layers of the stack. 
-TT-Fabric control plane monitors ethernet links and in case of an outage, it notifies the affected fabric routers to reroute their traffic over a different available router, that is connected in the same direction as the affected routers. 
+TT-Routing also implements automatic rerouting incase of an ethernet link failure. Rerouting is implemented within the TT-routing layer and is invisible to the upper layers of the stack.
+TT-Fabric control plane monitors ethernet links and in case of an outage, it notifies the affected fabric routers to reroute their traffic over a different available router, that is connected in the same direction as the affected routers.
 User workload on data plane encounters a temporary pause in activity. If TT-Fabric control plane and routers are able to setup a reroute, workload resumes operation at a lower data rate. In case alternate route is not possible, tt-fabric control plane can take other mitigating actions such as notifying the user application.
 
-### 2.2.1 Routing Buffer <a id="routing_buffer"></a>
 
-A Routing buffer (RB) is a circular buffer used for packet forwarding from a producer to a consumer. RB resides in L1 of consumer and packets are pushed to it over NOC or Ethernet by a producer. Producer and consumer implement a flowcontrol handshake to notify arrival and processing of packets in the buffer. Fabric routers process packets from associated RBs in the order they are received in. Producer gets back pressured if consumer does not pull data from the buffer and the buffer becomes full.
-
-An RB can only have one producer and one consumer.
-
-![](images/image005.png)
-
-### 2.2.2 Fabric Router <a id="router"></a>
-
-Fabric Router is responsible for routing packets in the fabric. As stated earlier, packets are source routed within a mesh. Fabric workers and It is the responsibility of the control plane to configure routing tables in every fabric router. Any router in the fabric only needs to determine the next hop in the direction of packet destination. At every hop, a fabric router picks the next hop for the current packet from its private routing table and forwards the packet in that direction. Routing decisions are purely based on routing table lookups.
-
-In a 2-D Mesh, a router has 5 possible directions. East, West, North, South to one of its four possible neighbors. The fifth direction is the center or the device itself. This is the case on the last hop, where the packet has reached its destination device, and the packet needs to be consumed at the router’s device.
-
-On Wormhole and Blackhole, Fabric Routers are Ethernet and Tensix cores within each device. There are no fabric workers other than the RiscV processors within these cores. Future architectures that provide dedicated communication chiplets will have fabric workers running on communication chiplets in addition to AI accelerator chiplets.
-
-Fabric routers can be mapped on to a single RiscV core or multiple cores depending on how the router functions are grouped. Since all fabric routers are bidirectional, there is independent incoming and outgoing traffic that can be mapped to different cores. This increases the worker core resource requirement for fabric routing node. On the other hand, mapping all fabric functions onto a single core affects performance as one core may not be able to sustain full ethernet bandwidth.
-
-#### 2.2.2.1 RB Per VC Per Direction <a id="rb_per_vc"></a>
-
-![](images/image006.png)
-
-In this configuration, every outgoing edge router has a dedicated RB for traffic coming from the remaining 4 directions. For example, West router has 1 RB each for traffic coming from South, East, North and Center. Data sent by local compute workers gets routed through the Center. Since there is 1 RB per center per FVC, there can only be one producer per FVC.
-
-Incoming traffic on an edge gets routed to one of the three outgoing edges, or the Center if it is intended for current device.
-
-A fabric router is mapped to one Ethernet Core and two Tensix RiscV cores. The two Tensix RiscV cores are required per direction.
-
-In total, 10 RiscV cores are used for four ethernet links. Wormhole Galaxy that has sixteen ethernet links, this adds up to 40 RiscV cores required to implement one TT-Fabric routing node.
-
-On Blackhole, with 10 ethernet links, we need 24 RiscV cores.
-
-Mapping the outgoing mux paths and incoming demux paths onto one core halves that core count.
-
-A major drawback of this approach is inefficient RB usage since we must size the buffers for worst case assuming traffic from all directions all the time. In practice, only some of the VCs and routes will be active which means most of the RBs and thus precious SRAM space will be unutilized.
-
-
-### 2.2.3 Routing Tables <a id="routing_tables"></a>
+### 2.2.1 Routing Tables <a id="routing_tables"></a>
 
 TT-Fabric allows a maximum scale out to 250,000 devices. Devices are connected in groups of meshes and we support upto 1024 meshes of 256 devices each.
 
@@ -326,9 +274,9 @@ Fabric routers have fully instantiated routing tables indexed with Device Id or 
 
 An intra-mesh routing table entry is a source route to a mesh destination. This destination can be the packet's final destination or it can be an exit node in case of in inter-mesh packet.
 
-An inter-mesh routing table entry is an exit node in the current mesh. 
+An inter-mesh routing table entry is an exit node in the current mesh.
 
-#### 2.2.3.1 L0 Routing (Intra-Mesh) <a id="intramesh"></a>
+#### 2.2.1.1 L0 Routing (Intra-Mesh) <a id="intramesh"></a>
 
 When a packet’s destination is within the local mesh, the next hop is looked up from L0 routing table and packet is forwarded over specified ethernet port.
 
@@ -344,7 +292,7 @@ L0 routing table example:
 | ... |  |
 | 1023 | 8 |
 
-##### 2.2.3.1.1 L0 Routing Table Setup <a id="intramesh_setup"></a>
+##### 2.2.1.1.1 L0 Routing Table Setup <a id="intramesh_setup"></a>
 
 The following figure shows a 4 mesh cluster. Each mesh has 9 devices. Each device shows which of its ethernet ports are connected to its neighbor.
 
@@ -387,7 +335,7 @@ The following table shows how a packet sent by source Device 0 gets routed to de
   </tr>
 </table>
 
-#### 2.2.3.2 L1 Routing (Inter-Mesh) <a id="intermesh"></a>
+#### 2.2.1.2 L1 Routing (Inter-Mesh) <a id="intermesh"></a>
 
 When a packet is not addressed to local mesh, the next hop is looked up from L1 routing table and packet is forwarded over specified ethernet port.
 
@@ -403,7 +351,7 @@ L1 routing table example:
 | ... |  |
 | 1023 | 9 |
 
-##### 2.2.3.2.1 L1 Routing Table Setup <a id="intermesh_setup"></a>
+##### 2.2.1.2.1 L1 Routing Table Setup <a id="intermesh_setup"></a>
 
 For the same 4 Mesh cluster mentioned in previous section, L1 routing table for devices on each of the 4 meshes is shown in the following figure. Each row labeled 0 to 8 is L1 routing table for respective device in respective source mesh. Colored boxes identify the Exit nodes on each Mesh. To identify Mesh x Device x (Ethernet) Port x we can use a notation of MxDxPx.
 
@@ -413,7 +361,7 @@ There is no direct route between M0, M3 or M1, M2. Traffic from M0 to M3 will tr
 
 ![](images/image011.png)
 
-### 2.2.4 Routing Planes <a id="routing_planes"></a>
+### 2.2.2 Routing Planes <a id="routing_planes"></a>
 
 Tenstorrent devices support multiple ethernet links for routing in any direction. On WH, for each of the East, West, North, South directions, we have 4 ethernet links. BH, similarly has 2, and potentially another 2 for Up or Down direction for 3D meshes. Multiple ethernet links means we have more than one TT-Fabric route to a destination. To support multiple routes while keeping the traffic patterns deterministic, we are introducing the concept of Routing Planes. The multiple ethernet ports in each direction are one to one mapped, such that the first ethernet port on any edge only routes over first ethernet port of the other edges. Similarly, the second ethernet port only routes over the second ethernet port of the other edges. This keeps the traffic contained within its routing plane and there is no cross talk between the routing planes. TT-Fabric clients can specify the routing plane when issuing transactions. In general, the number of routing planes is the same as the number of available parallel ethernet ports per direction on a device. For WH it is four while for BH it is two.
 
@@ -421,7 +369,7 @@ The following diagram shows how the four ethernet ports per direction on WH mesh
 
 ![](images/image012.png)
 
-### 2.2.5 Automatic Traffic Rerouting <a id="rerouting"></a>
+### 2.2.3 Automatic Traffic Rerouting <a id="rerouting"></a>
 
 TT-Fabric supports device meshes that can scale up to hundreds of thousands of devices. On such a large scale, the probability of some ethernet links going down is non-negligible. An interconnect that does not implement link redundancy and is not able to work around some broken ethernet links will face frequent work interruptions and require a lot of system management calls. We intend to build redundancy into TT-Fabric network stack such that if some ethernet links on a fabric node go down, fabric can automatically reroute blocked traffic over an available ethernet link. If there is at least 1 available link in the same direction as the broken link, TT-Fabric's redundancy implementation will be completely transparent to workloads running on the system. End user applications may notice a temporary pause and lower data rates but should not otherwise require any intervention. TT-Fabric will also notify Control Plane of the rerouting status so that appropriate action may be taken on the system management front to service the broken ethernet links. User workload will be able to reach its next checkpoint without network interruption at degraded data rates. At that point Control plane can update routing tables to take out broken links from routing network. System maintenance can also be performed to fix ethernet link issues before resuming user work.
 
@@ -455,17 +403,50 @@ TT-Session layer provides the APIs for higher level user programs/kernels to con
 Synchronous data transfer however is supported via sockets over fabric. We have implemented send/receive operations that use fabric send apis to exchange data as well as flow control messages.
 
 
-### 2.4.2 Sockets over TT-Fabric <a id="sockets"></a>
+### 2.4.1 Sockets over TT-Fabric <a id="sockets"></a>
 
 Describe Socket send/receive op operation.
 
-# 3 Read/Write API Specification <a id="rw_api"></a>
+# 3 Fabric Router <a id="router"></a>
+
+Fabric Router implements all runtime TT-Fabric network stack functions. A fabric router can be mapped onto a single RISCV processor or the overall router functionality can be broken up into separate functions and maped onto multiple RISCV processors.
+On Wromhole, Ethernet core RISCv performs all of the fabric netowrk stack functions. Blackhole has 2 RISCv processors and fabric router functions are mapped to both cores.
+The core function of a fabric router is to receive packets from ethernet and local device's worker and make a forwarding decision. A conbination of routing table lookup and source routing is used to make a forwarding decision. If a packet is to be consumed locally then the NOC command section of the packet header specifies how to process the packet payload locally.
+
+Fabric routers can be built for different kinds of TT-Fabric topologies. A topology specifies how the TT-Fabric logical routing network should be created on a set of physically connected devices. TT-Fabric topology is specific to application requirements. For example the devcies may be physically connected in a 2D ethernet grid however the user application is such that the devices only communicate with other devices in the same row or column. In this case, Fabric routers only need to route traffic on one axis and packet flow does not switch from row to column or vice versa. We call this a 1D Fabric. TT-Fabric can also be launched in a 2D routing mode where turns between rows and columns are supported. In addition to these simple line and mesh topologies, TT-Fabric supports rings and 2D toruses. A ring is where the two endpoints of every line (in a 1D Fabric) are also connected. A 2D torus connects every row and column endpoints of a 2D mesh.
+
+As stated earlier, TT-Fabric topology can match the physical connection topology exactly, or it can be a functionally downshifted topology.
+The following examples illustrate this concept.
+
+TODO: Add some galaxy/T3K examples here for 1D and 2D fabric.
+
+
+
+Fabric router uses circular buffers to send and receive packets from different routing directions.
+
+In a 2-D Mesh, a router has 5 possible directions. East, West, North, South to one of its four possible neighbors. The fifth direction is the center or the device itself. This is the case on the last hop, where the packet has reached its destination device, and the packet needs to be consumed at the router's device.
+
+On Wormhole and Blackhole, Fabric Routers are Ethernet and Tensix cores within each device. There are no fabric workers other than the RiscV processors within these cores. Future architectures that provide dedicated communication chiplets will have fabric workers running on communication chiplets in addition to AI accelerator chiplets.
+
+Fabric routers can be mapped on to a single RiscV core or multiple cores depending on how the router functions are grouped. Since all fabric routers are bidirectional, there is independent incoming and outgoing traffic that can be mapped to different cores. This increases the worker core resource requirement for fabric routing node. On the other hand, mapping all fabric functions onto a single core affects performance as one core may not be able to sustain full ethernet bandwidth.
+
+## 3.1 Buffers and Virtual Channels <a id="rb_per_vc"></a>
+
+TT-Fabric supports one bidirectional virtual channel per fabric router. The virtual channel is compirsed of several buffers used to transport a router's incoming and outgoing fabric packets. Virtual channels buffers are further identified as Sender Channels and Receiver Channels. Sender channels buffer all packets exiting a device through the router's ethernet link. Receiver Channels buffer all packets entering a device through the router's ethernet link.
+
+The number of sender and receiver channels in a single virtual channel depend on fabric topology.
+The following table lists the channel requirements for different topologies.
+
+TODO: Add a table here.
+
+
+# 4 Read/Write API Specification <a id="rw_api"></a>
 
 TT-Fabric provides Remote Direct Memory Access (RDMA) support to Write and Read data from any device connected to the fabric.
 
 The following sections describe supported APIs and their operation.
 
-## 3.1 Asynchronous Write <a id="async_wr"></a>
+## 4.1 Asynchronous Write <a id="async_wr"></a>
 ```
 fabric_async_write(
   routing_plane, // the network plane to use for this transaction
@@ -490,7 +471,7 @@ transaction\_id to keeps track of requests sent over fabric and acknowledgements
 
 fabric\_async\_write calls to different remote devices can be made with unique transaction\_id fields if the sender needs selective write barriers for devices.
 
-## 3.2 Asynchronous Multicast Write <a id="async_mcast_wr"></a>
+## 4.2 Asynchronous Multicast Write <a id="async_mcast_wr"></a>
 ```
 fabric_async_write_multicast(
   routing_plane
@@ -520,13 +501,13 @@ The following table summarizes asynchronous multicast write modes.
 
 ![](images/image016.png)
 
-## 3.3 Asynchronous Write Barrier <a id="async_wr_barrier"></a>
+## 4.3 Asynchronous Write Barrier <a id="async_wr_barrier"></a>
 ```
 fabric_async_write_barrier(transaction_id)
 ```
 Asynchronous write barrier guarantees that all prior writes issued by a sender with the specified transaction\_id have been committed to all the receivers.
 
-## 3.4 Asynchronous Read <a id="async_rd"></a>
+## 4.4 Asynchronous Read <a id="async_rd"></a>
 ```
 fabric_async_read(
   routing_plane, // the network plane to use for this transaction
@@ -540,7 +521,7 @@ fabric_async_read(
 ```
 Asynchronous read is used to read data from a remote receiver. Asynchronous reads are implemented as fabric writes originating from remote device and directed towards reading device’s return address.
 
-## 3.5 Asynchronous Read Barrier <a id="async_rd_barrier"></a>
+## 4.5 Asynchronous Read Barrier <a id="async_rd_barrier"></a>
 ```
 fabric_async_read_barrier(transaction_id)
 ```
@@ -548,7 +529,7 @@ Asynchronous read barrier guarantees that all prior reads issued by a reader hav
 
 When reading from multiple remote devices, or multiple non contiguous address from a single remote device, a reader can implement selective barriers by issuing fabric\_async\_read with unique transaction\_id parameter.
 
-## 3.6 Asynchronous Atomic Increment <a id="async_atomic_inc"></a>
+## 4.6 Asynchronous Atomic Increment <a id="async_atomic_inc"></a>
 ```
 fabric_async_atomic_inc(
   routing_plane, // the network plane to use for this transaction
@@ -564,7 +545,7 @@ Asynchronous atomic increment is used to atomically increment an address in a re
 
 wrap\_boundary is used to specify the maximum value of remote counter after which it will wrap to 0. The maximum value is 2 ^ (wrap_boundary + 1) - 1. To atomically count from 0 – 31, wrap\_boundary is set to 4.
 
-## 3.7 Asynchronous Atomic Read and Increment <a id="async_atomic_rd_inc"></a>
+## 4.7 Asynchronous Atomic Read and Increment <a id="async_atomic_rd_inc"></a>
 ```
 fabric_async_atomic_read_inc(
   routing_plane, // the network plane to use for this transaction
@@ -579,7 +560,7 @@ fabric_async_atomic_read_inc(
 ```
 Asynchronous atomic read and increment is a two-part command. It is used to atomically read a 32-bit address in a remote device. After the value has been sampled to be returned to reader, the 32-bit address is also atomically incremented in the remote device. return\_status\_addr is used to track the status of asynchronous command.
 
-# 4 Socket API Specification <a id="socket_api"></a>
+# 5 Socket API Specification <a id="socket_api"></a>
 
 Sockets are used to create sender/receiver pairs over TT-Fabric.
 
@@ -587,7 +568,7 @@ Streaming sockets create a dedicated path from a sender to a receiver or multipl
 
 Datagram sockets do not bind to a specific FVC and share the bandwidth with other fabric traffic over the FVC.
 
-## 4.1 Socket Open <a id="socket_open"></a>
+## 5.1 Socket Open <a id="socket_open"></a>
 ```
 socket_handle fabric_socket_open(
   routing_plane, // the network plane to use for this socket
@@ -607,7 +588,7 @@ socket\_handle returned by the open call holds socket specific parameters and is
 
 For datagram sockets, data is sent over the fabric virtual channel specified by fvc.
 
-## 4.2 Socket Close <a id="socket_close"></a>
+## 5.2 Socket Close <a id="socket_close"></a>
 ```
 fabric_socket_close(
   socket_handle, // handle to socket parameters
@@ -618,7 +599,7 @@ Socket close is used to close an open socket.
 
 If the socket is a SSocket, this frees the fabric FVCs bound to specified socket at all fabric routers from sending device to receiving device. FVC then becomes available to route general fabric traffic. return\_status\_addr provides status of socket close command.
 
-## 4.3 Socket Connect <a id="socket_connect"></a>
+## 5.3 Socket Connect <a id="socket_connect"></a>
 ```
 fabric_socket_connect(
   socket_handle, // handle to socket parameters
@@ -628,7 +609,7 @@ Socket connect ensures that all receivers for the send socket are ready and in t
 
 Ideally, fabric\_socket\_connect should be very quick as the process has been in progress in the background. For SSocket, connection establishment can suffer delays if the FVC being used for the SSocket is temporarily busy with other fabric traffic. In this case, the respective fabric nodes wait for the FVC to become available before it gets reserved for the socket. Before sending data, socket owner must check the status of connection by checking the status returned via return\_status\_addr.
 
-## 4.4 Socket Send <a id="socket_send"></a>
+## 5.4 Socket Send <a id="socket_send"></a>
 ```
 fabric_socket_send(
   socket_handle, // handle to socket parameters
@@ -640,13 +621,13 @@ Socket send is used to push data into an open socket. Sender can keep pushing da
 
 On the receiver device, when a fabric router receives data on a socket, it notifies the local receiver core that owns a receive socket with the matching socket id. Local receiver then pulls the data from socket buffer.
 
-# 5 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
+# 6 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
 
 Like any other network, TT-Fabric faces deadlock hazards. Circular dependencies, resource contention, buffer exhaustion are some of the conditions that can lead to deadlocks in the routing network. We are building features into TT-Fabric to minimize chances of hitting deadlocks. In the event of a deadlock, TT-Fabric should be able to detect it, try to mitigate the effects and notify the Control Plane.
 
 The following sections describe the TT-Fabric features for deadlock avoidance and mitigation.
 
-## 5.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
+## 6.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
 
 Cyclic dependency deadlock happens when a set of nodes form a cyclic traffic pattern. Each node’s outgoing traffic is waiting on resources in the next hop to make progress. Since the traffic pattern is a cycle, all nodes end up waiting for the next hop’s resource and form a routing deadlock.
 
@@ -675,15 +656,15 @@ Packet from D2 to D3 and D3 to D2 are routed in X direction first thus avoiding 
 
 TT-Fabric is not limited to just one kind of routing bias. Since routing tables are fully instantiated, any reasonable routing scheme can be devised and mapped onto fabric router tables.
 
-## 5.2 Edge Disjoint Routing <a id="disjoint_routing"></a>
+## 6.2 Edge Disjoint Routing <a id="disjoint_routing"></a>
 
 Edge disjoint routing uses different entry/exit nodes on network edges for traffic that is incoming/outgoing from current network. In TT-Fabric, we can set up L1 routing tables such that cross traffic between meshes uses different exit nodes. Opposite traffic flows will go through different fabric routers which can reduce chances of resource contention.
 
-## 5.3 Fabric Virtual Channels <a id="fab_vcs"></a>
+## 6.3 Fabric Virtual Channels <a id="fab_vcs"></a>
 
 As stated earlier, FVCs guarantee independent progress of traffic relative to other FVCs. Traffic that is expected to contend for network or endpoint resources can be routed via unique FVCs so that one traffic stream does not get stuck behind other traffic that is stalled due to a stalled endpoint.
 
-## 5.4 Time To Live (TTL) <a id="ttl"></a>
+## 6.4 Time To Live (TTL) <a id="ttl"></a>
 
 TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets have a TTL parameter. On traffic initiating end or router, TTL is initialized to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
 
@@ -709,19 +690,19 @@ With a TTL of 10 the packet hops are shown in the table below. As the packet loo
 | 7 | 1 |
 | 11 | 0  Fabric Router at Device 11 drops the packet with expired TTL |
 
-## 5.5 Timeout <a id="timeout"></a>
+## 6.5 Timeout <a id="timeout"></a>
 
 Timeouts are TT-Fabric's last line of defense against deadlocks. Timeout is a detection mechanism rather than a prevention mechanism. Schemes mentioned in previous sections are meant to prevent or minimize deadlocks. If a routing deadlock slips through, TT-Fabric will detect it through timeout. If a packet head is not able to make progress through a fabric router within the specified timeout, it may indicate some deadlock due to resource contention, erroneous routing, stalled endpoint etc. Fabric router encountering routing timeout will drop the packet and drain its data from the fabric buffers. The Fabric router will also notify Control Plane of the event.
 
-## 5.6 Limitations <a id="limits"></a>
+## 6.6 Limitations <a id="limits"></a>
 
 TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
 
-# 6 TT-Fabric Model <a id="model"></a>
+# 7 TT-Fabric Model <a id="model"></a>
 
 TT-Fabric Model is a software functional model of all components of the Fabric. The purpose of the Fabric Model is to fully simulate the ethernet traffic in the Fabric. It will provide a ground truth for the state of any configuration of the Fabric, to help with debug and rerouting decisions. The Fabric Model will include a new piece of software to emulate the physical data plane, but otherwise shares the software components of the TT-Control Plane and Fabric Router.
 
-## 6.1 Serialization and Visualization <a id="visualization"></a>
+## 7.1 Serialization and Visualization <a id="visualization"></a>
 
 TT-Fabric Model will serialize these components of the Fabric:
 
@@ -734,7 +715,7 @@ TT-Fabric Model will serialize these components of the Fabric:
 * Packet traffic across data plane
   + We should be able to download traffic serialization from software simulator to run on hardware, and vice versa.
 
-## 6.2 Data Plane Simulator <a id="simulator"></a>
+## 7.2 Data Plane Simulator <a id="simulator"></a>
 
 The data plane simulator will model all paths ethernet packets may take across the hardware, except for NOC activity between a device and the Fabric. Key components:
 
@@ -745,15 +726,15 @@ The data plane simulator will model all paths ethernet packets may take across t
 * Directed single threaded testing for buffer limits and rerouting
 * Random testing with multi-threading. One thread per device to simulate requests to the Fabric and one thread for external disruptors.
 
-## 6.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
+## 7.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
 
 TT-Fabric Model will have hooks to simulate failed links, to trigger and verify rerouting in the control plane. It will also have SW APIs to simulate back-pressured buffers and VCs, to detect possible deadlock scenarios.
 
-# 7 System Specification <a id="system_spec"></a>
+# 8 System Specification <a id="system_spec"></a>
 
 To configure and launch TT-Fabric on a physical system we need to specify the hardware components of the system in a hierarchy that is modular and scalable. System specification should be in a format that can be parsed by the Control Plane. The following sections describe our current approach which is to use a yaml to describe the topology of a physical machine. The system specification file contains all the necessary information to enable a user to build their AI workload offline. Before launching the workload, Control Plane validates the physical connectivity of the system to ascertain that it conforms to the system specification yaml file.
 
-## 7.1 System Components <a id="system_components"></a>
+## 8.1 System Components <a id="system_components"></a>
 
 To be able to describe the topology of a physical system, we need to identify the basic building blocks that are used to build an AI machine. This section lists the building blocks for a physical Tenstorrent machine.
 
@@ -775,7 +756,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 
 * **Graph**: A set of meshes that makes up the full system. Two neighboring meshes are not required to be fully connected. In addition, all the meshes are not required to be connected to each other. Traffic from a source mesh can traverse multiple other meshes before it reaches its destination mesh.
 
-## 7.2 TG <a id="tg"></a>
+## 8.2 TG <a id="tg"></a>
 
 ![](images/image020.png)
 
@@ -861,7 +842,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 </table>
 
 
-## 7.3 Multi-Host TGG <a id="tgg"></a>
+## 8.3 Multi-Host TGG <a id="tgg"></a>
 
 ![](images/image021.png)
 <table>
@@ -983,7 +964,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 
 </table>
 
-## 7.4 Quanta 2 Galaxy System <a id="ubb_galaxy"></a>
+## 8.4 Quanta 2 Galaxy System <a id="ubb_galaxy"></a>
 
 <table>
   <tr>
@@ -1031,10 +1012,10 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 
 </table>
 
-# 8 Resource Allocation <a id="resource_alloc"></a>
+# 9 Resource Allocation <a id="resource_alloc"></a>
 This seciton estimates the hardware resources required to implement different TT-Fabric workers.
 
-## 8.1 Available Dispatch Cores <a id="available_cores"></a>
+## 9.1 Available Dispatch Cores <a id="available_cores"></a>
 
 | Idle Eth Core | Worker (ROW) | Worker (COL) | Idle Eth Core |
 | --- | --- | --- | --- |
@@ -1045,7 +1026,7 @@ This seciton estimates the hardware resources required to implement different TT
 | Blackhole Chip |  |  |  |
 | Galaxy Blackhole Chip |  |  |  |
 
-## 8.2 Fast Dispatch and Fabric Kernel Resouces <a id="fd_and_fabric"></a>
+## 9.2 Fast Dispatch and Fabric Kernel Resouces <a id="fd_and_fabric"></a>
 
 ![](images/image022.png)
 
