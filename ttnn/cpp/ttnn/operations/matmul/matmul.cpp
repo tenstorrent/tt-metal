@@ -148,7 +148,6 @@ ttnn::Tensor bound_matmul(
 
     if (post_process_bias) {
         output_tensor = ttnn::add(
-            ttnn::QueueId{queue_id},
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
@@ -159,14 +158,11 @@ ttnn::Tensor bound_matmul(
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
         const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
         if (op_type == UnaryOpType::RELU) {
-            output_tensor = ttnn::relu(
-                ttnn::QueueId{queue_id}, output_tensor, parameters.output_mem_config, optional_output_tensor);
+            output_tensor = ttnn::relu(output_tensor, parameters.output_mem_config, optional_output_tensor);
         } else if (op_type == UnaryOpType::GELU) {
-            output_tensor = ttnn::gelu(
-                ttnn::QueueId{queue_id}, output_tensor, false, parameters.output_mem_config, optional_output_tensor);
+            output_tensor = ttnn::gelu(output_tensor, false, parameters.output_mem_config, optional_output_tensor);
         } else if (op_type == UnaryOpType::SILU) {
-            output_tensor = ttnn::silu(
-                ttnn::QueueId{queue_id}, output_tensor, parameters.output_mem_config, optional_output_tensor);
+            output_tensor = ttnn::silu(output_tensor, parameters.output_mem_config, optional_output_tensor);
         } else {
             TT_THROW("ttnn.matmul: Unsupported activation function");
         }
