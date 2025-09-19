@@ -218,28 +218,28 @@ struct boot_results_t {
 #include "tt_metal/hw/inc/risc_common.h"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 
-uint64_t eth_read_ptp_clock() {
+FORCE_INLINE uint64_t eth_read_ptp_clock() {
     uint32_t ptp_timer_lo = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR);
     uint32_t ptp_timer_hi = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR);
     return (((uint64_t)ptp_timer_hi) << 32) | ptp_timer_lo;
 }
 
-uint64_t get_next_link_status_check_timestamp() {
+FORCE_INLINE uint64_t get_next_link_status_check_timestamp() {
     return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(MEM_AERISC_LINK_STATUS_CHECK_TIMESTAMP);
 }
 
-void update_next_link_status_check_timestamp() {
-    uint64_t timestamp = eth_read_ptp_clock() + (ETH_PTP_CYCLES_1MS * 1000);
+FORCE_INLINE void update_next_link_status_check_timestamp() {
+    uint64_t timestamp = eth_read_ptp_clock() + (ETH_PTP_CYCLES_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(MEM_AERISC_LINK_STATUS_CHECK_TIMESTAMP) = timestamp;
 }
 
-void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
+FORCE_INLINE void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
     auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
         ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
     *reg_ptr = mode_val;
 }
 
-void disable_interrupts() {
+FORCE_INLINE void disable_interrupts() {
     for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
         eth_set_interrupt_mode(i, 0);
     }
@@ -273,7 +273,7 @@ FORCE_INLINE bool is_link_up() {
     do {
         invalidate_l1_cache();
         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while (risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK == MEM_SYSENG_ETH_MSG_DONE);
+    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_DONE);
 
     auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_STATUS);
     return link_status->rx_link_up == 1;

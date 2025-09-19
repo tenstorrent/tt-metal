@@ -40,6 +40,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
+#include "hal.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -1081,8 +1082,10 @@ KernelHandle CreateEthernetKernel(
         "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
         "cores because both NOCs are in use!",
         kernel->name());
-    // Due to conflict with eth fw using noc0, ensure each risc only uses their own noc
+
+    // Due to conflict with eth fw using noc0 at the same time, ensure each risc only uses their own noc
     // https://github.com/tenstorrent/tt-metal/issues/25058
+    // E.g., risc0 -> noc0, risc1 -> noc1
     if (config.processor != DataMovementProcessor::RISCV_0 && config.eth_mode != Eth::IDLE &&
         !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
         TT_FATAL(
