@@ -290,6 +290,8 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 info.name == "model.wte.weight" || info.name == "embeddings.word_embeddings.weight") {
                 
                 fmt::print("Loading embedding weight from: {}\n", info.name);
+                
+                // Load to embedding layer
                 auto out_tensor1 = get_parameter("llama/tok_emb/weight");
                 auto resized_emb = pad_and_resize_flat(
                     float_vec, 
@@ -300,15 +302,20 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 out_tensor1->set_value(core::from_vector(
                     resized_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 
-                auto out_tensor2 = get_parameter("llama/fc/weight");
-                auto resized_weight1 = pad_and_resize_flat(
-                    float_vec, 
-                    info.shape[0], 
-                    info.shape[1], 
-                    out_tensor2->get_value().logical_shape()[-2],
-                    out_tensor2->get_value().logical_shape()[-1]);
-                out_tensor2->set_value(core::from_vector(
-                    resized_weight1, out_tensor2->get_value().logical_shape(), out_tensor2->get_value().device()));
+                // For weight-tied models, also load to output layer (transposed)
+                if (config.weight_tying == WeightTyingType::Disabled) {
+                    fmt::print("Loading same weight to output layer (weight tying disabled)\n");
+                    auto out_tensor2 = get_parameter("llama/fc/weight");
+                    auto transposed_emb = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto resized_weight2 = pad_and_resize_flat(
+                        transposed_emb, 
+                        info.shape[1], 
+                        info.shape[0], 
+                        out_tensor2->get_value().logical_shape()[-2],
+                        out_tensor2->get_value().logical_shape()[-1]);
+                    out_tensor2->set_value(core::from_vector(
+                        resized_weight2, out_tensor2->get_value().logical_shape(), out_tensor2->get_value().device()));
+                }
             }
             
             // Final layer norm
