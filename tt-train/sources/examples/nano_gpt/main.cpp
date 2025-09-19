@@ -179,7 +179,7 @@ void generate(
 
     auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
 
-    auto logits_padding_mask = ttnn::concat(ttnn::DefaultQueueId, logits_padding_mask_vector, 3);
+    auto logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
 
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
