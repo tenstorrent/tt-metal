@@ -28,6 +28,7 @@ def run_reduce_scatter_impl(
     mem_config_input,
     mem_config_rs,
     rs_topology,
+    mesh_mapper,
     num_iters=1,
     enable_trace=True,
     ones_tensor=False,
@@ -135,9 +136,7 @@ def run_reduce_scatter_impl(
             memory_config=mem_config_input,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
-                ),
+                mesh_mapper,
             ),
         )
 
@@ -328,6 +327,11 @@ def test_reduce_scatter_async(
     use_persistent_buffers,
     rs_topology,
 ):
+    mesh_mapper = (
+        ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, mesh_device.get_num_devices())
+        ),
+    )
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -344,6 +348,7 @@ def test_reduce_scatter_async(
         ones_tensor=ones_tensor,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
+        mesh_mapper=mesh_mapper,
     )
 
 
@@ -433,6 +438,11 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
+    mesh_mapper = (
+        ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, mesh_device.get_num_devices())
+        ),
+    )
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -449,6 +459,7 @@ def test_reduce_scatter_async_training_shapes(
         ones_tensor=ones_tensor,
         use_barrier=True,
         use_persistent_buffers=False,
+        mesh_mapper=mesh_mapper,
     )
 
 
@@ -579,6 +590,11 @@ def test_reduce_scatter_async_sharded_to_sharded(
     )
     mem_config_rs = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
 
+    mesh_mapper = (
+        ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, mesh_device.get_num_devices())
+        ),
+    )
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -594,6 +610,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
         num_iters=num_iters,
         ones_tensor=ones_tensor,
         mem_config_intermediate=mem_config_intermediate,
+        mesh_mapper=mesh_mapper,
     )
 
 
@@ -695,6 +712,11 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     )
     mem_config_rs = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
 
+    mesh_mapper = (
+        ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, mesh_device.get_num_devices())
+        ),
+    )
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -710,6 +732,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         num_iters=num_iters,
         ones_tensor=ones_tensor,
         mem_config_intermediate=mem_config_intermediate,
+        mesh_mapper=mesh_mapper,
     )
 
 
@@ -793,6 +816,11 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     mem_config_intermediate = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     mem_config_rs = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+    mesh_mapper = (
+        ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, mesh_device.get_num_devices())
+        ),
+    )
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -808,4 +836,5 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         num_iters=num_iters,
         ones_tensor=ones_tensor,
         mem_config_intermediate=mem_config_intermediate,
+        mesh_mapper=mesh_mapper,
     )

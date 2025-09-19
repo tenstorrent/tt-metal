@@ -40,11 +40,36 @@ std::optional<MeshCoordinate> get_topological_neighbor(
                              ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
                              : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     if (cluster_axis.has_value()) {
+        log_info(
+            tt::LogOp,
+            "DEBUG: getting topological neighbor for physical_coord: {} at offset: {} with cluster_axis: {} and shape: "
+            "{}",
+            coord,
+            offset,
+            cluster_axis.value(),
+            shape);
         TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
         return coord.get_neighbor(shape, offset, cluster_axis.value(), boundary_mode);
     } else {
+        log_info(
+            tt::LogOp,
+            "DEBUG: getting topological neighbor for physical_coord: {} at offset: {} with no cluster axis provided "
+            "and shape: {}",
+            coord,
+            offset,
+            shape);
         for (int i = shape.dims() - 1; i >= 0; i--) {
+            log_info(tt::LogOp, "DEBUG: i = {}, shape[i] = {}", i, shape[i]);
             if (shape[i] > 1) {
+                log_info(
+                    tt::LogOp,
+                    "DEBUG: getting topological neighbor for physical_coord: {} at offset: {} with cluster_axis: {} "
+                    "and shape: {} and i: {}",
+                    coord,
+                    offset,
+                    i,
+                    shape,
+                    i);
                 return coord.get_neighbor(shape, offset, i, boundary_mode);
             }
         }

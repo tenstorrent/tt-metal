@@ -88,6 +88,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
 
     std::optional<MeshCoordinate> backward_coord =
         ccl::get_physical_neighbor(tensor_topology, coord, -1, this->topology, this->cluster_axis);
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     return all_broadcast_async_multicore(
         input_tensors[0],

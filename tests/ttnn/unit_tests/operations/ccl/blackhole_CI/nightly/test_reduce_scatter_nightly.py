@@ -102,6 +102,9 @@ def test_rs_row_nightly(
     cluster_axis = 0
     validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, cluster_axis)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    mesh_mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()], ttnn.MeshShape(num_devices, 1)
+    )
     run_reduce_scatter_impl(
         submesh_device,
         num_devices,
@@ -119,5 +122,6 @@ def test_rs_row_nightly(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
+        mesh_mapper=mesh_mapper,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

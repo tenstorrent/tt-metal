@@ -62,13 +62,7 @@ std::optional<tt::tt_metal::distributed::MeshCoordinate> TensorTopology::get_ten
     const tt::tt_metal::distributed::MeshCoordinate& device_coord) const {
     // Search through all stored mesh coordinates to find a match
     // Assume that the mesh coordinates are unique (ie. tensor to device coords mapping is one-to-one)
-    log_info(
-        tt::LogOp,
-        "DEBUG: get_tensor_coord is called with device_coord: {} and mesh_coords_: {}",
-        device_coord,
-        mesh_coords_);
     for (std::size_t tensor_coord_idx = 0; tensor_coord_idx < mesh_coords_.size(); ++tensor_coord_idx) {
-        log_info(tt::LogOp, "DEBUG: mesh_coords_[tensor_coord_idx]: {}", mesh_coords_[tensor_coord_idx]);
         if (mesh_coords_[tensor_coord_idx] == device_coord) {
             // Convert the position index to tensor coordinate
             // This assumes that mesh coordinates are stored in row-major order

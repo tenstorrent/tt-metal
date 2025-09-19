@@ -239,31 +239,25 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
     }
     uint32_t target_ring_size = devices_to_use.size();
 
-    std::optional<MeshCoordinate> backward_coord = std::nullopt;
-    std::optional<MeshCoordinate> forward_coord = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? target_ring_size - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : target_ring_size - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i + 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? 0 : coord[0], (this->cluster_axis.value() == 0) ? coord[1] : 0);
-            }
-        }
+    auto tensor_topology = input_tensors[0].tensor_topology();
+    log_info(tt::LogOp, "DEBUG: getting forward coord");
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor(tensor_topology, coord, 1, this->topology, this->cluster_axis);
+
+    log_info(tt::LogOp, "DEBUG: getting backward coord");
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor(tensor_topology, coord, -1, this->topology, this->cluster_axis);
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+
+    uint32_t device_index = ccl::get_physical_linearized_index(tensor_topology, coord, this->cluster_axis);
+
+    if (forward_coord.has_value()) {
+        log_info(tt::LogOp, "DEBUG: forward_coord: {}", forward_coord.value());
     }
+    if (backward_coord.has_value()) {
+        log_info(tt::LogOp, "DEBUG: backward_coord: {}", backward_coord.value());
+    }
+    log_info(tt::LogOp, "DEBUG: device_index: {}", device_index);
 
     return reduce_scatter_minimal_async(
         input_tensors[0],

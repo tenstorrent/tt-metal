@@ -133,7 +133,7 @@ def test_all_gather_async(
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 @pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
-def test_all_gather_async(
+def test_all_gather_async_blackhole(
     mesh_device,
     num_devices,
     ag_output_shape,
