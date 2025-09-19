@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pytest
 import torch
+import ttnn
 
 from ...layers.module import Module, Parameter
-
-if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-    from typing import Any
-
-    import ttnn
 
 
 class TinyLinear(Module):
@@ -24,9 +17,9 @@ class TinyLinear(Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return x @ self.weight.data + self.bias.data
 
-    def _prepare_torch_state(self, state: MutableMapping[str, Any]) -> None:
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            state["weight"] = state.pop("weight").T
+            state["weight"].transpose_(0, 1)
 
 
 class TinyFeedForward(Module):
