@@ -285,13 +285,14 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
             const FAILED_AT_START = /^FAILED\b/; // case-sensitive, first word
             for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) {
               const original = rawLines[i];
+              const modified = rawLines.slice(i, i + 2).join('\n');
               const stripped = original.replace(timestampPrefix, '').replace(/^\s+/, '');
               if (FAILED_AT_START.test(stripped)) {
                 const fileBase = path.basename(p);
                 collected.push({
                   label: `${fileBase}:\nFAILED line`,
                   // Return the original line (full context), truncated
-                  snippet: original.length > 600 ? original.slice(0, 600) + '…' : original,
+                  snippet: original.length > 600 ? original.slice(0, 600) + '…' : modified,
                 });
                 break; // one per file is enough
               }
