@@ -149,9 +149,7 @@ FORCE_INLINE void load_next_segment(
     uint32_t& reader_idx,
     uint16_t& start_ind,
     uint16_t& end_ind,
-    uint32_t& new_batch_image_rows_to_fill,
-    uint16_t& num_segments) {
-    num_segments--;
+    uint32_t& new_batch_image_rows_to_fill) {
     reader_idx++;
     start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
     if constexpr (single_core_processes_multiple_batches) {
@@ -224,8 +222,9 @@ FORCE_INLINE void read_sticks_activation_reuse(
             act_block_w_extra_align_bytes>(l1_write_addr_act, reader_offset, ind, pixel_column);
     }
 
+    num_segments--;
     load_next_segment<window_inner, single_core_processes_multiple_batches>(
-        packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill, num_segments);
+        packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
 
     if constexpr (!readers_process_full_image_widths) {
         if (num_segments) {
@@ -258,13 +257,9 @@ FORCE_INLINE void read_sticks_activation_reuse(
 
             if constexpr (!output_image_width_full_tile) {
                 if (third_row_width > 0) {
+                    num_segments--;
                     load_next_segment<window_inner, single_core_processes_multiple_batches>(
-                        packed_reader_indices_ptr,
-                        reader_idx,
-                        start_ind,
-                        end_ind,
-                        new_batch_image_rows_to_fill,
-                        num_segments);
+                        packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
 
                     for (uint16_t ind = start_ind; ind < start_ind + third_row_width; ind += stride_w) {
                         read_first_image_row_window<
@@ -287,7 +282,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
         l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
 
     // ------ HANDLE REMAINING INPUT, WHERE WE READ JUST THE LAST KERNEL WIDTH OF THE WINDOW ------
-    while (num_segments) {
+    while (num_segments--) {
         for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
             uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
             if constexpr (output_image_width_full_tile && !single_core_processes_multiple_batches) {
@@ -335,7 +330,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
         }
 
         load_next_segment<window_inner, single_core_processes_multiple_batches>(
-            packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill, num_segments);
+            packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
     }
 }
 #endif
