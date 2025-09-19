@@ -967,3 +967,24 @@ def create_sliding_window_causal_mask(
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
     return causal_mask
+
+
+def get_decode_mask(pos_idx, sliding_window, num_attention_heads, mesh_device, max_seq_len):
+    """Function to create a decoding mask for the attention mechanism."""
+    pos_idx = pos_idx[-1].item()
+    mask = torch.triu(torch.full((1, 1, max_seq_len, max_seq_len), -float("inf")), diagonal=1)
+    if sliding_window > 0:
+        mask += torch.tril(torch.full((1, 1, max_seq_len, max_seq_len), -float("inf")), diagonal=-sliding_window)
+    mask = mask[:, :, pos_idx : pos_idx + 1, :]
+
+    mask = mask.repeat(1, num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
+
+    causal_mask = ttnn.as_tensor(
+        mask,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return causal_mask
