@@ -613,10 +613,11 @@ def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]
 
     # Special case: if abs_x == torch.finfo(x.dtype).max, then next == math.inf, which leads to ULP(x) == inf rather than finite number
     # We fix this problem by manually calculating ULP at max value, and masking tensor when input == max
-    max_epsilon = torch.finfo(x.dtype).max - torch.nextafter(
-        torch.tensor(torch.finfo(x.dtype).max, dtype=x.dtype), torch.tensor(-math.inf, dtype=x.dtype)
+    dtype_max = torch.finfo(x.dtype).max
+    max_epsilon = dtype_max - torch.nextafter(
+        torch.tensor(dtype_max, dtype=x.dtype), torch.tensor(-math.inf, dtype=x.dtype)
     )
-    ulp_value = torch.where(abs_x == torch.finfo(x.dtype).max, max_epsilon, ulp_value)
+    ulp_value = torch.where(abs_x == dtype_max, max_epsilon, ulp_value)
 
     if received_ttnn_input:  # Ensures that type(input) == type(output)
         ulp_value = ttnn.from_torch(ulp_value)
