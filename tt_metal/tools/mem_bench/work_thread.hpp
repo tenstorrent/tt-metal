@@ -27,7 +27,6 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
 
     auto&& callable = std::forward<F>(work_fn);
     auto saved_args = std::make_tuple(std::forward<Args>(args)...);
-    auto intermediate_callable = std::forward<IntermediateF>(intermediate_fn);
 
     for (int i = 0; i < num_threads; ++i) {
         threads[i] = std::thread([i,
