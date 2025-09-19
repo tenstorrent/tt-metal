@@ -22,7 +22,7 @@ on:
 
 jobs:
   metalium-basic:
-    runs-on: "tt-metal-ci-bm-e04cs04"
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:

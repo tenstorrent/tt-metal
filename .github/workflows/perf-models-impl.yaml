@@ -35,7 +35,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    runs-on: ${{ matrix.test-info.runs-on }}
+    runs-on: "tt-metal-ci-bm-e04cs04"
     env:
       DOCKER_IMAGE: ${{ inputs.docker-image }}
       DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
