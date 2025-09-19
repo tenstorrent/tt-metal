@@ -57,25 +57,21 @@ void TestContext::read_telemetry() {
 
                 std::vector<CoreCoord> cores = {eth_core};
                 fixture_->read_buffer_from_ethernet_cores(
-                    coord,
-                    cores,
-                    telemetry_addr,
-                    sizeof(LowResolutionBandwidthTelemetryResult),
-                    false,
-                    results[fabric_node_id]);
+                    coord, cores, telemetry_addr, sizeof(LowResolutionBandwidthTelemetryResult), false, results[fabric_node_id]);
             }
         }
     }
 
     fixture_->barrier_reads();
+
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
         auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
         auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-        auto freq_mhz = get_device_frequency_mhz(device_id);
+        auto freq_mhz = cluster.get_device_aiclk(physical_chip_id);
         double freq_ghz = double(freq_mhz) / 1000.0;
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
         // Wait for reads to complete
         for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
             const auto& eth_cores =
@@ -86,11 +82,9 @@ void TestContext::read_telemetry() {
                 const auto& core_data = results.at(fabric_node_id).at(eth_core);
 
                 LowResolutionBandwidthTelemetryResult tel{};
-                if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) ==
-                    0) {
-                    constexpr size_t NUM_ELEMENTS =
-                        tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
-                    const std::array<uint32_t, NUM_ELEMENTS>& data_array =
+                if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) == 0) {
+                    constexpr size_t NUM_ELEMENTS = tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
+                    const std::array<uint32_t, NUM_ELEMENTS>& data_array = 
                         *reinterpret_cast<const std::array<uint32_t, NUM_ELEMENTS>*>(core_data.data());
                     tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(data_array);
                 } else {
