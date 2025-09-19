@@ -472,11 +472,17 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_overlapped_submeshes
     const std::vector<MeshCoordinateRange>& submesh_ranges) {
     auto lock_api = this->lock_api();
 
-    auto submesh_manager = std::make_shared<SubmeshManager>();
+    // Create submesh manager with ranges - dependencies are created internally
+    auto submesh_manager = std::make_shared<SubmeshManager>(submesh_ranges);
 
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
-    for (const auto& submesh_range : submesh_ranges) {
+    for (size_t i = 0; i < submesh_ranges.size(); ++i) {
+        const auto& submesh_range = submesh_ranges[i];
         auto submesh_shape = submesh_range.shape();
+
+        // Get the state ID for this submesh range
+        // This state ID corresponds to the allocator ID in the dependency graph
+        auto state_id = submesh_manager->get_state_id(submesh_range);
 
         // Create mesh device view for the submesh.
         std::vector<MaybeRemote<IDevice*>> submesh_devices;
@@ -492,7 +498,9 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_overlapped_submeshes
         auto submesh = std::make_shared<MeshDevice>(
             scoped_devices_,
             std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
-            shared_from_this());
+            shared_from_this(),
+            submesh_manager,
+            state_id);
 
         const auto& allocator_config = reference_device()->allocator()->get_config();
         submesh->initialize(
