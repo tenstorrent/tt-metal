@@ -82,6 +82,7 @@ python tests/sweep_framework/sweeps_runner.py --module-name "eltwise.unary.relu.
 - `--tag`: Tag to filter vectors in Elasticsearch (defaults to `$USER`)
 - `--skip-modules`: Comma-separated modules to skip when running all modules
 - `--skip-on-timeout`: Skip remaining tests in a suite if a test times out
+- `--keep-invalid`: Include invalid vectors in results with NOT_RUN status (default: exclude invalid vectors from results entirely)
 - `--watcher`: Enable watcher
 - `--perf`: Measure end-to-end perf for ops that support it
 - `--device-perf`: Measure device perf (requires profiler build)

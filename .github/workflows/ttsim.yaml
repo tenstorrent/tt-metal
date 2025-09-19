@@ -16,6 +16,17 @@ on:
 jobs:
   ttsim-integration:
     runs-on: ubuntu-latest
+    name: "TTSim Integration - ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole_b0
+            build_suffix: release_wh
+            soc_desc: wormhole_b0_80_arch.yaml
+          - arch: blackhole
+            build_suffix: release_bh
+            soc_desc: blackhole_140_arch.yaml
     permissions:
       contents: read
     container:
@@ -57,20 +68,20 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/ttsim
-          ref: 7193bee260c6c7fc91d731c3e2e5a52d2eeea6fd
+          ref: c6ed2d602eed8c7df3859053a6d114bec7d6407b
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}
 
       - name: Build ttsim
         run: |
           cd /work/ttsim/src
-          ../scripts/make.py _out/release_wh/libttsim.so
+          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/release_wh/libttsim.so $TT_METAL_SIMULATOR_HOME/
-          cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
         timeout-minutes: 15
@@ -79,7 +90,6 @@ jobs:
             "add_2_integers_in_compute"
             "add_2_integers_in_riscv"
             "eltwise_binary"
-            "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
           )

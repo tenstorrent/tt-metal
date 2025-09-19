@@ -19,7 +19,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_combine(py::module& module) {
     auto doc =
-        R"doc(all_to_all_combine(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, local_reduce: bool = false, num_links: Optional[int] = 1, topology: Optional[ttnn.Topology] = std::nullopt, memory_config: Optional[ttnn.MemoryConfig] = std::nullopt, axis: Optional[int] = std::nullopt, subdevice_id: Optional[ttnn.SubDeviceId] = std::nullopt, optional_output_tensor: Optional[ttnn.Tensor] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(all_to_all_combine(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, local_reduce: bool = false, num_links: Optional[int] = 1, topology: Optional[ttnn.Topology] = std::nullopt, memory_config: Optional[ttnn.MemoryConfig] = std::nullopt, axis: Optional[int] = std::nullopt, subdevice_id: Optional[ttnn.SubDeviceId] = std::nullopt, optional_output_tensor: Optional[ttnn.Tensor] = std::nullopt)) -> ttnn.Tensor
 
             All to all combine operation for combining the output tokens from the experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we combine the tokens only on that axis.
             B = batch size
@@ -45,7 +45,6 @@ void py_bind_all_to_all_combine(py::module& module) {
                 axis (int, optional): the cluster axis to combine along. Defaults to `None` though we assert out when it is not specified.
                 subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
                 optional_output_tensor (ttnn.Tensor, optional): the optional output tensor to use for the combined tokens. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B, S, H] ([K, B/D[A], S, H] per device) where each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
@@ -60,8 +59,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                                         topology=topology,
                                         memory_config=output_memory_config,
                                         local_reduce=local_reduce,
-                                        axis=axis,
-                                        queue_id=queue_id)
+                                        axis=axis)
             )doc";
 
     using OperationType = decltype(ttnn::all_to_all_combine);
@@ -80,10 +78,8 @@ void py_bind_all_to_all_combine(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<uint32_t>& axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::Tensor>& optional_output_tensor,
-               QueueId queue_id) {
+               const std::optional<ttnn::Tensor>& optional_output_tensor) {
                 return self(
-                    queue_id,
                     input_tensor,
                     expert_mapping_tensor,
                     expert_metadata_tensor,
@@ -105,9 +101,7 @@ void py_bind_all_to_all_combine(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("axis") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("optional_output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::ccl
