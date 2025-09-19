@@ -598,8 +598,6 @@ def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]
         x = ttnn.to_torch(x)
         received_ttnn_input = True
 
-    max_value = torch.full(x.size(), torch.finfo(x.dtype).max, dtype=x.dtype)
-
     # Notes:
     # - This should be identical to the definition of ULP by Goldberg
     #   "What every computer scientist should know about floating-point arithmetic"
@@ -608,8 +606,18 @@ def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]
     # - For x powers of 2, x + ULP(x) is not closest number but second closest (previous number is 2x closer)
     #   However, this avoids rounding-to-nearest-tie-to-even issues on addition (i.e. x + ULP(x) != x)
     abs_x = torch.abs(x)
-    next = torch.nextafter(abs_x, max_value)  # 1 ULP ~ Difference between two consecutive floating point numbers
+    next = torch.nextafter(
+        abs_x, torch.tensor(math.inf, dtype=x.dtype)
+    )  # 1 ULP ~ Difference between two consecutive floating point numbers
     ulp_value = next - abs_x
+
+    # Special case: if abs_x == torch.finfo(x.dtype).max, then next == math.inf, which leads to ULP(x) == inf rather than finite number
+    # We fix this problem by manually calculating ULP at max value, and masking tensor when input == max
+    dtype_max = torch.finfo(x.dtype).max
+    max_epsilon = dtype_max - torch.nextafter(
+        torch.tensor(dtype_max, dtype=x.dtype), torch.tensor(-math.inf, dtype=x.dtype)
+    )
+    ulp_value = torch.where(abs_x == dtype_max, max_epsilon, ulp_value)
 
     if received_ttnn_input:  # Ensures that type(input) == type(output)
         ulp_value = ttnn.from_torch(ulp_value)
@@ -964,36 +972,28 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
-def skip_for_blackhole(reason_str="Test_Infrastructure_Skip: not working for Blackhole"):
+def skip_for_blackhole(reason_str="not working for Blackhole"):
     return pytest.mark.skipif(is_blackhole(), reason=reason_str)
 
 
-def skip_for_wormhole_b0(reason_str="Test_Infrastructure_Skip: not working for Wormhole B0"):
+def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
     return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
 
 
-def skip_for_grayskull(reason_str="Test_Infrastructure_Skip: not working for Grayskull"):
+def skip_for_grayskull(reason_str="not working for Grayskull"):
     return pytest.mark.skipif(is_grayskull(), reason=reason_str)
 
 
-def run_for_blackhole(reason_str="Test_Infrastructure_Skip: only runs for Blackhole"):
+def run_for_blackhole(reason_str="only runs for Blackhole"):
     return pytest.mark.skipif(not is_blackhole(), reason=reason_str)
 
 
-def run_for_wormhole_b0(reason_str="Test_Infrastructure_Skip: only runs for Wormhole B0"):
+def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return pytest.mark.skipif(not is_wormhole_b0(), reason=reason_str)
 
 
-def run_for_grayskull(reason_str="Test_Infrastructure_Skip: only runs for Grayskull"):
+def run_for_grayskull(reason_str="only runs for Grayskull"):
     return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
-
-
-def skip_for_n_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant for this number of devices"):
-    return pytest.mark.skipif(ttnn.get_num_devices() == n, reason=reason_str)
-
-
-def skip_for_n_or_less_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant for this number of devices"):
-    return pytest.mark.skipif(ttnn.get_num_devices() <= n, reason=reason_str)
 
 
 def get_devices_for_t3000(all_devices, num_devices):
