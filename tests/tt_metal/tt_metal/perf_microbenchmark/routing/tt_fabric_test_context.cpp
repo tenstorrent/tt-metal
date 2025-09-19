@@ -57,7 +57,12 @@ void TestContext::read_telemetry() {
 
                 std::vector<CoreCoord> cores = {eth_core};
                 fixture_->read_buffer_from_ethernet_cores(
-                    coord, cores, telemetry_addr, sizeof(LowResolutionBandwidthTelemetryResult), false, results[fabric_node_id]);
+                    coord,
+                    cores,
+                    telemetry_addr,
+                    sizeof(LowResolutionBandwidthTelemetryResult),
+                    false,
+                    results[fabric_node_id]);
             }
         }
     }
@@ -81,9 +86,11 @@ void TestContext::read_telemetry() {
                 const auto& core_data = results.at(fabric_node_id).at(eth_core);
 
                 LowResolutionBandwidthTelemetryResult tel{};
-                if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) == 0) {
-                    constexpr size_t NUM_ELEMENTS = tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
-                    const std::array<uint32_t, NUM_ELEMENTS>& data_array = 
+                if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) ==
+                    0) {
+                    constexpr size_t NUM_ELEMENTS =
+                        tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
+                    const std::array<uint32_t, NUM_ELEMENTS>& data_array =
                         *reinterpret_cast<const std::array<uint32_t, NUM_ELEMENTS>*>(core_data.data());
                     tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(data_array);
                 } else {
@@ -137,7 +144,9 @@ void TestContext::clear_telemetry() {
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
         auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
         for (const auto& eth_core : active_eth_cores) {
-            if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) continue;
+            if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) {
+                continue;
+            }
 
             std::vector<CoreCoord> cores = {eth_core};
             fixture_->write_buffer_to_ethernet_cores(coord, cores, telemetry_addr, zero_vec);
@@ -146,8 +155,8 @@ void TestContext::clear_telemetry() {
 }
 
 void TestContext::process_telemetry_for_golden() {
-    std::sort(telemetry_entries_.begin(), telemetry_entries_.end(),
-        [](const TelemetryEntry& a, const TelemetryEntry& b) {
+    std::sort(
+        telemetry_entries_.begin(), telemetry_entries_.end(), [](const TelemetryEntry& a, const TelemetryEntry& b) {
             return a.bw_gbps > b.bw_gbps;
         });
 
@@ -181,7 +190,7 @@ void TestContext::process_telemetry_for_golden() {
 
     auto is_on_edge = [&](const TelemetryEntry& e) {
         return (e.coord == max_coord && e.connected_coord == max_connected) ||
-                (e.coord == max_connected && e.connected_coord == max_coord);
+               (e.coord == max_connected && e.connected_coord == max_coord);
     };
 
     std::map<int, std::vector<double>> plane_bws;
