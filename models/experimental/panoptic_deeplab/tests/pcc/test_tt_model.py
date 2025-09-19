@@ -25,9 +25,9 @@ PDL_L1_SMALL_SIZE = 37 * 1024  # Minimum L1 small size for Panoptic DeepLab
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 def test_panoptic_deeplab(device):
     """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
-    # compute_grid = device.compute_with_storage_grid_size()
-    # if compute_grid.x != 5 or compute_grid.y != 4:
-    #     pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
     current_dir = os.path.dirname(os.path.abspath(__file__))
