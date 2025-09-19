@@ -2138,6 +2138,30 @@ def test_small_matmul_pcc(device):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
 
+@pytest.mark.parametrize("shape", [(32, 32)])
+def test_linear_with_optional_output_tensor(device, shape):
+    torch.manual_seed(0)
+
+    torch_bias_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_tensor_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_tensor_b = torch.randn(shape, dtype=torch.bfloat16)
+    torch_out_tensor = torch.zeros(shape, dtype=torch.float32)
+
+    bias_tensor = ttnn.from_torch(torch_bias_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    tensor_a = ttnn.from_torch(torch_tensor_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    tensor_b = ttnn.from_torch(torch_tensor_b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    optional_output_tensor = ttnn.from_torch(
+        torch_out_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=device
+    )
+
+    result_tensor = ttnn.linear(tensor_a, tensor_b, bias=bias_tensor, optional_output_tensor=optional_output_tensor)
+    result_tensor = ttnn.to_torch(result_tensor)
+
+    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
+
+    assert_with_pcc(optional_output_tensor, result_tensor, pcc=0.9999)
+
+
 @pytest.mark.parametrize(
     "out_block_h, out_block_w",
     [
