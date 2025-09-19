@@ -40,7 +40,7 @@ class TtYolov10Conv2D:
         config_override=None,
         auto_shard=False,
         deallocate_activation=False,
-        act_block_h_override=0,
+        # act_block_h_override=0,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=False,
         core_count=None,
@@ -81,7 +81,7 @@ class TtYolov10Conv2D:
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
             output_layout=ttnn.TILE_LAYOUT,
-            act_block_h_override=act_block_h_override,
+            # act_block_h_override=act_block_h_override,
             enable_act_double_buffer=True
             if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
             else enable_act_double_buffer,
