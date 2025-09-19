@@ -90,9 +90,6 @@ private:
     // Output directory for device profiler logs
     std::filesystem::path device_logs_output_dir;
 
-    // Output directory for ops perf reports
-    std::filesystem::path ops_perf_report_output_dir;
-
     // Hash to zone source locations
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 

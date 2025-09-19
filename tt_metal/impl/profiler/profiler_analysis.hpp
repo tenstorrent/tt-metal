@@ -23,8 +23,7 @@ enum class AnalysisDimension { OP };
 
 using AnalysisRisc = tracy::RiscType;
 constexpr AnalysisRisc AnalysisRiscAny = AnalysisRisc::BRISC | AnalysisRisc::NCRISC | AnalysisRisc::TRISC_0 |
-                                         AnalysisRisc::TRISC_1 | AnalysisRisc::TRISC_2 | AnalysisRisc::ERISC |
-                                         AnalysisRisc::CORE_AGG;
+                                         AnalysisRisc::TRISC_1 | AnalysisRisc::TRISC_2 | AnalysisRisc::ERISC;
 
 using AnalysisMarkerType = tracy::TTDeviceMarkerType;
 constexpr AnalysisMarkerType AnalysisMarkerTypeAny = AnalysisMarkerType::ZONE_START | AnalysisMarkerType::ZONE_END |
