@@ -238,7 +238,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const uint32_t num_cores_x = parallelization_config.grid_size.x;
     const uint32_t num_cores_y = parallelization_config.grid_size.y;
-    // log_info(tt::LogOp, "Conv2D parallelization grid size: {} x {}", num_cores_x, num_cores_y);
     const uint32_t total_num_cores = all_cores.num_cores();
 
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
@@ -883,12 +882,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             (uint32_t)needs_act_block_zero_out,
             (uint32_t)dilation_h,
             (uint32_t)dilation_w,
-            (uint32_t)stride_w};
+            (uint32_t)stride_w,
+            (uint32_t)filter_h};
 
         std::vector<uint32_t> activation_reuse_args;
         if (enable_activation_reuse) {
             activation_reuse_args = {
-                filter_h,
                 activation_reuse_config.act_cb_num_tiles_split_last,
                 act_block_w_ntiles,
                 static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
@@ -897,7 +896,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 activation_reuse_config.reuse_window_offset,
                 static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0)};
         } else {
-            activation_reuse_args = std::vector<uint32_t>(8, 0);
+            activation_reuse_args = std::vector<uint32_t>(7, 0);
         }
         split_reader_args.insert(split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
     } else {

@@ -17,7 +17,7 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-
+#include "debug/dprint_pages.h"
 #define DEBUG_PRINT 0
 
 #ifdef SPLIT_READER
@@ -336,6 +336,7 @@ void MAIN {
                         DPRINT << "first tilize done" << ENDL();
 #ifdef SPLIT_READER
                         DPRINT << "second tilize start tiles=" << in0_num_subblocks_read_last * in0_block_w << ENDL();
+                        tt::compute::common::print_full_tile(in0_cb_second_reader_id, 0, true);
                         tilize_in<false, true>(
                             in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
                         DPRINT << "second tilize done" << ENDL();
