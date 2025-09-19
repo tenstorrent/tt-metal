@@ -31,13 +31,6 @@ template <typename ccl_operation_t>
 void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
     // namespace py = pybind11;
 
-    py::class_<GlobalSemaphoreArg>(module, "GlobalSemaphoreArg")
-        .def(py::init<const GlobalSemaphore&>())
-        .def(py::init<const std::vector<GlobalSemaphore>&>());
-
-    py::implicitly_convertible<GlobalSemaphore, GlobalSemaphoreArg>();
-    py::implicitly_convertible<std::vector<GlobalSemaphore>, GlobalSemaphoreArg>();
-
     bind_registered_operation(
         module,
         operation,
@@ -62,7 +55,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     topology,
                     subdevice_id,
                     use_optimal_ccl_for_llama,
-                    barrier_semaphore);
+                    barrier_semaphore,
+                    false);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -106,7 +100,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     barrier_semaphore,
                     chunks_per_sync,
                     num_workers_per_link,
-                    num_buffers_per_channel);
+                    num_buffers_per_channel,
+                    false);
             },
             py::arg("input_tensor"),
             py::arg("persistent_output_buffer"),
@@ -151,7 +146,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     num_preferred_links,       // = std::nullopt,
                     subdevice_id,
                     use_optimal_ccl_for_llama,
-                    barrier_semaphore);
+                    barrier_semaphore,
+                    false);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -171,11 +167,20 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
 }  // namespace
 
 void py_bind_all_gather_async(pybind11::module& module) {
+    namespace py = pybind11;
+
+    // Define GlobalSemaphoreArg once, outside the template
+    py::class_<GlobalSemaphoreArg>(module, "GlobalSemaphoreArg")
+        .def(py::init<const GlobalSemaphore&>())
+        .def(py::init<const std::vector<GlobalSemaphore>&>());
+
+    py::implicitly_convertible<GlobalSemaphore, GlobalSemaphoreArg>();
+    py::implicitly_convertible<std::vector<GlobalSemaphore>, GlobalSemaphoreArg>();
+
     bind_all_gather_async(
         module,
         ttnn::experimental::all_gather_async,
         R"doc(
-
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
@@ -207,6 +212,34 @@ void py_bind_all_gather_async(pybind11::module& module) {
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
             >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+
+        )doc");
+
+    bind_all_gather_async(
+        module,
+        ttnn::experimental::all_gather_async_reversed,
+        R"doc(
+
+        Performs a reversed all-gather operation on multi-device :attr:`input_tensor` across all devices.
+        This is identical to all_gather_async but with reversed device ordering in the output.
+
+        Args:
+            input_tensor (ttnn.Tensor): multi-device tensor.
+            dim (int): Dimension to perform operation.
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
+            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
+
+        Keyword Args:
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+
+        Returns:
+            ttnn.Tensor: the all-gathered tensor with reversed device ordering.
+
+        Note:
+            The tensor width must be divisible by 32*num_devices when using this reversed API.
 
         )doc");
 }
