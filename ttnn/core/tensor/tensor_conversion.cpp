@@ -58,7 +58,7 @@ struct TensorPreparedConversion {
     /// after the tensor has been moved to device.
     Layout construct_with_layout = Layout::TILE;
     DataType construct_with_data_type = DataType::INVALID;
-    std::optional<std::string> torch_convert_dtype = std::nullopt;
+    DataType host_convert_data_type = DataType::INVALID;
 };
 
 template <typename T>
@@ -92,7 +92,7 @@ Tensor create_typed_tt_tensor_from_host_data(
             pydata_span,
             tensor_spec.logical_shape(),
             host_data.pin(),
-            tensor_spec.layout(),
+            tensor_spec.tensor_layout(),
             *mesh_mapper,
             device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
             cq_id,
@@ -208,33 +208,30 @@ Tensor convert_host_buffer_to_tt_tensor_on_host(
 }
 
 struct HostBufferConversionInput {
-    const std::type_info* host_type;
-    DataType data_type;
+    host_buffer_data_type host_type;
+    DataType target_type;
     Layout layout;
 
     bool operator==(const HostBufferConversionInput& other) const {
-        return host_type == other.host_type && data_type == other.data_type && layout == other.layout;
+        return host_type == other.host_type && target_type == other.target_type && layout == other.layout;
     }
 };
 
 struct HostBufferConversionInputHash {
     std::size_t operator()(const HostBufferConversionInput& input) const {
-        std::size_t h1 = input.host_type->hash_code();
-        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.data_type));
+        std::size_t h1 = std::hash<int>{}(static_cast<int>(input.host_type));
+        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.target_type));
         std::size_t h3 = std::hash<int>{}(static_cast<int>(input.layout));
         return h1 ^ (h2 << 1) ^ (h3 << 2);
     }
 };
 
 std::optional<TensorPreparedConversion> prepare_tensor_conversion(
-    const HostBuffer& host_data, const TensorSpec& tensor_spec, bool has_device) {
+    const host_buffer_data_type& host_data_type, const TensorSpec& tensor_spec, bool has_device) {
     // Early exit conditions -- on-device strategy is not supported
 
     if (!has_device ||
         // Device is required
-        host_data.view_bytes().empty() ||
-        // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
-        // the tensor must be constructed on host.
         tensor_spec.memory_config().is_sharded() ||
         // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
         (((tensor_spec.tile().get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
@@ -286,8 +283,8 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
         };
 
     HostBufferConversionInput input{
-        .host_type = host_data.type_info(),
-        .data_type = tensor_spec.data_type(),
+        .host_type = host_data_type,
+        .target_type = tensor_spec.data_type(),
         .layout = tensor_spec.layout(),
     };
 
@@ -302,15 +299,17 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
 
 Tensor tt::tt_metal::create_device_tensor_from_host_data(
     const TensorSpec& tensor_spec,
-    const HostBuffer& host_data,
+    const host_buffer_data_type& host_data_type,
+    std::function<HostBuffer(DataType)> get_host_data,
     ttnn::distributed::MeshDevice* device,
     ttnn::QueueId cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    auto strategy = prepare_tensor_conversion(host_data, tensor_spec, device != nullptr);
+    auto strategy = prepare_tensor_conversion(host_data_type, tensor_spec, device != nullptr);
     Tensor output;
-
     py_log("entry");
+
+    HostBuffer host_data = get_host_data(strategy ? strategy->host_convert_data_type : tensor_spec.data_type());
 
     TT_FATAL(
         get_element_count(host_data) == tensor_spec.logical_shape().volume(),
@@ -320,8 +319,15 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
 
     if (strategy) {
         py_log("has strategy");
-        output = convert_host_buffer_to_tt_tensor_on_device(
-            host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper, strategy.value());
+        if (host_data.view_bytes().empty()) {
+            // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
+            // the tensor must be constructed on host.
+            output =
+                convert_host_buffer_to_tt_tensor_on_host(host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper);
+        } else {
+            output = convert_host_buffer_to_tt_tensor_on_device(
+                host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper, strategy.value());
+        }
     } else {
         py_log("no strategy");
         output =
