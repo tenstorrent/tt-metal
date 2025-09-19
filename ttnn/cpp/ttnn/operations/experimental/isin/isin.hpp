@@ -15,7 +15,6 @@ using namespace tt;
 
 struct IsInOperation {
     static Tensor invoke(
-        const QueueId& queue_id,
         const Tensor& elements,
         const Tensor& test_elements,
         const bool& assume_unique = false,
