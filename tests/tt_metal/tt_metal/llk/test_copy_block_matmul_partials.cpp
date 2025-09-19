@@ -29,7 +29,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -62,7 +62,7 @@ struct CopyBlockMatmulPartialsConfig {
 };
 
 void run_single_core_copy_block_matmul_partials(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////

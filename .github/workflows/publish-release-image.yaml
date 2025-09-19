@@ -6,6 +6,10 @@ on:
       version:
         required: true
         type: string
+      os:
+        required: false
+        type: string
+        default: ubuntu-22.04
       tag-latest:
         required: true
         type: boolean
@@ -17,6 +21,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      dry-run:
+        required: false
+        type: boolean
+        default: false
 jobs:
   create-docker-release-image:
     permissions:
@@ -24,7 +32,8 @@ jobs:
       packages: write
     strategy:
       matrix:
-        os: [ubuntu-22.04]
+        os:
+          - ${{ inputs.os }}
         image: [release, release-models]
     runs-on: ubuntu-latest
     outputs:
@@ -53,7 +62,8 @@ jobs:
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
-      - name: Build and push
+      - name: Build and push (skipped for dry run)
+        if: ${{ !inputs.dry-run }}
         uses: docker/build-push-action@v6
         with:
           push: true
@@ -65,10 +75,12 @@ jobs:
           target: ${{ matrix.image }}
 
   smoke-test-docker-image:
+    if: ${{ !inputs.dry-run }}
     needs: create-docker-release-image
     strategy:
       matrix:
-        os: [ubuntu-22.04]
+        os:
+          - ${{ inputs.os }}
         image: [release, release-models]
         test_group:
           [
@@ -120,10 +132,12 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   tag-docker-image-as-latest:
+    if: ${{ !inputs.dry-run }}
     needs: [smoke-test-docker-image, create-docker-release-image]
     strategy:
       matrix:
-        os: [ubuntu-22.04]
+        os:
+          - ${{ inputs.os }}
         image: [release, release-models]
     runs-on:
       - ubuntu-latest

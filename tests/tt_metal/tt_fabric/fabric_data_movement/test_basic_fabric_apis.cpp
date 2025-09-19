@@ -40,8 +40,9 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -57,7 +58,7 @@ using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
 
 std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     uint32_t size,
     CoreRangeSet& logical_crs,
     std::vector<uint32_t>& fill_data) {
@@ -168,6 +169,114 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         }
     }
 }
+void RunSetUnicastRouteTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
+    CoreCoord logical_core = {0, 0};
+    const auto& devices = fixture->get_devices();
+    const size_t NUM_DEVICES = devices.size();
+    bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
+    if (invalid_test_scenario) {
+        GTEST_SKIP() << "Test requires at least 2 devices, found " << NUM_DEVICES;
+    }
+
+    std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> result_buffers(NUM_DEVICES);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Get mesh shape to determine if it's 2D fabric
+    auto src_fabric_node_id =
+        control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_devices()[0]->id());
+    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto topology = fabric_context.get_fabric_topology();
+    bool is_2d_fabric = topology == Topology::Mesh;
+    uint32_t ew_dim = is_2d_fabric ? mesh_shape[1] : 0;
+
+    uint32_t MAX_ROUTE_BUFFER_SIZE = is_2d_fabric ? 32 : 4;
+    uint32_t RESULT_SIZE_PER_DEVICE = (MAX_ROUTE_BUFFER_SIZE * 2);  // 2 route buffers
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        const auto& src_device = devices[src_idx];
+        auto src_fabric_node_id =
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
+        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
+
+        uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
+        std::vector<uint32_t> result_buffer_data(NUM_DEVICES * RESULT_SIZE_PER_DEVICE, 0);
+        CoreRangeSet core_range = {logical_core};
+        result_buffers[src_idx] = PrepareBuffer(src_device, result_size, core_range, result_buffer_data);
+        programs[src_idx] = tt::tt_metal::CreateProgram();
+
+        uint32_t result_addr = result_buffers[src_idx]->address();
+        std::vector<uint32_t> runtime_args = {
+            *src_fabric_node_id.mesh_id,         // src_mesh_id
+            src_fabric_chip_id,                  // src_chip_id
+            result_addr,                         // result_addr
+            static_cast<uint32_t>(NUM_DEVICES),  // num_devices
+            ew_dim,                              // ew_dim
+        };
+
+        // Add mesh_id and chip_id pairs for all destinations
+        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
+            auto dst_fabric_node_id =
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+            runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
+            runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
+        }
+
+        std::map<std::string, std::string> defines = {};
+        if (is_2d_fabric) {
+            defines["FABRIC_2D"] = "";
+        }
+
+        auto kernel = tt_metal::CreateKernel(
+            programs[src_idx],
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_fabric_set_unicast_route.cpp",
+            {logical_core},
+            tt_metal::DataMovementConfig{.defines = defines});
+
+        tt_metal::SetRuntimeArgs(programs[src_idx], kernel, logical_core, runtime_args);
+    }
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        fixture->RunProgramNonblocking(devices[src_idx], programs[src_idx]);
+    }
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        fixture->WaitForSingleProgramDone(devices[src_idx], programs[src_idx]);
+    }
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        const auto& src_device = devices[src_idx];
+        auto src_fabric_node_id =
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
+
+        std::vector<uint32_t> result_data;
+        tt::tt_metal::distributed::ReadShard(
+            src_device->mesh_command_queue(),
+            result_data,
+            result_buffers[src_idx],
+            tt::tt_metal::distributed::MeshCoordinate({0, 0}));
+
+        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
+            auto dst_fabric_node_id =
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+            uint32_t result_offset = dst_idx * RESULT_SIZE_PER_DEVICE;
+            // Compare route buffers
+            bool route_buffers_match = true;
+            for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
+                uint32_t actual_byte = result_data[result_offset + i];
+                uint32_t expected_byte = result_data[result_offset + MAX_ROUTE_BUFFER_SIZE + i];
+                if (actual_byte != expected_byte) {
+                    route_buffers_match = false;
+                    break;
+                }
+            }
+
+            EXPECT_TRUE(route_buffers_match)
+                << "Route buffer mismatch for [" << *src_fabric_node_id.mesh_id << "/" << src_fabric_node_id.chip_id
+                << "] -> [" << *dst_fabric_node_id.mesh_id << "/" << dst_fabric_node_id.chip_id << "]";
+        }
+    }
+}
 
 std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValidCombinations(
     BaseFabricFixture* fixture) {
@@ -215,6 +324,18 @@ TEST_F(Fabric2DFixture, TestUnicastRaw) {
     }
 }
 
+TEST_F(Fabric2DFixture, TestUnicastRaw_3N) {
+    RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 0, RoutingDirection::E);
+}
+
+TEST_F(Fabric2DFixture, TestUnicastRaw_3E) {
+    RunTestUnicastRaw2D(this, 0, RoutingDirection::N, 3, RoutingDirection::E);
+}
+
+TEST_F(Fabric2DFixture, TestUnicastRaw_3N3E) {
+    RunTestUnicastRaw2D(this, 3, RoutingDirection::N, 3, RoutingDirection::E);
+}
+
 TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
@@ -260,6 +381,10 @@ TEST_F(Fabric2DFixture, TestMCastConnAPI_1N2S) {
 TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
 }
+
+TEST_F(Fabric2DFixture, Test2DMCastConnAPI_1N1E1W) { RunTest2DMCastConnAPI(this, 1, 0, 1, 1); }
+
+TEST_F(Fabric2DFixture, Test2DMCastConnAPI_7N3E) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
 
 TEST_F(NightlyFabric2DFixture, Test2DMCast) {
     auto valid_combinations = GenerateAllValidCombinations(this);
@@ -1069,6 +1194,21 @@ TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE3HopsW4Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 3};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
+}
+
+TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        GTEST_SKIP() << "Test applicable only on T3K";
+    }
+    RunSetUnicastRouteTest(this, false);
+}
+
+// 1 mesh all-to-all
+TEST_F(Fabric2DFixture, TestSetUnicastRoute) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        GTEST_SKIP() << "Test applicable only on T3K";
+    }
+    RunSetUnicastRouteTest(this, false);
 }
 
 }  // namespace fabric_router_tests

@@ -8,7 +8,6 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -35,11 +34,7 @@ struct LastRepeatDims {
 };
 
 ttnn::Tensor repeat_upper_dims_rm(
-    const ttnn::Tensor& tensor,
-    const uint32_t dim,
-    const uint32_t repetitions,
-    QueueId queue_id,
-    const MemoryConfig& output_mem_config) {
+    const ttnn::Tensor& tensor, const uint32_t dim, const uint32_t repetitions, const MemoryConfig& output_mem_config) {
     // collapse upper dims to 4D or append 1s
     // collapse lower dims or insert 1s
     // op
@@ -61,10 +56,9 @@ ttnn::Tensor repeat_upper_dims_rm(
     auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = false;
-    auto out_tensor =
-        tt::tt_metal::operation::run(
-            RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
-            .at(0);
+    auto out_tensor = tt::tt_metal::operation::run(
+                          RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {})
+                          .at(0);
     auto expected_shape = input_shape;
     expected_shape[dim] *= repetitions;
 
@@ -72,7 +66,7 @@ ttnn::Tensor repeat_upper_dims_rm(
 }
 
 ttnn::Tensor repeat_last_dim_rm(
-    const ttnn::Tensor& tensor, const uint32_t repetitions, QueueId queue_id, const MemoryConfig& output_mem_config) {
+    const ttnn::Tensor& tensor, const uint32_t repetitions, const MemoryConfig& output_mem_config) {
     // collapse to 2D
     // op
     // un-collapse
@@ -87,10 +81,9 @@ ttnn::Tensor repeat_last_dim_rm(
     auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = true;
-    auto out_tensor =
-        tt::tt_metal::operation::run(
-            RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
-            .at(0);
+    auto out_tensor = tt::tt_metal::operation::run(
+                          RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {})
+                          .at(0);
 
     auto expected_shape = input_shape;
     expected_shape[-1] *= repetitions;
@@ -111,7 +104,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
         ttnn::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
         std::copy_backward(input_shape.cbegin(), input_shape.cend(), new_shape_vec.end());
         working_tensor = ttnn::view(working_tensor, ttnn::Shape(new_shape_vec));
-        working_repetition_vector = std::move(repetition_vector);
+        working_repetition_vector = repetition_vector;
     }
     // torch actually throws an error if the repetition rank is smaller than the tensor rank but it seems reasonable to
     // handle it
@@ -121,7 +114,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     }
 
     else {
-        working_repetition_vector = std::move(repetition_vector);
+        working_repetition_vector = repetition_vector;
     }
 
     TT_ASSERT(working_tensor.logical_volume() == tensor.logical_volume());
@@ -139,8 +132,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
 ttnn::Tensor RepeatOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::SmallVector<uint32_t>& provided_repetition_vector,
-    const std::optional<MemoryConfig>& provided_output_mem_config,
-    QueueId queue_id) {
+    const std::optional<MemoryConfig>& provided_output_mem_config) {
     auto [working_tensor, repetition_vector] = detail::match_input_rank(tensor, provided_repetition_vector);
     MemoryConfig output_mem_config = provided_output_mem_config.value_or(tensor.memory_config());
     auto working_output_mem_config = output_mem_config;
@@ -166,7 +158,7 @@ ttnn::Tensor RepeatOperation::invoke(
     // Sharded -> interleaved
     if (tensor.memory_config().is_sharded()) {
         MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        working_tensor = ttnn::sharded_to_interleaved(queue_id, tensor, working_memory_config, std::nullopt);
+        working_tensor = ttnn::sharded_to_interleaved(tensor, working_memory_config, std::nullopt);
     }
     if (working_output_mem_config.is_sharded()) {
         working_output_mem_config =
@@ -186,12 +178,12 @@ ttnn::Tensor RepeatOperation::invoke(
         }
         // if last dim
         if (it == repetition_vector.crbegin()) {
-            working_tensor = detail::repeat_last_dim_rm(working_tensor, *it, queue_id, working_output_mem_config);
+            working_tensor = detail::repeat_last_dim_rm(working_tensor, *it, working_output_mem_config);
         }
         // if not last dim
         else {
             auto i = repetition_vector.crend() - it - 1;  // forward index
-            working_tensor = detail::repeat_upper_dims_rm(working_tensor, i, *it, queue_id, working_output_mem_config);
+            working_tensor = detail::repeat_upper_dims_rm(working_tensor, i, *it, working_output_mem_config);
         }
     }
 
@@ -202,7 +194,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // Interleaved to OG mem layout
     if (output_mem_config.is_sharded()) {
-        working_tensor = ttnn::interleaved_to_sharded(queue_id, working_tensor, output_mem_config, std::nullopt);
+        working_tensor = ttnn::interleaved_to_sharded(working_tensor, output_mem_config, std::nullopt);
     }
 
     return working_tensor;
@@ -210,7 +202,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
 ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
     return RepeatOperation::invoke(
-        input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt, DefaultQueueId);
+        input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
 }
 
 }  // namespace ttnn::operations::data_movement

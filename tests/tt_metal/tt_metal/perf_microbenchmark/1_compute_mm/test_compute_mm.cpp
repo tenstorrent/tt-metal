@@ -57,7 +57,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 using std::vector;
@@ -1492,7 +1492,7 @@ void prepare_inputs(
     }
 }
 
-float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
+float to_float(bfloat16 bfloat16_num) { return static_cast<float>(bfloat16_num); }
 
 bool validation_single_core(
     tt_metal::distributed::MeshDevice* device,

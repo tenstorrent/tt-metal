@@ -25,70 +25,35 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", model-group: "other", timeout: 5, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
+          {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "P150 BH", model-group: "other", timeout: 5, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "P150 BH", model-group: "other_mlperf_required", timeout: 5, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
+          {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
-        model-group:
-          - name: llm_javelin
-            timeout: 20
-            model-list:
-              - models/demos/falcon7b_common/tests
-              - models/demos/wormhole/mamba/tests
 
-          - name: cnn_javelin
-            timeout: 10
-            model-list:
-              - models/experimental/functional_unet/tests
-              - models/demos/wormhole/stable_diffusion/tests
-
-          - name: other
-            timeout: 5
-            model-list:
-              - models/demos/convnet_mnist/tests/
-              # This is bad. These should be referencing .../tests directories
-              - models/demos/bert_tiny/tests/test_performance.py
-              - models/demos/squeezebert/tests/test_performance.py
-              - models/demos/roberta/tests/test_performance.py
-
-          - name: other_magic_env
-            timeout: 45
-            model-list:
-              - models/demos/yolov10x/tests/perf/
-              - models/demos/sentence_bert/tests/perf/
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
-              - models/demos/yolov11/tests/perf/
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/wormhole/bert_tiny/tests/test_performance.py
-              - models/demos/yolov4/tests/perf/
-              - models/demos/yolov7/tests/perf/
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
-              - models/demos/segformer/tests/perf/
-              - models/demos/metal_BERT_large_11/tests/
-
-              - models/demos/yolov8s_world/tests/perf/
-              - models/demos/yolov8s/tests/perf/
-              - models/demos/yolov6l/tests/perf/
-              - models/demos/mobilenetv2/tests/perf/
-              - models/demos/vgg_unet/tests/
-              - models/demos/yolov9c/tests/perf/
-              - models/demos/vanilla_unet/tests/perf/
-              - models/demos/yolov8x/tests/perf/
-              # e2e performant test is present in .../vit/demo folder only
-              - models/demos/wormhole/vit/demo/
-              - models/experimental/swin_v2/tests/perf/
-              - models/experimental/swin_s/tests/perf/
-              - models/experimental/yolov5x/tests/perf/
-              - models/experimental/vovnet/tests/perf/
-              - models/demos/yolov12x/tests/perf/
-              - models/demos/ufld_v2/tests/perf/
-              - models/experimental/efficientnetb0/tests/perf/
-
-    name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
+    name: "${{ matrix.test-info.model-group }} ${{ matrix.test-info.name }}"
     defaults:
       run:
         shell: bash
     runs-on: ${{ matrix.test-info.runs-on }}
+    env:
+      DOCKER_IMAGE: ${{ inputs.docker-image }}
+      DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      DOCKER_OPTS: |
+        -v /mnt/MLPerf:/mnt/MLPerf:ro
+        -e TT_METAL_HOME=${{ github.workspace }}
+        -e ARCH_NAME=${{ matrix.test-info.arch }}
+        -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+        -e GTEST_OUTPUT=xml:generated/test_reports/
+        -e GITHUB_ACTIONS=true
+        -e LOGURU_LEVEL=INFO
+        ${{ (matrix.test-info.arch == 'wormhole_b0' || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'other_mlperf_required')) && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
+      PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -106,36 +71,227 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-      - name: Enable Performance mode
-        run: sudo cpupower frequency-set -g performance
-      - name: Run performance regressions
-        timeout-minutes: ${{ matrix.model-group.timeout }}
+      - name: Run falcon7b model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' }}
+      - name: Run mamba model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/wormhole/mamba/tests -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' }}
+      - name: Run functional_unet model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
+      - name: Run stable_diffusion model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/docker-run
-        env:
-          LOGURU_LEVEL: INFO
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-info.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e GITHUB_ACTIONS=true
+          docker_opts: ${{ env.DOCKER_OPTS }}
           install_wheel: true
+          run_args: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
+      - name: Run covnet_mnist model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/convnet_mnist/tests/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && ((matrix.test-info.arch == 'wormhole_b0' && matrix.test-info.model-group == 'other') || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'other_mlperf_required')) }}
+      - name: Run bert_tiny model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
+      - name: Run squeezebert model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/squeezebert/tests/test_performance.py -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
+      - name: Run roberta model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
+      # issue: https://github.com/tenstorrent/tt-metal/issues/27745
+      # - name: Run yolov10x model_perf test
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   uses: ./.github/actions/single-card-perf-test
+      #   with:
+      #     commands: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
+      #  if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run sentence_bert model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/sentence_bert/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run resnet50 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov11 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov11/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov11m model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov11m/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run bert_tiny model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov4 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov4/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov7 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov7/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run distilbert model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run segformer model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/segformer/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run metal_BERT_large_11 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov8s_world model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov8s_world/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov8s model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov8s/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov6l model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov6l/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run mobilenetv2 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/mobilenetv2/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run vgg_unet model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/vgg_unet/tests/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov9c model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov9c/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run vanilla_unet model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/vanilla_unet/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov8x model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov8x/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run swin_v2 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run swin_s model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/experimental/swin_s/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov5x model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/experimental/yolov5x/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run vovnet model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov12x model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov12x/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run ufld_v2 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/ufld_v2/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run efficientnetb0 model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Merge all the generated reports
+        timeout-minutes: 10
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: ${{ env.DOCKER_OPTS }}
           run_args: |
-            if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
-              echo "No environment variable engineering needed for other models"
-            elif [[ "${{ matrix.model-group.name }}" == "tt_transformers" ]]; then
-              export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct
-              export FAKE_DEVICE=N150
-            fi
+            # Merge all the generated reports
+            env python3 models/perf/merge_perf_results.py CHECK
+        if: ${{ !cancelled() }}
 
-            pytest -n auto ${{ join(matrix.model-group.model-list, ' ') }} -m models_performance_bare_metal ${{ matrix.model-group.name == 'cnn_javelin' && '--timeout=480' || '' }}
-
-            ## Merge all the generated reports
-            env python3 models/perf/merge_perf_results.py
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
@@ -154,7 +310,7 @@ jobs:
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: perf-report-csv-${{ matrix.model-group.name }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          name: perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -162,6 +318,3 @@ jobs:
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
-      - name: Disable Performance mode
-        if: always()
-        run: sudo cpupower frequency-set -g ondemand

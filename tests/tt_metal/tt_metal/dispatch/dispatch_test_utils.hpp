@@ -4,12 +4,12 @@
 
 #pragma once
 #include <gtest/gtest.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "hal_types.hpp"
-#include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
 
 namespace tt::tt_metal {
@@ -40,20 +40,6 @@ inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_
         src.at(i) = start + i;
     }
     return src;
-}
-
-inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(
-    tt::tt_metal::IDevice* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
-    // This function just enqueues a buffer (which should be large in the config)
-    // write as a precursor to testing the wrap mechanism
-    size_t buf_size = config.num_pages * config.page_size;
-    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
-
-    std::vector<uint32_t> src =
-        create_random_vector_of_bfloat16(buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-
-    EnqueueWriteBuffer(cq, *buffer, src, false);
-    return std::make_pair(std::move(buffer), src);
 }
 
 inline bool does_device_have_active_eth_cores(const IDevice* device) {

@@ -113,14 +113,37 @@ run_t3000_llama3_accuracy_tests() {
   llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+
+  # Run test accuracy llama3 - 1B, 3B, 8B, and 11B weights
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" ; do
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" ; fail+=$?
+    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_accuracy_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3_70n90b_accuracy_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_accuracy_tests"
+
   # Llama3.1-70B
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
   # Llama3.2-90B
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
 
-  # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf ; fail+=$?
+  # Run test accuracy llama3 - 70B and 90B weights
+  for llama_dir in "$llama70b" "$llama90b"; do
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 4200 ; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 
@@ -336,9 +359,9 @@ run_t3000_sd35large_tests() {
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
   # Run test_model for sd35 large
-  sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  SD35L_DIR=$sd35large pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_transformer_block.py -k "t3k" ; fail+=$?
-  SD35L_DIR=$sd35large pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_patch_embedding.py -k "t3k"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "t3k"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -374,6 +397,7 @@ run_t3000_tests() {
 
   # Run llama3 accuracy tests
   run_t3000_llama3_accuracy_tests
+  run_t3000_llama3_70n90b_accuracy_tests
 
   # Run Llama3.2-11B Vision tests
   run_t3000_llama3.2-11b-vision_freq_tests

@@ -27,7 +27,7 @@ public:
 
     // Constructors for `HostBuffer` based on the owned data.
     template <typename T>
-    explicit HostBuffer(std::shared_ptr<std::vector<T>> data);
+    explicit HostBuffer(const std::shared_ptr<std::vector<T>>& data);
 
     template <typename T>
     explicit HostBuffer(std::vector<T>&& data);
@@ -72,7 +72,7 @@ private:
 };
 
 template <typename T>
-HostBuffer::HostBuffer(std::shared_ptr<std::vector<T>> data) : type_info_(&typeid(T)) {
+HostBuffer::HostBuffer(const std::shared_ptr<std::vector<T>>& data) : type_info_(&typeid(T)) {
     const size_t size_bytes = data->size() * sizeof(T);
     view_ = tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
     pin_ = MemoryPin(data);

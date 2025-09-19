@@ -97,7 +97,12 @@ class Generator:
 
         # If batch is 32 and prompt_lens are all the same and batch_seq_len* batch is less than 128*1024, use batched prefill
         use_batched_prefill = False
-        if batch == 32 and len(set(prefill_seq_lens)) == 1 and batch_seq_len * batch < 128 * 1024:
+        if (
+            batch == 32
+            and len(set(prefill_seq_lens)) == 1
+            and batch_seq_len * batch < 128 * 1024
+            and tt_out_logits_all_users is None
+        ):
             use_batched_prefill = True
 
         all_users = [0] if use_batched_prefill else empty_slots
@@ -214,7 +219,7 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        trace_key = prefill_seq_len + batch_size
+        trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id, batch_size=batch_size

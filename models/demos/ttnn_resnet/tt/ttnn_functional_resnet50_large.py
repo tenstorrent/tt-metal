@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -234,7 +234,7 @@ class resnet50Bottleneck:
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -343,7 +343,7 @@ class resnet50Bottleneck:
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
                 act_block_h_override=act_block_h_override,
@@ -595,7 +595,7 @@ class resnet50:
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=True,
                 reallocate_halo_output=True,
                 act_block_h_override=act_block_h_override,
@@ -932,7 +932,7 @@ class resnet50:
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=True,
                 act_block_h_override=act_block_h_override,
             ),

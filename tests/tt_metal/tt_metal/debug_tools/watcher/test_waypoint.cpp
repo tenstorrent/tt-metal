@@ -25,7 +25,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -37,7 +37,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -183,9 +183,9 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
                     // Active eth core only has one available erisc to test on.
                     (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
-                    expected += fmt::format("rmsg:???|?? h_id:  0 smsg:? k_ids:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|?? h_id:  ? smsg:? k_ids:{}", k_id_s);
                 } else {
-                    expected += fmt::format("rmsg:???|? h_id:  0 k_ids:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|? h_id:  ? k_ids:{}", k_id_s);
                 }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
@@ -199,8 +199,7 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
                 }
                 expected = fmt::format(
                     "Device {} worker core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},{},{},{}  rmsg:???|??? h_id:  "
-                    "0 "
-                    "smsg:???? k_ids:{}",
+                    "? smsg:???? k_ids:{}",
                     device->id(),
                     logical_core.x,
                     logical_core.y,

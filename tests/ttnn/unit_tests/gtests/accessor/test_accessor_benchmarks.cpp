@@ -37,7 +37,7 @@ struct InputBufferParams {
 };
 
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_mesh_buffer_from_inputs(
-    const InputBufferParams& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    const InputBufferParams& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device, bool is_interleaved = false) {
     // These values would be passed from tensor correctly based on PageConfig
     const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
@@ -46,12 +46,17 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
 
     // Create input mesh buffer
-    auto input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
-        inputs.physical_tensor_shape,
-        inputs.input_shard_spec.physical_shard_shape,
-        inputs.page_shape,
-        inputs.input_shard_spec.grid,
-        inputs.input_shard_spec.shard_orientation);
+    std::optional<tt::tt_metal::BufferDistributionSpec> input_buffer_distribution_spec;
+    if (is_interleaved) {
+        input_buffer_distribution_spec = std::nullopt;
+    } else {
+        input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
+            inputs.physical_tensor_shape,
+            inputs.input_shard_spec.physical_shard_shape,
+            inputs.page_shape,
+            inputs.input_shard_spec.grid,
+            inputs.input_shard_spec.shard_orientation);
+    }
     const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.input_shard_spec.buffer_type,
@@ -62,7 +67,6 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
 
     return input_mesh_buffer;
 }
-
 }  // namespace accessor_benchmarks
 
 using namespace accessor_benchmarks;
@@ -78,19 +82,29 @@ std::vector<tensor_accessor::ArgsConfig> get_all_static_args_config() {
     return {static_config};
 }
 
+std::vector<tensor_accessor::ArgsConfig> get_all_static_interleaved_args_config() {
+    // Return only the all-static interleaved configuration (0000010 = only Interleaved bit set)
+    using tensor_accessor::ArgConfig;
+    using tensor_accessor::ArgsConfig;
+    ArgsConfig static_interleaved_config{};
+    return {static_interleaved_config};
+}
+
 void benchmark_args_combinations_single_core(
     const InputBufferParams& params,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     const std::string& res_path,
     const std::string& kernel_path,
-    const std::vector<tensor_accessor::ArgsConfig>& args_combinations) {
+    const std::vector<tensor_accessor::ArgsConfig>& args_combinations,
+    bool is_interleaved = false) {
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
-    const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
+    const auto input_mesh_buffer =
+        create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get(), is_interleaved);
 
-    // Extract local single-device buffer (ie. shard_view) concepts for testing
+    // Extract local single-device buffer concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
-    const auto local_device = input_shard_view->device();
+    const auto input_device_buffer = input_mesh_buffer->get_device_buffer(mesh_coordinate);
+    const auto local_device = input_device_buffer->device();
 
     auto profiler_dir = res_path + "/" + params.test_name;
     tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
@@ -108,10 +122,13 @@ void benchmark_args_combinations_single_core(
 
         constexpr CoreCoord grid = {0, 0};
 
-        // Set up sharded accessor compile-time args for reader kernel
-        const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, arg_config);
+        // Set up accessor compile-time args for reader kernel
+        const auto accessor_args = TensorAccessorArgs(*input_device_buffer, arg_config);
+        auto cta = accessor_args.get_compile_time_args();
+        cta.push_back(params.physical_tensor_shape.volume());  // tensor volume for interleaved tensors
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
+        defines["INTERLEAVED_LAYOUT"] = is_interleaved ? "1" : "0";
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
             program,
@@ -120,11 +137,11 @@ void benchmark_args_combinations_single_core(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = sharded_accessor_args.get_compile_time_args(),
+                .compile_args = cta,
                 .defines = defines});
 
         // Set up runtime args for reader kernel
-        SetCommonRuntimeArgs(program, reader_kernel_id, sharded_accessor_args.get_common_runtime_args());
+        SetCommonRuntimeArgs(program, reader_kernel_id, accessor_args.get_common_runtime_args());
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
@@ -142,7 +159,7 @@ void benchmark_args_combinations_single_core(
 
 void benchmark_all_args_combinations_single_core(
     const InputBufferParams& params,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     const std::string& res_path,
     const std::string& kernel_path) {
     auto all_args_combinations = get_all_sharded_args_configs();
@@ -173,24 +190,46 @@ TEST_P(AccessorBenchmarks, Constructor) {
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp");
 }
 
-TEST_P(AccessorBenchmarks, ManualPagesIteration) {
+TEST_P(AccessorBenchmarks, ManualPagesIterationSharded) {
     auto static_args_combinations = get_all_static_args_config();
     benchmark_args_combinations_single_core(
         GetParam(),
         mesh_device_,
-        "accessor_manual_pages_iteration_benchmarks",
+        "accessor_manual_pages_iteration_sharded_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_manual_pages_iteration_benchmark.cpp",
         static_args_combinations);
 }
 
-TEST_P(AccessorBenchmarks, PagesIterator) {
+TEST_P(AccessorBenchmarks, PagesIteratorSharded) {
     auto static_args_combinations = get_all_static_args_config();
     benchmark_args_combinations_single_core(
         GetParam(),
         mesh_device_,
-        "accessor_pages_iterator_benchmarks",
+        "accessor_pages_iterator_sharded_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_pages_iterator_benchmark.cpp",
         static_args_combinations);
+}
+
+TEST_P(AccessorBenchmarks, ManualPagesIterationInterleaved) {
+    auto static_interleaved_args_combinations = get_all_static_interleaved_args_config();
+    benchmark_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_manual_pages_iteration_interleaved_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_manual_pages_iteration_benchmark.cpp",
+        static_interleaved_args_combinations,
+        true);  // is_interleaved = true
+}
+
+TEST_P(AccessorBenchmarks, PagesIteratorInterleaved) {
+    auto static_interleaved_args_combinations = get_all_static_interleaved_args_config();
+    benchmark_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_pages_iterator_interleaved_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_pages_iterator_benchmark.cpp",
+        static_interleaved_args_combinations,
+        true);  // is_interleaved = true
 }
 
 INSTANTIATE_TEST_SUITE_P(

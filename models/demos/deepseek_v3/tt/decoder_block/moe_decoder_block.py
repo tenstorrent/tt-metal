@@ -57,7 +57,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
@@ -89,7 +89,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
@@ -122,8 +122,8 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
         ccl: CCL1D,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
             "moe": [
@@ -155,7 +155,12 @@ class MoEDecoderBlock(DecoderBlockBase):
         return x_partitioned
 
     @classmethod
-    def _broadcast_row_to_mesh(cls, tt_input: ttnn.Tensor, mesh_shape: tuple[int, int], src_row: int) -> ttnn.Tensor:
+    def _broadcast_row_to_mesh(
+        cls,
+        tt_input: ttnn.Tensor,
+        mesh_shape: tuple[int, int],
+        src_row: int,
+    ) -> ttnn.Tensor:
         """Broadcast data from a source row to all other rows in the mesh."""
         # Broadcast from src_row to mesh
         # Loop over rows, skip src_row
@@ -204,7 +209,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
             "moe": [

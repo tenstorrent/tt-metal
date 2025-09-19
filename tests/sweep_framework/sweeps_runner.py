@@ -22,8 +22,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 from framework.result_destination import ResultDestinationFactory
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from tracy.process_ops_logs import get_device_data_generate_report
+from tracy.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
 from framework.device_fixtures import default_device
 from time import sleep
@@ -46,6 +46,7 @@ class SweepsConfig:
     sweeps_tag: Optional[str] = None
     skip_modules: Optional[str] = None
     skip_on_timeout: bool = False
+    keep_invalid: bool = False
     elastic_connection_string: Optional[str] = None
     elastic_username: Optional[str] = None
     elastic_password: Optional[str] = None
@@ -71,6 +72,7 @@ def create_config_from_args(args) -> SweepsConfig:
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
         skip_on_timeout=args.skip_on_timeout,
+        keep_invalid=args.keep_invalid,
         summary=args.summary,
     )
 
@@ -91,7 +93,7 @@ def create_config_from_args(args) -> SweepsConfig:
 
     # Validate and set ARCH_NAME
     allowed_arch = {"blackhole", "wormhole_b0"}
-    arch_env = os.getenv("ARCH_NAME")
+    arch_env = os.getenv("ARCH_NAME") or os.getenv("IRD_ARCH_NAME")
     if not arch_env:
         logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
         exit(1)
@@ -270,7 +272,7 @@ def get_github_pipeline_id() -> Optional[int]:
     Prefer GitHub Actions run id if present; otherwise fall back to generic CI_PIPELINE_ID.
     Returns an int when available, otherwise None.
     """
-    run_id = os.getenv("GITHUB_RUN_ID") or os.getenv("CI_PIPELINE_ID")
+    run_id = os.getenv("GITHUB_RUN_NUMBER") or os.getenv("GITHUB_RUN_ID")
     if not run_id:
         return None
     try:
@@ -329,13 +331,14 @@ def run(module_name, input_queue, output_queue, config: SweepsConfig):
 def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
     # runs a single suite in a test vector
     results = []
+    invalid_vectors_count = 0
     input_queue = Queue()
     output_queue = Queue()
     p = None
     timeout = get_timeout()
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = not config.dry_run
+    child_mode = not config.dry_run and not config.vector_id
     timeout_before_rejoin = 5
 
     if child_mode:
@@ -356,10 +359,17 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         validity = deserialize(test_vector["validity"])
         result["start_time_ts"] = dt.datetime.now()
-        if validity == VectorValidity.INVALID:
-            result["status"] = TestStatus.NOT_RUN
-            result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
-            result["e2e_perf"] = None
+        if validity.value == "INVALID":
+            invalid_vectors_count += 1
+            if not config.keep_invalid:
+                # Skip this vector entirely - don't add to results
+                suite_pbar.update()
+                continue
+            else:
+                # Include invalid vector in results with NOT_RUN status
+                result["status"] = TestStatus.NOT_RUN
+                result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
+                result["e2e_perf"] = None
         else:
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
@@ -500,7 +510,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         p.join()
 
     suite_pbar.close()
-    return results
+    return results, invalid_vectors_count
 
 
 def run_sweeps(
@@ -561,9 +571,12 @@ def run_sweeps(
     # Summary counters
     total_vectors_run = 0  # total number of test cases (vectors)
     total_tests_run = 0  # total number of suites executed
+    total_invalid_vectors = 0  # total number of invalid vectors (skipped)
     module_suite_test_count = {}  # module_name -> {suite_name: count}
     max_test_cases_module = None  # find the module with the most test cases
     max_test_cases_per_module = 0
+    # Track test status counts across the entire run (only meaningful for non-dry runs)
+    status_counts = {}
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
@@ -600,13 +613,26 @@ def run_sweeps(
                     logger.warning(f"No vectors found for module {module_name}, suite {suite}")
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
-                results = execute_suite(test_vectors, pbar_manager, suite, module_name, header_info, config)
-
+                results, invalid_vectors_count = execute_suite(
+                    test_vectors, pbar_manager, suite, module_name, header_info, config
+                )
+                total_invalid_vectors += invalid_vectors_count
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
                 # Export results
                 if not config.dry_run and results:
+                    if config.summary:
+                        # Aggregate status counts for summary
+                        for res in results:
+                            st = res.get("status")
+                            if st is not None:
+                                key = getattr(st, "name", None)
+                                if key is None:
+                                    val = getattr(st, "value", None)
+                                    key = str(val) if val is not None else str(st)
+                                status_counts[key] = status_counts.get(key, 0) + 1
+
                     run_context = {
                         "run_id": run_id,
                         "test_start_time": suite_start_time,
@@ -643,6 +669,15 @@ def run_sweeps(
                 logger.info("=== EXECUTION SUMMARY ===")
                 logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
                 logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+                if config.keep_invalid:
+                    logger.info(f"Total invalid vectors (included in results as NOT_RUN): {total_invalid_vectors}")
+                else:
+                    logger.info(f"Total invalid vectors (excluded from results): {total_invalid_vectors}")
+                # Status breakdown across all executed tests
+                if status_counts:
+                    logger.info("\n=== TEST STATUS COUNTS ===")
+                    for status_name in sorted(status_counts.keys()):
+                        logger.info(f"{status_name}: {status_counts[status_name]}")
 
             # Detailed breakdown by module and suite
             if module_suite_test_count:
@@ -765,8 +800,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "postgres", "results_export"],
-        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export']",
+        choices=["elastic", "postgres", "results_export", "superset"],
+        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export', 'superset']",
     )
 
     parser.add_argument(
@@ -811,6 +846,13 @@ if __name__ == "__main__":
         action="store_true",
         required=False,
         help="Skip remaining tests in suite when a test times out. Default behavior is to not skip.",
+    )
+
+    parser.add_argument(
+        "--keep-invalid",
+        action="store_true",
+        required=False,
+        help="Include invalid vectors in results with NOT_RUN status. Default behavior is to exclude invalid vectors from results entirely.",
     )
 
     parser.add_argument(

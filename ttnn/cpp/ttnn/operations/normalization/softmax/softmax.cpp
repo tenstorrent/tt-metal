@@ -14,7 +14,6 @@
 constexpr float DEFAULT_SCALE_VALUE = 1.0f;
 namespace ttnn::operations::normalization {
 Tensor ExecuteSoftmax::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int dim,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -42,13 +41,12 @@ Tensor ExecuteSoftmax::invoke(
 
     // Operation
     auto output_tensor = ttnn::operations::normalization::softmax::softmax(
-        queue_id, input_tensor, dim, mem_config, compute_kernel_config, numeric_stable);
+        input_tensor, dim, mem_config, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
 }
 
 Tensor ExecuteScaleMaskSoftmax::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
@@ -74,7 +72,6 @@ Tensor ExecuteScaleMaskSoftmax::invoke(
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::softmax::scale_mask_softmax(
-        queue_id,
         input_tensor_4D,
         scale,
         mask,
@@ -87,7 +84,6 @@ Tensor ExecuteScaleMaskSoftmax::invoke(
 }
 
 Tensor ExecuteSoftmaxInPlace::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int dim,
     const SoftmaxProgramConfig& program_config,
@@ -110,13 +106,12 @@ Tensor ExecuteSoftmaxInPlace::invoke(
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::softmax::softmax_in_place(
-        queue_id, input_tensor_4D, dim_calculated, program_config, compute_kernel_config, numeric_stable);
+        input_tensor_4D, dim_calculated, program_config, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
 }
 
 Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
@@ -137,13 +132,12 @@ Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::softmax::scale_mask_softmax_in_place(
-        queue_id, input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
+        input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
 }
 
 Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
@@ -163,7 +157,7 @@ Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
     // Operation
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::softmax::scale_causal_mask_hw_dims_softmax_in_place(
-        queue_id, input_tensor_4D, scale, mask, program_config, compute_kernel_config, numeric_stable);
+        input_tensor_4D, scale, mask, program_config, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
 }

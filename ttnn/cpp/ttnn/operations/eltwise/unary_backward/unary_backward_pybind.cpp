@@ -30,7 +30,6 @@ void bind_unary_backward_two_float(
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -171,7 +170,6 @@ void bind_unary_backward_rsqrt(
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -181,7 +179,7 @@ void bind_unary_backward_rsqrt(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (uint8, optional): command queue id. Defaults to `0`.
+
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -222,16 +220,14 @@ void bind_unary_backward_rsqrt(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+            py::arg("input_grad") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
@@ -789,7 +785,7 @@ void bind_unary_backward_rdiv(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::optional<std::string> parameter_b,
+               const std::optional<std::string>& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
@@ -822,7 +818,7 @@ void bind_unary_backward_unary_optional_float(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
+
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -866,17 +862,15 @@ void bind_unary_backward_unary_optional_float(
                const ttnn::Tensor& input_tensor,
                float parameter,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, parameter, memory_config, input_grad);
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(grad_tensor, input_tensor, parameter, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::arg(parameter_name.c_str()),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("input_grad") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
@@ -970,7 +964,7 @@ void bind_unary_backward_optional(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
+
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -1012,16 +1006,14 @@ void bind_unary_backward_optional(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+            py::arg("input_grad") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
@@ -1042,7 +1034,7 @@ void bind_unary_backward_neg(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
+
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -1083,16 +1075,14 @@ void bind_unary_backward_neg(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+            py::arg("input_grad") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
@@ -1180,7 +1170,7 @@ void bind_unary_backward_gelu(
             {2} (string): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (uint8, optional): command queue id. Defaults to `0`.
+
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -1225,17 +1215,15 @@ void bind_unary_backward_gelu(
                const ttnn::Tensor& input_tensor,
                std::string parameter_a,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, parameter_a, memory_config, input_grad);
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(grad_tensor, input_tensor, parameter_a, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
             py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+            py::arg("input_grad") = std::nullopt});
 }
 
 }  // namespace
