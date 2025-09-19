@@ -177,12 +177,6 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
 
-// TODO: Docs and/or move to tt_metal::experimental
-KernelHandle CreateKernelFromBinary(
-    Program& program,
-    const std::string& binary_path,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
 
 // clang-format off
 // ==================================================
@@ -919,6 +913,22 @@ bool EventQuery(const std::shared_ptr<Event>& event);
 // clang-format on
 void Synchronize(
     IDevice* device, std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+namespace experimental {
+
+// Set the kernel binary path prefix for pre-compiled kernels
+// This path will be combined with kernel hash and name to form the full path to pre-compiled binaries
+void SetKernelBinaryPathPrefix(IDevice* device, const std::string& binary_path_prefix);
+
+// Create a kernel from pre-compiled binaries
+// The binary_path should be the kernel name, which will be combined with the prefix set via SetKernelBinaryPathPrefix
+KernelHandle CreateKernelFromBinary(
+    Program& program,
+    const std::string& kernel_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+
+}  // namespace experimental
 
 }  // namespace tt_metal
 

@@ -1125,23 +1125,6 @@ KernelHandle CreateKernelFromString(
         config);
 }
 
-KernelHandle CreateKernelFromBinary(
-    Program& program,
-    const std::string& binary_path,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
-    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(binary_path, KernelSource::BINARY_PATH);
-    return std::visit(
-        ttsl::overloaded{
-            [&](const DataMovementConfig& cfg) {
-                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            },
-            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
-            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
-        },
-        config);
-}
 
 CBHandle CreateCircularBuffer(
     Program& program,
@@ -1400,6 +1383,37 @@ void UpdateDynamicCircularBufferAddress(
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
+}
+
+void SetKernelBinaryPathPrefix(IDevice* device, const std::string& binary_path_prefix) {
+    // Store the binary path prefix on the device
+    // This will be used when constructing paths for BINARY_PATH kernels
+    device->set_kernel_binary_path_prefix(binary_path_prefix);
+}
+
+KernelHandle CreateKernelFromBinary(
+    Program& program,
+    const std::string& kernel_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+
+    // Get the device from the program to retrieve the binary path prefix
+    // Note: This assumes the program is associated with a device at this point
+    // The actual path construction will happen inside the kernel implementation
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+
+    // Pass kernel_name as the source - the actual path construction will happen in the kernel
+    KernelSource kernel_src(kernel_name, KernelSource::BINARY_PATH);
+
+    return std::visit(
+        ttsl::overloaded{
+            [&](const DataMovementConfig& cfg) {
+                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+            },
+            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
+            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+        },
+        config);
 }
 
 }  // namespace experimental
