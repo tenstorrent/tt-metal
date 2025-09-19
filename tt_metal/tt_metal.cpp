@@ -1357,6 +1357,27 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
+    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    cq_stack.push_back(cq_id);
+}
+
+uint8_t PopCurrentCommandQueueIdForThread() {
+    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    TT_FATAL(!cq_stack.empty(), "Current command queue id stack is empty!");
+    uint8_t cq_id = cq_stack.back();
+    cq_stack.pop_back();
+    return cq_id;
+}
+
+uint8_t GetCurrentCommandQueueIdForThread() {
+    const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    if (cq_stack.empty()) {
+        return 0;
+    }
+    return cq_stack.back();
+}
+
 namespace experimental {
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
