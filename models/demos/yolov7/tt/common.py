@@ -28,7 +28,7 @@ class TtYOLOv7Conv2D:
         math_approx_mode=False,
         input_channels_alignment=32,
         use_1d_systolic_array=True,
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
