@@ -191,7 +191,7 @@ def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, sha
     assert isequal
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w, num_slices",
     (
