@@ -46,6 +46,7 @@ target_sources(
         compressed_routing_table.cpp
         compressed_routing_path.cpp
         serialization/intermesh_link_table.cpp
+        serialization/router_port_directions.cpp
         serialization/physical_system_descriptor_serialization.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
@@ -71,6 +72,7 @@ include(protobuf)
 set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.proto
 )
 
 # Collect all generated protobuf files
