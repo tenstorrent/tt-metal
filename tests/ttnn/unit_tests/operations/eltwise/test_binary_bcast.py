@@ -225,6 +225,9 @@ activation_with_param_fns = {
     ),
 )
 def test_binary_scalar_ops_with_unary_param(a_shape, b_shape, ttnn_fn, post_activations, device):
+    if ttnn_fn == "divide":
+        pytest.skip("divide does not support row-col bcast due to being SFPU-only by default (Issue #28961)")
+
     torch.manual_seed(0)
     ttnn_op = getattr(ttnn, ttnn_fn)
     post = [(getattr(ttnn.UnaryOpType, op), param) for op, param in post_activations]
