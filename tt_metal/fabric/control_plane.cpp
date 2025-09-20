@@ -637,7 +637,6 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                     auto candidate_ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
                     if (candidate_ubb_id.tray_id == 1 && candidate_ubb_id.asic_id == 1) {
                         nw_chip_physical_id = chip_id;
-                        log_critical(tt::LogFabric, "NW chip physical id: {}", nw_chip_physical_id);
                     }
                 }
             }
@@ -1042,6 +1041,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         }
     }
 
+    std::string log_msg;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < inter_mesh_connectivity.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
@@ -1945,6 +1945,7 @@ ControlPlane::get_all_intermesh_eth_links() const {
     return intermesh_eth_links_;
 }
 
+// FIXME: THis is not right for multi-host mock systems
 std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_cores) const {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -2127,6 +2128,7 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
                        .logical_eth_core_to_chan_map.at(eth_core);
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
+        // FIXME: I suspect this is wrong....
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
     } else {
         log_debug(
