@@ -7,6 +7,7 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/vector.h>
 
 #include <ttnn/operations/experimental/dropout/dropout.hpp>
 
@@ -66,7 +67,7 @@ void py_module(nb::module_& m) {
             static_cast<nb::class_<models::BaseTransformer, ModuleBase>>(m.attr("BaseTransformer"));
         py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
     }
-
+    /*
     {
         auto py_gpt2_transformer_config_experimental =
             static_cast<nb::class_<models::gpt2::TransformerConfig::Experimental>>(
@@ -97,7 +98,7 @@ void py_module(nb::module_& m) {
         py_gpt2.def_static(
             "create", [](const models::gpt2::TransformerConfig& config) { return models::gpt2::create(config); });
     }
-
+    */
     {
         auto py_linear_layer = static_cast<nb::class_<LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
         py_linear_layer.def(nb::init<uint32_t, uint32_t, bool>());
@@ -138,7 +139,7 @@ void py_module(nb::module_& m) {
         auto py_mlp_params =
             static_cast<nb::class_<MultiLayerPerceptronParameters>>(m.attr("MultiLayerPerceptronParameters"));
         py_mlp_params.def(nb::init<>());
-        py_mlp_params.def(
+        py_mlp_params.def_static(
             "create",
             [](uint32_t input_features, const std::vector<uint32_t>& hidden_features, uint32_t output_features) {
                 return MultiLayerPerceptronParameters{

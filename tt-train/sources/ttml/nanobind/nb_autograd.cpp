@@ -10,6 +10,8 @@
 #include <nanobind/stl/string.h>
 
 #include <core/ttnn_all_includes.hpp>
+#include <ttnn/tensor/layout/layout.hpp>
+#include <ttnn/tensor/types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
