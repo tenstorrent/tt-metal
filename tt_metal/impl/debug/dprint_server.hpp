@@ -39,6 +39,9 @@ public:
     // Clears any raised signals (so they can be used again in a later run).
     void clear_signals();
 
+    // Clears the formatting of the print server.
+    void clear_formatting();
+
     bool reads_dispatch_cores(chip_id_t device_id);
 
     // Check whether a print hand has been detected by the server.
