@@ -46,9 +46,9 @@ void SetPC(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uin
 
 void SetPC(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val);
 
-void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, uint32_t state);
 
-void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, uint32_t state);
 
 void LaunchLiteFabric(
     tt::Cluster& cluster,

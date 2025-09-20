@@ -20,8 +20,8 @@ lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemD
     lite_fabric::FabricLiteConfig config{};
     config.is_primary = true;
     config.is_mmio = true;
-    config.initial_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
-    config.current_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
+    config.initial_state = lite_fabric::State::EthInitNeighbour;
+    config.current_state = lite_fabric::State::EthInitNeighbour;
     config.binary_addr = LITE_FABRIC_TEXT_START;
     config.binary_size = (LITE_FABRIC_TEXT_SIZE + 15) & ~0xF;  // Align to 16 bytes;
     config.eth_chans_mask = desc.enabled_eth_channels.at(0);
@@ -106,15 +106,15 @@ void SetPC(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr,
     }
 }
 
-void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, lite_fabric::InitState state) {
-    std::vector<uint32_t> readback{static_cast<uint32_t>(lite_fabric::InitState::UNKNOWN)};
-    while (static_cast<lite_fabric::InitState>(readback[0]) != state) {
+void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, uint32_t state) {
+    std::vector<uint32_t> readback{static_cast<uint32_t>(lite_fabric::State::Unknown)};
+    while ((readback[0] & lite_fabric::State::StateMask) != state) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         cluster.read_core(readback, sizeof(uint32_t), virtual_core, addr);
     }
 }
 
-void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, lite_fabric::InitState state) {
+void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, uint32_t state) {
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
         WaitForState(cluster, tunnel_1x.mmio_cxy_virtual(), addr, state);
     }
@@ -178,8 +178,7 @@ void LaunchLiteFabric(
     cluster.l1_barrier(0);
     // Wait for ready
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        lite_fabric::WaitForState(
-            cluster, tunnel_1x.mmio_cxy_virtual(), GetStateAddress(), lite_fabric::InitState::READY);
+        lite_fabric::WaitForState(cluster, tunnel_1x.mmio_cxy_virtual(), GetStateAddress(), lite_fabric::State::Ready);
         log_info(
             tt::LogMetal,
             "Lite Fabric {} (virtual={}) is ready",
@@ -230,8 +229,7 @@ void ResumeLiteFabric(
     cluster.l1_barrier(0);
     // Wait for ready
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        lite_fabric::WaitForState(
-            cluster, tunnel_1x.mmio_cxy_virtual(), GetStateAddress(), lite_fabric::InitState::READY);
+        lite_fabric::WaitForState(cluster, tunnel_1x.mmio_cxy_virtual(), GetStateAddress(), lite_fabric::State::Ready);
         log_info(
             tt::LogMetal,
             "Lite Fabric {} (virtual={}) is ready",
