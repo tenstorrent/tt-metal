@@ -274,10 +274,11 @@ class TtLlamaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
+        # for multidevice we will have bias duplication
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
-            bias=self.bo,
+            bias=self.bo if self.num_devices == 1 else None,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -304,6 +305,8 @@ class TtLlamaImageAttention(LightweightModule):
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
+            if self.bo is not None:
+                dense_out_reduced = ttnn.add(dense_out_reduced, self.bo)
             return dense_out_reduced
         else:
             return output_11SH
