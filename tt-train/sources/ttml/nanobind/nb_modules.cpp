@@ -99,7 +99,15 @@ void py_module(nb::module_& m) {
 
     {
         auto py_linear_layer = static_cast<nb::class_<LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
-        py_linear_layer.def(nb::init<uint32_t, uint32_t, bool>());
+        py_linear_layer.def(
+            nb::init<uint32_t, uint32_t, bool>(),
+            nb::arg("in_features"),
+            nb::arg("out_features"),
+            nb::arg("has_bias") = true);
+        py_linear_layer.def(
+            nb::init<const autograd::TensorPtr&, const autograd::TensorPtr&>(), nb::arg("weight"), nb::arg("bias"));
+        py_linear_layer.def(
+            nb::init<const autograd::TensorPtr&, bool>(), nb::arg("weight"), nb::arg("has_bias") = true);
         py_linear_layer.def("__call__", &LinearLayer::operator());
         py_linear_layer.def("get_weight", &LinearLayer::get_weight);
         py_linear_layer.def("get_weight_numpy", [](const LinearLayer& layer) {
