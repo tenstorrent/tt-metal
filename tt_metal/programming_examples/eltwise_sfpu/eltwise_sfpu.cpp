@@ -138,7 +138,7 @@ int main() {
 
         // Read the result (from shard at mesh coordinate {0,0} on a unit mesh) and compare to our expected result.
         std::vector<bfloat16> result_vec;
-        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
         // Compute the same thing on CPU for comparison
 

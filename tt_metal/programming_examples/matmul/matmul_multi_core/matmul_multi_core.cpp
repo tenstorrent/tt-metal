@@ -263,7 +263,7 @@ void matmul_multi_core(
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read waits for completion before returning and resizes 'output' as needed
-    distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

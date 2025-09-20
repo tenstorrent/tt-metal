@@ -462,7 +462,7 @@ void matmul_multicore_reuse_mcast(
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

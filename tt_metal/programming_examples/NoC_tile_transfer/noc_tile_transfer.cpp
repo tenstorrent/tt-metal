@@ -116,12 +116,7 @@ int main() {
 
     // Data transfer back to host machine
     std::vector<uint16_t> result_vec;
-    distributed::ReadShard(
-        cq,
-        result_vec,
-        dst_dram_buffer,
-        distributed::MeshCoordinate(0, 0),
-        true);  // Blocking call to ensure data is read before proceeding
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);
 

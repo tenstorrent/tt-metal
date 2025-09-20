@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
 
         // Read the output buffer (from shard at mesh coordinate {0,0} on a unit mesh) and validate.
         std::vector<bfloat16> result_vec;
-        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");

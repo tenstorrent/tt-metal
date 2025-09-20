@@ -213,6 +213,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
             .host_data = host_data,
             .region = std::nullopt,
         }};
+        // enqueue_read_shards will call lock_api_function_(), no need to call it here
         this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
     }
 }

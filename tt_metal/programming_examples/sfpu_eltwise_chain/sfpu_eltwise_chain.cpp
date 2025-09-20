@@ -199,12 +199,7 @@ int main() {
 
     // Data transfer back to host machine
     std::vector<bfloat16> result_vec(constants::TILE_HW, 0);
-    distributed::ReadShard(
-        cq,
-        result_vec,
-        dst_dram_buffer,
-        distributed::MeshCoordinate(0, 0),
-        true);  // Blocking call to ensure data is read before proceeding
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     // Reverse the tilization to get the result in the row-major format that the CPU expects
     result_vec = untilize_nfaces(result_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);

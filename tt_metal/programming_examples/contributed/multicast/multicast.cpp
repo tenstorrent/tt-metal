@@ -300,7 +300,7 @@ int main(int argc, char** argv) {
 
         // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
         //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-        distributed::ReadShard(cq, received_tiles, output_dram_buffer, device_coord);
+        distributed::EnqueueReadMeshBuffer(cq, received_tiles, output_dram_buffer, true);
         bool verbose_verify =
             false;  // if enabled, the original and all multicast-received tiles are printed in full (32x32).
         verify_tiles(identity_tile, received_tiles, num_dests, verbose_verify);

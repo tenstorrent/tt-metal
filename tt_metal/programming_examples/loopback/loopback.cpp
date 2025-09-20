@@ -116,8 +116,7 @@ int main() {
         // Read the result back from the shard at mesh coordinate {0,0}. Use blocking=true to wait for completion.
         // The vector is automatically resized to fit the data.
         std::vector<bfloat16> result_vec;
-        distributed::ReadShard(
-            cq, result_vec, output_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking*/ true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, output_dram_buffer, /*blocking*/ true);
 
         // Compare the result with the input. The result should be the same as the input.
         TT_FATAL(
