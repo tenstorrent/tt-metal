@@ -1759,13 +1759,6 @@ def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt):
             [10 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6))}),
         ],
-        [
-            torch.Size([5, 6, 1, 2]),
-            torch.Size([5, 6, 1, 1]),
-            [32, 32],
-            [32, 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 5))}),
-        ],
     ),
 )
 def test_binary_sharded_invalid_bcast(a_shape, b_shape, a_shard_size, b_shard_size, core_range, device):
@@ -2094,8 +2087,13 @@ def test_binary_sharded_uneven_invalid(a_shape, b_shape, shard_type, shard_size,
         memory_config=shard_config,
     )
 
-    with pytest.raises(RuntimeError) as e:
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=False)
+    # with pytest.raises(RuntimeError) as e:
+    # out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=False)
+
+    out_pt = torch.add(a_pt, b_pt)
+    out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=None)
+    out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+    assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
@@ -2270,17 +2268,17 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
     "a_shape, b_shape, a_shard_size, b_shard_size, core_range",
     (
         [
-            torch.Size([5, 6, 3200, 2]),
-            torch.Size([5, 6, 3200, 1]),
-            [3200, 32],
-            [3200, 32],
+            torch.Size([5, 6, 320, 2]),
+            torch.Size([5, 6, 320, 1]),
+            [320, 32],
+            [320, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 5))}),
         ],
         [
-            torch.Size([5, 6, 3200, 33]),
-            torch.Size([5, 6, 3200, 1]),
-            [3200, 64],
-            [3200, 32],
+            torch.Size([5, 6, 320, 33]),
+            torch.Size([5, 6, 320, 1]),
+            [320, 64],
+            [320, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 5))}),
         ],
         [

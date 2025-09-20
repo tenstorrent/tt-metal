@@ -173,7 +173,9 @@ public:
                 current_shape[majorDim] = last_shard_shape[majorDim];
                 current_shape[minorDim] = last_shard_shape[minorDim];
             } else {
-                // TODO
+                // to support sharding with any dim broadcast and any of HEIGHT, WIDTH, BLOCK
+                // the assumption of same core grid of A and B is no longer valid
+                // TODO: think more about uneven shard size support later
                 // TT_FATAL(
                 //     current_shape[majorDim] == last_shard_shape[majorDim] and
                 //         current_shape[minorDim] == last_shard_shape[minorDim],
