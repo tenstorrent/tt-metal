@@ -79,22 +79,26 @@ class Transformer(LightweightModule):
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
-        self.layers = [
-            TransformerBlock(
-                args=args,
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                dtype=dtype,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                transformation_mats=self.trans_mats_dict,
-                paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
-                attention_class=attention_class,
+        self.layers = []
+        ttnn.device.dump_device_memory_state(mesh_device, prefix="before_layers_")
+        for i in tqdm(range(self.n_layers)):
+            self.layers.append(
+                TransformerBlock(
+                    args=args,
+                    mesh_device=mesh_device,
+                    tt_ccl=self.tt_ccl,
+                    dtype=dtype,
+                    state_dict=state_dict,
+                    weight_cache_path=weight_cache_path,
+                    layer_num=i,
+                    transformation_mats=self.trans_mats_dict,
+                    paged_attention_config=paged_attention_config,
+                    use_paged_kv_cache=use_paged_kv_cache,
+                    attention_class=attention_class,
+                )
             )
-            for i in tqdm(range(self.n_layers))
-        ]
+            ttnn.device.dump_device_memory_state(mesh_device, prefix=f"after_{i}_layer_")
+
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,

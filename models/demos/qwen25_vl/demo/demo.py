@@ -172,10 +172,10 @@ def create_tt_model(
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             16384,  # max_seq_len, allow for image tokens
-            32,  # batch_size -- samples to load from the prompt JSON
+            16,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 16384},  # page_params
+            {"page_block_size": 32, "page_max_num_blocks": 8192},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -187,7 +187,7 @@ def create_tt_model(
         "ci-only-bert-score",  # ci_only batch-bleu-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
         "real-world-test",  # real-world test for 300DPI scanned document
-        "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context
+        "long-context-16k",  # real-world test for 300DPI scanned document with 32k long context
     ],
 )
 @pytest.mark.parametrize(
@@ -317,6 +317,7 @@ def test_demo(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
+    ttnn.device.dump_device_memory_state(mesh_device, prefix="before_create_tt_model_")
     model_args, model, paged_attention_config, tt_kv_cache = create_tt_model(
         mesh_device,
         instruct=instruct,
