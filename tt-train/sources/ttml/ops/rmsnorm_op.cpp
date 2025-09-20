@@ -186,7 +186,9 @@ autograd::TensorPtr rmsnorm_composite(
         auto c_by_ms_a = ttnn::multiply(
             ms_a, c, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,1,S,1] x [1] ->
                                                                                           // [B,1,S,1] (bcast)
-
+        // Note: Use fast_and_approximate_mode divide as
+        // fast_and_approximate_mode=true version does not work
+        // with row-col bcast (Issue #28961)
         auto rhs = ttnn::divide(
             scaled_outer,
             c_by_ms_a,
@@ -196,7 +198,8 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             none,
             none,
-            false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
+            false,
+            /*fast_and_approximate_mode*/ true);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
 
         auto dL_da = ttnn::subtract(
             gained_dL_dout,
