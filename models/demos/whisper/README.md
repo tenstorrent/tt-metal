@@ -5,7 +5,10 @@
 
 ## Introduction
 
-Read more about Whisper at [huggingface.co/distil-whisper/distil-large-v3](https://huggingface.co/distil-whisper/distil-large-v3)
+Read more about Whisper:
+- [huggingface.co/distil-whisper/distil-large-v3](https://huggingface.co/distil-whisper/distil-large-v3)
+- [huggingface.co/openai/whisper-large-v3](https://huggingface.co/openai/whisper-large-v3)
+- [huggingface.co/openai/whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo)
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -15,7 +18,7 @@ Read more about Whisper at [huggingface.co/distil-whisper/distil-large-v3](https
 ### Conditional Generation
 - To run the conditional generation demo with custom inputs:
 ```sh
-pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
+pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation -k "openai/whisper-large-v3-turbo"
 ```
 
 - To run the conditional generation demo with inputs from the `hf-internal-testing/librispeech_asr_dummy` dataset:
