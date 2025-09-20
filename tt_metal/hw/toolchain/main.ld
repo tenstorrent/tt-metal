@@ -15,18 +15,14 @@ OUTPUT_ARCH(riscv)
 #include "dev_mem_map.h"
 #include "tensix_dev_map.h"
 
-// Unused region, where we link the XIP-loaded kernels at.
-#define MEM_KERNEL_PSEUDO_BASE 0x80000000
-
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_BRISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_BRISC_STACK_MIN_SIZE
-#if defined(TYPE_FIRMWARE)
 #define TEXT_START MEM_BRISC_FIRMWARE_BASE
+#if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_BRISC_FIRMWARE_SIZE
 #else
-#define TEXT_START MEM_KERNEL_PSEUDO_BASE
 #define TEXT_SIZE MEM_BRISC_KERNEL_SIZE
 #endif
 
@@ -34,15 +30,14 @@ OUTPUT_ARCH(riscv)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_NCRISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_NCRISC_STACK_MIN_SIZE
-#if defined(TYPE_FIRMWARE)
+#if defined(TYPE_FIRMWARE) || !defined(ARCH_WORMHOLE)
 #define TEXT_START MEM_NCRISC_FIRMWARE_BASE
+#else
+#define TEXT_START MEM_NCRISC_KERNEL_BASE
+#endif
+#if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_NCRISC_FIRMWARE_SIZE
 #else
-#if defined(ARCH_WORMHOLE)
-#define TEXT_START MEM_NCRISC_KERNEL_BASE
-#else
-#define TEXT_START MEM_KERNEL_PSEUDO_BASE
-#endif
 #define TEXT_SIZE MEM_NCRISC_KERNEL_SIZE
 #endif
 
@@ -50,11 +45,10 @@ OUTPUT_ARCH(riscv)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_IERISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_IERISC_STACK_MIN_SIZE
-#if defined(TYPE_FIRMWARE)
 #define TEXT_START MEM_IERISC_FIRMWARE_BASE
+#if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_IERISC_FIRMWARE_SIZE
 #else
-#define TEXT_START MEM_KERNEL_PSEUDO_BASE
 #define TEXT_SIZE MEM_IERISC_KERNEL_SIZE
 #endif
 
@@ -62,13 +56,8 @@ OUTPUT_ARCH(riscv)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_SUBORDINATE_IERISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_SUBORDINATE_IERISC_STACK_MIN_SIZE
-#if defined(TYPE_FIRMWARE)
 #define TEXT_START MEM_SUBORDINATE_IERISC_FIRMWARE_BASE
 #define TEXT_SIZE MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE
-#else
-#define TEXT_START MEM_KERNEL_PSEUDO_BASE
-#define TEXT_SIZE MEM_IERISC_KERNEL_SIZE
-#endif
 
 #elif defined(COMPILE_FOR_TRISC)
 #define TRISC_SELECT__(BEFORE,MIDDLE,AFTER) BEFORE##TRISC##MIDDLE##AFTER
@@ -78,11 +67,10 @@ OUTPUT_ARCH(riscv)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_TRISC_LOCAL_SIZE
 #define STACK_MIN_SIZE TRISC_SELECT(MEM_,_STACK_MIN_SIZE)
-#if defined(TYPE_FIRMWARE)
 #define TEXT_START TRISC_SELECT(MEM_,_FIRMWARE_BASE)
+#if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE TRISC_SELECT(MEM_,_FIRMWARE_SIZE)
 #else
-#define TEXT_START MEM_KERNEL_PSEUDO_BASE
 #define TEXT_SIZE TRISC_SELECT(MEM_,_KERNEL_SIZE)
 #endif
 
@@ -91,11 +79,10 @@ OUTPUT_ARCH(riscv)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_IERISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_AERISC_STACK_MIN_SIZE
-#if defined(TYPE_FIRMWARE)
 #define TEXT_START MEM_AERISC_FIRMWARE_BASE
+#if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_IERISC_FIRMWARE_SIZE
 #else
-#define TEXT_START MEM_KERNEL_PSEUDO_BASE
 #define TEXT_SIZE MEM_IERISC_KERNEL_SIZE
 #endif
 
@@ -113,7 +100,11 @@ PHDRS {
 
 SECTIONS
 {
+#if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
+#else
+  .text __fw_export_text_end :
+#endif
   {
 #if defined(TYPE_KERNEL) && defined(COMPILE_FOR_NCRISC)
     __kernel_text_start = ABSOLUTE(.);
@@ -146,6 +137,7 @@ SECTIONS
 #endif
 /* FW must align to 16 byte boundary so kernel begins aligned to meet noc alignment constraints */
   . = ALIGN(ABSOLUTE(.) + MEM_PAD, 16);
+  __fw_export_text_end = ABSOLUTE(.);
 #else
   __kernel_data_lma = .;
 #endif
@@ -220,7 +212,11 @@ SECTIONS
      We don't do it here, as the failure mode would be bad (no executable to examine).  */
   .phdrs 0 (INFO) :
   {
-    LONG(TEXT_SIZE)
+    LONG(TEXT_SIZE
+#if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
+         - (__fw_export_text_end - TEXT_START)
+#endif
+         )
     LONG(DATA_SIZE - STACK_MIN_SIZE
 #if defined(TYPE_KERNEL)
          - (__fw_export_ldm_end - DATA_START)
