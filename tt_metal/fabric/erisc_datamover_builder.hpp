@@ -238,6 +238,9 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC = 1;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
 
     // If a mesh axis spans eight or more devices, use more buffer slot configuration.
     // Threshold (8 devices) was determined empirically.
@@ -433,6 +436,7 @@ struct FabricRiscConfig {
         is_sender_channel_serviced_[channel_idx] = enabled;
     }
 
+    void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
     size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;

@@ -15,7 +15,6 @@
 #include "hal_types.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/debug/inspector_impl.hpp"
@@ -849,10 +848,8 @@ void MetalContext::initialize_firmware(
                                        .get_target_out_path("");
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
-                    if (riscv_id + build_idx == 1) {  // TODO: clean up how brisc/ncrisc are handled
-                        // In this context, ncrisc_kernel_size16 is the size of the fw
-                        launch_msg.kernel_config().ncrisc_kernel_size16() = (fw_size + 15) >> 4;
-                    }
+                    hal_->set_iram_text_size(
+                        launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
@@ -947,7 +944,7 @@ void MetalContext::initialize_firmware(
         std::copy(
             launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
     }
-    auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     cluster_->write_core(
         init_launch_msg_data.data(),
         init_launch_msg_data.size(),
@@ -1156,8 +1153,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                     core_info.data(),
                     core_info.size(),
                     {device_id, worker_core},
-                    hal_->get_dev_addr(
-                        get_programmable_core_type(worker_core, device_id), HalL1MemAddrType::CORE_INFO));
+                    hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
                 initialize_firmware(
                     device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
                 not_done_cores.insert(worker_core);
@@ -1197,7 +1193,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             core_info.data(),
             core_info.size(),
             {device_id, virtual_core},
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_->get_eth_fw_is_cooperative()) {
@@ -1220,7 +1216,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             core_info.data(),
             core_info.size(),
             {device_id, virtual_core},
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);
@@ -1253,6 +1249,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");
+}
+
+// Command queue id stack for thread
+thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
+
+MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
+    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 uint32_t MetalContext::get_active_erisc_launch_flag_addr() {
