@@ -1211,7 +1211,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
     for (const auto& [dst_fabric_mesh_id, edge] : inter_mesh_node) {
         if (edge.port_direction == port_direction) {
             // Get reverse port direction
-            const auto& dst_connected_fabric_chip_id = edge.connected_chip_ids[routing_plane_id];
+            const auto& dst_connected_fabric_chip_id = edge.connected_chip_ids[0];
             TT_ASSERT(
                 inter_mesh_connectivity[*dst_fabric_mesh_id][dst_connected_fabric_chip_id].contains(
                     fabric_node_id.mesh_id),
