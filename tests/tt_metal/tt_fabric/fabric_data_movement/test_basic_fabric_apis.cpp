@@ -191,7 +191,7 @@ void RunSetUnicastRouteTest(BaseFabricFixture* fixture, bool is_multi_mesh = fal
     bool is_2d_fabric = topology == Topology::Mesh;
     uint32_t ew_dim = is_2d_fabric ? mesh_shape[1] : 0;
 
-    uint32_t MAX_ROUTE_BUFFER_SIZE = is_2d_fabric ? 26 : 4;
+    uint32_t MAX_ROUTE_BUFFER_SIZE = is_2d_fabric ? HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE : SINGLE_ROUTE_SIZE_1D;
     uint32_t RESULT_SIZE_PER_DEVICE = (MAX_ROUTE_BUFFER_SIZE * 2);  // 2 route buffers
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {

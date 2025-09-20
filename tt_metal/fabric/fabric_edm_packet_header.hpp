@@ -644,10 +644,12 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 };
 
+// WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
+#define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 26
+
 struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     LowLatencyMeshRoutingFieldsV2 routing_fields;  // 2B
-    // WARN: 13x13 mesh. want 16x16
-    uint8_t route_buffer[26];
+    uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
     union {
         union {
             struct {

@@ -16,6 +16,5 @@ namespace tt::tt_fabric {
 #define ROUTING_MODE_TORUS 0x0040
 #define ROUTING_MODE_LOW_LATENCY 0x0080
 #define ROUTING_MODE_DYNAMIC 0x0100
-#define ROUTING_MODE_HYBRID 0x0200  // TODO: remove after testing
 
 }  // namespace tt::tt_fabric
