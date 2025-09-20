@@ -1433,7 +1433,7 @@ Tensor matmul(
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
-        optional_input_tensors.push_back(bias.value());
+        optional_input_tensors.push_back(bias);
     } else {
         optional_input_tensors.push_back(std::nullopt);
     }
@@ -1454,7 +1454,7 @@ std::vector<Tensor> matmul_batched_weights(
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
-        optional_input_tensors.push_back(bias.value());
+        optional_input_tensors.push_back(bias);
     } else {
         optional_input_tensors.push_back(std::nullopt);
     }
