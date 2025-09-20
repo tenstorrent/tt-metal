@@ -324,3 +324,23 @@ CPMAddPackage(
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
 )
+
+####################################################################################################################
+# ttnn-op-runtime-predictor
+####################################################################################################################
+if(BUILD_TTNN_OP_RUNTIME_PREDICTOR)
+    CPMAddPackage(
+        NAME mlpack
+        GITHUB_REPOSITORY mlpack/mlpack
+        GIT_TAG 8fc23ba711075402c9cd77cfa0938a9d33256ca2
+        OPTIONS
+            "CMAKE_BUILD_PARALLEL_LEVEL 8"
+            "HAVE_CXX_ATOMICS_WITHOUT_LIB"
+    )
+
+    CPMAddPackage(
+        NAME ttnn-op-runtime-predictor
+        GIT_REPOSITORY git@github.com:tenstorrent/ttnn-op-runtime-predictor.git
+        GIT_TAG c46c4fb7de34c46fb565e032a75c5bee591f2b33
+    )
+endif()

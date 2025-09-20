@@ -13,6 +13,51 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/trace.hpp"
 
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
+#include "interface.hpp"
+#include "tt_stl/tt_stl/span.hpp"
+#include "ttnn/decorators.hpp"
+
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
+#include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/sort/sort.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/quantization/quantization.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/embedding/embedding.hpp"
+#include "ttnn/operations/embedding_backward/embedding_backward.hpp"
+#include "ttnn/operations/kv_cache/kv_cache.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum.hpp"
+#include "ttnn/operations/normalization/batch_norm/batch_norm.hpp"
+#include "ttnn/operations/normalization/rmsnorm/rmsnorm.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/operations/pool/generic/generic_pools.hpp"
+#include "ttnn/operations/pool/upsample/upsample.hpp"
+#include "ttnn/operations/rand/rand.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/reduction/prod/prod.hpp"
+#include "ttnn/operations/transformer/concatenate_heads/concatenate_heads.hpp"
+
+#endif
+
 namespace ttnn::graph {
 
 struct RuntimeQueryResponse {
@@ -40,32 +85,14 @@ static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
  */
 template <typename Op, typename... Args>
 auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
-    // helper lambda to transform TensorSpec to DeviceTensor
-    auto transform_arg = [device](auto&& arg) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
-            return create_device_tensor(arg, device);
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
-            return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
-            std::vector<Tensor> result(arg.size());
-            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
-                return create_device_tensor(arg, device);
-            });
-            return result;
-        } else {
-            return std::forward<decltype(arg)>(arg);
-        }
-    };
-    auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
-
     device->enable_program_cache();
     {  // warm up the program cache - required for trace capture
-        std::apply(op, transformed_args);
+        std::apply(op, std::make_tuple(std::forward<Args>(args)...));
     }
 
     auto trace_id = ttnn::operations::trace::begin_trace_capture(device, ttnn::QueueId(0));
     try {
-        std::apply(op, transformed_args);
+        std::apply(op, std::make_tuple(std::forward<Args>(args)...));
     } catch (const std::exception& e) {
         // Ensure trace capture is stopped and released before returning to avoid a memory leak
         ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::QueueId(0));
@@ -113,6 +140,71 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device, Qu
     }
 }
 
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
+
+// helper function checking for base_name()
+// if it does, this implies Op op in query_op_runtime() is a registered operation
+template <typename T>
+concept HasBaseName = requires(const T& t) {
+    { t.base_name() } -> std::convertible_to<std::string>;
+};
+
+template <typename T>
+auto get_op_name(const T& op) -> decltype(op.base_name()) {
+    return op.base_name();
+}
+
+inline std::string get_op_name(const std::string& op) { return op; }
+
+/**
+ * @brief Serializes op name and args, queries ttnn-op-runtime-predictor, and returns the predicted runtime.
+ *
+ * This function checks if the provided operation is a registered TTNN operation (has a base_name()),
+ * serializes the operation name and its arguments to JSON, and queries the ttnn-op-runtime-predictor
+ * model to obtain a predicted runtime for the operation. If the operation is not registered or the
+ * predictor does not return a valid runtime, std::nullopt is returned.
+ *
+ * @tparam Op The type of the operation to be queried.
+ * @tparam Args The types of the arguments to the operation.
+ * @param op The operation to be queried.
+ * @param transformed_args The arguments to the operation, packed as a tuple.
+ * @return std::optional<RuntimeQueryResponse> containing the predicted runtime in nanoseconds.
+ *         - On success: ExecutionStatus::Success and predicted runtime in nanoseconds.
+ *         - On failure: std::nullopt.
+ */
+template <typename Op, typename... Args>
+std::optional<RuntimeQueryResponse> query_ttnn_op_runtime_predictor(
+    const Op& op, const std::tuple<Args...>& transformed_args) {
+    if constexpr (HasBaseName<Op>) {
+        // helper lambda to make nlohmann::json objects from args
+        auto transform_to_json = [](auto&& arg) {
+            using ArgType = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<ArgType, nlohmann::json>) {
+                return arg;
+            } else {
+                auto json_arg = ttsl::json::to_json(arg);
+                return json_arg;
+            }
+        };
+
+        auto json_args_tuple = std::apply(
+            [&](auto&&... unpacked_args) { return std::make_tuple(transform_to_json(unpacked_args)...); },
+            transformed_args);
+
+        const auto& op_name = get_op_name(op);
+
+        uint64_t runtime = std::apply(
+            [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); },
+            json_args_tuple);
+        if (runtime != 0) {
+            return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
+        }
+    }
+    return std::nullopt;
+}
+
+#endif
+
 /**
  * @brief Extracts a trace of the graph operations and returns the trace execution runtime.
  *
@@ -131,8 +223,38 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device, Qu
  */
 template <typename Op, typename... Args>
 auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
+    // helper lambda to transform TensorSpec to DeviceTensor
+    auto transform_arg = [device](auto&& arg) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
+            return create_device_tensor(arg, device);
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
+            return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
+            std::vector<Tensor> result(arg.size());
+            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
+                return create_device_tensor(arg, device);
+            });
+            return result;
+        } else {
+            return std::forward<decltype(arg)>(arg);
+        }
+    };
+    auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
+
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
+    // query_response is an std::optional<RuntimeQueryResponse>
+    // if it has a value, return it
+    if (auto query_response = query_ttnn_op_runtime_predictor(op, transformed_args)) {
+        return *query_response;
+    }
+#endif
+
     try {
-        auto trace_id = capture_op_trace(op, device, std::forward<Args>(args)...);
+        auto trace_id = std::apply(
+            [&](auto&&... unpacked_args) {
+                return capture_op_trace(op, device, std::forward<decltype(unpacked_args)>(unpacked_args)...);
+            },
+            transformed_args);
         auto runtime = execute_time_and_release_trace(trace_id, device);
         return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
 
