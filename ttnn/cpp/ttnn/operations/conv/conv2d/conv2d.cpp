@@ -267,7 +267,11 @@ Result conv2d_DRAM(
         }
         return {matmul_output, input_height, input_width, weight_tensor_on_device, bias_tensor_on_device};
     }
-    TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
+    if (memory_config_.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "Conv2D DRAM doesn't support specifying memory config, as the output will always be DRAM Interleaved");
+    }
     TT_FATAL(
         !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
         "Conv output can't be in Row Major if output dtype is BFloat8_B.");
@@ -372,7 +376,6 @@ Result conv2d_DRAM(
                     BufferType::DRAM,
                 })),
         device);
-
     uint32_t slice_rounding_value = 1;
     if (conv_config.output_layout == tt_metal::Layout::TILE &&
         dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
@@ -573,8 +576,7 @@ Result conv2d_DRAM(
                 output_dtype,
                 first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
                 conv_config_l1,
-                compute_config_,
-                memory_config_);
+                compute_config_);
 
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
         // supported.
