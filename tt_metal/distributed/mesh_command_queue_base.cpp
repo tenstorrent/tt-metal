@@ -201,7 +201,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
     auto lock = lock_api_function_();
     TT_FATAL(
-        buffer->global_layout() == MeshBufferLayout::SHARDED || (buffer->device()->num_devices() == 1),
+        (buffer->global_layout() == MeshBufferLayout::SHARDED) || (buffer->device()->num_devices() == 1),
         "Can only read a Sharded MeshBuffer from a MeshDevice.");
     TT_FATAL(
         blocking, "Non-Blocking reads are not supported through {}. Use enqueue_read_shards_instead.", __FUNCTION__);

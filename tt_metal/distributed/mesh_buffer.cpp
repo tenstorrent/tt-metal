@@ -205,7 +205,8 @@ MeshBufferLayout MeshBuffer::global_layout() const {
 
 const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
     TT_FATAL(
-        global_layout() == MeshBufferLayout::SHARDED, "Can only query the global shard spec for a sharded MeshBuffer");
+        (global_layout() == MeshBufferLayout::SHARDED) || (device()->num_devices() == 1),
+        "Can only query the global shard spec for a sharded MeshBuffer");
     return std::get<ShardedBufferConfig>(config_);
 }
 
