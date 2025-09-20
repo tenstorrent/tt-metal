@@ -155,7 +155,6 @@ Checks: >
   -modernize-use-std-numbers,
   -modernize-use-trailing-return-type,
   -modernize-use-transparent-functors,
-  -modernize-use-using,
   -performance-avoid-endl,
   -performance-enum-size,
   -performance-faster-string-find,
