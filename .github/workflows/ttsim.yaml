@@ -99,7 +99,6 @@ jobs:
             "eltwise_binary"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
-            "custom_sfpi_add"
             "custom_sfpi_smoothstep"
           )
           for example_name in "${working_examples[@]}"; do

@@ -31,7 +31,7 @@
 inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
     // SFPU Tile Organization:
     // Each tile in Dst registers is divided into four 16x16 faces.
-    // n_vector_in_face = 32 as there are 32 SIMD lanes per tile
+    // n_vector_in_tile = 32 as there are 32 SIMD lanes per tile
     // i.e.
     //   dst_reg[0:31] holds the first tile
     //          dst_reg[0:8] holds the first face of the first tile
@@ -42,14 +42,14 @@ inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index
     //         etc.
     // NOTE: This value is architectural dependent and may change in future hardware revisions.
     //       For Blackhole and Whitehole, SFPU is 32 elements wide.
-    constexpr uint32_t n_vector_in_face = 32;
+    constexpr uint32_t n_vector_in_tile = 32;
 
     // Calculate base indices for each tile in the Dst register array.
     // Each tile occupies multiple consecutive slots in dst_reg[].
     // The multiplication accounts for the face structure within each tile.
-    const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_face;
-    const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_face;
-    const uint32_t out_base_idx = dst_index_out * n_vector_in_face;
+    const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_tile;
+    const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_tile;
+    const uint32_t out_base_idx = dst_index_out * n_vector_in_tile;
 
     // Process one face of the tile (8 SIMD operations).
     // Why 8 iterations? Each iteration processes 32 elements (vFloat is 32-elements-wide SIMD),
