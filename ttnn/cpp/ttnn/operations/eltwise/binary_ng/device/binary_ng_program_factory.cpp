@@ -173,11 +173,12 @@ public:
                 current_shape[majorDim] = last_shard_shape[majorDim];
                 current_shape[minorDim] = last_shard_shape[minorDim];
             } else {
-                TT_FATAL(
-                    current_shape[majorDim] == last_shard_shape[majorDim] and
-                        current_shape[minorDim] == last_shard_shape[minorDim],
-                    "no un-even shard size support memory layout {}",
-                    memory_layout);
+                // TODO
+                // TT_FATAL(
+                //     current_shape[majorDim] == last_shard_shape[majorDim] and
+                //         current_shape[minorDim] == last_shard_shape[minorDim],
+                //     "no un-even shard size support memory layout {}",
+                //     memory_layout);
             }
         }
         return current_shape;
@@ -315,9 +316,9 @@ void set_or_update_runtime_arguments(
             a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
             c_start_id =
                 (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
-        } else {
-            c_start_id = start_tile_id;
-        }
+        }  // else {
+        c_start_id = start_tile_id;
+        //}
 
         const bool is_quant_op = operation_attributes.is_quant_op;
         TT_FATAL(
@@ -361,9 +362,9 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
-            // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently only
-            // quant ops have different dtypes for a & b and we want to force f32 for better accuracy when scale is
-            // passed as a scalar, so we'll leave this here
+            // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently
+            // only quant ops have different dtypes for a & b and we want to force f32 for better accuracy when
+            // scale is passed as a scalar, so we'll leave this here
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
@@ -417,17 +418,17 @@ void set_or_update_runtime_arguments(
 
         start_tile_id += c_num_tiles;
     }
-    if (has_sharding) {
-        if (a.is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, cb_src_a, *a.buffer());
-        }
-        if (b.has_value() and b->is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, cb_src_b, *b->buffer());
-        }
-        if (c.is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, cb_src_c, *c.buffer());
-        }
-    }
+    // if (has_sharding) {
+    //     if (a.is_sharded()) {
+    //         UpdateDynamicCircularBufferAddress(program, cb_src_a, *a.buffer());
+    //     }
+    //     if (b.has_value() and b->is_sharded()) {
+    //         UpdateDynamicCircularBufferAddress(program, cb_src_b, *b->buffer());
+    //     }
+    //     if (c.is_sharded()) {
+    //         UpdateDynamicCircularBufferAddress(program, cb_src_c, *c.buffer());
+    //     }
+    // }
 }
 
 KernelName get_reader_kernel_name_and_defines(
@@ -528,8 +529,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const bool has_sharding = shard_specs.has_value();
 
     auto tile_hw = c.tensor_spec().tile().get_tile_hw();
-    uint32_t a_num_tiles_per_shard = has_sharding ? shard_specs->a_shard_spec.numel() / tile_hw : 0;
-    uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
+    // uint32_t a_num_tiles_per_shard = has_sharding ? shard_specs->a_shard_spec.numel() / tile_hw : 0;
+    // uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
     uint32_t c_num_tiles_per_shard = has_sharding ? shard_specs->c_shard_spec.numel() / tile_hw : 0;
 
     const auto a_dtype = a.dtype();
@@ -610,7 +611,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
-    bool a_sharded = a.memory_config().is_sharded();
+    // bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
 
@@ -620,9 +621,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         a_single_tile_size,
-        a_sharded ? a_num_tiles_per_shard : 2,
+        /*a_sharded ? a_num_tiles_per_shard : */ 2,
         a_data_format,
-        a_sharded ? a_buffer : nullptr);
+        /*a_sharded ? a_buffer : */ nullptr);
 
     if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
         auto a_intermediate_format = is_sfpu_op   ? a_data_format
@@ -639,9 +640,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         b_single_tile_size,
-        b_buffer == nullptr ? 1 : (b_sharded ? b_num_tiles_per_shard : 2),
+        b_buffer == nullptr ? 1 : (/*b_sharded ? b_num_tiles_per_shard : */ 2),
         b_data_format,
-        b_sharded ? b_buffer : nullptr);
+        /*b_sharded ? b_buffer : */ nullptr);
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
         auto b_intermediate_format = is_sfpu_op   ? b_data_format
@@ -668,7 +669,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         c_single_tile_size,
         c_sharded ? c_num_tiles_per_shard : 2,
         c_data_format,
-        c_sharded ? c_buffer : nullptr);
+        /*c_sharded ? c_buffer : */ nullptr);
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
     // WRITER KERNEL
@@ -682,11 +683,14 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     // to maintain backward compatibility, old writer kernel only needs b_dtype
     auto writer_defines = make_dataflow_defines(b_dtype, a_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
-    writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
+    // writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
+    writer_defines["DST_SHARDED"] = "0";
 
     auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
-    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
+    // reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED"] = "0";
+    // reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = "0";
 
     // overwrite reader and write kernel names so that reader reads both and b and
     // writer does not read b. For the transition, it can choose the original kernels
