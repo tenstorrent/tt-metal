@@ -8,8 +8,8 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
+from models.demos.sentence_bert.runner.performant_runner2 import SentenceBERTPerformantRunner
+from models.utility_functions import run_for_wormhole_b0
 
 
 def run_e2e_performant_sentencebert(
@@ -35,8 +35,9 @@ def run_e2e_performant_sentencebert(
     performant_runner.release()
     end = time.time() - start
 
-    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
     logger.info(f"Total time for 50 inferences: {end:.2f} seconds")
+
+    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
     logger.info(
         f"ttnn_sentencebert_batch_size: {batch_size}, One inference iteration time (sec): {inference_time_avg}, Sentence per sec: {round(batch_size * device.get_num_devices()/inference_time_avg)}"
     )
