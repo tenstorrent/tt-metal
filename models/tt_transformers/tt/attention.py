@@ -501,9 +501,6 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         if page_table:
-            import pdb
-
-            pdb.set_trace()
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
@@ -528,7 +525,7 @@ class Attention(LightweightModule):
                 attn_mask=attn_mask,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
 
         ttnn.deallocate(q_heads_1BQD)
@@ -833,10 +830,6 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
-            # import pdb; pdb.set_trace()
-            # seq_len = x_11SH.shape[-2]
-            # attention_mask = torch.full([1, 1, seq_len, seq_len], -1e9, dtype=torch.float32)
-            # attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,

@@ -969,15 +969,26 @@ def create_sliding_window_causal_mask(
     return causal_mask
 
 
-def get_decode_mask(pos_idx, sliding_window, num_attention_heads, mesh_device, max_seq_len):
+def get_decode_mask(args, mesh_device, paged_attention_config=None):
     """Function to create a decoding mask for the attention mechanism."""
-    pos_idx = pos_idx[-1].item()
-    mask = torch.triu(torch.full((1, 1, max_seq_len, max_seq_len), -float("inf")), diagonal=1)
-    if sliding_window > 0:
-        mask += torch.tril(torch.full((1, 1, max_seq_len, max_seq_len), -float("inf")), diagonal=-sliding_window)
+    # pos_idx = pos_idx[-1].item()
+    if paged_attention_config is not None:
+        max_seq_len = (paged_attention_config.max_num_blocks * paged_attention_config.block_size) // args.max_batch_size
+    else:
+        max_seq_len = args.max_seq_len
+    mask = torch.triu(
+        torch.full((1, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len), -float("inf")), diagonal=1
+    )
+    if args.sliding_window > 0:
+        mask += torch.tril(
+            torch.full((1, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len), -float("inf")),
+            diagonal=-args.sliding_window,
+        )
+
+    return mask
     mask = mask[:, :, pos_idx : pos_idx + 1, :]
 
-    mask = mask.repeat(1, num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
+    mask = mask.repeat(1, args.n_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
 
     causal_mask = ttnn.as_tensor(
         mask,
