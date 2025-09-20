@@ -298,8 +298,8 @@ class Generator:
         tt_current_pos = []
         tt_rot_mat_idxs = []
         tt_page_table = []
-        tt_sliding_window_attention_mask = []
-        tt_causal_attention_mask = []
+        tt_local_attn_mask = []
+        tt_global_attn_mask = []
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
@@ -308,15 +308,15 @@ class Generator:
                 tt_current_pos_i,
                 tt_rot_mat_idxs_i,
                 tt_page_table_i,
-                tt_sliding_window_attention_mask_i,
-                tt_causal_attention_mask_i,
+                tt_local_attn_mask_i,
+                tt_global_attn_mask_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
-            tt_sliding_window_attention_mask.append(tt_sliding_window_attention_mask_i)
-            tt_causal_attention_mask.append(tt_causal_attention_mask_i)
+            tt_local_attn_mask.append(tt_local_attn_mask_i)
+            tt_global_attn_mask.append(tt_global_attn_mask_i)
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -327,8 +327,8 @@ class Generator:
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
-                sliding_window_attn_mask=tt_sliding_window_attention_mask[i],
-                causal_attn_mask=tt_causal_attention_mask[i],
+                local_attn_mask=tt_local_attn_mask[i],
+                global_attn_mask=tt_global_attn_mask[i],
             )
             tt_logits.append(tt_logits_i)
 
