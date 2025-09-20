@@ -279,8 +279,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
     if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
         build_config.processor_class == HalProcessorClassType::COMPUTE) {
-        this->default_compile_opt_level_ = "O3";
-        this->default_linker_opt_level_ = "O3";
+        this->default_compile_opt_level_ = "O3 -fno-split-loops";
+        this->default_linker_opt_level_ = "O3 -fno-split-loops";
         this->includes_ += "-I" + env_.gpp_include_dir_ + " ";
         this->process_defines_at_compile_ = false;
     } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
@@ -378,7 +378,7 @@ void JitBuildState::compile_one(
     string defines = this->defines_;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
-        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        cmd += "-v -save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
     if (settings) {
@@ -463,7 +463,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     string lflags = this->lflags_;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
-        lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        lflags += "-v -save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
     // Append user args
