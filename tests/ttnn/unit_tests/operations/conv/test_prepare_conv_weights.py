@@ -27,7 +27,7 @@ def prepare_conv_weights_func(
     device,
     groups,
     is_owned,
-    slice_config=None,
+    slice_config=ttnn.Conv2dL1FullSliceConfig,
     weights_dtype=None,
     torch_weights_dtype=None,
     enable_kernel_stride_folding=False,
@@ -125,7 +125,6 @@ def prepare_conv_weights_func(
         if has_bias
         else None
     )
-
     tt_weight_tensor_formatted = ttnn.to_device(tt_weight_tensor_formatted, device)
     tt_bias_tensor_formatted = ttnn.to_device(tt_bias_tensor_formatted, device) if has_bias else None
     (k := next(iter(conv_kwargs)), conv_kwargs.pop(k))  ##removing 1st element from dict
@@ -414,8 +413,8 @@ def test_prepare_bias(
     assert passing
 
 
-SliceHeight = ttnn.Conv2dSliceHeight
-SliceWidth = ttnn.Conv2dSliceWidth
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @pytest.mark.skip("#26435: prepare weights is broken for dram sliced convs")

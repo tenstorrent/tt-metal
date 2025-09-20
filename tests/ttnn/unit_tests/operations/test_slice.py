@@ -1220,6 +1220,7 @@ def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, m
         [[2, 8, 8, 32], 2, 4],
         [[2, 8, 16, 2], 2, 8],
         [[2, 981, 39, 63], 63, 41],
+        [[1, 1024, 1024, 128], 37, 64],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])

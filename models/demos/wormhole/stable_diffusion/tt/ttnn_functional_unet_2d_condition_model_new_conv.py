@@ -374,6 +374,7 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         sample, [self.conv_in_weights, self.conv_in_bias] = ttnn.conv2d(
@@ -641,6 +642,7 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         sample, [self.conv_out_weights, self.conv_out_bias] = ttnn.conv2d(
