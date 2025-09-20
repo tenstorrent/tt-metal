@@ -40,7 +40,7 @@ The following image illustrates the connection between the different components 
     Furthermore, the unpacker, packer, SFPU, and FPU are not processing cores and cannot make control flow decisions on their own. The RISC-V cores issue commands to the compute engines and manage data flow between them. Explicit synchronization may be needed to ensure the engines have finished their work before the RISC-V cores proceed.
 
 .. figure:: /images/tenstorrent-sfpu-fpu-dst-register-diagram-and-dataflow.webp
-    :scale: 45%
+    :width: 65%
     :alt: Diagram of the dataflow, registers and engines that the compute kernel have access to
     :align: center
 

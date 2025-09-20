@@ -8,14 +8,14 @@ This is the simplest example of using the TT-Metal API. A data movement core in 
 
 We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/loopback`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``loopback`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_loopback`` executable in the ``build/programming_examples`` directory. For example:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     # To run the example
-    ./build/programming_examples/loopback
+    ./build/programming_examples/metal_example_loopback
 
 Device initialization
 ---------------------

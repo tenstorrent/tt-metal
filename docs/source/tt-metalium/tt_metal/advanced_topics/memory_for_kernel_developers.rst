@@ -137,7 +137,7 @@ In row-major layout, a single row of the tensor occupies one page, enabling simp
 .. figure:: /images/tenstorrent-row-major-memory-layout.webp
     :alt: The row-major memory layout of a tensor.
     :align: center
-    :scale: 65%
+    :width: 65%
 
     The row-major memory layout of a tensor. The data is stored in a single contiguous block of memory, with the last dimension varying the fastest.
 
@@ -147,7 +147,7 @@ In contrast, the tiled layout provides optimal performance for computations on t
 .. figure:: /images/tenstorrent-tile-memory-layout.webp
     :alt: The tiled memory layout of a tensor.
     :align: center
-    :scale: 65%
+    :width: 65%
 
     The tiled memory layout of a tensor.
 
@@ -285,7 +285,7 @@ Interleaved memory, while simple and generic, does not always provide optimal pe
 .. figure:: /images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp
     :alt: NoC congestion under DRAM access
     :align: center
-    :scale: 65%
+    :width: 65%
 
     It is possible to have contention on the NoC when multiple packets try to traverse the same link.
 
