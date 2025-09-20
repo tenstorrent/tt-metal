@@ -2127,10 +2127,23 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
                        .get_soc_desc(physical_chip_id)
                        .logical_eth_core_to_chan_map.at(eth_core);
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
+    std::string fabric_router_channels_on_chip_vec;
+    for (const auto& chan_id : fabric_router_channels_on_chip) {
+        fabric_router_channels_on_chip_vec += std::to_string(chan_id) + " ";
+    }
     if (fabric_router_channels_on_chip.contains(chan_id)) {
-        // FIXME: I suspect this is wrong....
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
+        log_warning(
+            tt::LogFabric,
+            "fabric_router_channels_on_chip_vec: {} chan_id: {}",
+            fabric_router_channels_on_chip_vec,
+            chan_id);
     } else {
+        log_critical(
+            tt::LogFabric,
+            "fabric_router_channels_on_chip_vec: {} chan_id: {}",
+            fabric_router_channels_on_chip_vec,
+            chan_id);
         log_debug(
             tt::LogFabric,
             "Control Plane: Disabling router on M{}D{} eth channel {}",
