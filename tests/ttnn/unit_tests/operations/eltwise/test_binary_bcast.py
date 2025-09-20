@@ -2120,8 +2120,13 @@ def test_binary_sharded_uneven_invalid(a_shape, b_shape, shard_type, shard_size,
         memory_config=shard_config,
     )
 
-    with pytest.raises(RuntimeError) as e:
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=False)
+    # with pytest.raises(RuntimeError) as e:
+    # out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=False)
+
+    out_pt = torch.add(a_pt, b_pt)
+    out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=None)
+    out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+    assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
