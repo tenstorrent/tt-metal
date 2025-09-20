@@ -437,7 +437,7 @@ Tensor run_remainder(
     result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result, output_mem_config);
     return result;
 }
-// Binary remainder will be overloaded by unary remainder in another PR
+
 Tensor ExecuteBinaryRemainder::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     DataType input_dtype = input_a.dtype();
@@ -458,7 +458,8 @@ Tensor ExecuteBinaryRemainder::invoke(
 
 Tensor ExecuteBinaryRemainder::invoke(
     const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::unary_remainder(input, scalar);
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::REMAINDER>::
+        invoke(ttnn::DefaultQueueId, input, scalar, output_mem_config);
 }
 
 Tensor run_fmod(
