@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <utility>
 #include <ttnn/tensor/tensor.hpp>
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
@@ -33,7 +34,7 @@ inline auto run(
     const OptionalTensors& optional_output_tensors = {}) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     if constexpr (detail::is_device_operation<ConcreteOperation>()) {
-        auto operation = DeviceOperation(concrete_op);
+        auto operation = DeviceOperation(std::forward<ConcreteOperation>(concrete_op));
         return run<OutputTensors>(std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
     } else {
         static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
@@ -53,7 +54,7 @@ inline auto run_without_autoformat(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {}) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    auto operation = DeviceOperation<OutputTensors>(concrete_op);
+    auto operation = DeviceOperation<OutputTensors>(std::forward<ConcreteOperation>(concrete_op));
     return run_without_autoformat<OutputTensors>(
         std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
 }
@@ -72,7 +73,7 @@ inline auto run_with_autoformat(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     const float pad_value = 0) -> Tensors {
-    auto operation = DeviceOperation<Tensors>(concrete_op);
+    auto operation = DeviceOperation<Tensors>(std::forward<ConcreteOperation>(concrete_op));
     return run_with_autoformat(
         std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value);
 }
@@ -96,7 +97,7 @@ inline auto run_with_autoformat(
     const std::vector<std::optional<FormatParams>>& optional_input_formatting = {},
     const OptionalTensors& optional_output_tensors = {}) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    auto operation = DeviceOperation<OutputTensors>(concrete_op);
+    auto operation = DeviceOperation<OutputTensors>(std::forward<ConcreteOperation>(concrete_op));
     return run_with_autoformat(
         std::move(operation),
         input_tensors,

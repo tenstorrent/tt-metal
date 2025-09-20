@@ -20,19 +20,18 @@ const std::string& get_reports_dir();
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
-template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
+template <typename FuncBody, typename FuncWait, typename OnTimeout>
 auto loop_and_wait_with_timeout(
     FuncBody&& func_body,
     FuncWait&& wait_condition,
     OnTimeout&& on_timeout,
-    std::chrono::duration<float> timeout_duration,
-    Args&&... args) {
+    std::chrono::duration<float> timeout_duration) {
     if (timeout_duration.count() > 0.0f) {
         auto start_time = std::chrono::high_resolution_clock::now();
 
         do {
-            func_body(args...);
-            if (wait_condition(args...)) {
+            func_body();
+            if (wait_condition()) {
                 // If somehow finished up the operation, we don't need to yield
                 std::this_thread::yield();
             }
@@ -44,11 +43,11 @@ auto loop_and_wait_with_timeout(
                 on_timeout();
                 break;
             }
-        } while (wait_condition(args...));
+        } while (wait_condition());
     } else {
         do {
-            func_body(args...);
-        } while (wait_condition(args...));
+            func_body();
+        } while (wait_condition());
     }
 }
 
