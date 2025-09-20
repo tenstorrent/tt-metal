@@ -375,7 +375,6 @@ inline std::vector<T> YamlConfigParser::get_elements_in_range(T start, T end) {
     return range;
 }
 
-
 class TestConfigBuilder {
 public:
     TestConfigBuilder(IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager, std::mt19937& gen) :
@@ -596,6 +595,9 @@ private:
                             // Explicitly preserve benchmark_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
 
+                            // Update test name to include parameter name and value
+                            detail::append_with_separator(next_config.name, "_", param_name, value);
+
                             ParsedTrafficPatternConfig param_default;
                             if (param_name == "ftype") {
                                 param_default.ftype = detail::chip_send_type_mapper.from_string(value, "ftype");
@@ -614,6 +616,9 @@ private:
                             auto& next_config = next_level_configs.back();
                             // Explicitly preserve benchmark_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
+
+                            // Update test name to include parameter name and value
+                            detail::append_with_separator(next_config.name, "_", param_name, std::to_string(value));
 
                             if (param_name == "num_links") {
                                 // num_links is part of fabric_setup, not traffic pattern defaults
@@ -824,8 +829,11 @@ private:
 
     void expand_one_or_all_to_all_unicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
-        const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
-        log_info(LogTest, "Expanding {}_unicast pattern for test: {}", pattern_name, test.name);
+        log_debug(
+            LogTest,
+            "Expanding {}_unicast pattern for test: {}",
+            (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all",
+            test.name);
         std::vector<std::pair<FabricNodeId, FabricNodeId>> all_pairs =
             this->route_manager_.get_all_to_all_unicast_pairs();
 
@@ -850,7 +858,8 @@ private:
 
     void expand_all_to_one_unicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
-        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {} (iteration {})", test.name, iteration_idx);
+        log_debug(
+            LogTest, "Expanding all_to_one_unicast pattern for test: {} (iteration {})", test.name, iteration_idx);
         auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(iteration_idx);
         if (!filtered_pairs.empty()) {
             add_senders_from_pairs(test, filtered_pairs, base_pattern);
@@ -858,20 +867,20 @@ private:
     }
 
     void expand_all_to_one_random_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
+        log_debug(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
         uint32_t index = get_random_in_range(0, device_info_provider_.get_global_node_ids().size() - 1);
         auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(index);
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
+        log_debug(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
         auto random_pairs = this->route_manager_.get_full_device_random_pairs(this->gen_);
         add_senders_from_pairs(test, random_pairs, base_pattern);
     }
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
+        log_debug(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
 
@@ -884,7 +893,7 @@ private:
     void expand_one_or_all_to_all_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
-        log_info(LogTest, "Expanding {}_multicast pattern for test: {}", pattern_name, test.name);
+        log_debug(LogTest, "Expanding {}_multicast pattern for test: {}", pattern_name, test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand {}_multicast because no devices were found.", pattern_name);
 
@@ -923,7 +932,7 @@ private:
 
     void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_info(LogTest, "Expanding unidirectional_linear pattern for test: {}", test.name);
+        log_debug(LogTest, "Expanding unidirectional_linear pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear because no devices were found.");
 
@@ -948,7 +957,7 @@ private:
 
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
-        log_info(LogTest, "Expanding full_or_half_ring pattern for test: {}", test.name);
+        log_debug(LogTest, "Expanding full_or_half_ring pattern for test: {}", test.name);
         std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand full_or_half_ring because no devices were found.");
 
@@ -963,7 +972,7 @@ private:
                 // Check if the result is valid (has value)
                 if (!ring_neighbors.has_value()) {
                     // Skip this device as it's not on the perimeter and can't participate in ring multicast
-                    log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_node.chip_id);
+                    log_debug(LogTest, "Skipping device {} as it's not on the perimeter ring", src_node.chip_id);
                     continue;
                 }
 
@@ -1011,7 +1020,7 @@ private:
     }
 
     void expand_sync_patterns(ParsedTestConfig& test) {
-        log_info(
+        log_debug(
             LogTest,
             "Expanding line sync patterns for test: {} with topology: {}",
             test.name,
@@ -1036,7 +1045,7 @@ private:
             test.global_sync_val = sync_val;
         }
 
-        log_info(
+        log_debug(
             LogTest,
             "Generated {} line sync configurations, line_syn_val: {}",
             test.global_sync_configs.size(),
@@ -1160,7 +1169,7 @@ private:
         }
 
         uint32_t num_links = test.fabric_setup.num_links;
-        log_info(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
+        log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
 
         // Validate that num_links doesn't exceed available routing planes for any device
         if (!route_manager_.validate_num_links_supported(num_links)) {
