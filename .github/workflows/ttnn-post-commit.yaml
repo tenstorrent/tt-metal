@@ -1,9 +1,6 @@
 name: "[internal] ttnn unit tests impl"
 
 on:
-  push:
-    branches:
-      ["roseli/28975-pipeline-reorg-apc-ops"]
   workflow_call:
     inputs:
       arch:
