@@ -57,9 +57,9 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
 
     MeshCoordinateRange devices(mesh_device_->shape());
-    auto waiter_mesh_workload = CreateMeshWorkload();
-    auto syncer_mesh_workload = CreateMeshWorkload();
-    auto incrementer_mesh_workload = CreateMeshWorkload();
+    auto waiter_mesh_workload = MeshWorkload();
+    auto syncer_mesh_workload = MeshWorkload();
+    auto incrementer_mesh_workload = MeshWorkload();
     AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
     AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
     AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
@@ -128,8 +128,8 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
             .set_page_size(src0_cb_index, single_tile_size);
     CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
 
-    auto syncer_mesh_workload = CreateMeshWorkload();
-    auto datacopy_mesh_workload = CreateMeshWorkload();
+    auto syncer_mesh_workload = MeshWorkload();
+    auto datacopy_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
 
     AddProgramToMeshWorkload(syncer_mesh_workload, std::move(sync_and_incr_program), devices);
@@ -185,16 +185,16 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
     // Create MeshWorkloads corresponding to different SubDevice configs,
     // so we can single-shot dispatch to the entire Mesh
     MeshCoordinateRange devices(mesh_device_->shape());
-    auto waiter_mesh_workload = CreateMeshWorkload();
-    auto syncer_mesh_workload = CreateMeshWorkload();
-    auto incrementer_mesh_workload = CreateMeshWorkload();
+    auto waiter_mesh_workload = MeshWorkload();
+    auto syncer_mesh_workload = MeshWorkload();
+    auto incrementer_mesh_workload = MeshWorkload();
     AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
     AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
     AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
 
-    auto waiter_mesh_workload_1 = CreateMeshWorkload();
-    auto syncer_mesh_workload_1 = CreateMeshWorkload();
-    auto incrementer_mesh_workload_1 = CreateMeshWorkload();
+    auto waiter_mesh_workload_1 = MeshWorkload();
+    auto syncer_mesh_workload_1 = MeshWorkload();
+    auto incrementer_mesh_workload_1 = MeshWorkload();
     AddProgramToMeshWorkload(waiter_mesh_workload_1, std::move(waiter_program_1), devices);
     AddProgramToMeshWorkload(syncer_mesh_workload_1, std::move(syncer_program_1), devices);
     AddProgramToMeshWorkload(incrementer_mesh_workload_1, std::move(incrementer_program_1), devices);
@@ -235,9 +235,9 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
     auto [waiter_program, syncer_program, incrementer_program, global_sem] =
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
     MeshCoordinateRange devices(mesh_device_->shape());
-    auto waiter_mesh_workload = CreateMeshWorkload();
-    auto syncer_mesh_workload = CreateMeshWorkload();
-    auto incrementer_mesh_workload = CreateMeshWorkload();
+    auto waiter_mesh_workload = MeshWorkload();
+    auto syncer_mesh_workload = MeshWorkload();
+    auto incrementer_mesh_workload = MeshWorkload();
     AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
     AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
     AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
