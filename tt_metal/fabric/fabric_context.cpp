@@ -77,7 +77,7 @@ bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric
 size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->is_2D_routing_enabled()) {
         return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
-                                                    : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+                                                    : sizeof(tt::tt_fabric::HybridMeshPacketHeader);
     } else {
         return sizeof(tt::tt_fabric::PacketHeader);
     }

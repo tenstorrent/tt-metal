@@ -21,11 +21,12 @@ void kernel_main() {
     auto actual_packet_header = PacketHeaderPool::allocate_header();
 
 #ifdef FABRIC_2D
-    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = 32;  // 2D: store 32 bytes (32 packed command bytes)
+    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE;
     volatile uint8_t* actual_route_buffer = actual_packet_header->route_buffer;
     volatile uint8_t* expected_route_buffer = expected_packet_header->route_buffer;
 #else
-    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = 4;  // 1D: store only 4 bytes (single 32-bit routing field)
+    constexpr uint32_t MAX_ROUTE_BUFFER_SIZE =
+        SINGLE_ROUTE_SIZE_1D;  // 1D: store only 4 bytes (single 32-bit routing field)
     volatile uint8_t* actual_route_buffer = (uint8_t*)&actual_packet_header->routing_fields.value;
     volatile uint8_t* expected_route_buffer = (uint8_t*)&expected_packet_header->routing_fields.value;
 #endif
@@ -33,7 +34,6 @@ void kernel_main() {
         uint32_t dst_mesh_id = get_arg_val<uint32_t>(5 + dst_idx * 2);
         uint32_t dst_fabric_dev_id = get_arg_val<uint32_t>(5 + dst_idx * 2 + 1);
 
-        bool routing_success = false;
         for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
             actual_route_buffer[i] = 0;
             expected_route_buffer[i] = 0;
@@ -41,13 +41,13 @@ void kernel_main() {
 
         if (src_mesh_id == dst_mesh_id) {
 #ifdef FABRIC_2D
-            routing_success = fabric_set_unicast_route(dst_fabric_dev_id, actual_packet_header);
+            fabric_set_unicast_route(actual_packet_header, dst_fabric_dev_id, src_mesh_id);
             fabric_set_unicast_route(expected_packet_header, src_fabric_dev_id, dst_fabric_dev_id, dst_mesh_id, ew_dim);
 #else
             uint8_t distance_in_hops = (dst_fabric_dev_id > src_fabric_dev_id)
                                            ? (dst_fabric_dev_id - src_fabric_dev_id)
                                            : (src_fabric_dev_id - dst_fabric_dev_id);
-            routing_success = fabric_set_unicast_route(dst_fabric_dev_id, actual_packet_header);
+            fabric_set_unicast_route(dst_fabric_dev_id, actual_packet_header);
             if (distance_in_hops != 0) {
                 // For 1D fabric, use LowLatencyPacketHeader with distance in hops
                 expected_packet_header->to_chip_unicast(distance_in_hops);
