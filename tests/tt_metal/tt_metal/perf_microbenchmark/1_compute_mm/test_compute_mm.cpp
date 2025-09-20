@@ -85,7 +85,7 @@ using namespace tt;
 //   cores for certain input shapes. In that case, only some cores are used with
 //   a warning message.
 //   - To measure performance in the slow dispatch mode, build tt_metal project
-//   with the profiler option using build_metal.sh --enable-profiler first. This benchmark
+//   with Tracy enabled. This benchmark
 //   copied device profiler's internal code to get the "t0 to any riscfw end"
 //   cycles. If device profiler is changed, it also should be updated.
 //   Otherwise, it may get inappropriate cycle value.

@@ -141,10 +141,7 @@ int main(int argc, char** argv) {
 
     if (use_device_profiler) {
 #if !defined(TRACY_ENABLE)
-        log_error(
-            LogTest,
-            "Metal library and test code should be build with "
-            "profiler option using ./build_metal.sh --enable-profiler");
+        log_error(LogTest, "Metal library and test code should be built with Tracy enabled.");
 #endif
         auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
         TT_FATAL(

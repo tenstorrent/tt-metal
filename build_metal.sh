@@ -22,7 +22,7 @@ show_help() {
     echo "  -c, --enable-ccache              Enable ccache for the build."
     echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
-    echo "  -p, --enable-profiler            Enable Tracy profiler."
+    echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
     echo "  --build-tests                    Build All Testcases."
@@ -68,7 +68,7 @@ export_compile_commands="OFF"
 enable_ccache="OFF"
 enable_time_trace="OFF"
 build_type="Release"
-enable_profiler="OFF"
+disable_profiler="OFF"
 build_dir=""
 build_tests="OFF"
 build_ttnn_tests="OFF"
@@ -102,7 +102,7 @@ enable_fake_kernels_target="OFF"
 
 declare -a cmake_args
 
-OPTIONS=h,e,c,t,a,m,s,u,b:,p
+OPTIONS=h,e,c,t,a,m,s,u,b:
 LONGOPTIONS="
 help
 build-all
@@ -110,7 +110,7 @@ export-compile-commands
 enable-ccache
 enable-time-trace
 build-type:
-enable-profiler
+disable-profiler
 install-prefix:
 build-dir:
 build-tests
@@ -172,8 +172,8 @@ while true; do
             build_dir="$2";shift;;
         -b|--build-type)
             build_type="$2";shift;;
-        -p|--enable-profiler)
-            enable_profiler="ON";;
+        --disable-profiler)
+            disable_profiler="ON";;
         --install-prefix)
             install_prefix="$2";shift;;
         --build-tests)
@@ -237,6 +237,12 @@ if [[ $# -gt 0 ]]; then
     exit 1
 fi
 
+# Determine Tracy default: enabled unless explicitly disabled
+tracy_enabled="ON"
+if [ "$disable_profiler" = "ON" ]; then
+    tracy_enabled="OFF"
+fi
+
 # Validate the build_type
 VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
@@ -246,12 +252,9 @@ if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
 fi
 
 # If build-dir is not specified
-# Use build_type and enable_profiler setting to choose a default path
+# Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
-    if [ "$enable_profiler" = "ON" ]; then
-        build_dir="${build_dir}_tracy"
-    fi
     # Create and link the build directory
     mkdir -p $build_dir
     ln -nsf $build_dir build
@@ -279,6 +282,7 @@ echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
+echo "INFO: Enable Tracy: $tracy_enabled"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -308,8 +312,8 @@ if [ "$enable_time_trace" = "ON" ]; then
     cmake_args+=("-DENABLE_BUILD_TIME_TRACE=ON")
 fi
 
-if [ "$enable_profiler" = "ON" ]; then
-    cmake_args+=("-DENABLE_TRACY=ON")
+if [ "$disable_profiler" = "ON" ]; then
+    cmake_args+=("-DENABLE_TRACY=OFF")
 fi
 
 if [ "$enable_coverage" = "ON" ]; then
