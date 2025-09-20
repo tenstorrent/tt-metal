@@ -147,6 +147,25 @@ std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_
         MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
 }
 
+std::string print_peer_intermesh_link_tables(
+    const std::
+        unordered_map<MeshId, std::unordered_map<MeshHostRankId, std::map<EthChanDescriptor, EthChanDescriptor>>>&
+            peer_intermesh_link_tables) {
+    std::stringstream ss;
+    ss << "Peer Intermesh Link Tables:" << std::endl;
+    for (const auto& [mesh_id, mesh_host_rank_id_to_link_table] : peer_intermesh_link_tables) {
+        ss << "Mesh ID: " << *mesh_id << std::endl;
+        for (const auto& [mesh_host_rank_id, link_table] : mesh_host_rank_id_to_link_table) {
+            ss << "Mesh Host Rank ID: " << *mesh_host_rank_id << std::endl;
+            for (const auto& [local_chan, remote_chan] : link_table) {
+                ss << "Local Chan: " << local_chan.board_id << " " << local_chan.chan_id << std::endl;
+                ss << "Remote Chan: " << remote_chan.board_id << " " << remote_chan.chan_id << std::endl;
+            }
+        }
+    }
+    return ss.str();
+}
+
 }  // namespace
 
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
@@ -1003,6 +1022,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                                                       .value();
                     auto unique_chip_id =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
+
                     // Look up connected chip's intermesh link table and grab local desc channel
                     // TODO: need to add validate to make sure there is bidrectional traffic
                     for (const auto& [local_desc, peer_desc] :
@@ -1021,6 +1041,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         }
     }
 
+    std::string log_msg;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < inter_mesh_connectivity.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
@@ -1936,6 +1957,7 @@ ControlPlane::get_all_intermesh_eth_links() const {
     return intermesh_eth_links_;
 }
 
+// FIXME: THis is not right for multi-host mock systems
 std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_cores) const {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -2061,9 +2083,17 @@ void ControlPlane::exchange_intermesh_link_tables() {
                     reinterpret_cast<std::byte*>(&local_table_size_bytes), sizeof(local_table_size_bytes)),
                 distributed_context.rank());
 
+            // log_critical(tt::LogFabric, "Size of serialized local table: {}", local_table_size_bytes);
+
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
                 distributed_context.rank());
+
+            // for (const auto& [local_chan, remote_chan] : intermesh_link_table_.intermesh_links) {
+            //     log_critical(tt::LogFabric, "Rank {} sent intermesh link: {} -> {}", my_rank, local_chan,
+            //     remote_chan);
+            // }
+
         } else {
             // Acknowledge the broadcast issued by the root
             int remote_table_size_bytes = 0;  // Receive the size of the serialized descriptor
@@ -2071,6 +2101,9 @@ void ControlPlane::exchange_intermesh_link_tables() {
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_table_size_bytes), sizeof(remote_table_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
+
+            // log_critical(tt::LogFabric, "Size of serialized remote table: {}", remote_table_size_bytes);
+
             serialized_remote_table.clear();
             serialized_remote_table.resize(remote_table_size_bytes);
             distributed_context.broadcast(
@@ -2079,6 +2112,12 @@ void ControlPlane::exchange_intermesh_link_tables() {
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
             tt_fabric::IntermeshLinkTable deserialized_remote_table =
                 tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
+
+            // for (const auto& [local_chan, remote_chan] : deserialized_remote_table.intermesh_links) {
+            //     log_critical(
+            //         tt::LogFabric, "Rank {} received intermesh link: {} -> {}", my_rank, local_chan, remote_chan);
+            // }
+
             peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id]
                                        [deserialized_remote_table.local_host_rank_id] =
                                            std::move(deserialized_remote_table.intermesh_links);
@@ -2100,9 +2139,23 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
                        .get_soc_desc(physical_chip_id)
                        .logical_eth_core_to_chan_map.at(eth_core);
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
+    std::string fabric_router_channels_on_chip_vec;
+    for (const auto& chan_id : fabric_router_channels_on_chip) {
+        fabric_router_channels_on_chip_vec += std::to_string(chan_id) + " ";
+    }
     if (fabric_router_channels_on_chip.contains(chan_id)) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
+        log_warning(
+            tt::LogFabric,
+            "fabric_router_channels_on_chip_vec: {} chan_id: {}",
+            fabric_router_channels_on_chip_vec,
+            chan_id);
     } else {
+        log_critical(
+            tt::LogFabric,
+            "fabric_router_channels_on_chip_vec: {} chan_id: {}",
+            fabric_router_channels_on_chip_vec,
+            chan_id);
         log_debug(
             tt::LogFabric,
             "Control Plane: Disabling router on M{}D{} eth channel {}",
