@@ -416,6 +416,7 @@ The core function of a fabric router is to receive packets from ethernet and loc
 Fabric routers can be built for different kinds of TT-Fabric topologies. A topology specifies how the TT-Fabric logical routing network should be created on a set of physically connected devices. TT-Fabric topology is specific to application requirements. For example the devcies may be physically connected in a 2D ethernet grid however the user application is such that the devices only communicate with other devices in the same row or column. In this case, Fabric routers only need to route traffic on one axis and packet flow does not switch from row to column or vice versa. We call this a 1D Fabric. TT-Fabric can also be launched in a 2D routing mode where turns between rows and columns are supported. In addition to these simple line and mesh topologies, TT-Fabric supports rings and 2D toruses. A ring is where the two endpoints of every line (in a 1D Fabric) are also connected. A 2D torus connects every row and column endpoints of a 2D mesh.
 
 As stated earlier, TT-Fabric topology can match the physical connection topology exactly, or it can be a functionally downshifted topology where all available ethernet links are not utilized.
+
 The following diagrams show the supported 1D and 2D TT-Fabric topologies.
 
 **8x4 Galaxy with TT-Fabric in 1D Line Topology**
