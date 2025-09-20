@@ -13,6 +13,7 @@
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
+#include "program/program_impl.hpp"
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal {
@@ -86,8 +87,7 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config) {
-        this->dispatch_class_ =
-            enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
+        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_DM0 + enchantum::to_underlying(config.processor);
     }
 
     ~DataMovementKernel() override = default;
@@ -127,8 +127,7 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config) {
-        this->dispatch_class_ =
-            enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
+        this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0 + enchantum::to_underlying(config.processor);
     }
 
     ~EthernetKernel() override = default;
@@ -168,7 +167,9 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config) {
-        this->dispatch_class_ = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
+        // Note: it's wrong to use HalProcessorClassType here, because DM == 0 and COMPUTE == 1,
+        // but DISPATCH_CLASS_TENSIX_COMPUTE == 2.
+        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE;
     }
 
     ~ComputeKernel() override = default;

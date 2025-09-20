@@ -1064,13 +1064,13 @@ KernelHandle CreateEthernetKernel(
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <
-            MetalContext::instance().hal().get_processor_classes_count(eth_core_type),
+            MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
         enchantum::to_string(config.processor),
-        MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
+        MetalContext::instance().hal().get_num_risc_processors(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
         "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
