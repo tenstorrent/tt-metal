@@ -190,6 +190,8 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.is_2d_fabric = false;
         static_config_.is_2d_fabric_dynamic = false;
     }
+    static_config_.dispatch_shared_region =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_SHARED_REGION);
 }
 
 void DispatchKernel::GenerateDependentConfigs() {
@@ -407,6 +409,8 @@ void DispatchKernel::CreateKernel() {
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
+
+        {"DISPATCH_SHARED_REGION", std::to_string(static_config_.dispatch_shared_region.value())},
 
         // Add all the dispatch-specific defines
         {"DISPATCH_CB_BASE", std::to_string(static_config_.dispatch_cb_base.value())},
