@@ -223,13 +223,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-
         return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop("rot_mats_all_users", None)
-        assert rot_mats_list is not None, "rot_mats_all_users must be provided for Qwen2.5-VL"
-        # [INFO] update the cos/sin matrices for the current users in the batch
-        super().update_cos_sin_rows(rot_mats_list)
+        rot_mats_list: list = kwargs.pop(
+            "rot_mats_all_users", None
+        )  # [INFO] update the cos/sin matrices for the current users in the batch
+        if rot_mats_list is not None:
+            super().update_cos_sin_rows(rot_mats_list)
 
         return super().decode_forward_text(*args, **kwargs)
