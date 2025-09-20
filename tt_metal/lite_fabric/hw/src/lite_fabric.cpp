@@ -72,9 +72,9 @@ RemoteReceiverChannelsType remote_receiver_channels __attribute__((used));
 LocalSenderChannelsType local_sender_channels __attribute__((used));
 
 // These are used by the other files
-bool on_mmio_chip __attribute__((used));
+volatile tt_l1_ptr bool* on_mmio_chip __attribute__((used));
 
-volatile HostInterface* host_interface __attribute__((used));
+volatile tt_l1_ptr HostInterface* host_interface __attribute__((used));
 
 WriteTridTracker receiver_channel_0_trid_tracker __attribute__((used));
 
@@ -85,8 +85,13 @@ ReceiverChannelPointersTupleImpl receiver_channel_pointers_tuple __attribute__((
 // object_init and routing_init are expected to be called before this
 __attribute__((noinline)) void service_lite_fabric() {
     invalidate_l1_cache();
-    if (!reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START)
-             ->config.routing_enabled) {
+    auto mem_map = reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START);
+
+    // Increment heartbeat to indicate active servicing
+    mem_map->config.current_state = (mem_map->config.current_state & lite_fabric::State::StateMask) |
+                                    ((mem_map->config.current_state + 1) & lite_fabric::State::HeartbeatMask);
+
+    if (!mem_map->config.routing_enabled) {
         return;
     }
     // Update local reads/writes issued/acked counters
@@ -142,10 +147,13 @@ inline void object_init(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
         SENDER_CHANNEL_BASE_ID);
 
     (lite_fabric::receiver_channel_pointers_tuple.template get<0>()).reset();
-    lite_fabric::on_mmio_chip = mem_map->config.is_mmio;
+    lite_fabric::on_mmio_chip = &mem_map->on_mmio_chip;
     lite_fabric::host_interface = &mem_map->host_interface;
     mem_map->service_lite_fabric_addr = reinterpret_cast<uint32_t>(&service_lite_fabric);
     lite_fabric::host_interface->init();
+    mem_map->version_major = VERSION_MAJOR;
+    mem_map->version_minor = VERSION_MINOR;
+    mem_map->version_patch = VERSION_PATCH;
 }
 
 inline void data_init() {
@@ -162,13 +170,15 @@ inline void teardown(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
 
     lite_fabric::ConnectedRisc1Interface::assert_connected_dm1_reset();
 
-    mem_map->config.current_state = lite_fabric::InitState::READY;
+    mem_map->config.current_state = lite_fabric::State::Terminated;
 }
 
 }  // namespace lite_fabric
 
 int main() {
     invalidate_l1_cache();
+    auto mem_map = reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START);
+
     configure_csr();
     noc_index = NOC_INDEX;
     lite_fabric::data_init();
@@ -178,16 +188,25 @@ int main() {
         noc_local_state_init(n);
     }
 
-    auto structs = reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START);
-    lite_fabric::object_init(structs);
-    lite_fabric::routing_init(&structs->config);
+    lite_fabric::object_init(mem_map);
+    const bool can_skip_binary_transfer = mem_map->binary_written == lite_fabric::BinaryWritten::Written;
+    if (can_skip_binary_transfer) {
+        if (*lite_fabric::on_mmio_chip) {
+            // Assume the connected core has the binary already
+            // Ensure connected chip is out of reset
+            lite_fabric::run_connected_dm1();
+        }
+    } else {
+        *lite_fabric::on_mmio_chip = mem_map->config.is_mmio;
+        lite_fabric::routing_init(&mem_map->config);
+    }
 
+    mem_map->binary_written = lite_fabric::BinaryWritten::Written;
     invalidate_l1_cache();
     while (true) {
         lite_fabric::service_lite_fabric();
     }
 
-    lite_fabric::teardown(structs);
-
+    lite_fabric::teardown(mem_map);
     return 0;
 }
