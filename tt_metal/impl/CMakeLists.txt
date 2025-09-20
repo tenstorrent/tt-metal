@@ -103,12 +103,15 @@ list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
+# target_include_directories(impl PRIVATE "${libnuma_INCLUDE_DIR}")
+
 target_link_libraries(
     impl
     PUBLIC
         common
         Tracy::TracyClient
     PRIVATE
+        numa
         FlatBuffers::FlatBuffers
         range-v3::range-v3
         TT::Metalium::Common

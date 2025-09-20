@@ -42,6 +42,7 @@ show_help() {
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
+    echo "  --conan-install-path             Set path to installed conan packages"
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --cpm-source-cache               Set path to CPM Source Cache."
     echo "  --cpm-use-local-packages         Attempt to use locally installed dependencies."
@@ -132,6 +133,7 @@ cxx-compiler-path:
 cpm-source-cache:
 cpm-use-local-packages
 c-compiler-path:
+conan-install-path:
 ttnn-shared-sub-libs
 toolchain-path:
 configure-only
@@ -210,6 +212,8 @@ while true; do
             light_metal_trace="OFF";;
         --cxx-compiler-path)
             cxx_compiler_path="$2";shift;;
+        --conan-install-path)
+            conan_install_path="$2";shift;;
         --cpm-source-cache)
             cpm_source_cache="$2";shift;;
         --c-compiler-path)
@@ -299,6 +303,12 @@ if [ "$cpm_source_cache" != "" ]; then
     echo "INFO: CPM_SOURCE_CACHE: $cpm_source_cache"
     cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
 fi
+
+if [ "$conan_install_path" != "" ]; then
+    echo "INFO: CONAN_INSTALL_DIR: $conan_install_path"
+    cmake_args+=("-DCONAN_INSTALL_ROOT=$conan_install_path")
+fi
+
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args+=("-DENABLE_CCACHE=TRUE")
@@ -413,6 +423,12 @@ if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
+
+# WIP code, will be removed before making a final PR
+# cmake_args+=("--debug-output")
+cmake_args+=("--fresh")
+# cmake_args+=("--graphviz=build_dependencies.dot")
+# cmake_args+=("-DCMAKE_FIND_DEBUG_MODE=ON")
 
 echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
