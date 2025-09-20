@@ -13,6 +13,7 @@ on:
   push:
     branches:
       ["roseli/28975-pipeline-reorg-apc-ops"]
+  workflow_dispatch:
   workflow_call:
     inputs:
       build-artifact-name:
