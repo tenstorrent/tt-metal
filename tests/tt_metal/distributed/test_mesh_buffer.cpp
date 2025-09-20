@@ -34,6 +34,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
@@ -624,19 +626,18 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
-// Prepare destination buffer and pin the entire destination range for the target shard
-#if 0
-    std::vector<uint32_t> dst((bytes_per_device + 32)/ sizeof(uint32_t), 0);
-    uint32_t *dst_ptr_aligned = reinterpret_cast<uint32_t*>((reinterpret_cast<uintptr_t>(dst.data()) + 31) & ~31);
-    fmt::println(stderr, "dst_ptr_aligned: {}", fmt::ptr(dst_ptr_aligned));
-#endif
-    vector_aligned_32<uint32_t> dst(bytes_per_device / sizeof(uint32_t), 0);
-    uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst.data());
+    // Prepare destination buffer and pin the entire destination range for the target shard
+    auto dst = std::make_shared<vector_aligned_32<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
+
+    // Create HostBuffer on top of dst
+    HostBuffer host_buffer(
+        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = mesh_device_->pin_memory(
         coordinate_range_set,
-        static_cast<void*>(dst_ptr_aligned),
-        bytes_per_device,
+        host_buffer,
         /*map_to_noc=*/true);
     std::shared_ptr<PinnedMemory> pinned_shared = std::move(pinned_unique);
 

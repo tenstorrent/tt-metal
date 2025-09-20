@@ -21,6 +21,9 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
@@ -158,16 +161,19 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
 
-    // Allocate destination host buffer and align its base to 32 bytes
-    std::vector<std::uint8_t> dst_storage(static_cast<std::size_t>(transfer_size) + 32, 0);
-    auto base_ptr = reinterpret_cast<std::uintptr_t>(dst_storage.data());
-    auto aligned_ptr = reinterpret_cast<void*>((base_ptr + 31) & ~static_cast<std::uintptr_t>(31));
+    // Allocate destination host buffer with 16-byte alignment
+    auto dst_storage = std::make_shared<vector_aligned<std::uint8_t>>(static_cast<std::size_t>(transfer_size), 0);
+    auto aligned_ptr = reinterpret_cast<void*>(dst_storage->data());
+
+    // Create HostBuffer on top of aligned memory
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(dst_storage->data(), static_cast<std::size_t>(transfer_size)),
+        MemoryPin(dst_storage));
 
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = mesh_device->pin_memory(
-        coordinate_range_set, aligned_ptr, static_cast<std::size_t>(transfer_size), /*map_to_noc=*/true);
+    auto pinned_unique = mesh_device->pin_memory(coordinate_range_set, host_buffer, /*map_to_noc=*/true);
     std::shared_ptr<PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
@@ -226,9 +232,14 @@ int main(int argc, char** argv) {
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
+
         benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
             ->ArgsProduct(benchmark_args)
-            ->UseRealTime();
+            ->UseRealTime()
+            ->Repetitions(num_test_repetitions)
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
     }
 
     benchmark::RunSpecifiedBenchmarks();

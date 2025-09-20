@@ -38,6 +38,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "command_queue_fixture.hpp"
 
@@ -398,6 +400,11 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     auto mesh_device = devices_.at(0);
 
+    // Skip if mapping to NOC isn't supported on this system
+    if (!mesh_device->get_memory_pinning_parameters().can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
     // Use first device from the mesh for this test
     MeshCoordinate target_coord(0, 0);
     IDevice* device = mesh_device->get_device(target_coord);
@@ -415,12 +422,13 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     // Allocate and pin host memory
-    std::vector<uint32_t> host_buffer(size_bytes / sizeof(uint32_t), 0);
+    auto aligned_buf = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
+    tt::tt_metal::HostBuffer host_buffer_view(
+        tt::stl::Span<uint32_t>(aligned_buf->data(), aligned_buf->size()), tt::tt_metal::MemoryPin(aligned_buf));
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(target_coord, target_coord));
     auto pinned_memory = mesh_device->pin_memory(
         coordinate_range_set,
-        host_buffer.data(),
-        size_bytes,
+        host_buffer_view,
         true  // map_to_noc
     );
 
@@ -432,7 +440,7 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     // Create program and kernel for mesh workload
     tt_metal::Program program = tt_metal::CreateProgram();
-    auto pcie_writer = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
         logical_core,
@@ -455,7 +463,9 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     EnqueueMeshWorkload(mesh_cq, mesh_workload, true);  // blocking = true
 
     // Verify the data was written correctly to pinned memory
-    EXPECT_EQ(src, host_buffer);
+    // Compare with a std::vector copy to avoid allocator type mismatch in EXPECT_EQ
+    std::vector<uint32_t> aligned_copy(aligned_buf->begin(), aligned_buf->end());
+    EXPECT_EQ(src, aligned_copy);
 }
 
 }  // namespace tt::tt_metal

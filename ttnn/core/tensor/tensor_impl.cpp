@@ -676,7 +676,6 @@ Tensor to_device(
 struct PinnedMemoryWrapper {
     distributed::MeshCoordinateRangeSet device_range;
     std::shared_ptr<tt_metal::PinnedMemory> pinned_memory;
-    // std::shared_ptr<tt_metal::distributed::MeshEvent> release_event;
 };
 std::deque<PinnedMemoryWrapper> pinned_memories_cache;
 
@@ -704,12 +703,6 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
 
     const DistributedHostBuffer& distributed_host_buffer = host_tensor.host_storage().buffer();
 
-#if 0
-    for (auto& pinned_memory : pinned_memories_cache) {
-        EventSynchronize(*pinned_memory.release_event);
-    }
-#endif
-    // pinned_memories_cache.clear();
     std::vector<PinnedMemoryWrapper> pinned_memories_to_cache;
 
     // Host tensor must have pre-allocated buffers for all device shards.
@@ -726,26 +719,21 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
             std::shared_ptr<tt_metal::PinnedMemory> pinned_memory;
             for (auto& pinned_memory_wrapper : pinned_memories_cache) {
                 if (pinned_memory_wrapper.device_range == range_set &&
-                    pinned_memory_wrapper.pinned_memory->get_host_ptr() == shard->view_bytes().data()) {
-                    fmt::println(stderr, "Found pinned memory in cache");
+                    pinned_memory_wrapper.pinned_memory->get_host_ptr() == shard->view_bytes().data() &&
+                    pinned_memory_wrapper.pinned_memory->get_buffer_size() == shard->view_bytes().size()) {
                     pinned_memory = pinned_memory_wrapper.pinned_memory;
                     break;
                 }
             }
             if (pinned_memory == nullptr) {
                 try {
-                    fmt::println(stderr, "Pinning memory");
-
-                    pinned_memory = device->pin_memory(
-                        range_set, shard->view_bytes().data(), shard->view_bytes().size(), /*map_to_noc=*/true);
+                    pinned_memory = device->pin_memory(range_set, *shard, /*map_to_noc=*/true);
                 } catch (const std::exception& e) {
                     pinned_memories_cache.clear();
                 }
                 if (pinned_memory == nullptr) {
                     try {
-                        fmt::println(stderr, "Retry pinning memory");
-                        pinned_memory = device->pin_memory(
-                            range_set, shard->view_bytes().data(), shard->view_bytes().size(), /*map_to_noc=*/true);
+                        pinned_memory = device->pin_memory(range_set, *shard, /*map_to_noc=*/true);
                     } catch (const std::exception& e) {
                     }
                 }
@@ -753,7 +741,6 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
                     pinned_memories_to_cache.push_back(PinnedMemoryWrapper{range_set, pinned_memory});
                 }
             }
-            fmt::println(stderr, "Setting pinned memory to {}", fmt::ptr(pinned_memory.get()));
             shard->set_pinned_memory(pinned_memory);
         }
         shards.push_back({device_coord, std::move(shard)});

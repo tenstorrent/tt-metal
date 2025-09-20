@@ -17,8 +17,8 @@
 #include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <context/metal_context.hpp>
-#include <umd/device/chip_helpers/sysmem_manager.h>
-#include <umd/device/chip_helpers/sysmem_buffer.h>
+#include <umd/device/chip_helpers/sysmem_manager.hpp>
+#include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal {
@@ -170,7 +170,7 @@ uint64_t PinnedMemoryImpl::get_device_addr(chip_id_t device_id) const {
     return get_buffer(device_id).get_device_io_addr() + static_cast<uint64_t>(host_offset_);
 }
 
-std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemoryImpl::get_noc_addr(chip_id_t device_id) const {
+std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(chip_id_t device_id) const {
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         return std::nullopt;
@@ -189,7 +189,7 @@ std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemoryImpl::get_noc_addr(chi
     // fmt::println(stderr, "noc_addr_opt: {}", noc_addr_opt.value());
 
     // Return NOC address and the MMIO device ID where it's usable from
-    return std::make_pair(noc_addr_opt.value() + static_cast<uint64_t>(host_offset_), mmio_device_id);
+    return PinnedMemory::NocAddr{noc_addr_opt.value() + static_cast<uint64_t>(host_offset_), mmio_device_id};
 }
 
 std::vector<chip_id_t> PinnedMemoryImpl::get_device_ids() const {
@@ -223,7 +223,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
 
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
-        if (event.device()->using_slow_dispatch()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             barrier_events_.pop_front();
             continue;
         }
@@ -276,7 +276,7 @@ const void* PinnedMemory::get_host_ptr() const { return pImpl->get_host_ptr(); }
 
 uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const { return pImpl->get_device_addr(device_id); }
 
-std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemory::get_noc_addr(chip_id_t device_id) const {
+std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(chip_id_t device_id) const {
     return pImpl->get_noc_addr(device_id);
 }
 

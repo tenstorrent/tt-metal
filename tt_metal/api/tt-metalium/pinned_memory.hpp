@@ -36,6 +36,11 @@ class MeshEvent;
  */
 class PinnedMemory {
 public:
+    struct NocAddr {
+        uint64_t addr;
+        chip_id_t device_id;
+    };
+
     ~PinnedMemory();
 
     // Move semantics
@@ -73,7 +78,7 @@ public:
      * @param device_id The device ID to get the NOC address for
      * @return Optional pair of (NOC address, MMIO chip ID) if buffer is mapped to NOC, nullopt otherwise
      */
-    std::optional<std::pair<uint64_t, chip_id_t>> get_noc_addr(chip_id_t device_id) const;
+    std::optional<NocAddr> get_noc_addr(chip_id_t device_id) const;
 
     /**
      * @brief Get the buffer size.
@@ -101,14 +106,32 @@ public:
      */
     bool usable_from_noc(chip_id_t device_id) const;
 
-    // Add an event that will be waited on before the memory can be locked or destroyed.
+    /**
+     * @brief Add a barrier event that must complete before memory can be locked
+     * @param event The MeshEvent to add as a barrier
+     *
+     * This method adds an event to the barrier queue. The event must complete
+     * before the memory can be safely accessed via lock().
+     */
     void add_barrier_event(const distributed::MeshEvent& event);
 
-    // Return a pointer to the memory that can be used to access the pinned memory. Will block until all barrier events
-    // are completed.
+    /**
+     * @brief Lock the pinned memory for host access
+     * @return Pointer to the host memory that can be safely accessed
+     *
+     * This method blocks until all pending barrier events have completed,
+     * then returns a pointer to the pinned memory. The memory should be
+     * unlocked with unlock() when access is no longer needed.
+     */
     void* lock();
 
-    // Unlock the memory.
+    /**
+     * @brief Unlock the pinned memory
+     *
+     * This method releases the lock on the pinned memory, allowing it to be
+     * safely accessed by devices again. Currently this is a no-op but should
+     * be called for future compatibility and clarity of intent.
+     */
     void unlock();
 
 private:

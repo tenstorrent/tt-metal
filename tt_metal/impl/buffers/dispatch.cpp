@@ -959,30 +959,35 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
 
     // Precompute whether pinned direct write is feasible, and derive dst noc params
     const bool is_unpadded = (buffer.page_size() == dispatch_params.padded_page_size);
     const bool has_pinned_inputs = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
-    const uint64_t xfer_bytes = (DeviceAddr)dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
-    bool pinned_feasible = false;
+    const uint64_t xfer_bytes = (uint64_t)dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
+    bool use_pinned_transfer = false;
     uint32_t pinned_dst_noc_xy = 0;
     uint32_t pinned_dst_addr_lo = 0;
+
     if (has_pinned_inputs && is_unpadded) {
         const chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
                 dispatch_params.device->id());
         auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
-        if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->second == mmio_device_id) {
-            const uint64_t pinned_noc_base = noc_addr_pair_opt->first;
+        if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->device_id == mmio_device_id) {
+            const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base =
                 static_cast<const uint8_t*>(dispatch_params.pinned_memory->get_host_ptr());
             const uint8_t* dst_ptr = static_cast<const uint8_t*>(dispatch_params.dst);
-            const uint64_t dst_offset_base =
-                static_cast<uint64_t>(dst_ptr - pinned_host_base) + dispatch_params.unpadded_dst_offset;
-            const uint64_t pinned_size = dispatch_params.pinned_memory->get_buffer_size();
-            if (dst_offset_base + xfer_bytes <= pinned_size) {
+            const uint8_t* pinned_region_end = pinned_host_base + dispatch_params.pinned_memory->get_buffer_size();
+            const uint8_t* dst_region_start = dst_ptr + dispatch_params.unpadded_dst_offset;
+            const uint8_t* dst_region_end = dst_region_start + xfer_bytes;
+            if ((reinterpret_cast<uintptr_t>(dst_region_start) % hal.get_write_alignment(HalMemType::HOST) == 0) &&
+                (dst_region_start >= pinned_host_base) && (dst_region_end <= pinned_region_end)) {
+                const uint64_t dst_offset_base = static_cast<uint64_t>(dst_region_start - pinned_host_base);
                 const auto& cluster = MetalContext::instance().get_cluster();
                 const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
                 const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
@@ -992,7 +997,7 @@ void issue_read_buffer_dispatch_command_sequence(
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_dst_noc_xy =
                     MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
-                pinned_feasible = true;
+                use_pinned_transfer = true;
             }
         }
     }
@@ -1003,7 +1008,7 @@ void issue_read_buffer_dispatch_command_sequence(
         calculator.add_dispatch_wait();
     }
     calculator.add_prefetch_stall();
-    if (pinned_feasible) {
+    if (use_pinned_transfer) {
         // When flush_prefetch=false and inline_data=false, size is ignored.
         calculator.add_dispatch_write_linear_h<false, false>(0);
     } else {
@@ -1034,14 +1039,14 @@ void issue_read_buffer_dispatch_command_sequence(
         dispatch_params.expected_num_workers_completed[offset_index]);
 
     // Select write op once, then unify relay
-    if (pinned_feasible) {
+    if (use_pinned_transfer) {
         // fmt::println(stderr, "Reading pinned");
         command_sequence.add_dispatch_write_linear_h<false, false>(
             0, pinned_dst_noc_xy | 0x8, pinned_dst_addr_lo, xfer_bytes);
     } else {
         bool flush_prefetch = false;
         // fmt::println(stderr, "Reading unpinned");
-        command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false);
+        command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false, 0);
     }
 
     // Unified relay from device memory
@@ -1062,7 +1067,7 @@ void issue_read_buffer_dispatch_command_sequence(
     }
 
     // Mark whether completion read is needed
-    dispatch_params.requires_completion_read = !pinned_feasible;
+    dispatch_params.requires_completion_read = !use_pinned_transfer;
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);

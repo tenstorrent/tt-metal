@@ -16,9 +16,7 @@
 #include <set>
 #include <string>
 #include <tuple>
-#include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
@@ -34,6 +32,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/host_buffer.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -137,6 +136,16 @@ private:
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
+
+public:
+    struct MemoryPinningParameters {
+        uint32_t max_pins;
+        uint64_t max_total_pin_size;
+        bool can_map_to_noc;
+    };
+
+private:
+    MemoryPinningParameters memory_pinning_params_{};
 
 public:
     MeshDevice(
@@ -325,10 +334,10 @@ public:
      * @return Unique pointer to the created PinnedMemory instance
      */
     std::unique_ptr<PinnedMemory> pin_memory(
-        const MeshCoordinateRangeSet& coordinate_range_set,
-        void* host_buffer,
-        size_t buffer_size,
-        bool map_to_noc = false);
+        const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc = false);
+
+    MemoryPinningParameters get_memory_pinning_parameters() const;
+
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
