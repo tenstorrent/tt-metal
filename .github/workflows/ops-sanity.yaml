@@ -7,7 +7,7 @@
 # sku: the sku of the test (N150, N300, P100, P150b, llmbox, galaxy, etc)
 # timeout: The timeout for the whole pipeline
 
-name: "Ops Sanity pipeline"
+name: "[testing] Ops Sanity pipeline"
 
 on:
   push:
