@@ -7,6 +7,13 @@
 # sku: the sku of the test (N150, N300, P100, P150b, llmbox, galaxy, etc)
 # timeout: The timeout for the whole pipeline
 
+# The following parameters can be controlled in the tests.json file by the developer:
+
+# name: The name of the test
+# cmd: The command to run the test
+# owner_id: The owner of the test
+
+
 name: "[testing] Ops Sanity pipeline"
 
 on:
