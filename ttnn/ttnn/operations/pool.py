@@ -17,6 +17,7 @@ def golden_maxpool2d(
     stride: Tuple[int, int],
     padding: Tuple[int, int],
     dilation: Tuple[int, int],
+    ceil_mode: bool = False,
     **_,
 ):
     import torch
@@ -26,7 +27,7 @@ def golden_maxpool2d(
     )  # 1, 1, NHW, C -> N, C, H, W
 
     output_tensor = torch.nn.functional.max_pool2d(
-        input_tensor, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation
+        input_tensor, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, ceil_mode=ceil_mode
     )
 
     N, C, H, W = output_tensor.shape
