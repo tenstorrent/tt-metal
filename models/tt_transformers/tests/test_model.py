@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
 
 
 @torch.no_grad()
@@ -81,6 +81,7 @@ def test_model_inference(
     request,
 ):
     from models.demos.gemma3.tt.model_config import ModelArgs
+
     model_name_env = os.getenv("HF_MODEL")
     if model_name_env:
         if "Mistral-7B" in model_name_env and weights == "instruct":
@@ -310,7 +311,9 @@ def test_model_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
-        rot_mats_local = tt_model.rope_local_setup.get_rot_mats(current_pos) if hasattr(tt_model, "rope_local_setup") else None
+        rot_mats_local = (
+            tt_model.rope_local_setup.get_rot_mats(current_pos) if hasattr(tt_model, "rope_local_setup") else None
+        )
 
         # Run TT model
         tt_out = tt_model(
@@ -489,8 +492,10 @@ def test_model_inference(
                 logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
 
     import json
+
     json.dump(pccs, open(f"pccs_model_{model_args.model_name}.json", "w"))
     import matplotlib.pyplot as plt
+
     fig, ax = plt.subplots(3)
     ax[0].plot(pccs["model"])
     ax[0].set_title("Model PCCs")
