@@ -24,25 +24,25 @@
     TracyMessage(trace_message.c_str(), trace_message.size());
 
 #define TracyTTMetalBeginMeshTrace(device_ids, trace_id)                                                \
-    for (auto device_id : device_ids) {                                                                 \
+    for (auto device_id : (device_ids)) {                                                               \
         std::string trace_message = fmt::format("`TT_METAL_TRACE_BEGIN: {}, {}`", device_id, trace_id); \
         TracyMessage(trace_message.c_str(), trace_message.size());                                      \
     }
 
 #define TracyTTMetalEndMeshTrace(device_ids, trace_id)                                                \
-    for (auto device_id : device_ids) {                                                               \
+    for (auto device_id : (device_ids)) {                                                             \
         std::string trace_message = fmt::format("`TT_METAL_TRACE_END: {}, {}`", device_id, trace_id); \
         TracyMessage(trace_message.c_str(), trace_message.size());                                    \
     }
 
 #define TracyTTMetalReplayMeshTrace(device_ids, trace_id)                                                \
-    for (auto device_id : device_ids) {                                                                  \
+    for (auto device_id : (device_ids)) {                                                                \
         std::string trace_message = fmt::format("`TT_METAL_TRACE_REPLAY: {}, {}`", device_id, trace_id); \
         TracyMessage(trace_message.c_str(), trace_message.size());                                       \
     }
 
 #define TracyTTMetalReleaseMeshTrace(device_ids, trace_id)                                                \
-    for (auto device_id : device_ids) {                                                                   \
+    for (auto device_id : (device_ids)) {                                                                 \
         std::string trace_message = fmt::format("`TT_METAL_TRACE_RELEASE: {}, {}`", device_id, trace_id); \
         TracyMessage(trace_message.c_str(), trace_message.size());                                        \
     }

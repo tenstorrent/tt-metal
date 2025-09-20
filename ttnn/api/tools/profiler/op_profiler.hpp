@@ -300,6 +300,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
 static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
+    ret.reserve(tensors.size());
     for (auto& tensor : tensors) {
         ret.push_back(get_tensor_json(tensor));
     }
@@ -502,17 +503,17 @@ inline std::string op_meta_data_serialized_json(
 
 #define TracyOpMeshWorkload(                                                                                   \
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)             \
-    for (const auto& [range, program] : mesh_workload.get_programs()) {                                        \
+    for (const auto& [range, program] : (mesh_workload).get_programs()) {                                      \
         auto base_program_id = program.get_runtime_id();                                                       \
         for (auto coord : range) {                                                                             \
             /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
             /* regression tests well-formed data. */                                                           \
             /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
-            if (!mesh_device->is_local(coord)) {                                                               \
+            if (!(mesh_device)->is_local(coord)) {                                                             \
                 continue;                                                                                      \
             }                                                                                                  \
             ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
-            auto device_id = mesh_device->get_device(coord)->id();                                             \
+            auto device_id = (mesh_device)->get_device(coord)->id();                                           \
             auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
             std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
                 operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \

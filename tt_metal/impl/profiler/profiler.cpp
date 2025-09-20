@@ -1551,13 +1551,13 @@ void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; 
 
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
 
-DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
+DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
+    device_id(device->id()),
+    device_arch(device->arch()),
+    device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
-    this->device_id = device->id();
-    this->device_arch = device->arch();
-    this->device_core_frequency =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id);
+
     this->output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::create_directories(this->output_dir);
     std::filesystem::path log_path = this->output_dir / DEVICE_SIDE_LOG;
@@ -1717,7 +1717,7 @@ void DeviceProfiler::processResults(
             }
         }
 
-        const std::unordered_map<RuntimeID, nlohmann::json::array_t> processed_markers_by_op_name =
+        std::unordered_map<RuntimeID, nlohmann::json::array_t> processed_markers_by_op_name =
             convertNocTracePacketsToJson(new_device_markers, device_id, routing_lookup);
         noc_trace_data.push_back(std::move(processed_markers_by_op_name));
     }
