@@ -11,6 +11,7 @@ import math
 
 from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import randomize_torch_tensor
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -23,17 +24,6 @@ def tensor_map(request):
     tensor_map = {}
 
     return tensor_map
-
-
-def randomize_torch_tensor(tensor_map, tensor_shape):
-    tensor_shape = tuple(tensor_shape)
-    if tensor_shape in tensor_map.keys():
-        torch_tensor = tensor_map[tensor_shape]
-    else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-        tensor_map[tensor_shape] = torch_tensor
-
-    return torch_tensor
 
 
 def run_max_pool(
@@ -125,12 +115,6 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    # act = torch.zeros(input_shape, dtype=torch.bfloat16)
-    # for n in range(input_shape[0]):
-    #     for c in range(input_shape[1]):
-    #         for h in range(input_shape[2]):
-    #             for w in range(input_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
