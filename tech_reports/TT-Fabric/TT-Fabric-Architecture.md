@@ -604,8 +604,49 @@ Fabric routers can be mapped on to a single RiscV core or multiple cores dependi
 
 TT-Fabric supports one bidirectional virtual channel per fabric router. The virtual channel is compirsed of several buffers used to transport a router's incoming and outgoing fabric packets. Virtual channels buffers are further identified as Sender Channels and Receiver Channels. Sender channels buffer all packets exiting a device through the router's ethernet link. Receiver Channels buffer all packets entering a device through the router's ethernet link.
 
+Basic architecture of a virtual channel is shown in the following diagram.
+
+```
+                                        VIRTUAL CHANNEL
+                                        ┌─────────────────────────────────────┐
+                                        │  SENDER CHANNELS (4)                │
+                                        │  ┌───────────────────────────────┐  │
+                                        │  │ Sender Channel 0 (8 slots)    │  │
+                                        │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │
+                                    ╔═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╗
+                                    ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │       ║
+                                    ║   │  └───────────────────────────────┘  │       ║
+                                    ║   │  ┌───────────────────────────────┐  │       ║
+                                    ║   │  │ Sender Channel 1 (8 slots)    │  │       ║
+                                    ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │       ║
+                                    ╠═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╣
+                                    ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │       ║
+            ┌───────────────────┐   ║   │  └───────────────────────────────┘  │       ╠══════▶┌──────────────────┐
+            │  Network-On-Chip  ├═▶═╣   │  ┌───────────────────────────────┐  │       ║       │  E T H E R N E T │◀═══▶
+            └───────────────┬───┘   ║   │  │ Sender Channel 2 (8 slots)    │  │       ║  ╔══◀═└──────────────────┘
+                            ▲       ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │       ║  ║
+                            ║       ╠═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╣  ║
+                            ║       ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │       ║  ║
+                            ║       ║   │  └───────────────────────────────┘  │       ║  ║
+                            ║       ║   │  ┌───────────────────────────────┐  │       ║  ║
+                            ║       ║   │  │ Sender Channel 3 (8 slots)    │  │       ║  ║
+                            ║       ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │       ║  ║
+                            ║       ╚═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╝  ║    
+                            ║           │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │          ║
+                            ║           │  └───────────────────────────────┘  │          ║
+                            ║           ├─────────────────────────────────────┤          ║
+                            ║           │  RECEIVER CHANNEL (1)               │          ║
+                            ║           │  ┌───────────────────────────────┐  │          ║
+                            ║           │  │ Receiver Channel 0 (16 slots) │  │          ║
+                            ║           │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │          ║
+                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════════╝     
+                                        │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
+                                        │  └───────────────────────────────┘  │
+                                        └─────────────────────────────────────┘
+```
+
 The number of sender and receiver channels in a single virtual channel depend on fabric topology.
-The following table lists the channel requirements for different topologies.
+The following table lists the sender/receiver channel counts for different fabric topologies.
 
 TODO: Add a table here.
 
