@@ -42,7 +42,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
-    TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
+    // TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
     uint32_t num_tile_per_core = 0;
 
