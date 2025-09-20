@@ -36,9 +36,9 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
     }
 #else
     if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
-        fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.downstream_chip_id));
+        fabric_set_unicast_route<false>(socket.downstream_chip_id, fabric_header_addr);
     } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-        fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.upstream_chip_id));
+        fabric_set_unicast_route<false>(socket.upstream_chip_id, fabric_header_addr);
     } else {
         static_assert(always_false<SocketT>, "Unsupported socket type passed to fabric_set_unicast_route");
     }
