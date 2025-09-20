@@ -31,11 +31,11 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
     guidance_scale,
+    fixed_seed_bool,
 ):
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
-    torch.manual_seed(0)
 
     if isinstance(prompts, str):
         prompts = [prompts]
@@ -77,27 +77,12 @@ def run_demo_inference(
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
-    (
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
-    ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
-    )
-
-    tt_sdxl.prepare_input_tensors(
-        [
-            tt_latents,
-            *tt_prompt_embeds[0],
-            tt_add_text_embeds[0][0],
-            tt_add_text_embeds[0][1],
-        ]
+        prompt_embeds_torch=(torch.randn(batch_size, 77, 2048),),
+        pooled_prompt_embeds_torch=(torch.randn(batch_size, 1280),),
+        negative_prompt_embeds_torch=(torch.randn(batch_size, 77, 2048),),
+        negative_pooled_prompt_embeds_torch=(torch.randn(batch_size, 1280),),
     )
     tt_sdxl.compile_image_processing()
 
@@ -114,16 +99,40 @@ def run_demo_inference(
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
+        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
+        )
+
+        prompts_batch = prompts[iter * batch_size : (iter + 1) * batch_size]
+        negative_prompts_batch = (
+            negative_prompts[iter * batch_size : (iter + 1) * batch_size]
+            if isinstance(negative_prompts, list)
+            else negative_prompts
+        )
+
+        (
+            prompt_embeds_torch,
+            negative_prompt_embeds_torch,
+            pooled_prompt_embeds_torch,
+            negative_pooled_prompt_embeds_torch,
+        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
+
+        tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+            prompt_embeds_torch,
+            negative_prompt_embeds_torch,
+            pooled_prompt_embeds_torch,
+            negative_pooled_prompt_embeds_torch,
+            start_latent_seed=0,
+            fixed_seed_bool=fixed_seed_bool,
         )
 
         tt_sdxl.prepare_input_tensors(
             [
                 tt_latents,
-                *tt_prompt_embeds[iter],
-                tt_add_text_embeds[iter][0],
-                tt_add_text_embeds[iter][1],
+                *tt_prompt_embeds[0],
+                tt_add_text_embeds[0][0],
+                tt_add_text_embeds[0][1],
             ]
         )
         imgs = tt_sdxl.generate_images()
@@ -139,6 +148,8 @@ def run_demo_inference(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
         logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
+
+        profiler.end("end_to_end_generation")
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
@@ -157,6 +168,10 @@ def run_demo_inference(
 
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+)
+@pytest.mark.parametrize(
+    "fixed_seed_bool",
+    (False,),
 )
 @pytest.mark.parametrize(
     "prompt",
@@ -209,6 +224,7 @@ def test_demo(
     capture_trace,
     evaluation_range,
     guidance_scale,
+    fixed_seed_bool,
 ):
     return run_demo_inference(
         mesh_device,
@@ -221,4 +237,5 @@ def test_demo(
         evaluation_range,
         capture_trace,
         guidance_scale,
+        fixed_seed_bool,
     )
