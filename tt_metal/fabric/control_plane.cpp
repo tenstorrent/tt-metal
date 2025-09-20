@@ -637,6 +637,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                     auto candidate_ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
                     if (candidate_ubb_id.tray_id == 1 && candidate_ubb_id.asic_id == 1) {
                         nw_chip_physical_id = chip_id;
+                        log_critical(tt::LogFabric, "NW chip physical id: {}", nw_chip_physical_id);
                     }
                 }
             }
@@ -1023,7 +1024,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     auto unique_chip_id =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
 
-                    auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
                     // Look up connected chip's intermesh link table and grab local desc channel
                     // TODO: need to add validate to make sure there is bidrectional traffic
                     for (const auto& [local_desc, peer_desc] :

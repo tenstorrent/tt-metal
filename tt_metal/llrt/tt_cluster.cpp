@@ -606,8 +606,7 @@ int Cluster::get_device_aiclk(const chip_id_t& chip_id) const { return this->dri
 
 uint16_t Cluster::get_bus_id(chip_id_t chip) const {
     if (this->target_type_ == tt::TargetDevice::Mock) {
-        log_warning(tt::LogDevice, "get_bus_id is not supported for mock devices");
-        return 0;
+        return this->cluster_desc_->get_bus_id(chip);
     }
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
 }
