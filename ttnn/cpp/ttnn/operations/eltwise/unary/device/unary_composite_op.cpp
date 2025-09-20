@@ -576,15 +576,6 @@ Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_
     return ttnn::logical_not(x, output_mem_config, x);
 }
 
-// rpow: y = k**(a) = exp( a**log(k) )
-Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(k > 0.0, "rpow cannot be calcualted for non-positive numbers");
-    float log_k = logf(k);
-
-    Tensor result = ttnn::multiply(a, log_k);
-    return ttnn::exp(result, false);
-}
-
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
 Tensor _make_global_from_hw_impl(
     const HWFunctionT& fn, const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {

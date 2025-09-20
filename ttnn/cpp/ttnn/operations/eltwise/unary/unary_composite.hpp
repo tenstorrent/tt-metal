@@ -200,9 +200,6 @@ constexpr auto triu = ttnn::register_operation<
 constexpr auto polygamma = ttnn::register_operation<
     "ttnn::polygamma",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::POLYGAMMA>>();
-constexpr auto rpow = ttnn::register_operation<
-    "ttnn::rpow",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::RPOW>>();
 constexpr auto normalize_global = ttnn::register_operation<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
