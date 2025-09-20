@@ -1,5 +1,10 @@
 # tt-train: CPP ML training framework
 
+## Roadmap
+
+<img width="1053" alt="Screenshot 2025-04-01 at 8 06 23 PM" src="https://github.com/user-attachments/assets/b4041e9f-700e-410f-b1d3-48f0ad838e2a" />
+
+
 ## Overview
 This repository contains a high-performance training framework developed in C++ designed to efficiently leverage the computational capabilities of Tenstorrent hardware. The framework is optimized to accelerate model training tasks, providing a seamless interface for training deep learning models on Tenstorrent's advanced hardware architecture.
 
