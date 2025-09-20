@@ -63,12 +63,12 @@ namespace HAL_BUILD {
 // TODO: Review if this should  be 2 for BH (the number of eth processors)
 // Hardcode to 1 to keep size as before
 #ifdef ARCH_BLACKHOLE
-constexpr uint32_t PROFILER_RISC_COUNT = 1;
+constexpr uint32_t PROCESSOR_COUNT = 1;
 #else
-constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #endif
 #else
-constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
 #else
 #error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
@@ -80,7 +80,7 @@ struct profiler_msg_buffer_t {
 
 struct profiler_msg_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
-    profiler_msg_buffer_t buffer[PROFILER_RISC_COUNT];
+    profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
 // Messages for host to tell brisc to go
@@ -130,28 +130,20 @@ struct rta_offset_t {
     volatile uint16_t crta_offset;
 };
 
-// Maximums across all archs
-#ifndef CODEGEN
-// Do not expose in HAL interface.
-// Eventually they should be removed from this file.
-// And host code should get them from HAL.
-constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
-constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
-#endif
 enum dispatch_enable_flags : uint8_t {
     DISPATCH_ENABLE_FLAG_PRELOAD = 1 << 7,
 };
 
 struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
-    volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
-    volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
+    volatile uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
+    volatile uint16_t sem_offset[ProgrammableCoreType::COUNT];
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
-    rta_offset_t rta_offset[NUM_PROCESSORS_PER_CORE_TYPE];
+    rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
-    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -165,7 +157,7 @@ struct kernel_config_msg_t {
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
-    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint16_t watcher_kernel_ids[MaxProcessorsPerCoreType];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
@@ -275,7 +267,7 @@ enum debug_assert_type_t {
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint8_t flags[MaxProcessorsPerCoreType];
     uint8_t pad[3];  // CODEGEN:skip
 };
 
@@ -294,7 +286,7 @@ struct debug_stack_usage_per_cpu_t {
 };
 
 struct debug_stack_usage_t {
-    debug_stack_usage_per_cpu_t cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    debug_stack_usage_per_cpu_t cpu[MaxProcessorsPerCoreType];
     uint8_t pad[12];  // CODEGEN:skip
 };
 
@@ -312,7 +304,7 @@ constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 
 struct watcher_msg_t {
     volatile uint32_t enable;
-    struct debug_waypoint_msg_t debug_waypoint[NUM_PROCESSORS_PER_CORE_TYPE];
+    struct debug_waypoint_msg_t debug_waypoint[MaxProcessorsPerCoreType];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
@@ -325,18 +317,15 @@ struct watcher_msg_t {
 };
 
 #ifndef CODEGEN
-// TODO: DebugPrintMemLayout not visible by codegen
-// To be fixed by HAL work on dprint buffers.
+// Host code does not need to use dprint_buf_msg_t (it uses DebugPrintMemLayout directly), skip because codegen can't
+// see DebugPrintMemLayout.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[NUM_PROCESSORS_PER_CORE_TYPE];
-    uint32_t pad;  // to 1024 bytes
+    DebugPrintMemLayout data[PROCESSOR_COUNT];
 };
 #endif
 
 // NOC aligment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
-
-constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 3;
 
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,
@@ -401,9 +390,8 @@ struct mailboxes_t {
     struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
-    // Keep profiler last since it's size is dynamic per core type
-    uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];  // CODEGEN:skip
-    profiler_msg_t profiler;                            // CODEGEN:skip
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
+        profiler_msg_t profiler;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
