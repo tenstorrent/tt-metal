@@ -90,6 +90,8 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     steps:
+      - name: Mark repository as safe directory # not sure why this is needed
+        run: git config --global --add safe.directory ${{ github.workspace }}
       - name: Checkout the repository
         uses: actions/checkout@v4
         with:
