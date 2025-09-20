@@ -37,7 +37,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<models::BaseTransformer, ModuleBase>(m, "BaseTransformer");
 
     nb::class_<models::gpt2::TransformerConfig>(m, "GPT2TransformerConfig");
-    nb::class_<models::gpt2::Transformer>(m, "GPT2Transformer");
+    nb::class_<models::gpt2::Transformer, models::BaseTransformer>(m, "GPT2Transformer");
 
     nb::class_<LinearLayer, ModuleBase>(m, "LinearLayer");
 
@@ -67,15 +67,15 @@ void py_module(nb::module_& m) {
             static_cast<nb::class_<models::BaseTransformer, ModuleBase>>(m.attr("BaseTransformer"));
         py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
     }
-    /*
+
     {
-        auto py_gpt2_transformer_config_experimental =
+        /*auto py_gpt2_transformer_config_experimental =
             static_cast<nb::class_<models::gpt2::TransformerConfig::Experimental>>(
                 m.attr("GPT2TransformerConfigExperimental"));
         py_gpt2_transformer_config_experimental.def(nb::init<>());
         py_gpt2_transformer_config_experimental.def_rw(
             "use_composite_layernorm", &models::gpt2::TransformerConfig::Experimental::use_composite_layernorm);
-
+        */
         auto py_gpt2_transformer_config =
             static_cast<nb::class_<models::gpt2::TransformerConfig>>(m.attr("GPT2TransformerConfig"));
         py_gpt2_transformer_config.def(nb::init<>());
@@ -96,7 +96,7 @@ void py_module(nb::module_& m) {
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
         py_gpt2.def("__call__", &models::gpt2::Transformer::operator());
     }
-    */
+
     {
         auto py_linear_layer = static_cast<nb::class_<LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
         py_linear_layer.def(
@@ -161,7 +161,7 @@ void py_module(nb::module_& m) {
     }
 
     m.def("create_linear_regression_model", &models::linear_regression::create);
-    m.def("create_gpt2_transformer", [](const models::gpt2::TransformerConfig& config) {
+    m.def("create_gpt2_model", [](const models::gpt2::TransformerConfig& config) {
         return models::gpt2::create(config);
     });
     m.def("create_llama_model", [](const models::llama::LlamaConfig& config) { return models::llama::create(config); });
