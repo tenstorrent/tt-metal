@@ -129,7 +129,7 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
             # User provided only valid type
             self.type = type
             self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.info(f"Using default dispatch core axis for this system: {self.axis}")
+            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
         elif axis:
             self.axis = axis
             # User provided only valid axis
@@ -142,13 +142,13 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
             elif self.axis == DispatchCoreAxis.ROW:
                 # ROW axis is supported for all dispatch core types, use default type for their system
                 self.type = get_default_dispatch_core_type()
-                logger.info(f"Using default dispatch core type for this system: {self.type}")
+                logger.debug(f"Using default dispatch core type for this system: {self.type}")
         else:
             # User provided no valid type or axis, use default for their system
             self.type = get_default_dispatch_core_type()
-            logger.info(f"Using default dispatch core type for this system: {self.type}")
+            logger.debug(f"Using default dispatch core type for this system: {self.type}")
             self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.info(f"Using default dispatch core axis for this system: {self.axis}")
+            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
         super().__init__(self.type, self.axis)
 
 
