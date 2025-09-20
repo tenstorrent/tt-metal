@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * telemetry/mock_telemetry_provider.hpp
+ * telemetry/mock_telemetry_collector.hpp
  *
  * Generates fake telemetry. Useful for testing.
  *
@@ -116,7 +116,8 @@ private:
                 delta->bool_metrics[path] = new_value;
                 // Add current timestamp
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count();
                 delta->bool_metric_timestamps[path] = timestamp;
             }
         }
@@ -140,7 +141,8 @@ private:
                 delta->uint_metrics[path] = new_value;
                 // Add current timestamp
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count();
                 delta->uint_metric_timestamps[path] = timestamp;
             }
         }
@@ -160,7 +162,8 @@ private:
                 snapshot->bool_metrics[path] = value;
                 // Add current timestamp for initial snapshot
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count();
                 snapshot->bool_metric_timestamps[path] = timestamp;
             }
 
@@ -170,7 +173,8 @@ private:
                 snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metric_units_.at(path));
                 // Add current timestamp for initial snapshot
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count();
                 snapshot->uint_metric_timestamps[path] = timestamp;
             }
 

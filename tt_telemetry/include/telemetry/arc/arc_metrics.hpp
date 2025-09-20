@@ -14,6 +14,8 @@
 #include <memory>
 #include <string>
 
+#include <llrt/hal.hpp>
+
 #include <telemetry/metric.hpp>
 #include <telemetry/arc/arc_telemetry_reader.hpp>
 
@@ -21,7 +23,7 @@
 class ARCTelemetryAvailableMetric : public BoolMetric {
 public:
     // Constructor
-    ARCTelemetryAvailableMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader);
+    ARCTelemetryAvailableMetric(std::shared_ptr<ARCTelemetryReader> reader);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -36,7 +38,6 @@ class ARCUintMetric : public UIntMetric {
 public:
     // Constructor for direct telemetry tag usage
     ARCUintMetric(
-        size_t chip_id,
         std::shared_ptr<ARCTelemetryReader> reader,
         tt::umd::TelemetryTag tag,
         const std::string& metric_name,
@@ -65,7 +66,6 @@ public:
 
     // Constructor for direct telemetry tag usage
     ARCDoubleMetric(
-        size_t chip_id,
         std::shared_ptr<ARCTelemetryReader> reader,
         tt::umd::TelemetryTag tag,
         const std::string& metric_name,
@@ -87,3 +87,10 @@ private:
     double scale_factor_;  // Factor to scale raw telemetry value to double
     Signedness signedness_;  // Whether the value is signed or unsigned
 };
+
+void create_arc_metrics(
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal);

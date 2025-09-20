@@ -41,11 +41,9 @@ std::unordered_map<uint16_t, std::string> create_metric_unit_full_label_map();
 
 class Metric {
 public:
-    const size_t id = 0;
     const MetricUnit units;
 
-    Metric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        id(metric_unique_id), units(metric_units) {}
+    Metric(MetricUnit metric_units = MetricUnit::UNITLESS) : units(metric_units) {}
 
     virtual const std::vector<std::string> telemetry_path() const {
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
@@ -77,8 +75,7 @@ protected:
 
 class BoolMetric: public Metric {
 public:
-    BoolMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        Metric(metric_unique_id, metric_units) {}
+    BoolMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     bool value() const {
         return value_;
@@ -90,8 +87,7 @@ protected:
 
 class UIntMetric: public Metric {
 public:
-    UIntMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        Metric(metric_unique_id, metric_units) {}
+    UIntMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     uint64_t value() const {
         return value_;
@@ -103,8 +99,7 @@ protected:
 
 class DoubleMetric : public Metric {
 public:
-    DoubleMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        Metric(metric_unique_id, metric_units) {}
+    DoubleMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     double value() const { return value_; }
 
