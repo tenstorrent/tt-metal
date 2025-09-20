@@ -602,7 +602,9 @@ Fabric routers can be mapped on to a single RiscV core or multiple cores dependi
 
 ## 3.1 Buffers and Virtual Channels <a id="rb_per_vc"></a>
 
-TT-Fabric supports one bidirectional virtual channel per fabric router. The virtual channel is compirsed of several buffers used to transport a router's incoming and outgoing fabric packets. Virtual channels buffers are further identified as Sender Channels and Receiver Channels. Sender channels buffer all packets exiting a device through the router's ethernet link. Receiver Channels buffer all packets entering a device through the router's ethernet link.
+A virtual channel is compirsed of several buffers used to transport incoming and outgoing fabric packets. Virtual channels buffers are classified as Sender Channels and Receiver Channels. Sender channels buffer all packets exiting a device through the router's ethernet link. Receiver Channels buffer all packets entering a device through the router's ethernet link.
+
+TT-Fabric supports one user visible bidirectional virtual channel per fabric router. 
 
 Basic architecture of a virtual channel is shown in the following diagram.
 
@@ -645,7 +647,8 @@ Basic architecture of a virtual channel is shown in the following diagram.
                                         └─────────────────────────────────────┘
 ```
 
-The number of sender and receiver channels in a single virtual channel depend on fabric topology.
+The number of sender and receiver channels in a single virtual channel depend on fabric topology. The number of slots in sender/receiver channel depend on amount of memory available for buffering.
+
 The following table lists the sender/receiver channel counts for different fabric topologies.
 
 TODO: Add a table here.
