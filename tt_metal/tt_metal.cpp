@@ -202,7 +202,7 @@ std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange
     }
 
     if (uninitialized_sem_id.has_value()) {
-        semaphore_id = uninitialized_sem_id.value();
+        semaphore_id = uninitialized_sem_id;
     } else {
         TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
     }
@@ -1363,7 +1363,7 @@ LightMetalBinary LightMetalEndCapture() {
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         if (cq_id.has_value()) {
-            Finish(device->command_queue(cq_id.value()), sub_device_ids);
+            Finish(device->command_queue(cq_id), sub_device_ids);
         } else {
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
                 Finish(device->command_queue(cq_id), sub_device_ids);
