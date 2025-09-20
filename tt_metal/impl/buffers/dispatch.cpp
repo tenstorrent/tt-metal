@@ -510,6 +510,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                 data_size_bytes);
         }
     }
+    command_sequence.align_write_offset();
 }
 
 void populate_sharded_buffer_write_dispatch_cmds(
@@ -531,12 +532,11 @@ void populate_sharded_buffer_write_dispatch_cmds(
     ptrdiff_t dst_offset = reinterpret_cast<ptrdiff_t>(dst - (uint8_t*)command_sequence.data());
     TT_ASSERT(dst_offset >= 0, "Offset into command sequence is negative");
     if (dispatch_params.write_large_pages()) {
+        const auto cur_host_page = *dispatch_params.core_page_mapping_it;
+        if (!cur_host_page) {
+            return;
+        }
         for (uint32_t i = 0; i < dispatch_params.pages_per_txn; ++i) {
-            const auto cur_host_page = *dispatch_params.core_page_mapping_it;
-            if (!cur_host_page) {
-                dst_offset += dispatch_params.page_size_to_write;
-                continue;
-            }
             const uint64_t src_offset =
                 (*cur_host_page * (uint64_t)buffer.page_size()) +
                 (dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
@@ -551,7 +551,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         while (true) {
             auto range = dispatch_params.core_page_mapping_it.next_range(end_device_page_offset);
             if (range.num_pages == 0) {
-                break;
+                return;
             }
             uint64_t src_offset = (uint64_t)(range.host_page_start) * dispatch_params.page_size_to_write;
             auto cmd_region_offset =
@@ -588,7 +588,12 @@ void issue_buffer_dispatch_command_sequence(
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_write_linear<true, true>(data_size_bytes);
+    if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
+        calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
+    } else {
+        calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, dispatch_params.pages_per_txn);
+    }
+    calculator.add_data<false>(data_size_bytes);
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
@@ -633,11 +638,9 @@ void write_interleaved_buffer_to_device(
     uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(
         HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                             // + CQ_DISPATCH_CMD_WRITE_PAGED
+    dispatch_params.calculate_issue_wait();
+    update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
     while (dispatch_params.total_pages_to_write > 0) {
-        dispatch_params.calculate_issue_wait();
-
-        update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
-
         if (dispatch_params.is_page_offset_out_of_bounds()) {
             dispatch_params.update_params_to_be_within_bounds();
         }
@@ -678,15 +681,12 @@ void write_sharded_buffer_to_core(
     }
 
     dispatch_params.reset_params_for_core(core, core_page_mapping);
+    // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
+    uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
+    dispatch_params.calculate_issue_wait();
+    update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
 
     while (dispatch_params.core_num_pages_remaining_to_write != 0) {
-        // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-        uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
-
-        dispatch_params.calculate_issue_wait();
-
-        update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
-
         const int32_t num_pages_available_in_cq =
             calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, data_offset_bytes);
         if (num_pages_available_in_cq <= 0) {
