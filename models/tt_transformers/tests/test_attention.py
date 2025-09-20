@@ -13,7 +13,7 @@ from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
-from models.tt_transformers.tt.model_config import ModelArgs, CheckpointType
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 
 
@@ -52,10 +52,7 @@ from models.tt_transformers.tt.rope import RotarySetup
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-@pytest.mark.parametrize(
-    "rope_embeddings",
-    ["global", "local"]
-)
+@pytest.mark.parametrize("rope_embeddings", ["global", "local"])
 def test_attention_inference(
     max_seq_len,
     batch_size,
@@ -304,7 +301,7 @@ def test_attention_inference(
             for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
                 cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                 # cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                cache_pt = cache_pt[:, :, :cache_length_to_check-generation_start_pos, :]
+                cache_pt = cache_pt[:, :, : cache_length_to_check - generation_start_pos, :]
                 cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
                 abs_max_vals_ref[label].append(torch.max(torch.abs(cache_pt.to(torch.float32))))
                 abs_max_vals_tt[label].append(torch.max(torch.abs(cache_tt.to(torch.float32))))
@@ -322,9 +319,14 @@ def test_attention_inference(
                     logger.warning(f"{label} Cache Failed! PCC value is lower than {pcc}")
                     all_tests_pass = False
 
-    import matplotlib.pyplot as plt
     import json
-    json.dump(pccs, open(f"attention_pccs_startpos{generation_start_pos}_rope{rope_embeddings}_{model_args.model_name}.json", "w"))
+
+    import matplotlib.pyplot as plt
+
+    json.dump(
+        pccs,
+        open(f"attention_pccs_startpos{generation_start_pos}_rope{rope_embeddings}_{model_args.model_name}.json", "w"),
+    )
     fig, ax = plt.subplots(3, 3)
     ax[0][0].plot(pccs["attention"])
     ax[0][0].set_title("Attention")
@@ -356,7 +358,6 @@ def test_attention_inference(
     ax[2][2].set_title("Values")
     # ax[2][2].set_ylim(0, 1.05)
 
-    
     plt.tight_layout()
     plt.savefig(f"attention_pccs_startpos{generation_start_pos}_rope{rope_embeddings}_{model_args.model_name}.png")
 
@@ -372,8 +373,9 @@ def test_attention_inference(
     ax[2].plot(abs_max_vals_tt["V"], label="TT")
     ax[0].legend()
     plt.tight_layout()
-    plt.savefig(f"attention_abs_max_vals_startpos{generation_start_pos}_rope{rope_embeddings}_{model_args.model_name}.png")
-
+    plt.savefig(
+        f"attention_abs_max_vals_startpos{generation_start_pos}_rope{rope_embeddings}_{model_args.model_name}.png"
+    )
 
     if all_tests_pass:
         logger.info("Attention output Passed!")
