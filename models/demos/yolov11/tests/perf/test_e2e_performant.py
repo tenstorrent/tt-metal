@@ -44,13 +44,13 @@ def run_yolov11_inference(
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(100):
         _ = performant_runner.run(torch_input_tensor=torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
 
     performant_runner.release()
-    inference_time_avg = round((t1 - t0) / 10, 6)
+    inference_time_avg = round((t1 - t0) / 100, 6)
     logger.info(
         f"Model: ttnn_yolov11 - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size / inference_time_avg)}"
     )

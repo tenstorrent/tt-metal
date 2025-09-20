@@ -82,10 +82,30 @@ def custom_preprocessor(model, name, mesh_mapper=None):
 
     if isinstance(model, Conv):
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv, model.bn)
-        parameters["conv"] = {}
-        parameters["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        if model.split_weights:
+            chunk_size = bias.shape[-1] // 2
+            parameters["a"] = {}
+            parameters["a"]["conv"] = {}
+            parameters["a"]["conv"]["weight"] = ttnn.from_torch(
+                weight[:chunk_size, :, :, :], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
+            parameters["a"]["conv"]["bias"] = ttnn.from_torch(
+                bias[:, :, :, :chunk_size], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
+            parameters["b"] = {}
+            parameters["b"]["conv"] = {}
+            parameters["b"]["conv"]["weight"] = ttnn.from_torch(
+                weight[chunk_size:, :, :, :], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
+            parameters["b"]["conv"]["bias"] = ttnn.from_torch(
+                bias[:, :, :, chunk_size:], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
+        else:
+            parameters["conv"] = {}
+            parameters["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+
+            parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
 
     return parameters
 

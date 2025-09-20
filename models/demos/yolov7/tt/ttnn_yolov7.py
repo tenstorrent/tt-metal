@@ -891,9 +891,9 @@ class ttnn_yolov7:
         conv3 = self.conv3(self.device, conv2)
 
         conv4 = self.conv4(self.device, conv3)
-
+        print("conv5 ----Matmul")
         conv5 = self.conv5(self.device, conv4)
-
+        print("conv5 done ----Matmul")
         conv6 = self.conv6(self.device, conv4)
         ttnn.deallocate(conv4)
 
