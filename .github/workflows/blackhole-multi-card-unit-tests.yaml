@@ -22,10 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: LLMBox unit tests
-            runner-label: BH-LLMBox
-          - name: DeskBox unit tests
-            runner-label: BH-DeskBox
+          # - name: LLMBox unit tests
+          #   runner-label: BH-LLMBox
+          - name: P300 unit tests
+            runner-label: P300
           # - name: RackBox unit tests
           #   runner-label: BH-RackBox
     with:
