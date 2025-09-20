@@ -1028,7 +1028,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     // TODO: need to add validate to make sure there is bidrectional traffic
                     for (const auto& [local_desc, peer_desc] :
                          peer_intermesh_link_tables_[mesh_id][connected_host_rank_id]) {
-                        log_critical(tt::LogFabric, "{} {}", peer_desc.board_id, unique_chip_id);
                         if (peer_desc.board_id == unique_chip_id) {
                             tt::umd::CoreCoord eth_core =
                                 tt::tt_metal::MetalContext::instance()
