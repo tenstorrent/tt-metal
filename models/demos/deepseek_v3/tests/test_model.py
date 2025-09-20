@@ -98,7 +98,7 @@ def test_forward_pass(
                 (batch_size,), dtype=torch.long
             )  # TODO: investigate the PCC issue with real weights
 
-        logger.info("Running the reference model")
+        logger.info("Running the model")
         reference_output, input_cache, output_cache = run_reference_with_attention(
             reference_model, torch_input, position_ids, None, hf_config_short, mode, False
         )
