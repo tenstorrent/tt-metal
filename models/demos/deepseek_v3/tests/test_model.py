@@ -20,6 +20,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     dequantize_state_dict,
     get_model_config,
+    get_test_weight_config,
     load_state_dict,
     paged_caches_from_torch,
     run_reference_with_attention,
@@ -53,9 +54,11 @@ def test_forward_pass(
     batch_size,
     hf_config_short,
     tmp_path,
+    cache_path,
     mesh_device,
     model_path,
     ccl,
+    force_recalculate_weight_config,
     set_deterministic_env,
 ):
     # Set less layers and shorter max length for the sake of testing
@@ -128,6 +131,10 @@ def test_forward_pass(
         input_cache = torch_cache_from_transformers(input_cache)
         output_cache = torch_cache_from_transformers(output_cache)
 
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
+
     # Set up page config
     logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
@@ -136,8 +143,9 @@ def test_forward_pass(
     paged_input_caches, torch_page_tables = paged_caches_from_torch(input_cache, dp_factor, paged_config, user_id)
 
     # Set up model config
-    weight_config = Model1D.convert_weights(hf_config_short, [state_dict], tmp_path, mesh_device)
-    logger.info("Weight conversion done")
+    weight_config = get_test_weight_config(
+        Model1D, hf_config_short, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+    )
     model_config = get_model_config(Model1D, mode, hf_config_short, mesh_device)
     logger.info(f"Model config created for {mode} mode")
     model_state = Model1D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
