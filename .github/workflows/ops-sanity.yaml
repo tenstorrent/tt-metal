@@ -90,6 +90,10 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
@@ -98,9 +102,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout || 15 }}
         run: |
-          pwd
-          ls tests/
-          ls ./tests/
           ls $(pwd)/tests/
           echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
