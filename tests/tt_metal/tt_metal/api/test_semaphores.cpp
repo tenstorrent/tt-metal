@@ -181,9 +181,9 @@ TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
         tt_metal::Program program = tt_metal::CreateProgram();
         workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
+        unit_tests::initialize_semaphores::try_creating_semaphores_out_of_bounds(devices_.at(id), workload);
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
             devices_.at(id), workload, core_range);
-        unit_tests::initialize_semaphores::try_creating_semaphores_out_of_bounds(devices_.at(id), workload);
     }
 }
 
