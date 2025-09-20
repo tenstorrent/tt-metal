@@ -71,16 +71,11 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    env:
-      ARCH_NAME: wormhole_b0
-      LOGURU_LEVEL: INFO
-      PYTHONPATH: /work
     runs-on: 
       - 28975_test_pipeline_reorg
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
       env:
-        PYTHONPATH: /work
         LOGURU_LEVEL: INFO
         TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
