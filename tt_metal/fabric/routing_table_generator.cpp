@@ -11,6 +11,7 @@
 #include <ostream>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -343,5 +344,62 @@ const std::vector<FabricNodeId>& RoutingTableGenerator::get_exit_nodes_routing_t
         return it->second;
     }
     TT_THROW("No exit nodes found for mesh_id {}", *mesh_id);
+}
+
+FabricNodeId RoutingTableGenerator::get_exit_node_from_mesh_to_mesh(
+    MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const {
+    TT_FATAL(*src_mesh_id < this->inter_mesh_table_.size(), "src_mesh_id out of range");
+    TT_FATAL(src_chip_id < this->inter_mesh_table_[*src_mesh_id].size(), "src_chip_id out of range");
+    TT_FATAL(*dst_mesh_id < this->inter_mesh_table_.size(), "dst_mesh_id out of range");
+
+    auto direction = this->inter_mesh_table_[*src_mesh_id][src_chip_id][*dst_mesh_id];
+    if (direction == RoutingDirection::C) {
+        return FabricNodeId(src_mesh_id, src_chip_id);
+    }
+
+    TT_FATAL(
+        direction != RoutingDirection::NONE,
+        "No route from M{}D{} to mesh M{}",
+        *src_mesh_id,
+        src_chip_id,
+        *dst_mesh_id);
+
+    MeshShape mesh_shape = this->mesh_graph->get_mesh_shape(src_mesh_id);
+    TT_FATAL(mesh_shape.dims() == 2, "Only 2D mesh supported");
+    uint32_t width = mesh_shape[1];
+    uint32_t height = mesh_shape[0];
+
+    auto src_coord = this->mesh_graph->chip_to_coordinate(src_mesh_id, src_chip_id);
+    auto step = [&](RoutingDirection dir, uint32_t x, uint32_t y) -> std::optional<chip_id_t> {
+        int nx = x, ny = y;
+        switch (dir) {
+            case RoutingDirection::N:
+                nx = x - 1;
+                ny = y;
+                break;
+            case RoutingDirection::S:
+                nx = x + 1;
+                ny = y;
+                break;
+            case RoutingDirection::W:
+                nx = x;
+                ny = y - 1;
+                break;
+            case RoutingDirection::E:
+                nx = x;
+                ny = y + 1;
+                break;
+            default: return std::nullopt;
+        }
+        if (nx < 0 || ny < 0 || nx >= (int)height || ny >= (int)width) {
+            return std::nullopt;
+        }
+        MeshCoordinate next_coord(nx, ny);
+        return this->mesh_graph->coordinate_to_chip(src_mesh_id, next_coord);
+    };
+
+    auto next_chip_opt = step(direction, src_coord[0], src_coord[1]);
+    TT_FATAL(next_chip_opt.has_value(), "Invalid next hop for direction from M{}D{}", *src_mesh_id, src_chip_id);
+    return FabricNodeId(src_mesh_id, next_chip_opt.value());
 }
 }  // namespace tt::tt_fabric
