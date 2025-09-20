@@ -568,20 +568,20 @@ const std::unordered_set<CoreCoord>& Cluster::get_virtual_eth_cores(ChipId chip_
 
 CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
     ChipId chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
+    // TBD: Remove when all WORKER are rewritten to TENSIX
+    CoreType core_type_to_use = core_type;
+    if (core_type_to_use == CoreType::WORKER) {
+        core_type_to_use = CoreType::TENSIX;
+    }
+
     // Keeping the old behavior, although UMD does define translation for other cores as well.
-    if (core_type != CoreType::WORKER && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
+    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
         TT_THROW("Undefined conversion for core type.");
     }
 
     auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {
         return soc_desc.get_physical_dram_core_from_logical(logical_coord);
-    }
-
-    // TBD: Remove when all WORKER are rewritten to TENSIX
-    CoreType core_type_to_use = core_type;
-    if (core_type_to_use == CoreType::WORKER) {
-        core_type_to_use = CoreType::TENSIX;
     }
 
     tt::umd::CoreCoord translated_coord =
