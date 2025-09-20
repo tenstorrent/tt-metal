@@ -76,5 +76,20 @@ void calculate_rsub(uint32_t param) {
     return;
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+void calculate_add_int32(uint32_t scalar) {
+    int int_scalar = scalar;
+
+    // Load value scalar to lreg2
+    _sfpu_load_imm32_(p_sfpu::LREG2, int_scalar);
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);  // Using mov to preserve the scalar value after each iteration
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 4);
+        TTI_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, 0);
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
