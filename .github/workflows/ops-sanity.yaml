@@ -10,6 +10,9 @@
 name: "Ops Sanity pipeline"
 
 on:
+  push:
+    branches:
+      ["roseli/28975-pipeline-reorg-apc-ops"]
   workflow_call:
     inputs:
       build-artifact-name:
