@@ -3,3 +3,5 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 
 add_subdirectory(umd)
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tt_llk DESTINATION ${CMAKE_INSTALL_PREFIX}/tt_metal/third_party)
