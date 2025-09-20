@@ -24,16 +24,15 @@ def run_e2e_performant_sentencebert(
         model_location_generator=model_location_generator,
     )
     performant_runner._capture_sentencebert_trace_2cqs()
-    inference_times = []
-    for _ in range(50):
-        t0 = time.time()
+    inference_iter_count = 50
+    t0 = time.time()
+    for _ in range(inference_iter_count):
         _ = performant_runner.run()
-        t1 = time.time()
-        inference_times.append(t1 - t0)
-
+    ttnn.synchronize_device(device)
+    t1 = time.time()
     performant_runner.release()
 
-    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
+    inference_time_avg = round((t1 - t0) / inference_iter_count, 6)
     logger.info(
         f"ttnn_sentencebert_batch_size: {batch_size}, One inference iteration time (sec): {inference_time_avg}, Sentence per sec: {round(batch_size * device.get_num_devices()/inference_time_avg)}"
     )
