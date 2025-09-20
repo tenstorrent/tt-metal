@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    distributed::ReadShard(cq, c_data, c, distributed::MeshCoordinate(0, 0), true);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)

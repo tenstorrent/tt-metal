@@ -199,7 +199,7 @@ int main() {
     distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::ReadShard(cq, dst_vec, dst_buffer, distributed::MeshCoordinate(0, 0), false);
+    distributed::EnqueueReadMeshBuffer(cq, dst_vec, dst_buffer, true);
     distributed::Finish(cq);
 
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);

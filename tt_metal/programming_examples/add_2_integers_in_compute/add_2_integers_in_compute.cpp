@@ -151,7 +151,7 @@ int main() {
     // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
     // operation is blocking or not.
     std::vector<bfloat16> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     // compare the results with the expected values.
     bool success = true;

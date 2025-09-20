@@ -119,7 +119,7 @@ int main() {
     // This time we set blocking=true since we must have the data before comparing.
     // NOTE: Everything on the command queue executes in order; a read will not run before the prior kernel finishes.
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
     if (result_vec.size() != 1) {
         std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;
         mesh_device->close();
