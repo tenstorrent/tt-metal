@@ -63,17 +63,18 @@ inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index
         // Load 32-element SIMD vectors from Dst registers.
         // vFloat represents 32 parallel floating-point values.
         // This is the SFPU's native SIMD data type.
-        vFloat a = dst_reg[in0_base_idx + i];
-        vFloat b = dst_reg[in1_base_idx + i];
+        vFloat a = dst_reg[in0_base_idx];
+        vFloat b = dst_reg[in1_base_idx];
 
         // Perform SIMD addition: all 32 elements are added in parallel.
         // This is where the actual computation happens on the vector engine.
         // For FP32 accuracy, ensure the host sets fp32_dest_acc_en=true.
-        dst_reg[out_base_idx + i] = a + b;
+        dst_reg[out_base_idx] = a + b;
+        dst_reg++;
 
         // The above program can be shortened to a single line:
         // However, the expanded form is clearer for educational purposes.
-        // dst_reg[out_base_idx + i] = dst_reg[in0_base_idx + i] + dst_reg[in1_base_idx + i];
+        // dst_reg[out_base_idx] = dst_reg[in0_base_idx] + dst_reg[in1_base_idx];
     }
 
     // Note: This function only processes ONE FACE of a tile.
