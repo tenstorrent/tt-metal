@@ -95,13 +95,19 @@ void py_module(nb::module_& m) {
             static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(m.attr("GPT2Transformer"));
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
         py_gpt2.def("__call__", &models::gpt2::Transformer::operator());
-        py_gpt2.def_static(
-            "create", [](const models::gpt2::TransformerConfig& config) { return models::gpt2::create(config); });
     }
     */
     {
         auto py_linear_layer = static_cast<nb::class_<LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
-        py_linear_layer.def(nb::init<uint32_t, uint32_t, bool>());
+        py_linear_layer.def(
+            nb::init<uint32_t, uint32_t, bool>(),
+            nb::arg("in_features"),
+            nb::arg("out_features"),
+            nb::arg("has_bias") = true);
+        py_linear_layer.def(
+            nb::init<const autograd::TensorPtr&, const autograd::TensorPtr&>(), nb::arg("weight"), nb::arg("bias"));
+        py_linear_layer.def(
+            nb::init<const autograd::TensorPtr&, bool>(), nb::arg("weight"), nb::arg("has_bias") = true);
         py_linear_layer.def("__call__", &LinearLayer::operator());
         py_linear_layer.def("get_weight", &LinearLayer::get_weight);
         py_linear_layer.def("get_weight_numpy", [](const LinearLayer& layer) {
@@ -131,8 +137,6 @@ void py_module(nb::module_& m) {
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(m.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
         py_llama.def("__call__", &models::llama::Llama::operator());
-        py_llama.def_static(
-            "create", [](const models::llama::LlamaConfig& config) { return models::llama::create(config); });
     }
 
     {
@@ -147,16 +151,23 @@ void py_module(nb::module_& m) {
                     .hidden_features = hidden_features,
                     .output_features = output_features};
             });
+        py_mlp_params.def_rw("input_features", &modules::MultiLayerPerceptronParameters::input_features);
+        py_mlp_params.def_rw("hidden_features", &modules::MultiLayerPerceptronParameters::hidden_features);
+        py_mlp_params.def_rw("output_features", &modules::MultiLayerPerceptronParameters::output_features);
 
         auto py_mlp = static_cast<nb::class_<MultiLayerPerceptron, ModuleBase>>(m.attr("MultiLayerPerceptron"));
         py_mlp.def(nb::init<const MultiLayerPerceptronParameters&>());
         py_mlp.def("__call__", &modules::MultiLayerPerceptron::operator());
-        py_mlp.def_static("create", [](const modules::MultiLayerPerceptronParameters& config) {
-            return models::mlp::create(config);
-        });
     }
 
     m.def("create_linear_regression_model", &models::linear_regression::create);
+    m.def("create_gpt2_transformer", [](const models::gpt2::TransformerConfig& config) {
+        return models::gpt2::create(config);
+    });
+    m.def("create_llama_model", [](const models::llama::LlamaConfig& config) { return models::llama::create(config); });
+    m.def("create_mlp_model", [](const modules::MultiLayerPerceptronParameters& config) {
+        return models::mlp::create(config);
+    });
 }
 
 }  // namespace ttml::modules
