@@ -30,7 +30,7 @@
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -231,6 +231,11 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_);
 }
 
+static bool requires_forced_assignment_to_noc1() {
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
+           get_num_riscv_cores() == 1;
+}
+
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     uint32_t num_sender_channels = get_sender_channel_count(is_2D_routing);
@@ -257,6 +262,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
+    }
+    // temporary work-around for BH until 2-erisc is enabled. We are required to switch entirely to noc1 for
+    // routers when only using a single erisc because erisc0 will be used by base FW and may periodically use
+    // noc0 for link health related functionality.
+    if (requires_forced_assignment_to_noc1()) {
+        for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+            this->risc_configs[risc_id].set_configured_noc(tt::tt_metal::NOC::NOC_1);
+        }
     }
 
     if (this->sender_txq_id != this->receiver_txq_id) {
@@ -930,10 +943,22 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
         this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
         this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+
+        if (requires_forced_assignment_to_noc1()) {
+            this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
+            this->receiver_channel_local_write_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        }
     }
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
+
+        if (requires_forced_assignment_to_noc1()) {
+            this->sender_channel_ack_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
+        }
     }
     this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
 }
@@ -1340,6 +1365,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->get_configured_risc_count(),
 
         update_pkt_hdr_on_rx_ch,
+
+        requires_forced_assignment_to_noc1(),
 
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};

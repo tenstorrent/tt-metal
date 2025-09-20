@@ -86,12 +86,7 @@ void kernel_main() {
     uint64_t noc_dest_addr = get_noc_addr_helper(sender_noc_xy_encoding, credit_handshake_address);
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     if constexpr (is_2d_fabric) {
-        fabric_set_unicast_route(
-            (LowLatencyMeshPacketHeader*)packet_header,
-            my_device_id,
-            dst_device_id,
-            dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
-            mesh_ew_dim);
+        fabric_set_unicast_route(dst_device_id, (LowLatencyMeshPacketHeader*)packet_header);
     } else {
         packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
     }

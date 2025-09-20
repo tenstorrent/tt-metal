@@ -24,7 +24,7 @@ class TtnnABlock:
             conv=parameter.mlp[0].conv,
             conv_pth=conv_pt.mlp[0].conv,
             device=device,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.mlp_1 = TtYOLOv12xConv2D(

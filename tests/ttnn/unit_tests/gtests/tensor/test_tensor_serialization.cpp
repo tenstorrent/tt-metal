@@ -82,7 +82,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
         ASSERT_THAT(loaded_data, SizeIs(test_data.size()));
 
         for (size_t i = 0; i < test_data.size(); i++) {
-            EXPECT_FLOAT_EQ(test_data[i].to_float(), loaded_data[i].to_float());
+            EXPECT_FLOAT_EQ(static_cast<float>(test_data[i]), static_cast<float>(loaded_data[i]));
         }
     }
 }

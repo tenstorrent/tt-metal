@@ -33,7 +33,7 @@
 #include <tt_stl/span.hpp>
 
 #include "device_fixture.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
@@ -71,7 +71,7 @@ uint32_t get_runtime_arg_addr(
 };
 
 distributed::MeshWorkload initialize_program_data_movement(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreRangeSet& core_range_set) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& core_range_set) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -89,7 +89,7 @@ distributed::MeshWorkload initialize_program_data_movement(
 }
 
 distributed::MeshWorkload initialize_program_data_movement_rta(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& core_range_set,
     uint32_t num_unique_rt_args,
     bool common_rtas = false) {
@@ -125,7 +125,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
 }
 
 tt::tt_metal::KernelHandle initialize_program_compute(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     tt::tt_metal::Program& program,
     const CoreRangeSet& core_range_set,
     uint32_t num_unique_rt_args,
@@ -160,7 +160,7 @@ tt::tt_metal::KernelHandle initialize_program_compute(
 }
 
 std::pair<distributed::MeshWorkload, tt::tt_metal::KernelHandle> initialize_program_compute(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& core_range_set,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args) {
@@ -177,7 +177,7 @@ std::pair<distributed::MeshWorkload, tt::tt_metal::KernelHandle> initialize_prog
 
 std::pair<distributed::MeshWorkload, std::vector<tt::tt_metal::KernelHandle>>
 initialize_program_compute_multi_range_sets(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<CoreRangeSet>& core_range_sets,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args) {
@@ -199,7 +199,7 @@ initialize_program_compute_multi_range_sets(
 // Verify the runtime args for a single core (apply optional non-zero increment amounts to values written to match
 // compute kernel)
 void verify_core_rt_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool is_common,
     CoreCoord core,
     uint32_t base_addr,
@@ -227,7 +227,7 @@ void verify_core_rt_args(
 // Iterate over all cores unique and common runtime args, and verify they match expected values.
 void verify_results(
     bool are_args_incremented,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshWorkload& workload,
     const std::map<CoreCoord, std::vector<uint32_t>>& core_to_rt_args,
     const std::vector<uint32_t>& common_rt_args = {}) {

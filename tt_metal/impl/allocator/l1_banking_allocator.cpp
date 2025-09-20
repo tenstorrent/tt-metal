@@ -18,12 +18,13 @@
 #include <optional>
 #include <random>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "bank_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt {
@@ -275,7 +276,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = cluster.get_worker_logical_to_virtual_x(device_id),
          .worker_log_to_virtual_routing_y = cluster.get_worker_logical_to_virtual_y(device_id),
-         .l1_bank_remap = l1_bank_remap,
+         .l1_bank_remap = std::move(l1_bank_remap),
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});

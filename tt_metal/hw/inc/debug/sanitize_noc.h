@@ -587,9 +587,9 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
     bool delay = false;
     switch (transaction_type) {
-        case TransactionRead: delay = (v[0].read_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
-        case TransactionWrite: delay = (v[0].write_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
-        case TransactionAtomic: delay = (v[0].atomic_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
+        case TransactionRead: delay = (v[0].read_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
+        case TransactionWrite: delay = (v[0].write_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
+        case TransactionAtomic: delay = (v[0].atomic_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
         default: break;
     }
     if (delay) {

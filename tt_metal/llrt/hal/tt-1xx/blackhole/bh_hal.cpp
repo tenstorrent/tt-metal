@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
@@ -18,6 +17,13 @@
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "hal_1xx_common.hpp"
+
+namespace {
+
+// Wrap enum definitions in anonymous namespace so as to not clash with other archs.
+#include "core_config.h"  // MaxProcessorsPerCoreType
+
+}  // namespace
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -35,7 +41,7 @@ constexpr static std::uint32_t NUM_DRAM_CHANNELS = 8;
 constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
     (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
 constexpr static std::uint32_t DRAM_PROFILER_SIZE =
-    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
       DRAM_ALIGNMENT - 1) /
      DRAM_ALIGNMENT) *
     DRAM_ALIGNMENT;
@@ -53,13 +59,6 @@ static constexpr float INF_BH = 1.7014e+38;
 namespace tt {
 
 namespace tt_metal {
-
-namespace blackhole {
-
-// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
-#include "core_config.h"  // ProgrammableCoreType
-
-}
 
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
@@ -201,8 +200,6 @@ void Hal::initialize_bh() {
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
-    static_assert(MaxProcessorsPerCoreType <= MAX_RISCV_PER_CORE);
-
     HalCoreInfoType tensix_mem_map = blackhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
@@ -288,7 +285,7 @@ void Hal::initialize_bh() {
         uint32_t mailbox_base =
             MEM_SYSENG_ETH_MAILBOX_ADDR + (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(uint32_t));
         return mailbox_base + offsetof(blackhole::EthFwMailbox, arg) +
-               (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
+               (arg_index * sizeof(((blackhole::EthFwMailbox*)nullptr)->arg[0]));
     };
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
@@ -302,6 +299,7 @@ void Hal::initialize_bh() {
         }
     };
 
+    this->max_processors_per_core_ = MaxProcessorsPerCoreType;
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
@@ -321,7 +319,10 @@ void Hal::initialize_bh() {
     this->eth_fw_is_cooperative_ = false;
     this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Blackhole
     this->virtualized_core_types_ = {
-        AddressableCoreType::TENSIX, AddressableCoreType::ETH, AddressableCoreType::PCIE, AddressableCoreType::DRAM};
+        dev_msgs::AddressableCoreType::TENSIX,
+        dev_msgs::AddressableCoreType::ETH,
+        dev_msgs::AddressableCoreType::PCIE,
+        dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
     this->eps_ = EPS_BH;

@@ -31,28 +31,59 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
 
 }  // namespace
 
-bfloat16::bfloat16(float float_num) : uint16_data(fp32_to_bf16_bits_round_to_nearest_even(float_num)) {}
-
 bfloat16 bfloat16::truncate(float float_num) {
     uint32_t U32 = std::bit_cast<uint32_t>(float_num);
-    return bfloat16(U32 >> 16);
+    return std::bit_cast<bfloat16>(static_cast<uint16_t>(U32 >> 16));
 }
 
-bfloat16::bfloat16(uint32_t uint32_data) : uint16_data((uint16_t)uint32_data) {}
+// -- Arithmetic Operators ---
+bfloat16& bfloat16::operator+=(bfloat16 rhs) noexcept {
+    *this = *this + rhs;
+    return *this;
+}
 
-bfloat16::bfloat16(uint16_t uint16_data_) : uint16_data(uint16_data_) {}
+bfloat16& bfloat16::operator-=(bfloat16 rhs) noexcept {
+    *this = *this - rhs;
+    return *this;
+}
 
-bfloat16::bfloat16(int int_data) : uint16_data((uint16_t)int_data) {}
+bfloat16& bfloat16::operator*=(bfloat16 rhs) noexcept {
+    *this = *this * rhs;
+    return *this;
+}
+
+bfloat16& bfloat16::operator/=(bfloat16 rhs) noexcept {
+    *this = *this / rhs;
+    return *this;
+}
+
+bfloat16 bfloat16::operator+(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) + static_cast<float>(rhs));
+}
+
+bfloat16 bfloat16::operator-(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) - static_cast<float>(rhs));
+}
+
+bfloat16 bfloat16::operator*(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) * static_cast<float>(rhs));
+}
+
+bfloat16 bfloat16::operator/(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) / static_cast<float>(rhs));
+}
+
+uint16_t bfloat16::from_float(float val) { return fp32_to_bf16_bits_round_to_nearest_even(val); }
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
-    os << bfp16.to_uint16();
+    os << std::bit_cast<uint16_t>(bfp16);
     return os;
 }
 
 bool operator==(const std::vector<bfloat16>& lhs, const std::vector<bfloat16>& rhs) {
     bool is_equal = lhs.size() == rhs.size();
     for (auto i = 0; i < lhs.size(); i++) {
-        is_equal &= (lhs[i].to_uint16() == rhs[i].to_uint16());
+        is_equal &= (std::bit_cast<uint16_t>(lhs[i]) == std::bit_cast<uint16_t>(rhs[i]));
     }
     return is_equal;
 }
@@ -60,14 +91,15 @@ bool operator==(const std::vector<bfloat16>& lhs, const std::vector<bfloat16>& r
 uint32_t pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16> two_bfloats) {
     // first -> lower 16
     // second -> upper 16
-    return (uint32_t)two_bfloats.first.to_uint16() | ((uint32_t)two_bfloats.second.to_uint16() << 16);
+    return (uint32_t)std::bit_cast<uint16_t>(two_bfloats.first) |
+           ((uint32_t)std::bit_cast<uint16_t>(two_bfloats.second) << 16);
 }
 
 std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_data) {
     std::pair<bfloat16, bfloat16> two_bfloats;
 
-    two_bfloats.first = bfloat16(uint32_data & 0xffff);  // lower 16
-    two_bfloats.second = bfloat16(uint32_data >> 16);    // upper 16
+    two_bfloats.first = std::bit_cast<bfloat16>(static_cast<uint16_t>(uint32_data & 0xffff));  // lower 16
+    two_bfloats.second = std::bit_cast<bfloat16>(static_cast<uint16_t>(uint32_data >> 16));    // upper 16
 
     return two_bfloats;
 }
@@ -82,9 +114,9 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bo
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
 
         if (print) {
-            std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float()
+            std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << static_cast<float>(num_1_bfloat16)
                       << ", \t\t";
-            std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float()
+            std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << static_cast<float>(num_2_bfloat16)
                       << std::endl;
         }
 
@@ -118,10 +150,6 @@ std::vector<std::uint32_t> create_random_vector_of_bfloat16(
 
         bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
-
-        // std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ",
-        // \t\t"; std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() <<
-        // std::endl;
 
         // pack 2 uint16 into uint32
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
@@ -191,8 +219,8 @@ std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
     for (size_t i = 0; i < in.size(); i++) {
         uint32_t val = in.at(i);
         auto two_bfloats = unpack_two_bfloat16_from_uint32(val);
-        result[i * 2] = two_bfloats.first.to_uint16();
-        result[i * 2 + 1] = two_bfloats.second.to_uint16();
+        result[i * 2] = std::bit_cast<uint16_t>(two_bfloats.first);
+        result[i * 2 + 1] = std::bit_cast<uint16_t>(two_bfloats.second);
     }
     return result;
 }
@@ -201,8 +229,8 @@ std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in) {
     std::vector<uint32_t> result(in.size() / 2);
     TT_ASSERT(in.size() % 2 == 0);
     for (size_t i = 0; i < in.size(); i += 2) {
-        auto val1 = bfloat16(in.at(i));
-        auto val2 = bfloat16(in.at(i + 1));
+        auto val1 = std::bit_cast<bfloat16>(in.at(i));
+        auto val2 = std::bit_cast<bfloat16>(in.at(i + 1));
         auto packed = pack_two_bfloat16_into_uint32(std::make_pair(val1, val2));
         result[i / 2] = packed;
     }
@@ -218,7 +246,8 @@ void print_vec_of_uint32_as_packed_bfloat16(
             for (int k = 0; k < 32; k += 2) {
                 uint32_t uint32_data = vec.at(idx);
                 std::pair<bfloat16, bfloat16> two_bfloats = unpack_two_bfloat16_from_uint32(uint32_data);
-                std::cout << two_bfloats.first.to_float() << ", " << two_bfloats.second.to_float() << ", ";
+                std::cout << static_cast<float>(two_bfloats.first) << ", " << static_cast<float>(two_bfloats.second)
+                          << ", ";
                 idx++;
             }
             std::cout << std::endl;
@@ -234,7 +263,7 @@ void print_vec_of_bfloat16(
         std::cout << name << " tile " << i + tile_print_offset << std::endl;
         for (int j = 0; j < 32; j++) {
             for (int k = 0; k < 32; k++) {
-                std::cout << vec.at(idx).to_float() << ", ";
+                std::cout << static_cast<float>(vec.at(idx)) << ", ";
                 idx++;
             }
             std::cout << std::endl;
@@ -344,11 +373,11 @@ bool packed_uint32_t_vector_comparison(
         std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(vec_a.at(i));
         std::pair<bfloat16, bfloat16> bs = unpack_two_bfloat16_from_uint32(vec_b.at(i));
 
-        float a1 = as.first.to_float();
-        float b1 = bs.first.to_float();
+        float a1 = static_cast<float>(as.first);
+        float b1 = static_cast<float>(bs.first);
 
-        float a2 = as.second.to_float();
-        float b2 = bs.second.to_float();
+        float a2 = static_cast<float>(as.second);
+        float b2 = static_cast<float>(bs.second);
 
         if (not(comparison_function(a1, b1) and comparison_function(a2, b2))) {
             if (argfail) {

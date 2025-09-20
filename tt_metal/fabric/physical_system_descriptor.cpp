@@ -33,34 +33,56 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
-std::pair<TrayID, ASICLocation> get_asic_position(
-    chip_id_t chip_id, const std::set<uint32_t, std::greater<uint32_t>>& sorted_pcie_slots) {
+TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
+    static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
+        {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
+        {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
+    };
+
+    if (mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
+        return TrayID{0};
+    }
+    const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
+    auto bus_id = tt::tt_metal::MetalContext::instance().get_cluster().get_bus_id(chip_id);
+    auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
+    TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
+    auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
+    return TrayID{tray_id};
+}
+
+std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
+        constexpr std::string_view ubb_mobo_name = "S7T-MB";
+
+        TT_FATAL(get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
-    } else if (cluster_desc->get_board_type(chip_id) == BoardType::N300) {
-        // Derive NID based on the tunnel depth for N300 systems
-        auto mmio_device = cluster.get_associated_mmio_device(chip_id);
-        auto tunnels = cluster.get_tunnels_from_mmio_device(mmio_device);
-        ASICLocation asic_location;
-        for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
-            const auto& devices_on_tunnel = tunnels[tunnel];
-            auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
-            if (device_it != devices_on_tunnel.end()) {
-                asic_location = ASICLocation{device_it - devices_on_tunnel.begin()};
-            }
-        }
-        // Derive Tray ID based on the Physical PCIe slot for N300 systems
-        uint32_t tray_id =
-            1 + std::distance(
-                    sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(chip_id).value()));
-        return {TrayID{tray_id}, asic_location};
     } else {
-        TT_THROW("Unrecognized board type. Cannot determine asic position.");
+        auto tray_id = get_tray_id_for_chip(chip_id, get_mobo_name());
+        ASICLocation asic_location;
+        if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+            // Derive ASIC Location based on the tunnel depth for Wormhole systems
+            // TODO: Remove this once UMD populates the ASIC Location for WH systems.
+            auto mmio_device = cluster.get_associated_mmio_device(chip_id);
+            auto tunnels = cluster.get_tunnels_from_mmio_device(mmio_device);
+            for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
+                const auto& devices_on_tunnel = tunnels[tunnel];
+                auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
+                if (device_it != devices_on_tunnel.end()) {
+                    asic_location = ASICLocation{device_it - devices_on_tunnel.begin()};
+                    break;
+                }
+            }
+        } else if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+            // Query ASIC Location from the Cluster Descriptor for BH.
+            asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
+        } else {
+            TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
+        }
+        return {tray_id, asic_location};
     }
-    return {};
 }
 
 struct EthEndpoint {
@@ -171,18 +193,13 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
-    std::set<uint32_t, std::greater<uint32_t>> sorted_pcie_slots = {};
     auto& asic_graph = system_graph_.asic_connectivity_graph[hostname];
     auto& exit_nodes = exit_node_connection_table_[hostname];
-
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
-    }
 
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
-        auto [tray_id, asic_location] = get_asic_position(src, sorted_pcie_slots);
+        auto [tray_id, asic_location] = get_asic_position(src);
         asic_descriptors_[src_unique_id] =
             ASICDescriptor{TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
@@ -255,7 +272,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         host_to_mobo_name_[host_name] = std::move(mobo_name);
     }
     for (auto& [host_name, rank] : other.get_host_to_rank_map()) {
-        host_to_rank_[host_name] = std::move(rank);
+        host_to_rank_[host_name] = rank;
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
@@ -588,7 +605,7 @@ ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
     return asic_descriptors_.at(asic_id).asic_location;
 }
 
-std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(std::string hostname) const {
+std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
     std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.find(hostname) != system_graph_.asic_connectivity_graph.end()) {
         for (const auto& [asic_id, _] : system_graph_.asic_connectivity_graph.at(hostname)) {

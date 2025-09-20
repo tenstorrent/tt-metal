@@ -11,99 +11,188 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - add
-          - tilize
-          - tilize_with_val_padding
-          - untilize
-          - untilize_with_unpadding
-          - creation.zeros.zeros
-          - creation.empty.empty
-          - creation.zeros_like.zeros_like
-          - eltwise.unary.cos.cos_sharded
-          - eltwise.unary.cosh.cosh_sharded
-          - eltwise.unary.deg2rad.deg2rad_sharded
-          - eltwise.unary.log1p.log1p_sharded
-          - eltwise.unary.log10.log10_sharded
-          - eltwise.unary.log2.log2_sharded
-          - eltwise.unary.nez.nez_sharded
-          - eltwise.unary.relu6.relu6_sharded
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
-          - eltwise.unary.abs.abs_pytorch2
-          - eltwise.unary.relu.relu
-          - eltwise.unary.relu.relu_pytorch2
-          - eltwise.unary.gelu.gelu
-          - eltwise.unary.gelu.gelu_pytorch2
-          - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
-          - eltwise.unary.leaky_relu.leaky_relu_pytorch2
+          - conv2d.full.conv2d_misc
+          - conv2d.full.conv2d_sharding
+          - conv2d.full.conv2d_sliding_window
+          - conv2d.short.conv2d_short_sweep
+          - conv2d.short.conv2d_ttforge_sweep
+          - conv_transpose2d.short.conv_transpose2d_short_sweep
+          - creation.empty.empty
+          - creation.zeros.zeros
+          - creation.zeros_like.zeros_like
+          - data_movement.backward.concat_bw.concat_bw
+          - data_movement.concat.concat_interleaved
+          - data_movement.concat.concat_interleaved_n_tensors
+          - data_movement.concat.concat_pytorch2
+          - data_movement.concat.concat_sharded
+          - data_movement.copy.copy
+          - data_movement.embedding.embedding_pytorch2
+          - data_movement.expand.expand_pytorch2
+          - data_movement.fill.fill_pytorch2
+          - data_movement.index_select.index_select_pytorch2
+          - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
+          - data_movement.nonzero.nonzero
+          - data_movement.pad.pad
+          - data_movement.permute.permute
+          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.permute.permute_pytorch2_tiled
+          - data_movement.repeat.repeat
+          - data_movement.repeat.repeat_pytorch2
+          - data_movement.repeat_interleave.repeat_interleave
+          - data_movement.reshape.reshape
+          - data_movement.slice.slice_forge
+          - data_movement.slice.slice_pytorch2_rm
+          - data_movement.slice.slice_pytorch2_tiled
+          - data_movement.split.split_pytorch2
+          - data_movement.squeeze.squeeze_pytorch2
+          - data_movement.stack.stack_pytorch2
+          - data_movement.transpose.t_pytorch2
+          - data_movement.transpose.transpose_forge
+          - data_movement.transpose.transpose_interleaved
+          - data_movement.transpose.transpose_pytorch2
+          - data_movement.unsqueeze.unsqueeze_pytorch2
+          - data_movement.view.view_pytorch2
+          - data_movement.view.view_tt_torch
+          - eltwise.binary.add.add_all_pytorch2
+          - eltwise.binary.add.add_different_memory_configs
+          - eltwise.binary.add.add_forge
+          - eltwise.binary.add.add_llama
+          - eltwise.binary.add.add_set2_pytorch2
+          - eltwise.binary.atan2.atan2
+          - eltwise.binary.atan2.atan2_sharded
+          - eltwise.binary.bcast.bcast
+          - eltwise.binary.bcast.bcast_h_sharded
+          - eltwise.binary.div.div
+          - eltwise.binary.div.div_forge
+          - eltwise.binary.div.div_tensor_pytorch2
+          - eltwise.binary.div_no_nan.div_no_nan
+          - eltwise.binary.eq.eq_forge
+          - eltwise.binary.eq.eq_scalar_pytorch2
+          - eltwise.binary.floor_divide.floor_divide
+          - eltwise.binary.floor_divide.floor_divide_pytorch2
+          - eltwise.binary.fmod.fmod
+          - eltwise.binary.fmod.fmod_unary
+          - eltwise.binary.fmod.fmod_unary_sharded
+          - eltwise.binary.ge.ge_forge
+          - eltwise.binary.gt.gt_forge
+          - eltwise.binary.gt.gt_scalar_pytorch2
+          - eltwise.binary.hypot.hypot
+          - eltwise.binary.isclose.isclose
+          - eltwise.binary.isclose.isclose_sharded
+          - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.ldexp.ldexp_sharded
+          - eltwise.binary.le.le_tensor_pytorch2
+          - eltwise.binary.logaddexp.logaddexp
+          - eltwise.binary.logaddexp.logaddexp_sharded
+          - eltwise.binary.logaddexp2.logaddexp2
+          - eltwise.binary.logaddexp2.logaddexp2_sharded
+          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_and.logical_and_
+          - eltwise.binary.logical_and.logical_and_forge
+          - eltwise.binary.logical_and.logical_and_output
+          - eltwise.binary.logical_and.logical_and_sharded
+          - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_or.logical_or_
+          - eltwise.binary.logical_or.logical_or_forge
+          - eltwise.binary.logical_or.logical_or_output
+          - eltwise.binary.logical_or.logical_or_sharded
+          - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_xor.logical_xor_
+          - eltwise.binary.logical_xor.logical_xor_sharded
+          - eltwise.binary.lt.lt_forge
+          - eltwise.binary.lt.lt_scalar_pytorch2
+          - eltwise.binary.lt.lt_tensor_pytorch2
+          - eltwise.binary.multiply.mul_no_act_llama
+          - eltwise.binary.multiply.mul_tensor_pytorch2
+          - eltwise.binary.multiply.multiply
+          - eltwise.binary.multiply.multiply_forge
+          - eltwise.binary.multiply.multiply_llama
+          - eltwise.binary.multiply.multiply_scalar_pytorch2
+          - eltwise.binary.ne.ne_forge
+          - eltwise.binary.ne.ne_scalar_pytorch2
+          - eltwise.binary.polyval.polyval
+          - eltwise.binary.polyval.polyval_sharded
+          - eltwise.binary.remainder.remainder
+          - eltwise.binary.remainder.remainder_forge
+          - eltwise.binary.remainder.remainder_scalar_pytorch2
+          - eltwise.binary.remainder.remainder_shape
+          - eltwise.binary.remainder.remainder_unary
+          - eltwise.binary.remainder.remainder_unary_sharded
+          - eltwise.binary.rpow.rpow
+          - eltwise.binary.rpow.rpow_sharded
+          - eltwise.binary.squared_difference.squared_difference
+          - eltwise.binary.squared_difference_output.squared_difference_output
+          - eltwise.binary.subtract.subtract
+          - eltwise.binary.subtract.subtract_forge
+          - eltwise.binary.subtract.subtract_tensor_pytorch2
+          - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_backward.add_bw.add_bw
+          - eltwise.binary_backward.addalpha_bw.addalpha_bw
+          - eltwise.binary_backward.div_bw.div_bw
+          - eltwise.binary_backward.fmod_bw.fmod_bw
+          - eltwise.binary_backward.hypot_bw.hypot_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw_sharded
+          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw
+          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw_sharded
+          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw
+          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw_sharded
+          - eltwise.binary_backward.mul_bw.mul_bw
+          - eltwise.binary_backward.remainder_bw.remainder_bw
+          - eltwise.binary_backward.rsub_bw.rsub_bw
+          - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
+          - eltwise.binary_backward.sub_bw.sub_bw
+          - eltwise.binary_backward.sub_bw.sub_bw_sharded
+          - eltwise.binary_backward.subalpha_bw.subalpha_bw
+          - eltwise.binary_backward.xlogy_bw.xlogy_bw
+          - eltwise.binary_complex.add_bw.add_bw
+          - eltwise.binary_complex.div_bw.div_bw
+          - eltwise.binary_complex.mul_bw.mul_bw
+          - eltwise.binary_complex.sub_bw.sub_bw
+          - eltwise.composite.binary.addalpha.addalpha
+          - eltwise.composite.binary.maximum.maximum
+          - eltwise.composite.binary.maximum.maximum_forge
+          - eltwise.composite.binary.maximum.maximum_pytorch2
+          - eltwise.composite.binary.maximum.maximum_sharded
+          - eltwise.composite.binary.maximum.maximum_unary
+          - eltwise.composite.binary.maximum.maximum_unary_sharded
+          - eltwise.composite.binary.minimum.minimum
+          - eltwise.composite.binary.minimum.minimum_forge
+          - eltwise.composite.binary.minimum.minimum_pytorch2
+          - eltwise.composite.binary.minimum.minimum_sharded
+          - eltwise.composite.binary.minimum.minimum_unary
+          - eltwise.composite.binary.minimum.minimum_unary_sharded
+          - eltwise.composite.binary.pow.pow_pytorch2
+          - eltwise.composite.binary.pow.pow_scalar_pytorch2
+          - eltwise.composite.binary.pow.pow_tensor_pytorch2
+          - eltwise.composite.binary.subalpha.subalpha
+          - eltwise.ternary.addcdiv.addcdiv
+          - eltwise.ternary.addcdiv.addcdiv_sharded
+          - eltwise.ternary.addcmul.addcmul
+          - eltwise.ternary.addcmul.addcmul_sharded
+          - eltwise.ternary.lerp.lerp
+          - eltwise.ternary.mac.mac
+          - eltwise.ternary.where.where
+          - eltwise.ternary.where.where_forge
+          - eltwise.ternary.where.where_pytorch2
+          - eltwise.ternary_backward.addcdiv_bw
+          - eltwise.ternary_backward.addcmul_bw
           - eltwise.unary.abs.abs
-          - eltwise.unary.abs.abs_sharded
           - eltwise.unary.abs.abs_forge
-          - eltwise.unary.cos.cos
-          - eltwise.unary.cos.cos_pytorch2
-          - eltwise.unary.cos.cos_forge
-          - eltwise.unary.sin.sin
-          - eltwise.unary.sin.sin_pytorch2
-          - eltwise.unary.sin.sin_forge
-          - eltwise.unary.sin.sin_sharded
-          - eltwise.unary.tril.tril_pytorch2
-          - eltwise.unary.clamp.clamp
-          - eltwise.unary.clamp.clamp_forge
-          - eltwise.unary.clamp.clamp_pytorch2
-          - eltwise.unary.clamp.clamp_min_pytorch2
-          - eltwise.unary.clip.clip
-          - eltwise.unary.cbrt.cbrt
-          - eltwise.unary.rsub.rsub
-          - eltwise.unary.rsub.rsub_sharded
-          - eltwise.unary.rsub.rsub_pytorch2
-          - eltwise.unary.rsqrt.rsqrt_pytorch2
-          - eltwise.unary.rsqrt.rsqrt_forge
-          - eltwise.unary.rdiv.rdiv
-          - eltwise.unary.rdiv.rdiv_sharded
-          - eltwise.unary.frac.frac
-          - eltwise.unary.frac.frac_sharded
-          - eltwise.unary.ceil.ceil
-          - eltwise.unary.ceil.ceil_sharded
-          - eltwise.unary.ceil.ceil_pytorch2
-          - eltwise.unary.trunc.trunc
-          - eltwise.unary.trunc.trunc_sharded
-          - eltwise.unary.floor.floor
-          - eltwise.unary.floor.floor_forge
-          - eltwise.unary.floor.floor_pytorch2
-          - eltwise.unary.clone.clone
-          - eltwise.unary.elu.elu
-          - eltwise.unary.elu.elu_pytorch2
-          - eltwise.unary.elu.elu_sharded
-          - eltwise.unary.erfc.erfc
-          - eltwise.unary.erfc.erfc_sharded
-          - eltwise.unary.eqz.eqz
-          - eltwise.unary.eqz.eqz_sharded
-          - eltwise.unary.exp.exp
-          - eltwise.unary.exp.exp_sharded
-          - eltwise.unary.exp.exp_forge
-          - eltwise.unary.exp.exp_pytorch2
-          - eltwise.unary.exp2.exp2
-          - eltwise.unary.exp2.exp2_sharded
-          - eltwise.unary.expm1.expm1
-          - eltwise.unary.expm1.expm1_sharded
-          - eltwise.unary.tanh.tanh
-          - eltwise.unary.tanh.tanh_pytorch2
-          - eltwise.unary.tanh.tanh_forge
-          - eltwise.unary.atanh.atanh
-          - eltwise.unary.atanh.atanh_sharded
+          - eltwise.unary.abs.abs_pytorch2
+          - eltwise.unary.abs.abs_sharded
+          - eltwise.unary.acos.acos
+          - eltwise.unary.acos.acos_sharded
+          - eltwise.unary.acosh.acosh
+          - eltwise.unary.acosh.acosh_sharded
+          - eltwise.unary.asinh.asinh
+          - eltwise.unary.asinh.asinh_sharded
           - eltwise.unary.atan.atan
           - eltwise.unary.atan.atan_sharded
-          - eltwise.unary.sign.sign
-          - eltwise.unary.rad2deg.rad2deg
-          - eltwise.unary.deg2rad.deg2rad
-          - eltwise.unary.relu6.relu6
-          - eltwise.unary.log.log
-          - eltwise.unary.log.log_sharded
-          - eltwise.unary.log.log_pytorch2
-          - eltwise.unary.log.log_forge
-          - eltwise.unary.log1p.log1p
-          - eltwise.unary.log2.log2
-          - eltwise.unary.log10.log10
-          - eltwise.unary.sqrt.sqrt_forge
+          - eltwise.unary.atanh.atanh
+          - eltwise.unary.atanh.atanh_sharded
           - eltwise.unary.bitwise.bitwise_and.bitwise_and
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_sharded
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary
@@ -113,8 +202,8 @@ on:
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary_sharded
           - eltwise.unary.bitwise.bitwise_not.bitwise_not
-          - eltwise.unary.bitwise.bitwise_not.bitwise_not_sharded
           - eltwise.unary.bitwise.bitwise_not.bitwise_not_pytorch2
+          - eltwise.unary.bitwise.bitwise_not.bitwise_not_sharded
           - eltwise.unary.bitwise.bitwise_or.bitwise_or
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_sharded
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary
@@ -127,186 +216,72 @@ on:
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_sharded
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary_sharded
-          - eltwise.unary.log_sigmoid.log_sigmoid
-          - eltwise.unary.logical_not.logical_not_
-          - eltwise.unary.logical_not.logical_not
-          - eltwise.unary.logical_not.logical_not_sharded
-          - eltwise.unary.logical_not.logical_not_forge
-          - eltwise.unary.logical_not.logical_not_output
-          - eltwise.unary.logical_not.logical_not_pytorch2
-          - eltwise.unary.neg.neg_pytorch2
-          - eltwise.unary.neg.neg_forge
-          - eltwise.unary.erf.erf
-          - eltwise.unary.erf.erf_sharded
-          - eltwise.unary.erfinv.erfinv
-          - eltwise.unary.erfinv.erfinv_sharded
-          - eltwise.unary.i0.i0
-          - eltwise.unary.reciprocal.reciprocal
-          - eltwise.unary.reciprocal.reciprocal_sharded
-          - eltwise.unary.silu.silu
-          - eltwise.unary.silu.silu_pytorch2
-          - eltwise.unary.silu.silu_llama
-          - eltwise.unary.glu.glu
-          - eltwise.unary.geglu.geglu
-          - eltwise.unary.swiglu.swiglu
-          - eltwise.unary.sigmoid.sigmoid
-          - eltwise.unary.sigmoid.sigmoid_sharded
-          - eltwise.unary.sigmoid.sigmoid_pytorch2
-          - eltwise.unary.sigmoid_accurate.sigmoid_accurate
-          - eltwise.unary.sigmoid_accurate.sigmoid_accurate_sharded
-          - eltwise.unary.tril.tril
-          - eltwise.unary.tril.tril_sharded
-          - eltwise.unary.triu.triu
-          - eltwise.unary.triu.triu_sharded
-          - eltwise.unary.normalize_hw.normalize_hw
-          - eltwise.unary.normalize_global.normalize_global
-          - eltwise.unary.heaviside.heaviside
-          - eltwise.unary.heaviside.heaviside_sharded
-          - eltwise.unary.hardtanh.hardtanh
-          - eltwise.unary.hardtanh.hardtanh_sharded
-          - eltwise.unary.hardswish.hardswish
-          - eltwise.unary.hardswish.hardswish_sharded
-          - eltwise.unary.hardsigmoid.hardsigmoid
-          - eltwise.unary.hardsigmoid.hardsigmoid_sharded
-          - eltwise.unary.hardshrink.hardshrink
-          - eltwise.unary.hardshrink.hardshrink_sharded
-          - normalization.softmax.softmax
-          - normalization.softmax.softmax_sharded
-          - normalization.batch_norm.batch_norm
-          - normalization.generality.layernorm
-          - normalization.generality.softmax
-          - normalization.generality.softmax_fused
-          - eltwise.unary.identity.identity
-          - eltwise.unary.identity.identity_sharded
-          - eltwise.unary.neg.neg
-          - eltwise.unary.neg.neg_sharded
-          - eltwise.unary.sinh.sinh
-          - eltwise.unary.sinh.sinh_sharded
-          - eltwise.unary.asinh.asinh
-          - eltwise.unary.acosh.acosh
-          - eltwise.unary.acosh.acosh_sharded
-          - eltwise.unary.acos.acos
-          - eltwise.unary.acos.acos_sharded
-          - eltwise.unary.asinh.asinh_sharded
+          - eltwise.unary.cbrt.cbrt
+          - eltwise.unary.ceil.ceil
+          - eltwise.unary.ceil.ceil_pytorch2
+          - eltwise.unary.ceil.ceil_sharded
+          - eltwise.unary.clamp.clamp
+          - eltwise.unary.clamp.clamp_forge
+          - eltwise.unary.clamp.clamp_min_pytorch2
+          - eltwise.unary.clamp.clamp_pytorch2
+          - eltwise.unary.clip.clip
+          - eltwise.unary.clone.clone
+          - eltwise.unary.cos.cos
+          - eltwise.unary.cos.cos_forge
+          - eltwise.unary.cos.cos_pytorch2
+          - eltwise.unary.cos.cos_sharded
           - eltwise.unary.cosh.cosh
-          - eltwise.unary.relu_min.relu_min
-          - eltwise.unary.relu_min.relu_min_sharded
-          - eltwise.unary.relu_max.relu_max
-          - eltwise.unary.relu_max.relu_max_sharded
-          - eltwise.unary.softplus.softplus
-          - eltwise.unary.softplus.softplus_sharded
-          - eltwise.unary.selu.selu
-          - eltwise.unary.selu.selu_sharded
-          - eltwise.unary.softshrink.softshrink_sharded
-          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw
-          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
-          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
-          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
-          - eltwise.unary_backward.clip_bw.clip_bw
-          - eltwise.unary_backward.clip_bw.clip_bw_sharded
-          - eltwise.unary_backward.logit_bw
-          - eltwise.unary_backward.neg_bw.neg_bw
-          - eltwise.unary_backward.neg_bw.neg_bw_sharded
-          - eltwise.unary_backward.hardshrink_bw
-          - eltwise.unary_backward.softshrink_bw
-          - eltwise.unary_backward.acos_bw.acos_bw
-          - eltwise.unary_backward.acos_bw.acos_bw_sharded
-          - eltwise.unary_backward.acosh_bw.acosh_bw
-          - eltwise.unary_backward.acosh_bw.acosh_bw_sharded
-          - eltwise.unary_backward.atan_bw.atan_bw
-          - eltwise.unary_backward.atan_bw.atan_bw_sharded
-          - eltwise.unary_backward.cos_bw.cos_bw
-          - eltwise.unary_backward.cos_bw.cos_bw_sharded
-          - eltwise.unary_backward.frac_bw.frac_bw
-          - eltwise.unary_backward.frac_bw.frac_bw_sharded
-          - eltwise.unary_backward.i0_bw.i0_bw
-          - eltwise.unary_backward.i0_bw.i0_bw_sharded
-          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
-          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
-          - eltwise.unary_backward.relu_bw.relu_bw
-          - eltwise.unary_backward.relu_bw.relu_bw_sharded
-          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
-          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
-          - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
-          - eltwise.unary_backward.sub_bw.sub_bw
-          - eltwise.unary_backward.sub_bw.sub_bw_sharded
-          - eltwise.unary_backward.tan_bw.tan_bw
-          - eltwise.unary_backward.tan_bw.tan_bw_sharded
-          - eltwise.unary_backward.trunc_bw.trunc_bw
-          - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
-          - eltwise.unary_backward.clamp_bw.clamp_bw
-          - eltwise.unary_backward.clamp_bw.clamp_bw_sharded
-          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
-          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw_sharded
-          - eltwise.unary_backward.mul_bw.mul_bw
-          - eltwise.unary_backward.softplus_bw.softplus_bw
-          - eltwise.unary_backward.softplus_bw.softplus_bw_sharded
-          - eltwise.unary_backward.threshold_bw.threshold_bw
-          - eltwise.unary_backward.threshold_bw.threshold_bw_sharded
-          - eltwise.unary_backward.div_bw.div_bw
-          - eltwise.unary_backward.log_bw.log_bw
-          - eltwise.unary_backward.log_bw.log_bw_sharded
-          - eltwise.unary_backward.relu6_bw.relu6_bw
-          - eltwise.unary_backward.relu6_bw.relu6_bw_sharded
-          - eltwise.unary_backward.log10_bw.log10_bw
-          - eltwise.unary_backward.abs_bw.abs_bw
-          - eltwise.unary_backward.sinh_bw.sinh_bw
-          - eltwise.unary_backward.sin_bw.sin_bw
-          - eltwise.unary_backward.square_bw.square_bw
-          - eltwise.unary_backward.rdiv_bw.rdiv_bw
-          - eltwise.unary_backward.rdiv_bw.rdiv_bw_sharded
-          - eltwise.unary_backward.bias_gelu_bw.bias_gelu_bw
-          - eltwise.unary_backward.pow_bw.pow_bw
-          - eltwise.unary_backward.pow_bw.pow_bw_sharded
-          - eltwise.unary_backward.exp_bw.exp_bw
-          - eltwise.unary_backward.exp_bw.exp_bw_sharded
-          - eltwise.unary_backward.tanh_bw.tanh_bw
-          - eltwise.unary_backward.tanh_bw.tanh_bw_sharded
-          - eltwise.unary_backward.sqrt_bw.sqrt_bw
-          - eltwise.unary_backward.sqrt_bw.sqrt_bw_sharded
-          - eltwise.unary_backward.add_bw.add_bw
-          - eltwise.unary_backward.add_bw.add_bw_sharded
-          - eltwise.unary_backward.assign_bw.assign_bw
-          - eltwise.unary_backward.fill_bw.fill_bw
-          - eltwise.unary_backward.fill_bw.fill_bw_sharded
-          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
-          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw_sharded
-          - eltwise.unary_backward.lgamma_bw.lgamma_bw
-          - eltwise.unary_backward.lgamma_bw.lgamma_bw_sharded
-          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
-          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw_sharded
-          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
-          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw_sharded
-          - eltwise.unary_backward.elu_bw.elu_bw
-          - eltwise.unary_backward.celu_bw.celu_bw
-          - eltwise.unary_backward.selu_bw.selu_bw
-          - eltwise.unary_backward.silu_bw.silu_bw
-          - eltwise.unary_backward.floor_bw.floor_bw
-          - eltwise.unary_backward.round_bw.round_bw
-          - eltwise.unary_backward.tanhshrink_bw.tanhshrink_bw
-          - eltwise.unary_backward.hardswish_bw.hardswish_bw
-          - eltwise.unary_backward.rpow_bw.rpow_bw
-          - eltwise.unary_complex.conj
-          - eltwise.unary_complex.is_real
-          - eltwise.unary_complex.is_imag
-          - eltwise.unary_complex.reciprocal.reciprocal
-          - eltwise.unary_complex.reciprocal.reciprocal_sharded
-          - eltwise.unary_complex.reciprocal_bw
-          - eltwise.binary_complex.div_bw.div_bw
-          - eltwise.binary_complex.add_bw.add_bw
-          - eltwise.binary_complex.sub_bw.sub_bw
-          - eltwise.binary_complex.mul_bw.mul_bw
+          - eltwise.unary.cosh.cosh_sharded
+          - eltwise.unary.deg2rad.deg2rad
+          - eltwise.unary.deg2rad.deg2rad_sharded
           - eltwise.unary.digamma.digamma
           - eltwise.unary.digamma.digamma_sharded
-          - eltwise.unary.lgamma.lgamma
-          - eltwise.unary.lgamma.lgamma_sharded
-          - eltwise.unary.logit.logit
-          - eltwise.unary.logit.logit_forge
-          - eltwise.unary.logit.logit_sharded
-          - eltwise.unary.mish.mish
-          - eltwise.unary.mish.mish_sharded
-          - eltwise.unary.multigammaln.multigammaln
-          - eltwise.unary.multigammaln.multigammaln_sharded
+          - eltwise.unary.elu.elu
+          - eltwise.unary.elu.elu_pytorch2
+          - eltwise.unary.elu.elu_sharded
+          - eltwise.unary.eqz.eqz
+          - eltwise.unary.eqz.eqz_sharded
+          - eltwise.unary.erf.erf
+          - eltwise.unary.erf.erf_sharded
+          - eltwise.unary.erfc.erfc
+          - eltwise.unary.erfc.erfc_sharded
+          - eltwise.unary.erfinv.erfinv
+          - eltwise.unary.erfinv.erfinv_sharded
+          - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_forge
+          - eltwise.unary.exp.exp_pytorch2
+          - eltwise.unary.exp.exp_sharded
+          - eltwise.unary.exp2.exp2
+          - eltwise.unary.exp2.exp2_sharded
+          - eltwise.unary.expm1.expm1
+          - eltwise.unary.expm1.expm1_sharded
+          - eltwise.unary.floor.floor
+          - eltwise.unary.floor.floor_forge
+          - eltwise.unary.floor.floor_pytorch2
+          - eltwise.unary.frac.frac
+          - eltwise.unary.frac.frac_sharded
+          - eltwise.unary.geglu.geglu
+          - eltwise.unary.gelu.gelu
+          - eltwise.unary.gelu.gelu_pytorch2
+          - eltwise.unary.gez.gez
+          - eltwise.unary.glu.glu
+          - eltwise.unary.gtz.gtz
+          - eltwise.unary.hardshrink.hardshrink
+          - eltwise.unary.hardshrink.hardshrink_sharded
+          - eltwise.unary.hardsigmoid.hardsigmoid
+          - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
+          - eltwise.unary.hardsigmoid.hardsigmoid_sharded
+          - eltwise.unary.hardswish.hardswish
+          - eltwise.unary.hardswish.hardswish_pytorch2
+          - eltwise.unary.hardswish.hardswish_sharded
+          - eltwise.unary.hardtanh.hardtanh
+          - eltwise.unary.hardtanh.hardtanh_pytorch2
+          - eltwise.unary.hardtanh.hardtanh_sharded
+          - eltwise.unary.heaviside.heaviside
+          - eltwise.unary.heaviside.heaviside_sharded
+          - eltwise.unary.i0.i0
+          - eltwise.unary.identity.identity
+          - eltwise.unary.identity.identity_sharded
           - eltwise.unary.isfinite.isfinite
           - eltwise.unary.isfinite.isfinite_sharded
           - eltwise.unary.isinf.isinf
@@ -317,242 +292,269 @@ on:
           - eltwise.unary.isneginf.isneginf_sharded
           - eltwise.unary.isposinf.isposinf
           - eltwise.unary.isposinf.isposinf_sharded
-          - eltwise.binary.add.add_all_pytorch2
-          - eltwise.binary.add.add_set2_pytorch2
-          - eltwise.binary.add.add_different_memory_configs
-          - eltwise.binary.add.add_forge
-          - eltwise.binary.add.add_llama
-          - eltwise.binary.atan2.atan2
-          - eltwise.binary.atan2.atan2_sharded
-          - eltwise.unary.gtz.gtz
-          - eltwise.unary.ltz.ltz
-          - eltwise.unary.gez.gez
+          - eltwise.unary.leaky_relu.leaky_relu
+          - eltwise.unary.leaky_relu.leaky_relu_pytorch2
+          - eltwise.unary.leaky_relu.leaky_relu_sharded
           - eltwise.unary.lez.lez
           - eltwise.unary.lez.lez_sharded
+          - eltwise.unary.lgamma.lgamma
+          - eltwise.unary.lgamma.lgamma_sharded
+          - eltwise.unary.log.log
+          - eltwise.unary.log.log_forge
+          - eltwise.unary.log.log_pytorch2
+          - eltwise.unary.log.log_sharded
+          - eltwise.unary.log10.log10
+          - eltwise.unary.log10.log10_sharded
+          - eltwise.unary.log1p.log1p
+          - eltwise.unary.log1p.log1p_sharded
+          - eltwise.unary.log2.log2
+          - eltwise.unary.log2.log2_sharded
+          - eltwise.unary.log_sigmoid.log_sigmoid
+          - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_
+          - eltwise.unary.logical_not.logical_not_forge
+          - eltwise.unary.logical_not.logical_not_output
+          - eltwise.unary.logical_not.logical_not_pytorch2
+          - eltwise.unary.logical_not.logical_not_sharded
+          - eltwise.unary.logit.logit
+          - eltwise.unary.logit.logit_forge
+          - eltwise.unary.logit.logit_sharded
+          - eltwise.unary.ltz.ltz
+          - eltwise.unary.mish.mish
+          - eltwise.unary.mish.mish_sharded
+          - eltwise.unary.multigammaln.multigammaln
+          - eltwise.unary.multigammaln.multigammaln_sharded
+          - eltwise.unary.neg.neg
+          - eltwise.unary.neg.neg_forge
+          - eltwise.unary.neg.neg_pytorch2
+          - eltwise.unary.neg.neg_sharded
           - eltwise.unary.nez.nez
+          - eltwise.unary.nez.nez_sharded
+          - eltwise.unary.normalize_global.normalize_global
+          - eltwise.unary.normalize_hw.normalize_hw
           - eltwise.unary.prelu.prelu
           - eltwise.unary.prelu.prelu_sharded
-          - eltwise.unary.hardswish.hardswish_pytorch2
-          - eltwise.unary.hardtanh.hardtanh_pytorch2
-          - eltwise.unary.leaky_relu.leaky_relu
-          - eltwise.unary.leaky_relu.leaky_relu_sharded
+          - eltwise.unary.rad2deg.rad2deg
+          - eltwise.unary.rdiv.rdiv
+          - eltwise.unary.rdiv.rdiv_sharded
+          - eltwise.unary.reciprocal.reciprocal
+          - eltwise.unary.reciprocal.reciprocal_sharded
           - eltwise.unary.reglu.reglu
+          - eltwise.unary.relu.relu
+          - eltwise.unary.relu.relu_pytorch2
+          - eltwise.unary.relu6.relu6
+          - eltwise.unary.relu6.relu6_sharded
+          - eltwise.unary.relu_max.relu_max
+          - eltwise.unary.relu_max.relu_max_sharded
+          - eltwise.unary.relu_min.relu_min
+          - eltwise.unary.relu_min.relu_min_sharded
           - eltwise.unary.round.round_sharded
-          - eltwise.unary_complex.polar.polar
+          - eltwise.unary.rsqrt.rsqrt_forge
+          - eltwise.unary.rsqrt.rsqrt_pytorch2
+          - eltwise.unary.rsub.rsub
+          - eltwise.unary.rsub.rsub_pytorch2
+          - eltwise.unary.rsub.rsub_sharded
+          - eltwise.unary.selu.selu
+          - eltwise.unary.selu.selu_sharded
+          - eltwise.unary.sigmoid.sigmoid
+          - eltwise.unary.sigmoid.sigmoid_pytorch2
+          - eltwise.unary.sigmoid.sigmoid_sharded
+          - eltwise.unary.sigmoid_accurate.sigmoid_accurate
+          - eltwise.unary.sigmoid_accurate.sigmoid_accurate_sharded
+          - eltwise.unary.sign.sign
+          - eltwise.unary.silu.silu
+          - eltwise.unary.silu.silu_llama
+          - eltwise.unary.silu.silu_pytorch2
+          - eltwise.unary.sin.sin
+          - eltwise.unary.sin.sin_forge
+          - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.sin.sin_sharded
+          - eltwise.unary.sinh.sinh
+          - eltwise.unary.sinh.sinh_sharded
+          - eltwise.unary.softplus.softplus
+          - eltwise.unary.softplus.softplus_sharded
+          - eltwise.unary.softshrink.softshrink_sharded
+          - eltwise.unary.sqrt.sqrt_forge
+          - eltwise.unary.swiglu.swiglu
+          - eltwise.unary.tanh.tanh
+          - eltwise.unary.tanh.tanh_forge
+          - eltwise.unary.tanh.tanh_pytorch2
+          - eltwise.unary.tril.tril
+          - eltwise.unary.tril.tril_pytorch2
+          - eltwise.unary.tril.tril_sharded
+          - eltwise.unary.triu.triu
+          - eltwise.unary.triu.triu_sharded
+          - eltwise.unary.trunc.trunc
+          - eltwise.unary.trunc.trunc_sharded
+          - eltwise.unary_backward.abs_bw.abs_bw
+          - eltwise.unary_backward.acos_bw.acos_bw
+          - eltwise.unary_backward.acos_bw.acos_bw_sharded
+          - eltwise.unary_backward.acosh_bw.acosh_bw
+          - eltwise.unary_backward.acosh_bw.acosh_bw_sharded
+          - eltwise.unary_backward.add_bw.add_bw
+          - eltwise.unary_backward.add_bw.add_bw_sharded
+          - eltwise.unary_backward.assign_bw.assign_bw
+          - eltwise.unary_backward.atan_bw.atan_bw
+          - eltwise.unary_backward.atan_bw.atan_bw_sharded
+          - eltwise.unary_backward.bias_gelu_bw.bias_gelu_bw
+          - eltwise.unary_backward.celu_bw.celu_bw
+          - eltwise.unary_backward.clamp_bw.clamp_bw
+          - eltwise.unary_backward.clamp_bw.clamp_bw_sharded
+          - eltwise.unary_backward.clip_bw.clip_bw
+          - eltwise.unary_backward.clip_bw.clip_bw_sharded
+          - eltwise.unary_backward.cos_bw.cos_bw
+          - eltwise.unary_backward.cos_bw.cos_bw_sharded
+          - eltwise.unary_backward.div_bw.div_bw
+          - eltwise.unary_backward.elu_bw.elu_bw
+          - eltwise.unary_backward.exp_bw.exp_bw
+          - eltwise.unary_backward.exp_bw.exp_bw_sharded
+          - eltwise.unary_backward.fill_bw.fill_bw
+          - eltwise.unary_backward.fill_bw.fill_bw_sharded
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
+          - eltwise.unary_backward.floor_bw.floor_bw
+          - eltwise.unary_backward.frac_bw.frac_bw
+          - eltwise.unary_backward.frac_bw.frac_bw_sharded
+          - eltwise.unary_backward.hardshrink_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw_sharded
+          - eltwise.unary_backward.hardswish_bw.hardswish_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw_sharded
+          - eltwise.unary_backward.i0_bw.i0_bw
+          - eltwise.unary_backward.i0_bw.i0_bw_sharded
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw_sharded
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw_sharded
+          - eltwise.unary_backward.log10_bw.log10_bw
+          - eltwise.unary_backward.log_bw.log_bw
+          - eltwise.unary_backward.log_bw.log_bw_sharded
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
+          - eltwise.unary_backward.logit_bw
+          - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw_sharded
+          - eltwise.unary_backward.neg_bw.neg_bw
+          - eltwise.unary_backward.neg_bw.neg_bw_sharded
+          - eltwise.unary_backward.pow_bw.pow_bw
+          - eltwise.unary_backward.pow_bw.pow_bw_sharded
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw_sharded
+          - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.relu6_bw.relu6_bw_sharded
+          - eltwise.unary_backward.relu_bw.relu_bw
+          - eltwise.unary_backward.relu_bw.relu_bw_sharded
+          - eltwise.unary_backward.round_bw.round_bw
+          - eltwise.unary_backward.rpow_bw.rpow_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
+          - eltwise.unary_backward.selu_bw.selu_bw
+          - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
+          - eltwise.unary_backward.silu_bw.silu_bw
+          - eltwise.unary_backward.sin_bw.sin_bw
+          - eltwise.unary_backward.sinh_bw.sinh_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw_sharded
+          - eltwise.unary_backward.softshrink_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw_sharded
+          - eltwise.unary_backward.square_bw.square_bw
+          - eltwise.unary_backward.sub_bw.sub_bw
+          - eltwise.unary_backward.sub_bw.sub_bw_sharded
+          - eltwise.unary_backward.tan_bw.tan_bw
+          - eltwise.unary_backward.tan_bw.tan_bw_sharded
+          - eltwise.unary_backward.tanh_bw.tanh_bw
+          - eltwise.unary_backward.tanh_bw.tanh_bw_sharded
+          - eltwise.unary_backward.tanhshrink_bw.tanhshrink_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw_sharded
+          - eltwise.unary_backward.trunc_bw.trunc_bw
+          - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
           - eltwise.unary_complex.angle.angle
-          - eltwise.unary_complex.polar_bw.polar_bw
           - eltwise.unary_complex.angle_bw.angle_bw
+          - eltwise.unary_complex.conj
           - eltwise.unary_complex.conj_bw
-          - eltwise.binary.subtract.subtract
-          - eltwise.binary.subtract.subtract_tensor_pytorch2
-          - eltwise.binary.subtract.subtract_forge
-          - eltwise.binary.multiply.multiply
-          - eltwise.binary.multiply.mul_tensor_pytorch2
-          - eltwise.binary.multiply.multiply_scalar_pytorch2
-          - eltwise.binary.multiply.multiply_forge
-          - eltwise.binary.multiply.multiply_llama
-          - eltwise.binary.multiply.mul_no_act_llama
-          - eltwise.binary.div.div
-          - eltwise.binary.div.div_tensor_pytorch2
-          - eltwise.binary.div.div_forge
-          - eltwise.binary.div_no_nan.div_no_nan
-          - eltwise.binary.logical_or.logical_or_
-          - eltwise.binary.logical_or.logical_or
-          - eltwise.binary.logical_or.logical_or_output
-          - eltwise.binary.logical_or.logical_or_forge
-          - eltwise.binary.logical_or.logical_or_sharded
-          - eltwise.binary.logical_xor.logical_xor_
-          - eltwise.binary.logical_xor.logical_xor
-          - eltwise.binary.logical_xor.logical_xor_sharded
-          - eltwise.binary.logical_and.logical_and_
-          - eltwise.binary.logical_and.logical_and
-          - eltwise.binary.logical_and.logical_and_output
-          - eltwise.binary.logical_and.logical_and_forge
-          - eltwise.binary.logical_and.logical_and_sharded
-          - eltwise.binary.polyval.polyval
-          - eltwise.binary.polyval.polyval_sharded
-          - eltwise.binary.remainder.remainder
-          - eltwise.binary.remainder.remainder_scalar_pytorch2
-          - eltwise.binary.remainder.remainder_forge
-          - eltwise.binary.remainder.remainder_unary
-          - eltwise.binary.remainder.remainder_unary_sharded
-          - eltwise.binary.remainder.remainder_shape
-          - eltwise.binary.rpow.rpow
-          - eltwise.binary.rpow.rpow_sharded
-          - eltwise.binary.squared_difference.squared_difference
-          - eltwise.binary.squared_difference_output.squared_difference_output
-          - eltwise.binary.bcast.bcast_h_sharded
-          - eltwise.binary.bcast.bcast
-          - eltwise.binary.eq.eq_scalar_pytorch2
-          - eltwise.binary.eq.eq_forge
-          - eltwise.binary.ge.ge_forge
-          - eltwise.binary.gt.gt_scalar_pytorch2
-          - eltwise.binary.gt.gt_forge
-          - eltwise.binary.le.le_tensor_pytorch2
-          - eltwise.binary.fmod.fmod
-          - eltwise.binary.fmod.fmod_unary
-          - eltwise.binary.fmod.fmod_unary_sharded
-          - eltwise.binary.floor_divide.floor_divide_pytorch2
-          - eltwise.binary.floor_divide.floor_divide
-          - eltwise.binary.logaddexp.logaddexp
-          - eltwise.binary.logaddexp.logaddexp_sharded
-          - eltwise.binary.logaddexp2.logaddexp2
-          - eltwise.binary.logaddexp2.logaddexp2_sharded
-          - eltwise.binary.ldexp.ldexp
-          - eltwise.binary.ldexp.ldexp_sharded
-          - eltwise.binary.lt.lt_tensor_pytorch2
-          - eltwise.binary.lt.lt_scalar_pytorch2
-          - eltwise.binary.lt.lt_forge
-          - eltwise.binary.ne.ne_scalar_pytorch2
-          - eltwise.binary.ne.ne_forge
-          - eltwise.binary.isclose.isclose
-          - eltwise.binary.isclose.isclose_sharded
-          - eltwise.binary.hypot.hypot
-          - eltwise.binary.xlogy.xlogy
-          - eltwise.binary_backward.ldexp_bw.ldexp_bw
-          - eltwise.binary_backward.ldexp_bw.ldexp_bw_sharded
-          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw
-          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw_sharded
-          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw
-          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw_sharded
-          - eltwise.binary_backward.addalpha_bw.addalpha_bw
-          - eltwise.binary_backward.subalpha_bw.subalpha_bw
-          - eltwise.binary_backward.xlogy_bw.xlogy_bw
-          - eltwise.binary_backward.hypot_bw.hypot_bw
-          - eltwise.binary_backward.add_bw.add_bw
-          - eltwise.binary_backward.sub_bw.sub_bw
-          - eltwise.binary_backward.sub_bw.sub_bw_sharded
-          - eltwise.binary_backward.mul_bw.mul_bw
-          - eltwise.binary_backward.div_bw.div_bw
-          - eltwise.binary_backward.fmod_bw.fmod_bw
-          - eltwise.binary_backward.remainder_bw.remainder_bw
-          - eltwise.binary_backward.rsub_bw.rsub_bw
-          - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
-          - eltwise.composite.binary.addalpha.addalpha
-          - eltwise.composite.binary.subalpha.subalpha
-          - eltwise.composite.binary.minimum.minimum
-          - eltwise.composite.binary.minimum.minimum_sharded
-          - eltwise.composite.binary.minimum.minimum_unary
-          - eltwise.composite.binary.minimum.minimum_unary_sharded
-          - eltwise.composite.binary.minimum.minimum_pytorch2
-          - eltwise.composite.binary.minimum.minimum_forge
-          - eltwise.composite.binary.maximum.maximum
-          - eltwise.composite.binary.maximum.maximum_sharded
-          - eltwise.composite.binary.maximum.maximum_unary
-          - eltwise.composite.binary.maximum.maximum_unary_sharded
-          - eltwise.composite.binary.maximum.maximum_pytorch2
-          - eltwise.composite.binary.maximum.maximum_forge
-          - eltwise.composite.binary.pow.pow_pytorch2
-          - eltwise.composite.binary.pow.pow_scalar_pytorch2
-          - eltwise.composite.binary.pow.pow_tensor_pytorch2
-          - eltwise.ternary.addcmul.addcmul
-          - eltwise.ternary.addcmul.addcmul_sharded
-          - eltwise.ternary.addcdiv.addcdiv
-          - eltwise.ternary.addcdiv.addcdiv_sharded
-          - eltwise.ternary.mac.mac
-          - eltwise.ternary.lerp.lerp
-          - eltwise.ternary.where.where
-          - eltwise.ternary.where.where_pytorch2
-          - eltwise.ternary.where.where_forge
-          - eltwise.ternary_backward.addcmul_bw
-          - eltwise.ternary_backward.addcdiv_bw
+          - eltwise.unary_complex.is_imag
+          - eltwise.unary_complex.is_real
+          - eltwise.unary_complex.polar.polar
+          - eltwise.unary_complex.polar_bw.polar_bw
+          - eltwise.unary_complex.reciprocal.reciprocal
+          - eltwise.unary_complex.reciprocal.reciprocal_sharded
+          - eltwise.unary_complex.reciprocal_bw
           - embedding.embedding
           - embedding_bw.embedding_bw
-          - fused.softmax_traces
           - fused.layer_norm_traces
-          - reduction.backward.prod_bw.prod_bw
-          - reduction.topk.topk
-          - reduction.topk.topk_output
+          - fused.softmax_traces
+          - losses.l1_loss
+          - losses.mse_loss
+          - matmul.full.matmul_default_block_sharded
+          - matmul.full.matmul_default_height_sharded
+          - matmul.full.matmul_default_interleaved
+          - matmul.full.matmul_default_width_sharded
+          - matmul.generality.linear
+          - matmul.generality.matmul
+          - matmul.short.matmul
+          - matmul.short.matmul_create_program_config
+          - matmul.short.matmul_default
+          - matmul.short.matmul_default_sharded
+          - matmul.short.matmul_traces
+          - matmul.short.matmul_user_program_config
+          - matmul.short.matmul_user_program_config_mcast_1d
+          - matmul.short.matmul_user_program_config_mcast_2d
+          - matmul.sparse.sparse_matmul
+          - max_pool2d.full.max_pool2d_large_dims
+          - max_pool2d.full.max_pool2d_params
+          - max_pool2d.short.max_pool2d_short_sweep
+          - normalization.batch_norm.batch_norm
+          - normalization.generality.layernorm
+          - normalization.generality.softmax
+          - normalization.generality.softmax_fused
+          - normalization.softmax.softmax
+          - normalization.softmax.softmax_sharded
+          - pooling.global_avg_pool2d
+          - pooling.max_pool2d
           - reduction.argmax.argmax
           - reduction.argmax.argmax_output
-          - reduction.prod
-          - reduction.sum
-          - reduction.var.var
-          - reduction.std.std
+          - reduction.backward.prod_bw.prod_bw
+          - reduction.cross_entropy_loss.cross_entropy_loss
+          - reduction.generality.argmax
+          - reduction.generality.reduction_all_ranks
           - reduction.mean.mean
+          - reduction.prod
+          - reduction.std.std
+          - reduction.sum
+          - reduction.topk.topk
+          - reduction.topk.topk_output
           - reduction.traces.argmax_traces
           - reduction.traces.max_traces
           - reduction.traces.mean_traces
           - reduction.traces.sum_traces
           - reduction.traces.topk_traces
-          - reduction.generality.argmax
-          - reduction.generality.reduction_all_ranks
-          - matmul.full.matmul_default_block_sharded
-          - matmul.full.matmul_default_height_sharded
-          - matmul.full.matmul_default_interleaved
-          - matmul.full.matmul_default_width_sharded
-          - matmul.short.matmul_create_program_config
-          - matmul.short.matmul_default_sharded
-          - matmul.short.matmul_default
-          - matmul.short.matmul_user_program_config_mcast_1d
-          - matmul.short.matmul_user_program_config_mcast_2d
-          - matmul.short.matmul_user_program_config
-          - matmul.short.matmul_traces
-          - matmul.short.matmul
-          - matmul.generality.matmul
-          - matmul.generality.linear
-          - matmul.sparse.sparse_matmul
-          - losses.l1_loss
-          - losses.mse_loss
-          - data_movement.concat.concat_interleaved_n_tensors
-          - data_movement.concat.concat_interleaved
-          - data_movement.concat.concat_sharded
-          - data_movement.concat.concat_pytorch2
-          - data_movement.slice.slice_pytorch2_rm
-          - data_movement.slice.slice_pytorch2_tiled
-          - data_movement.slice.slice_forge
-          - data_movement.permute.permute
-          - data_movement.permute.permute_pytorch2_tiled
-          - data_movement.permute.permute_pytorch2_rm
-          - data_movement.transpose.transpose_pytorch2
-          - data_movement.transpose.transpose_forge
-          - data_movement.transpose.transpose_interleaved
-          - data_movement.transpose.t_pytorch2
-          - data_movement.copy.copy
-          - data_movement.expand.expand_pytorch2
-          - data_movement.fill.fill_pytorch2
-          - data_movement.index_select.index_select_pytorch2
-          - data_movement.repeat.repeat
-          - data_movement.reshape.reshape
-          - data_movement.repeat_interleave.repeat_interleave
-          - data_movement.nonzero.nonzero
-          - data_movement.backward.concat_bw.concat_bw
-          - data_movement.pad.pad
-          - conv_transpose2d.short.conv_transpose2d_short_sweep
-          - conv2d.full.conv2d_misc
-          - conv2d.full.conv2d_sharding
-          - conv2d.full.conv2d_sliding_window
-          - conv2d.short.conv2d_short_sweep
-          - conv2d.short.conv2d_ttforge_sweep
-          - pooling.global_avg_pool2d
-          - pooling.max_pool2d
-          - max_pool2d.short.max_pool2d_short_sweep
-          - max_pool2d.full.max_pool2d_params
-          - max_pool2d.full.max_pool2d_large_dims
-          - transformer.concatenate_heads.concatenate_heads
-          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
-          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
+          - reduction.var.var
+          - tilize
+          - tilize_with_val_padding
           - transformer.attention_softmax.attention_softmax
           - transformer.attention_softmax.attention_softmax_
+          - transformer.concatenate_heads.concatenate_heads
           - transformer.rotary_embedding.rotary_embedding
-          - data_movement.stack.stack_pytorch2
-          - data_movement.repeat.repeat_pytorch2
-          - data_movement.split.split_pytorch2
-          - data_movement.unsqueeze.unsqueeze_pytorch2
-          - data_movement.squeeze.squeeze_pytorch2
-          - data_movement.embedding.embedding_pytorch2
-          - data_movement.view.view_pytorch2
-          - data_movement.view.view_tt_torch
-          - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
+          - untilize
+          - untilize_with_unpadding
       suite_name:
         description: "Which sweep suite to run?"
         type: string
       upload_results:
-        description: "Upload sweep results to SFTP server?"
+        description: "Upload sweep results to Superset?"
         type: boolean
-        default: false
-  # schedule:
-  #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
+        default: true
+  schedule:
+    - cron: "0 4 * * 4" # This cron schedule runs the workflow at 4:00 AM UTC on Thursdays (Wednesday 11 PM EST)
+    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (Friday 9 PM PST)
 
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}
@@ -612,7 +614,6 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
           retention-days: 1
-
   ttnn-compute-module-matrix:
     name: Compute module matrix
     needs: ttnn-generate-sweeps
@@ -637,12 +638,16 @@ jobs:
           import os, json, math
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
-          BATCH_SIZE = 10
+          # Use smaller batch size for Friday night runs (more comprehensive tests)
+          # Use larger batch size for Thursday runs (nightly suite only)
+          if "${{ github.event.schedule }}" == "0 5 * * 6":
+              BATCH_SIZE = 4  # Smaller batches for Friday night comprehensive runs
+          else:
+              BATCH_SIZE = 10  # Larger batches for Thursday nightly runs
           batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
           print(json.dumps({"module": modules, "batches": batches}))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
-
   ttnn-run-single-sweep:
     name: Run single sweep
     needs:
@@ -657,15 +662,15 @@ jobs:
         test-group:
           [
             {
-              name: "Wormhole N150 Sweeps",
+              name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   runs-on: tt-ubuntu-2204-n300-stable,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -710,10 +715,9 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: sweeps-results
+          name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
-
   ttnn-run-sweeps-parallel:
     name: Run sweeps in parallel (${{ matrix.test-group.name }}, ${{ matrix.batch }})
     needs:
@@ -730,15 +734,15 @@ jobs:
         test-group:
           [
             {
-              name: "Wormhole N150 Sweeps",
+              name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   runs-on: tt-ubuntu-2204-n300-stable,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -779,7 +783,12 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (batch)
-        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+        run: |
+          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]]; then
+            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
+          else
+            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+          fi
       - name: Compute artifact suffix
         shell: bash
         run: |
@@ -791,14 +800,12 @@ jobs:
           name: sweeps-results-${{ matrix.test-group.name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
-
-  ttnn-homogenize-and-publish-run-result:
-    name: Homogenize and publish run result
+  ttnn-homogenize-run-result:
+    name: Homogenize run result
     needs:
       - build-artifact
-      - ttnn-run-single-sweep
       - ttnn-run-sweeps-parallel
-    if: ${{ always() && (needs.ttnn-run-single-sweep.result == 'success' || needs.ttnn-run-sweeps-parallel.result == 'success') }}
+    if: ${{ always() && needs.ttnn-run-sweeps-parallel.result != 'skipped' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -836,12 +843,12 @@ jobs:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
-
   ttnn-upload-results:
     name: Upload sweep results to SFTP server
     needs:
-      - ttnn-homogenize-and-publish-run-result
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
+      - ttnn-homogenize-run-result
+      - ttnn-run-single-sweep
+    if: ${{ always() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
@@ -849,7 +856,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions
-      - name: Download homogenized results
+      - name: Download sweep results
         uses: actions/download-artifact@v4
         with:
           name: sweeps-run-result
@@ -857,26 +864,6 @@ jobs:
       - name: List all downloaded files
         run: |
           ls -hal tests/sweep_framework/results_export
-      - name: Generate dynamic SFTP batchfile
-        run: |
-          # Create a dynamic batchfile with individual put commands
-          echo "# Dynamic batchfile for uploading oprun files" > dynamic_batchfile.txt
-          echo "# Generated at runtime to avoid wildcard limitations" >> dynamic_batchfile.txt
-          echo "" >> dynamic_batchfile.txt
-
-          # Add individual put commands for each file
-          for file in tests/sweep_framework/results_export/oprun_*.json; do
-            if [ -f "$file" ]; then
-              echo "put $file" >> dynamic_batchfile.txt
-            fi
-          done
-
-          echo "" >> dynamic_batchfile.txt
-          echo "# List files to verify upload" >> dynamic_batchfile.txt
-          echo "ls -hal" >> dynamic_batchfile.txt
-
-          echo "Generated batchfile contents:"
-          cat dynamic_batchfile.txt
       - name: Upload via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:

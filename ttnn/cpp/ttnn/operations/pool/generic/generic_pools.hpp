@@ -21,7 +21,6 @@ struct MaxPoolWithIndicesResult {
 
 struct MaxPool2DOp {
     static std::variant<Tensor, MaxPoolWithIndicesResult> invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,
@@ -37,11 +36,12 @@ struct MaxPool2DOp {
         bool in_place_halo = false,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
-        bool return_indices = false);
+        bool return_indices = false,
+        DataType dtype = DataType::BFLOAT16,
+        Layout output_layout = Layout::ROW_MAJOR);
 };
 struct AvgPool2DOp {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,
@@ -57,7 +57,9 @@ struct AvgPool2DOp {
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool in_place_halo = false,
         bool deallocate_input = false,
-        bool reallocate_halo_output = true);
+        bool reallocate_halo_output = true,
+        DataType dtype = DataType::BFLOAT16,
+        Layout output_layout = Layout::ROW_MAJOR);
 };
 
 }  // namespace operations::pool

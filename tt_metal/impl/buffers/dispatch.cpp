@@ -32,8 +32,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
-
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {
@@ -848,7 +847,7 @@ void issue_read_buffer_dispatch_command_sequence(
 
     bool flush_prefetch = false;
     command_sequence.add_dispatch_write_host(
-        flush_prefetch, (DeviceAddr)dispatch_params.pages_per_txn * dispatch_params.padded_page_size, false);
+        flush_prefetch, (DeviceAddr)dispatch_params.pages_per_txn * dispatch_params.padded_page_size, false, 0);
 
     // Buffer layout specific logic
     if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {

@@ -98,8 +98,11 @@ void kernel_main() {
     uint32_t act_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
     const bool is_receiver_core = get_arg_val<uint32_t>(i++) > 0;
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
+    uint32_t dram_config_reader_index = get_arg_val<uint32_t>(i++);
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
+
+    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(dram_config_reader_index);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));

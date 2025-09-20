@@ -34,7 +34,7 @@ public:
         offset_t membytes = 0;             // Byte size of memory image.
 
     public:
-        inline Segment(std::span<word_t const> contents, address_t addr, address_t lma, offset_t membytes) :
+        Segment(std::span<const word_t> contents, address_t addr, address_t lma, offset_t membytes) :
             contents(contents), address(addr), lma(lma), membytes(membytes) {}
     };
 
@@ -46,11 +46,11 @@ public:
     ElfFile operator=(ElfFile const&) = delete;
 
     // Move constructable & assignable -- take ownership
-    ElfFile(ElfFile&& s) : pimpl_(s.pimpl_), contents_(std::move(s.contents_)), segments_(std::move(s.segments_)) {
+    ElfFile(ElfFile&& s) noexcept : pimpl_(s.pimpl_), contents_(s.contents_), segments_(std::move(s.segments_)) {
         s.contents_ = std::span<std::byte>();
         s.pimpl_ = nullptr;
     }
-    ElfFile& operator=(ElfFile&& s) {
+    ElfFile& operator=(ElfFile&& s) noexcept {
         std::swap(contents_, s.contents_);
         segments_ = std::move(s.segments_);
         std::swap(pimpl_, s.pimpl_);

@@ -14,7 +14,7 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <optional>
 #include <set>
 #include <vector>
@@ -22,7 +22,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
@@ -51,11 +51,7 @@ bool is_TG_gateway_connection(
 
     // both of the chips should have the same associated mmio device and
     // one of the chips should be the mmio device itself
-    if (mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id)) {
-        return true;
-    }
-
-    return false;
+    return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
 }
 
 }  // namespace

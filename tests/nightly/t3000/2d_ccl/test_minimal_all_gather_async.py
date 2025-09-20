@@ -10,25 +10,26 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    "ag_output_shape, dim, layout, ag_input_dtype",
     [
         # Gather on dim 0
-        (8, [16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [16, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Gather on dim 1
-        (8, [1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [16, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Gather on dim 2
-        (8, [1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [16, 1, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 1, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # # Gather on dim 3
-        (8, [1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [16, 1, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 1, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "tt_training_test_one",
@@ -71,8 +72,7 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
     ids=["fabric_2d_dynamic_linear"],
 )
 def test_all_gather_async_training_shapes(
-    t3k_mesh_device,
-    num_devices,
+    mesh_device,
     ag_output_shape,
     dim,
     num_links,
@@ -85,8 +85,8 @@ def test_all_gather_async_training_shapes(
     num_iters,
 ):
     run_all_gather_impl(
-        t3k_mesh_device,
-        num_devices,
+        mesh_device,
+        mesh_device.get_num_devices(),
         ag_output_shape,
         dim,
         num_links,

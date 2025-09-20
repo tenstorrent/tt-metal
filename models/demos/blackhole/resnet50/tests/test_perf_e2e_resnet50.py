@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import run_for_blackhole
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
-from models.utility_functions import run_for_blackhole
 
 # These perf figures were measured on one of the machines in ird -
 # as e2e perf depends on the performance of the host machine,
@@ -18,8 +18,8 @@ from models.utility_functions import run_for_blackhole
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (16, 0.006, 30),
-        (32, 0.0062, 30),
+        (16, 0.0065, 30),
+        (32, 0.0067, 30),
     ),
 )
 def test_perf(
@@ -47,8 +47,8 @@ def test_perf(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (16, 0.002, 30),
-        (32, 0.0034, 30),
+        (16, 0.0024, 30),
+        (32, 0.004, 30),
     ),
 )
 def test_perf_trace(
@@ -106,7 +106,7 @@ def test_perf_2cqs(
 )
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.002, 30), (32, 0.003, 30)),
+    ((16, 0.0022, 30), (32, 0.0035, 30)),
 )
 def test_perf_trace_2cqs(
     device,

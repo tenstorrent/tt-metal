@@ -22,6 +22,7 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "dev_mem_map.h"
+#include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -96,6 +97,7 @@ int main() {
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
+            lite_fabric::service_lite_fabric_channels();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
@@ -125,7 +127,7 @@ int main() {
 
             flush_erisc_icache();
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
 
