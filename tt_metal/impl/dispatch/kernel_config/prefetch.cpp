@@ -240,10 +240,10 @@ void PrefetchKernel::GenerateDependentConfigs() {
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
-                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base.value();
+                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base;
                 dependent_config_.downstream_cb_log_page_size =
-                    dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value();
-                dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value();
+                    dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size;
+                dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages;
             } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
@@ -292,7 +292,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                     DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE ==
                     DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
                 dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-                dependent_config_.downstream_cb_pages = prefetch_d->GetStaticConfig().cmddat_q_pages.value();
+                dependent_config_.downstream_cb_pages = prefetch_d->GetStaticConfig().cmddat_q_pages;
                 dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, prefetch_d->GetDeviceId());
                 assemble_2d_fabric_packet_header_args(
                     this->dependent_config_, GetDeviceId(), prefetch_d->GetDeviceId());
@@ -332,10 +332,10 @@ void PrefetchKernel::GenerateDependentConfigs() {
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
-                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base.value();
+                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base;
                 dependent_config_.downstream_cb_log_page_size =
-                    dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value();
-                dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value();
+                    dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size;
+                dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages;
             } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
