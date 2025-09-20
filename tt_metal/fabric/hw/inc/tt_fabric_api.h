@@ -31,9 +31,9 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
     }
 }
 
-template <typename PacketHeaderType, bool mcast = false>
+template <bool mcast = false>
 void fabric_set_route(
-    volatile tt_l1_ptr PacketHeaderType* packet_header,
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions direction,
     uint32_t branch_forward,
     uint32_t start_hop,
@@ -232,23 +232,21 @@ void fabric_set_mcast_route(
 
     if (n_num_hops) {
         // Is a 2D mcast if mcast_branch != 0
-        fabric_set_route<PacketHeaderType, true>(
-            packet_header, eth_chan_directions::NORTH, mcast_branch, 0, n_num_hops);
+        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, mcast_branch, 0, n_num_hops);
         spine_hops = n_num_hops;
     } else if (s_num_hops) {
         // Is a 2D mcast if mcast_branch != 0
-        fabric_set_route<PacketHeaderType, true>(
-            packet_header, eth_chan_directions::SOUTH, mcast_branch, 0, s_num_hops);
+        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, mcast_branch, 0, s_num_hops);
         spine_hops = s_num_hops;
     }
     if (e_num_hops) {
         // Is a line mcast if spine_hops == 0
-        fabric_set_route<PacketHeaderType, true>(packet_header, eth_chan_directions::EAST, 0, spine_hops, e_num_hops);
+        fabric_set_route<true>(packet_header, eth_chan_directions::EAST, 0, spine_hops, e_num_hops);
         spine_hops += e_num_hops;
     }
     if (w_num_hops) {
         // Is a line mcast if spine_hops == 0
-        fabric_set_route<PacketHeaderType, true>(packet_header, eth_chan_directions::WEST, 0, spine_hops, w_num_hops);
+        fabric_set_route<true>(packet_header, eth_chan_directions::WEST, 0, spine_hops, w_num_hops);
     }
 }
 
