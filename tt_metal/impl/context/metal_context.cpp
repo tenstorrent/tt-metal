@@ -85,7 +85,7 @@ void MetalContext::initialize(
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
                 force_reinit_ = false;
-                log_warning(
+                log_debug(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
                 teardown();
