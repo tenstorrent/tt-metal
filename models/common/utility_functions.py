@@ -531,9 +531,7 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
     return (
         torch.allclose(golden, calculated, rtol, atol, True),
-        atol_delta,
-        rtol_delta,
-        # f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
+        f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
     )
 
 
