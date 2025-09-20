@@ -17,9 +17,6 @@
 name: "[testing] Ops Sanity pipeline"
 
 on:
-  push:
-    branches:
-      ["roseli/28975-pipeline-reorg-apc-ops"]
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -39,6 +36,9 @@ on:
         required: false
         type: number
         default: 15
+  push:
+    branches:
+      ["roseli/28975-pipeline-reorg-apc-ops"]
 
 jobs:
   load-test-matrix:
@@ -80,7 +80,6 @@ jobs:
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
