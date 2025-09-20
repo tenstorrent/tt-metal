@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
     // buffer.
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    // Finish(cq);
+    // distributed::Finish(cq);
     std::cout << "Kernel execution finished" << std::endl;
 
     // Read the output buffer.
@@ -202,8 +202,9 @@ int main(int argc, char** argv) {
 
     // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-    distributed::ReadShard(cq, c_data, c, device_coord);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
     distributed::Finish(cq);
+
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
     size_t n = std::min((size_t)10, (size_t)tile_size * n_tiles);

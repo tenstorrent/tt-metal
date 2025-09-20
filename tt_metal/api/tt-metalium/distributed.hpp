@@ -97,9 +97,11 @@ void EnqueueReadMeshBuffer(
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     bool blocking = true) {
     TT_FATAL(
-        mesh_buffer->global_layout() == MeshBufferLayout::SHARDED,
+        (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) || (mesh_buffer->device()->num_devices() == 1),
         "Can only read a Sharded MeshBuffer from a MeshDevice.");
-    dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
+    if (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) {
+        dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
+    }
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
