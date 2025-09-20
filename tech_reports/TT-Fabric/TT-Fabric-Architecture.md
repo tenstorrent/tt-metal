@@ -410,73 +410,187 @@ Describe Socket send/receive op operation.
 # 3 Fabric Router <a id="router"></a>
 
 Fabric Router implements all runtime TT-Fabric network stack functions. A fabric router can be mapped onto a single RISCV processor or the overall router functionality can be broken up into separate functions and maped onto multiple RISCV processors.
-On Wromhole, Ethernet core RISCv performs all of the fabric netowrk stack functions. Blackhole has 2 RISCv processors and fabric router functions are mapped to both cores.
+On Wromhole, Ethernet core RISCv performs all of the fabric netowrk stack functions. Blackhole Ethernet core supports 2 RISCv processors and fabric router functions are mapped to both processors.
 The core function of a fabric router is to receive packets from ethernet and local device's worker and make a forwarding decision. A conbination of routing table lookup and source routing is used to make a forwarding decision. If a packet is to be consumed locally then the NOC command section of the packet header specifies how to process the packet payload locally.
 
 Fabric routers can be built for different kinds of TT-Fabric topologies. A topology specifies how the TT-Fabric logical routing network should be created on a set of physically connected devices. TT-Fabric topology is specific to application requirements. For example the devcies may be physically connected in a 2D ethernet grid however the user application is such that the devices only communicate with other devices in the same row or column. In this case, Fabric routers only need to route traffic on one axis and packet flow does not switch from row to column or vice versa. We call this a 1D Fabric. TT-Fabric can also be launched in a 2D routing mode where turns between rows and columns are supported. In addition to these simple line and mesh topologies, TT-Fabric supports rings and 2D toruses. A ring is where the two endpoints of every line (in a 1D Fabric) are also connected. A 2D torus connects every row and column endpoints of a 2D mesh.
 
-As stated earlier, TT-Fabric topology can match the physical connection topology exactly, or it can be a functionally downshifted topology.
-The following examples illustrate this concept.
-
-TODO: Add some galaxy/T3K examples here for 1D and 2D fabric
+As stated earlier, TT-Fabric topology can match the physical connection topology exactly, or it can be a functionally downshifted topology where all available ethernet links are not utilized.
+The following diagrams show the supported 1D and 2D TT-Fabric topologies.
 
 **8x4 Galaxy with TT-Fabric in 1D Line Topology**
 ```
-█  : Fabric Router
-┄┄ : 1-D Row Line Fabric. There are 8 independent line fabric instances.
-┇  : 1-D Column Line Fabric. There are 4 independent line fabric instances.
-┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
-│             │             │             │             │
-│             │             │             │             │
-├            █┼█┄┄┄┄┄┄┄┄┄┄┄█┼█┄┄┄┄┄┄┄┄┄┄┄█┼█            ┤
-│             │             │             │             │
-│      █      │      █      │      █      │      █      │
-├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│      █      │      █      │      █      │      █      │
-│      ┇      │      ┇      │      ┇      │      ┇      │
-├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
-│      ┇      │      ┇      │      ┇      │      ┇      │
-│      █      │      █      │      █      │      █      │
-├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│      █      │      █      │      █      │      █      │
-│      ┇      │      ┇      │      ┇      │      ┇      │
-├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
-│      ┇      │      ┇      │      ┇      │      ┇      │
-│      █      │      █      │      █      │      █      │
-├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│      █      │      █      │      █      │      █      │
-│      ┇      │      ┇      │      ┇      │      ┇      │
-├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
-│      ┇      │      ┇      │      ┇      │      ┇      │
-│      █      │      █      │      █      │      █      │
-├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│      █      │      █      │      █      │      █      │
-│      ┇      │      ┇      │      ┇      │      ┇      │
-├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
-│      ┇      │      ┇      │      ┇      │      ┇      │
-│      █      │      █      │      █      │      █      │
-├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│      █      │      █      │      █      │      █      │
-│      ┇      │      ┇      │      ┇      │      ┇      │
-├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
-│      ┇      │      ┇      │      ┇      │      ┇      │
-│      █      │      █      │      █      │      █      │
-├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│      █      │      █      │      █      │      █      │
-│      ┇      │      ┇      │      ┇      │      ┇      │
-├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
-│      ┇      │      ┇      │      ┇      │      ┇      │
-│      █      │      █      │      █      │      █      │
-├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│      █      │      █      │      █      │      █      │
-│             │             │             │             │
-├            █┼█┄┄┄┄┄┄┄┄┄┄┄█┼█┄┄┄┄┄┄┄┄┄┄┄█┼█            ┤
-│             │             │             │             │
-│             │             │             │             │
-└──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
+                █  : Fabric Router
+                ┄┄ : 1-D Row Line Fabric. There are 8 independent line fabric instances.
+                ┇  : 1-D Column Line Fabric. There are 4 independent line fabric instances.
+                ┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
+                │0            │1            │2            │3            │
+                │             │             │             │             │
+                ├            █┼█┄┄┄┄┄┄┄┄┄┄┄█┼█┄┄┄┄┄┄┄┄┄┄┄█┼█            ┤
+                │             │             │             │             │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │4     █      │5     █      │6     █      │7     █      │
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                ├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │8     █      │9     █      │10    █      │11    █      │
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                ├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │12    █      │13    █      │14    █      │15    █      │
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                ├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │16    █      │17    █      │18    █      │19    █      │
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                ├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │20    █      │21    █      │22    █      │23    █      │
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                ├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │24    █      │25    █      │26    █      │27    █      │
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                ├      ┇     █┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█     ┇      ┤
+                │      ┇      │      ┇      │      ┇      │      ┇      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │28    █      │29    █      │30    █      │30    █      │
+                │             │             │             │             │
+                ├            █┼█┄┄┄┄┄┄┄┄┄┄┄█┼█┄┄┄┄┄┄┄┄┄┄┄█┼█            ┤
+                │             │             │             │             │
+                │             │             │             │             │
+                └──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
 ```
 
+**8x4 Galaxy with TT-Fabric in 2D Mesh Topology**
+```
+                █  : Fabric Router
+                ══ : 2-D Mesh Fabric. One fabric network connects all 32 devices.
+                ┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
+                │0            │1            │2            │3            │
+                │             │             │             │             │
+                ├      ╔═════█┼█═════╦═════█┼█═════╦═════█┼█═════╗      ┤
+                │      ║      │      ║      │      ║      │      ║      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │4     █      │5     █      │6     █      │7     █      │
+                │      ║      │      ║      │      ║      │      ║      │
+                ├      ╠═════█┼█═════╬═════█┼█═════╬═════█┼█═════╣      ┤
+                │      ║      │      ║      │      ║      │      ║      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │8     █      │9     █      │10    █      │11    █      │
+                │      ║      │      ║      │      ║      │      ║      │
+                ├      ╠═════█┼█═════╬═════█┼█═════╬═════█┼█═════╣      ┤
+                │      ║      │      ║      │      ║      │      ║      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │12    █      │13    █      │14    █      │15    █      │
+                │      ║      │      ║      │      ║      │      ║      │
+                ├      ╠═════█┼█═════╬═════█┼█═════╬═════█┼█═════╣      ┤
+                │      ║      │      ║      │      ║      │      ║      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │16    █      │17    █      │18    █      │19    █      │
+                │      ║      │      ║      │      ║      │      ║      │
+                ├      ╠═════█┼█═════╬═════█┼█═════╬═════█┼█═════╣      ┤
+                │      ║      │      ║      │      ║      │      ║      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │20    █      │21    █      │22    █      │23    █      │
+                │      ║      │      ║      │      ║      │      ║      │
+                ├      ╠═════█┼█═════╬═════█┼█═════╬═════█┼█═════╣      ┤
+                │      ║      │      ║      │      ║      │      ║      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │24    █      │25    █      │26    █      │27    █      │
+                │      ║      │      ║      │      ║      │      ║      │
+                ├      ╠═════█┼█═════╬═════█┼█═════╬═════█┼█═════╣      ┤
+                │      ║      │      ║      │      ║      │      ║      │
+                │      █      │      █      │      █      │      █      │
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+                │28    █      │29    █      │30    █      │31    █      │
+                │      ║      │      ║      │      ║      │      ║      │
+                ├      ╚═════█┼█═════╩═════█┼█═════╩═════█┼█═════╝      ┤
+                │             │             │             │             │
+                │             │             │             │             │
+                └──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
+```
 
+**8x4 Galaxy with TT-Fabric in 2D Torus Topology**
+```
+              █  : Fabric Router
+              ══ : 2-D Torus Fabric. One fabric network connects all 32 devices.
+                   All rows and columns are rings.
+
+             ╔═════════════════════════════════════════════════════════════╗
+             ║         ╔═●           ╔═○           ╔═◎           ╔════════════╗
+             ║         ║             ║             ║             ║         ║  ║
+             ║  ┌──────┼──────┬──────┼──────┬──────┼──────┬──────┼──────┐  ║  ║
+             ║  │0     █      │1     █      │2     █      │3     █      │  ║  ║
+             ║  │      ║      │      ║      │      ║      │      ║      │  ║  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║ 
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
+                │4     █      │5     █      │6     █      │7     █      │     ║
+             ★  │      ║      │      ║      │      ║      │      ║      │  ★  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║         
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║         
+                │8     █      │9     █      │10    █      │11    █      │     ║         
+             ☆  │      ║      │      ║      │      ║      │      ║      │  ☆  ║         
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║         
+                │      ║      │      ║      │      ║      │      ║      │     ║         
+                │      █      │      █      │      █      │      █      │     ║         
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║         
+                │12    █      │13    █      │14    █      │15    █      │     ║         
+             ✦  │      ║      │      ║      │      ║      │      ║      │  ✦  ║         
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║         
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║    
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
+                │16    █      │17    █      │18    █      │19    █      │     ║
+             ✧  │      ║      │      ║      │      ║      │      ║      │  ✧  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
+                │20    █      │21    █      │22    █      │23    █      │     ║
+             ✩  │      ║      │      ║      │      ║      │      ║      │  ✩  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
+                │24    █      │25    █      │26    █      │27    █      │     ║
+             ✪  │      ║      │      ║      │      ║      │      ║      │  ✪  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
+                │28    █      │29    █      │30    █      │31    █      │     ║
+             ✬  │      ║      │      ║      │      ║      │      ║      │  ✬  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║
+                └──────┼──────┴──────┼──────┴──────┼──────┴──────┼──────┘     ║
+                       ║             ║             ║             ║            ║
+                       ╚═●           ╚═○           ╚═◎           ╚════════════╝     
+
+```
 
 Fabric router uses circular buffers to send and receive packets from different routing directions.
 
