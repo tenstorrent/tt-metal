@@ -193,7 +193,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-aliasing>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-volatile>"

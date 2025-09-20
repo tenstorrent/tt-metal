@@ -122,7 +122,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
 
     std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = std::string("1");
     }
     const auto compute_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_int_sum_h.cpp"};

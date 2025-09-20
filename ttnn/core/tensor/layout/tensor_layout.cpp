@@ -30,9 +30,10 @@ Alignment legacyShapeToAlignment(
         return Alignment{};
     }
 
-    const int padded_rank = legacy_padded_shape.rank();
+    const size_t padded_rank = legacy_padded_shape.rank();
+    const int negative_padded_rank = -padded_rank;
     bool alignment_can_be_2D = true;
-    for (int i = -3; i >= -padded_rank; i--) {
+    for (int i = -3; i >= negative_padded_rank; i--) {
         alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
     }
 
@@ -55,7 +56,7 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
-        ttnn::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
+        ttnn::SmallVector<uint32_t> values(std::min<size_t>(padded_rank, 2));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
             values[alignment_size - 1] = legacy_padded_shape[-1];
