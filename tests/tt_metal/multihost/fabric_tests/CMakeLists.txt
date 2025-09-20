@@ -79,6 +79,21 @@ target_link_libraries(
         yaml-cpp
 )
 
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(multi_host_fabric_tests PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(test_mesh_socket_main PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(multi_host_fabric PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(mesh_socket_components PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()
+
 target_include_directories(
     test_mesh_socket_main
     PRIVATE

@@ -4,6 +4,18 @@ find_package(Python3 REQUIRED COMPONENTS Development)
 add_library(test_eager_common_libs INTERFACE)
 target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(test_eager_common_libs INTERFACE ${EXECINFO_LIB})
+    endif()
+endif()
+
 set(TT_EAGER_TESTS_OPS
     ops/test_eltwise_binary_op.cpp
     ops/test_eltwise_unary_op.cpp

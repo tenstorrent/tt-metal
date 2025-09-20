@@ -43,7 +43,6 @@ target_sources(
 
 target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-
 target_link_libraries(
     scaleout_tools
     PUBLIC
@@ -55,6 +54,18 @@ target_link_libraries(
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(scaleout_tools PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()
 
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)

@@ -19,6 +19,18 @@ function(setup_multiprocess_unit_test target_name test_source)
             test_common_libs
             TTNN::CPP
     )
+    check_function_exists(
+        backtrace
+        HAVE_BACKTRACE
+    )
+
+    if(NOT HAVE_BACKTRACE)
+        find_library(EXECINFO_LIB execinfo)
+        if(EXECINFO_LIB)
+            target_link_libraries(${target_name} PRIVATE ${EXECINFO_LIB})
+        endif()
+    endif()
+
     target_include_directories(${target_name} PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 endfunction()
 

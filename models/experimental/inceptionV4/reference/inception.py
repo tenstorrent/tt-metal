@@ -12,7 +12,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.experimental.inceptionV4.reference._utils import create_classifier
-from models.experimental.inceptionV4.reference._utils import assign_weight_seq, assign_weight_basic_conv, assign_weight_linear
+from models.experimental.inceptionV4.reference._utils import (
+    assign_weight_seq,
+    assign_weight_basic_conv,
+    assign_weight_linear,
+)
 from models.experimental.inceptionV4.reference.basicconv import BasicConv2d
 
 IMAGENET_INCEPTION_MEAN = (0.5, 0.5, 0.5)
@@ -224,26 +228,14 @@ class InceptionC(nn.Module):
         self.branch0 = BasicConv2d(1536, 256, kernel_size=1, stride=1)
 
         self.branch1_0 = BasicConv2d(1536, 384, kernel_size=1, stride=1)
-        self.branch1_1a = BasicConv2d(
-            384, 256, kernel_size=(1, 3), stride=1, padding=(0, 1)
-        )
-        self.branch1_1b = BasicConv2d(
-            384, 256, kernel_size=(3, 1), stride=1, padding=(1, 0)
-        )
+        self.branch1_1a = BasicConv2d(384, 256, kernel_size=(1, 3), stride=1, padding=(0, 1))
+        self.branch1_1b = BasicConv2d(384, 256, kernel_size=(3, 1), stride=1, padding=(1, 0))
 
         self.branch2_0 = BasicConv2d(1536, 384, kernel_size=1, stride=1)
-        self.branch2_1 = BasicConv2d(
-            384, 448, kernel_size=(3, 1), stride=1, padding=(1, 0)
-        )
-        self.branch2_2 = BasicConv2d(
-            448, 512, kernel_size=(1, 3), stride=1, padding=(0, 1)
-        )
-        self.branch2_3a = BasicConv2d(
-            512, 256, kernel_size=(1, 3), stride=1, padding=(0, 1)
-        )
-        self.branch2_3b = BasicConv2d(
-            512, 256, kernel_size=(3, 1), stride=1, padding=(1, 0)
-        )
+        self.branch2_1 = BasicConv2d(384, 448, kernel_size=(3, 1), stride=1, padding=(1, 0))
+        self.branch2_2 = BasicConv2d(448, 512, kernel_size=(1, 3), stride=1, padding=(0, 1))
+        self.branch2_3a = BasicConv2d(512, 256, kernel_size=(1, 3), stride=1, padding=(0, 1))
+        self.branch2_3b = BasicConv2d(512, 256, kernel_size=(3, 1), stride=1, padding=(1, 0))
 
         self.branch3 = nn.Sequential(
             nn.AvgPool2d(3, stride=1, padding=1, count_include_pad=False),
@@ -252,35 +244,17 @@ class InceptionC(nn.Module):
 
         assign_weight_basic_conv(self.branch0, state_dict, f"{base_address}.branch0")
 
-        assign_weight_basic_conv(
-            self.branch1_0, state_dict, f"{base_address}.branch1_0"
-        )
-        assign_weight_basic_conv(
-            self.branch1_1a, state_dict, f"{base_address}.branch1_1a"
-        )
-        assign_weight_basic_conv(
-            self.branch1_1b, state_dict, f"{base_address}.branch1_1b"
-        )
+        assign_weight_basic_conv(self.branch1_0, state_dict, f"{base_address}.branch1_0")
+        assign_weight_basic_conv(self.branch1_1a, state_dict, f"{base_address}.branch1_1a")
+        assign_weight_basic_conv(self.branch1_1b, state_dict, f"{base_address}.branch1_1b")
 
-        assign_weight_basic_conv(
-            self.branch2_0, state_dict, f"{base_address}.branch2_0"
-        )
-        assign_weight_basic_conv(
-            self.branch2_1, state_dict, f"{base_address}.branch2_1"
-        )
-        assign_weight_basic_conv(
-            self.branch2_2, state_dict, f"{base_address}.branch2_2"
-        )
-        assign_weight_basic_conv(
-            self.branch2_3a, state_dict, f"{base_address}.branch2_3a"
-        )
-        assign_weight_basic_conv(
-            self.branch2_3b, state_dict, f"{base_address}.branch2_3b"
-        )
+        assign_weight_basic_conv(self.branch2_0, state_dict, f"{base_address}.branch2_0")
+        assign_weight_basic_conv(self.branch2_1, state_dict, f"{base_address}.branch2_1")
+        assign_weight_basic_conv(self.branch2_2, state_dict, f"{base_address}.branch2_2")
+        assign_weight_basic_conv(self.branch2_3a, state_dict, f"{base_address}.branch2_3a")
+        assign_weight_basic_conv(self.branch2_3b, state_dict, f"{base_address}.branch2_3b")
 
-        assign_weight_basic_conv(
-            self.branch3[1], state_dict, f"{base_address}.branch3.1"
-        )
+        assign_weight_basic_conv(self.branch3[1], state_dict, f"{base_address}.branch3.1")
 
     def forward(self, x):
         x0 = self.branch0(x)
