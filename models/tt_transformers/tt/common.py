@@ -452,30 +452,22 @@ def copy_host_to_device(
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
     """
-    # logger.info(f"Copying host tensors to device tensors...")
     if device_tensors is None:
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            # logger.info(f"1) Copying host tensor {i} to device tensor {i}...")
             if shard_specs and shard_specs[i] is not None:
                 on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
-            elif isinstance(host_tensors[i], list):
-                # Handle list of tensors
-                on_device = [ttnn.to_device(v, device=mesh_device) for v in host_tensors[i]]
             else:
                 on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
-        # logger.info(f"1) Done Copying host tensors to device tensors...")
         return ret
     else:
         for i in range(len(host_tensors)):
-            # logger.info(f"2) Copying host tensor {i} to device tensor {i}...")
             if host_tensors[i] is None:
                 assert device_tensors[i] is None
                 continue
             ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
-        # logger.info(f"2) Done Copying host tensors to device tensors...")
         return device_tensors
 
 
