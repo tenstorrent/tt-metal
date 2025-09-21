@@ -24,7 +24,7 @@ def test_elu_arange_masking(device):
     input_tensor = input_tensor[mask]
 
     # Mask NaN, special value where selu has ULP>1. Exclude a small range around 0 for this elu test where error is higher. This range is verified in test_elu_allclose
-    mask = torch.isnan(input_tensor) | (input_tensor == 3.3895313892515355e38)
+    mask = torch.isnan(input_tensor)
     input_tensor[mask] = 1.0
     mask_failed = (input_tensor >= -0.28515625) & (input_tensor <= 1.1663108012064884e-38)
     input_tensor[mask_failed] = 1.0
