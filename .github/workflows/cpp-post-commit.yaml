@@ -90,7 +90,9 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: ${{ inputs.runner-label == 'N150' && 'tt-ubuntu-2204-N150-viommu-stable' || inputs.runner-label == 'N300' && 'tt-ubuntu-2204-N300-viommu-stable' || inputs.runner-label == 'P150' && 'tt-ubuntu-2204-P150-viommu-stable' || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)) }}
+    env:
+      ci-v1: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
+    runs-on: ${{ inputs.runner-label == 'N150x' && 'tt-ubuntu-2204-N150-viommu-stable' || inputs.runner-label == 'N300x' && 'tt-ubuntu-2204-N300-viommu-stable' || inputs.runner-label == 'P150x' && 'tt-ubuntu-2204-P150-viommu-stable' || env.ci-v1 }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
