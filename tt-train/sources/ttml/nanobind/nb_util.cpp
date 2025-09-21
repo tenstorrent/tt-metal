@@ -38,7 +38,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
             output_tensor_end[index] = tensor.logical_shape()[index] - 1;
         }
 
-        return ttnn::untilize_with_unpadding(ttnn::DefaultQueueId, tensor, output_tensor_end, std::nullopt);
+        return ttnn::untilize_with_unpadding(tensor, output_tensor_end, std::nullopt);
     };
 
     auto const impl = [&numpy_tensor_from_data,
@@ -53,7 +53,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
             const auto tensor_data = tt::tt_metal::host_buffer::get_as<const T>(tensor);
             return numpy_tensor_from_data.template operator()<U>(tensor_data, tensor.tensor_spec(), tensor.strides());
         }
-        const auto cpu_tensor = tensor.cpu(/*blocking=*/true, ttnn::DefaultQueueId);
+        const auto cpu_tensor = tensor.cpu(/*blocking=*/true);
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const T>(cpu_tensor);
         const auto cpu_tensor_spec = tensor.tensor_spec();
         const auto cpu_tensor_strides = tensor.strides();
@@ -203,9 +203,9 @@ tt::tt_metal::Tensor make_metal_tensor(
             if (layout == tt::tt_metal::Layout::ROW_MAJOR) {
                 return tensor.to_device(device, tensor_memory_config);
             }
-            auto padded_tensor = ttnn::tilize_with_zero_padding(ttnn::DefaultQueueId, tensor);
 
-            return padded_tensor.to_device(device, tensor_memory_config);
+            auto device_tensor = tensor.to_device(device, tensor_memory_config);
+            return ttnn::tilize_with_zero_padding(device_tensor);
         }
         const auto convert_to_type = [&]<typename Type>() {
             std::span<U const> data_span(static_cast<const U*>(data.data()), data.size());
@@ -215,9 +215,8 @@ tt::tt_metal::Tensor make_metal_tensor(
             if (layout == tt::tt_metal::Layout::ROW_MAJOR) {
                 return tensor.to_device(device, tensor_memory_config);
             }
-            auto padded_tensor = ttnn::tilize_with_zero_padding(ttnn::DefaultQueueId, tensor);
-
-            return padded_tensor.to_device(device, tensor_memory_config);
+            auto device_tensor = tensor.to_device(device, tensor_memory_config);
+            return ttnn::tilize_with_zero_padding(device_tensor);
         };
         switch (tensor_data_type) {
             case tt::tt_metal::DataType::INT32: return convert_to_type.template operator()<int32_t>();
