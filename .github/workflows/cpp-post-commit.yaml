@@ -72,6 +72,7 @@ jobs:
           - name: data movement
             cmd: |
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
+    
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
@@ -82,8 +83,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
-        CI_V1_RUNNERS: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
-        CI_V2_RUNNERS: ["tt-ubuntu-2204-${{ inputs.runner-label }}-viommu-stable"]
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -92,6 +91,9 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      CI_V1_RUNNERS: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
+      CI_V2_RUNNERS: ["tt-ubuntu-2204-${{ inputs.runner-label }}-viommu-stable"]
     runs-on: ${{ inputs.runner-label == 'N150x' && 'tt-ubuntu-2204-N150-viommu-stable' || inputs.runner-label == 'N300x' && 'tt-ubuntu-2204-N300-viommu-stable' || inputs.runner-label == 'P150x' && 'tt-ubuntu-2204-P150-viommu-stable' || env.CI_V1_RUNNERS }}
     steps:
       - name: ⬇️  Setup Job
