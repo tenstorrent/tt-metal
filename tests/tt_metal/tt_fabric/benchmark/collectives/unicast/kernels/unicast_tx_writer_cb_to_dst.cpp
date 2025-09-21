@@ -89,17 +89,17 @@ void kernel_main() {
 
     noc_async_writes_flushed();
 
-    // Final signal: bump receiver semaphore so the receiver kernel exits
-    if (sem_l1_addr != 0) {
-        const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
-        uint32_t sem_lo = (uint32_t)(sem_noc & 0xffffffffull);
-        uint32_t sem_hi = (uint32_t)(sem_noc >> 32);
+    // Final signal: bump receiver semaphore so the receiver kernel exits.
+    // In this benchmark we always have a completion semaphore.
+    ASSERT(sem_l1_addr != 0);
 
-        fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
-        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
-        sender.wait_for_empty_write_slot();
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-    }
+    fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
+    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+
+    sender.wait_for_empty_write_slot();
+    sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+
     sender.close();
 }
