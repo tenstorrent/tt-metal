@@ -399,7 +399,7 @@ void RunTimeOptions::ParseInspectorEnv() {
     const char* inspector_rpc_str = getenv("TT_METAL_INSPECTOR_RPC");
     if (inspector_rpc_str != nullptr) {
         inspector_settings.rpc_server_enabled = true;
-        if (strcmp(inspector_rpc_str, "0") == 0) {
+        if (std::strncmp(inspector_rpc_str, "0", 1) == 0) {
             inspector_settings.rpc_server_enabled = false;
         }
     }
