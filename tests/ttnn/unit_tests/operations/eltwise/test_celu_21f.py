@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 import torch
 import pytest
 import ttnn
@@ -12,11 +15,7 @@ def test_celu_arange(device):
     input_tensor = input_tensor.to(torch.float32)
 
     # Mask NaN, special values where celu has ULP>1 (Covered in allclose test below).
-    mask = (
-        (torch.isnan(input_tensor))
-        | (input_tensor == 3.3895313892515355e38)
-        | ((input_tensor >= -0.28515625) & (input_tensor <= 1.1663108012064884e-38))
-    )
+    mask = (torch.isnan(input_tensor)) | ((input_tensor >= -0.28515625) & (input_tensor <= 1.1663108012064884e-38))
     input_tensor[mask] = 1.0
 
     tt_in = ttnn.from_torch(
