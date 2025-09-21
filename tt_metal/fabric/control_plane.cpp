@@ -1541,14 +1541,14 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
 
     // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
     for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_MESH_SIZE; i++) {
-        tensix_routing_info.intra_mesh_routing_table.set_original_direction(
+        tensix_routing_info.intra_mesh_routing_direction_table.set_original_direction(
             i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
     }
 
     for (chip_id_t dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
          dst_chip_id++) {
         if (chip_id == dst_chip_id) {
-            tensix_routing_info.intra_mesh_routing_table.set_original_direction(
+            tensix_routing_info.intra_mesh_routing_direction_table.set_original_direction(
                 dst_chip_id, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION));
             continue;
         }
@@ -1557,7 +1557,7 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
             forwarding_direction != RoutingDirection::NONE
                 ? static_cast<std::uint8_t>(this->routing_direction_to_eth_direction(forwarding_direction))
                 : static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION);
-        tensix_routing_info.intra_mesh_routing_table.set_original_direction(dst_chip_id, direction_value);
+        tensix_routing_info.intra_mesh_routing_direction_table.set_original_direction(dst_chip_id, direction_value);
     }
 
     // Build inter-mesh routing entries (mesh-to-mesh routing)
@@ -1568,14 +1568,14 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
 
     // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
     for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_NUM_MESHES; i++) {
-        tensix_routing_info.inter_mesh_routing_table.set_original_direction(
+        tensix_routing_info.inter_mesh_routing_direction_table.set_original_direction(
             i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
     }
 
     for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table[*mesh_id][chip_id].size();
          dst_mesh_id++) {
         if (*mesh_id == dst_mesh_id) {
-            tensix_routing_info.inter_mesh_routing_table.set_original_direction(
+            tensix_routing_info.inter_mesh_routing_direction_table.set_original_direction(
                 dst_mesh_id, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION));
             continue;
         }
@@ -1584,7 +1584,38 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
             forwarding_direction != RoutingDirection::NONE
                 ? static_cast<std::uint8_t>(this->routing_direction_to_eth_direction(forwarding_direction))
                 : static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION);
-        tensix_routing_info.inter_mesh_routing_table.set_original_direction(dst_mesh_id, direction_value);
+        tensix_routing_info.inter_mesh_routing_direction_table.set_original_direction(dst_mesh_id, direction_value);
+    }
+
+    // Populate routing path tables (1D and 2D) into tensix_routing_info so a single copy suffices
+    {
+        // 1D routing path table (uncompressed): calculate once with src=0, same for all chips in mesh
+        auto host_rank_id = this->get_local_host_rank_id_binding();
+        const auto& local_mesh_chip_id_container =
+            this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+        uint16_t num_chips_1d = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
+                                    ? MAX_CHIPS_LOWLAT_1D
+                                    : static_cast<uint16_t>(local_mesh_chip_id_container.size());
+
+        routing_path_table_t<1, false> routing_path_1d;
+        routing_path_1d.calculate_chip_to_all_routing_fields(0, num_chips_1d);
+        tensix_routing_info.routing_path_table_1d = routing_path_1d;
+
+        // 2D routing path table (compressed): calculate per-source chip
+        MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
+        uint16_t num_chips_2d = mesh_shape[0] * mesh_shape[1];
+        uint16_t ew_dim = mesh_shape[1];
+        TT_ASSERT(num_chips_2d <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
+        TT_ASSERT(
+            mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
+            "One or both of mesh axis exceed 16 for mesh {}: {}x{}",
+            *mesh_id,
+            mesh_shape[0],
+            mesh_shape[1]);
+
+        routing_path_table_t<2, true> routing_path_2d;
+        routing_path_2d.calculate_chip_to_all_routing_fields(chip_id, num_chips_2d, ew_dim);
+        tensix_routing_info.routing_path_table_2d = routing_path_2d;
     }
 
     write_to_all_tensix_cores(
@@ -1700,64 +1731,6 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
     return 0;
 }
 
-template <>
-void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) const {
-    auto host_rank_id = this->get_local_host_rank_id_binding();
-    const auto& local_mesh_chip_id_container =
-        this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-    uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
-                             ? MAX_CHIPS_LOWLAT_1D
-                             : static_cast<uint16_t>(local_mesh_chip_id_container.size());
-
-    routing_path_t<1, false> routing_path;
-    routing_path.calculate_chip_to_all_routing_fields(0, num_chips);
-
-    // For each source chip in the current mesh
-    for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
-        auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
-
-        write_to_all_tensix_cores(
-            &routing_path,
-            sizeof(routing_path),
-            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_1D,
-            physical_chip_id);
-    }
-}
-
-template <>
-void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) const {
-    auto host_rank_id = this->get_local_host_rank_id_binding();
-    const auto& local_mesh_chip_id_container =
-        this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-
-    // Get mesh shape for 2D routing calculation
-    MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
-    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
-    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
-    TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
-    TT_ASSERT(
-        mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
-        "One or both of mesh axis exceed 16 for mesh {}: {}x{}",
-        *mesh_id,
-        mesh_shape[0],
-        mesh_shape[1]);
-
-    for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        routing_path_t<2, true> routing_path;
-        FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
-
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
-        auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
-
-        write_to_all_tensix_cores(
-            &routing_path,
-            sizeof(routing_path),
-            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_2D,
-            physical_chip_id);
-    }
-}
-
 void ControlPlane::write_routing_tables_to_all_chips() const {
     // Configure the routing tables on the chips
     TT_ASSERT(
@@ -1770,11 +1743,6 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-    }
-
-    for (const auto& mesh_id : this->get_local_mesh_id_bindings()) {
-        this->write_all_to_all_routing_fields<1, false>(mesh_id);
-        this->write_all_to_all_routing_fields<2, true>(mesh_id);
     }
 }
 

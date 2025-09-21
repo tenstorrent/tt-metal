@@ -71,7 +71,7 @@ enum class compressed_routing_values : std::uint8_t {
 
 // Compressed routing table base structure using 3 bits
 template <std::uint32_t ArraySize>
-struct __attribute__((packed)) compressed_routing_table_t {
+struct __attribute__((packed)) routing_direction_table_t {
     static constexpr std::uint32_t BITS_PER_COMPRESSED_ENTRY = 3;
     static constexpr std::uint8_t COMPRESSED_ENTRY_MASK = 0x7;                // 3-bit mask (2^3 - 1)
     static constexpr std::uint32_t BITS_PER_BYTE = sizeof(std::uint8_t) * 8;  // 8 bits in a byte
@@ -84,12 +84,12 @@ struct __attribute__((packed)) compressed_routing_table_t {
     std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];  // 384 bytes
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-    // Host-side methods (declared here, implemented in compressed_routing_table.cpp):
+    // Host-side methods (declared here, implemented in compressed_routing_direction.cpp):
     void set_direction(std::uint16_t index, std::uint8_t direction);
     std::uint8_t compress_value(std::uint8_t original_value) const;
     void set_original_direction(std::uint16_t index, std::uint8_t original_direction);
 #else
-    // Device-side methods (declared here, implemented in fabric_routing_table_interface.h):
+    // Device-side methods (declared here, implemented in fabric_routing_direction_interface.h):
     inline std::uint8_t get_direction(std::uint16_t index) const;
     inline std::uint8_t decompress_value(std::uint8_t compressed_value) const;
     inline std::uint8_t get_original_direction(std::uint16_t index) const;
@@ -123,7 +123,7 @@ static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
 static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
 template <uint8_t dim, bool compressed>
-struct __attribute__((packed)) routing_path_t {
+struct __attribute__((packed)) routing_path_table_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
 
     // For 1D: Create LowLatencyPacketHeader pattern
@@ -172,10 +172,10 @@ struct __attribute__((packed)) routing_path_t {
 #endif
 };
 // 16 chips * 4 bytes = 64
-static_assert(sizeof(routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
-static_assert(sizeof(routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
+static_assert(sizeof(routing_path_table_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
+static_assert(sizeof(routing_path_table_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
 // 256 chips * 2 bytes = 512
-static_assert(sizeof(routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
+static_assert(sizeof(routing_path_table_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
 
 struct tensix_routing_l1_info_t {
     // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
@@ -185,8 +185,10 @@ struct tensix_routing_l1_info_t {
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
-    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 384 bytes
-    compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table;  // 384 bytes
+    routing_direction_table_t<MAX_MESH_SIZE> intra_mesh_routing_direction_table;   // 384 bytes
+    routing_direction_table_t<MAX_NUM_MESHES> inter_mesh_routing_direction_table;  // 384 bytes
+    routing_path_table_t<1, false> routing_path_table_1d;                          // 64 bytes
+    routing_path_table_t<2, true> routing_path_table_2d;                           // 512 bytes
     uint8_t padding[12];                                                  // pad to 16-byte alignment
 } __attribute__((packed));
 
