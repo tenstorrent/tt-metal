@@ -703,9 +703,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
-    this->sender_txq_id = 0;
-    this->receiver_txq_id = 0;
-
     // Update sender channel servicing based on fabric tensix configuration
     if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
         // Use default direction (EAST) for the constructor case since direction isn't available here
