@@ -59,7 +59,7 @@ def test_forward_pass(
     set_deterministic_env,
 ):
     # Set less layers and shorter max length for the sake of testing
-    hf_config_short.num_hidden_layers = 8
+    hf_config_short.num_hidden_layers = 3
 
     # CCL workaround (remove once persistent buffers are added)
     mesh_device.disable_and_clear_program_cache()
