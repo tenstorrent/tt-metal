@@ -273,22 +273,21 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     }
 
     if (this->sender_txq_id != this->receiver_txq_id) {
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            this->to_sender_channel_remote_ack_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            this->to_sender_channel_remote_completion_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            this->receiver_channel_remote_ack_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            this->receiver_channel_remote_completion_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
+        // counters are packed contiguously in memory, This can lead to resends of values but
+        // this is safe for free running counters, which are enabled in this mode.
+        size_t num_eth_words_consumed = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
+
+        this->to_sender_channel_remote_ack_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_eth_words_consumed;
+
+        this->to_sender_channel_remote_completion_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_eth_words_consumed;
+
+        this->receiver_channel_remote_ack_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_eth_words_consumed;
+
+        this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_eth_words_consumed;
     }
 
     this->edm_channel_ack_addr = next_l1_addr;
@@ -1446,18 +1445,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
     if (multi_txq_enabled) {
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            ct_args.push_back(config.to_sender_channel_remote_ack_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            ct_args.push_back(config.to_sender_channel_remote_completion_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            ct_args.push_back(config.receiver_channel_remote_ack_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            ct_args.push_back(config.receiver_channel_remote_completion_counter_addrs[i]);
-        }
+        ct_args.push_back(config.to_sender_channel_remote_ack_counters_base_addr);
+        ct_args.push_back(config.to_sender_channel_remote_completion_counters_base_addr);
+        ct_args.push_back(config.receiver_channel_remote_ack_counters_base_addr);
+        ct_args.push_back(config.receiver_channel_remote_completion_counters_base_addr);
     }
 
     ct_args.push_back(0x30c0ffee);
