@@ -72,7 +72,6 @@ jobs:
           - name: data movement
             cmd: |
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
-    
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
@@ -91,11 +90,6 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    # strategy:
-    #   matrix:
-    #   runner-labels:
-    #     - ["tt-ubuntu-2204-${{ inputs.runner-label }}-viommu-stable"]
-    #     - ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
     runs-on: >-
       ${{ 
         (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150')
