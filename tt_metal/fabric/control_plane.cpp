@@ -26,7 +26,7 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "compressed_routing_table.hpp"
+#include "compressed_routing_direction.hpp"
 #include "compressed_routing_path.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"

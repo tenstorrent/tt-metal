@@ -43,7 +43,7 @@ target_sources(
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
-        compressed_routing_table.cpp
+        compressed_routing_direction.cpp
         compressed_routing_path.cpp
         serialization/intermesh_link_table.cpp
         serialization/physical_system_descriptor_serialization.cpp
