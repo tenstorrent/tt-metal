@@ -19,7 +19,7 @@ class DebugToolsMeshFixture : public MeshDispatchFixture {
        void RunTestOnDevice(
            const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
            const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-           auto run_function_no_args = [=, this]() { run_function(static_cast<T*>(this), mesh_device); };
+           auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
            MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
        }
 };
