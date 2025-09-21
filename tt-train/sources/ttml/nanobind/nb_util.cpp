@@ -73,7 +73,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
             case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
             case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
             case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(t);
-            case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(t);
+            case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, float>(t);
             case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW("Unsupported type: BFLOAT8_B"); break;
             case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW("Unsupported type: BFLOAT4_B"); break;
             case tt::tt_metal::DataType::UINT8: TT_THROW("Unsupported type: UINT8"); break;
@@ -194,18 +194,14 @@ tt::tt_metal::Tensor make_metal_tensor(
         }
         const tt::tt_metal::Shape tensor_shape(shape_container);
         const tt::tt_metal::MemoryConfig tensor_memory_config{};
-        const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
+        const tt::tt_metal::PageConfig tensor_page_config(layout);
         tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
         tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-        if (types_match(tensor_data_type)) {
+        // if (types_match(tensor_data_type)) {
+        if (true) {
             auto tensor = tt::tt_metal::Tensor::from_span(
                 ttsl::Span<const T>(static_cast<const T*>(data.data()), data.size()), tensor_spec, device);
-            if (layout == tt::tt_metal::Layout::ROW_MAJOR) {
-                return tensor.to_device(device, tensor_memory_config);
-            }
-
-            auto device_tensor = tensor.to_device(device, tensor_memory_config);
-            return ttnn::tilize_with_zero_padding(device_tensor);
+            return tensor;
         }
         const auto convert_to_type = [&]<typename Type>() {
             std::span<U const> data_span(static_cast<const U*>(data.data()), data.size());
@@ -213,10 +209,9 @@ tt::tt_metal::Tensor make_metal_tensor(
             new_data.assign(data_span.begin(), data_span.end());
             auto tensor = tt::tt_metal::Tensor::from_vector(new_data, tensor_spec, device);
             if (layout == tt::tt_metal::Layout::ROW_MAJOR) {
-                return tensor.to_device(device, tensor_memory_config);
+                return tensor;
             }
-            auto device_tensor = tensor.to_device(device, tensor_memory_config);
-            return ttnn::tilize_with_zero_padding(device_tensor);
+            return ttnn::tilize_with_zero_padding(tensor);
         };
         switch (tensor_data_type) {
             case tt::tt_metal::DataType::INT32: return convert_to_type.template operator()<int32_t>();
@@ -238,7 +233,7 @@ tt::tt_metal::Tensor make_metal_tensor(
             return impl.template operator()<uint32_t>(new_type.value_or(tt::tt_metal::DataType::UINT32));
         case nb::dlpack::dtype_code::Float:
             return impl.template operator()<float>(new_type.value_or(tt::tt_metal::DataType::FLOAT32));
-        case nb::dlpack::dtype_code::Bfloat:
+        case nb::dlpack::dtype_code::Bfloat:  //  seems like bfloat is not bfloat16
             return impl.template operator()<bfloat16>(new_type.value_or(tt::tt_metal::DataType::BFLOAT16));
         case nb::dlpack::dtype_code::Complex: TT_THROW("Unsupported type: Complex"); break;
         case nb::dlpack::dtype_code::Bool: TT_THROW("Unsupported type: Bool"); break;
