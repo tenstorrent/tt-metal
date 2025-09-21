@@ -38,7 +38,6 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        ci-v1: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
         test-group:
           - name: All C++
             cmd: |
@@ -83,6 +82,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
+        CI_V1_RUNNERS: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
+        CI_V2_RUNNERS: ["tt-ubuntu-2204-${{ inputs.runner-label }}-viommu-stable"]
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -91,7 +92,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: ${{ inputs.runner-label == 'N150x' && 'tt-ubuntu-2204-N150-viommu-stable' || inputs.runner-label == 'N300x' && 'tt-ubuntu-2204-N300-viommu-stable' || inputs.runner-label == 'P150x' && 'tt-ubuntu-2204-P150-viommu-stable' || matrix.ci-v1 }}
+    runs-on: ${{ inputs.runner-label == 'N150x' && 'tt-ubuntu-2204-N150-viommu-stable' || inputs.runner-label == 'N300x' && 'tt-ubuntu-2204-N300-viommu-stable' || inputs.runner-label == 'P150x' && 'tt-ubuntu-2204-P150-viommu-stable' || env.CI_V1_RUNNERS }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
