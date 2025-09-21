@@ -745,6 +745,7 @@ class Attention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
+        ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
@@ -756,9 +757,8 @@ class Attention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
-
-        ttnn.deallocate(q_heads_1QSD_pre_rot)
         ttnn.deallocate(k_heads_1KSD_pre_rot)
+
         # Fill KV-Cache
         if kv_cache:
             keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
