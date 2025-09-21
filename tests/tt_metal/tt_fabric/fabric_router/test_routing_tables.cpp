@@ -130,13 +130,13 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
 }
 
@@ -179,7 +179,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
             for (auto [chan, direction] : active_fabric_eth_channels) {
                 auto dst_fabric_node_id = FabricNodeId(dst_mesh, std::rand() % dst_mesh_size);
                 auto path = control_plane->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, chan);
-                EXPECT_EQ(src_fabric_node_id == dst_fabric_node_id ? path.size() == 0 : path.size() > 0, true);
+                EXPECT_EQ(src_fabric_node_id == dst_fabric_node_id ? path.empty() : !path.empty(), true);
             }
         }
     }
@@ -196,19 +196,19 @@ TEST_F(ControlPlaneFixture, TestT3kDisjointFabricRoutes) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{1}, 0), 0);
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 3), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{1}, 3), chan);
-        EXPECT_EQ(path.size() == 0, true);
+        EXPECT_EQ(path.empty(), true);
         auto direction = control_plane->get_forwarding_direction(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{1}, 3));
         EXPECT_EQ(direction.has_value(), false);
     }
@@ -834,7 +834,7 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
 }
 

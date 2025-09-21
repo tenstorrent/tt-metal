@@ -233,7 +233,7 @@ void GraphProcessor::track_function_end_impl() {
 void GraphProcessor::track_function_end() {
     const std::lock_guard<std::mutex> lock(mutex);
     this->track_function_end_impl();
-    TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
+    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
 }
 
@@ -256,7 +256,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     } else {
         log_debug(tt::LogAlways, "output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
     }
-    TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
+    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
 }
 

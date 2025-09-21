@@ -22,7 +22,7 @@ inline Tensor unary_impl(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    TT_FATAL(op_chain.size() > 0, "Op chain cannot be empty");
+    TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
     DataType output_dtype = (op_chain[0].type() == UnaryOpType::TYPECAST)
                                 ? static_cast<DataType>(*op_chain[0].get_param_if<float>(1))
@@ -284,7 +284,7 @@ Tensor Unary_chain::invoke(
     const std::vector<EltwiseUnaryWithParam>& ops_chain,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    TT_FATAL(ops_chain.size() > 0, "Op chain cannot be empty");
+    TT_FATAL(!ops_chain.empty(), "Op chain cannot be empty");
     return detail::unary_impl(input_tensor, ops_chain, memory_config, optional_output_tensor);
 }
 

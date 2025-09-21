@@ -880,8 +880,8 @@ template std::map<std::string, std::string> get_defines<std::uint32_t>(
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
-    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
-                             : get_op_init_and_func_default(op_type, idst, input_dtype);
+    return !params.empty() ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
+                           : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
 template std::pair<std::string, std::string> get_op_init_and_func<float>(
