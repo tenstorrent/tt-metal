@@ -25,15 +25,16 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         }
     }
 
-    static FORCE_INLINE uint32_t eth_word_align(uint32_t addr) { return addr & ~0xF; }
+    static FORCE_INLINE uint32_t round_down_to_eth_word_alignment(uint32_t addr) { return addr & ~0xF; }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
         completion_counters[src_id]++;
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
-            eth_word_align(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
-            eth_word_align(to_sender_remote_completion_counters_base_address + src_id * sizeof(uint32_t)),
+            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->completion_counters_base_ptr + src_id)),
+            round_down_to_eth_word_alignment(
+                to_sender_remote_completion_counters_base_address + src_id * sizeof(uint32_t)),
             ETH_WORD_SIZE_BYTES);
     }
 
@@ -43,8 +44,8 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
-            eth_word_align(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
-            eth_word_align(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)),
+            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
+            round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)),
             ETH_WORD_SIZE_BYTES);
     }
 

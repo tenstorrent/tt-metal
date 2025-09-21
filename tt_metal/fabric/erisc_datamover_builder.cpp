@@ -275,19 +275,21 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     if (this->sender_txq_id != this->receiver_txq_id) {
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
-        size_t num_eth_words_consumed = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
+        size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
+
+        next_l1_addr = tt::align(next_l1_addr, field_size);
 
         this->to_sender_channel_remote_ack_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_eth_words_consumed;
+        next_l1_addr += num_words_consumed_per_counter;
 
         this->to_sender_channel_remote_completion_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_eth_words_consumed;
+        next_l1_addr += num_words_consumed_per_counter;
 
         this->receiver_channel_remote_ack_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_eth_words_consumed;
+        next_l1_addr += num_words_consumed_per_counter;
 
         this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
-        next_l1_addr += num_eth_words_consumed;
+        next_l1_addr += num_words_consumed_per_counter;
     }
 
     this->edm_channel_ack_addr = next_l1_addr;
