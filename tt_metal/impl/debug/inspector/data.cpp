@@ -148,9 +148,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 }
 
 void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
-    std::lock_guard<std::mutex> lock_programs(programs_mutex);
-    std::lock_guard<std::mutex> lock_mesh_device(mesh_devices_mutex);
-    std::lock_guard<std::mutex> lock_mesh_workload(mesh_workloads_mutex);
+    std::scoped_lock locks(programs_mutex, mesh_devices_mutex, mesh_workloads_mutex);
     std::set<uint64_t> device_ids;
 
     // First add all devices from mesh workloads
