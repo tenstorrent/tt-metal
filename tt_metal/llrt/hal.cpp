@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <enchantum/iostream.hpp>
 
-#include "hal/generated/dev_msgs.hpp"
 #include "hal_types.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -69,35 +68,9 @@ uint32_t Hal::get_total_num_risc_processors() const {
     return num_riscs;
 }
 
-HalCoreInfoType::HalCoreInfoType(
-    HalProgrammableCoreType programmable_core_type,
-    CoreType core_type,
-    const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
-    const std::vector<DeviceAddr>& mem_map_bases,
-    const std::vector<uint32_t>& mem_map_sizes,
-    const std::vector<uint32_t>& eth_fw_mailbox_msgs,
-    bool supports_cbs,
-    bool supports_receiving_multicast_cmds,
-    dev_msgs::Factory dev_msgs_factory) :
-    programmable_core_type_(programmable_core_type),
-    core_type_(core_type),
-    processor_classes_(processor_classes),
-    mem_map_bases_(mem_map_bases),
-    mem_map_sizes_(mem_map_sizes),
-    eth_fw_mailbox_msgs_{eth_fw_mailbox_msgs},
-    supports_cbs_(supports_cbs),
-    supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
-    dev_msgs_factory_(dev_msgs_factory) {}
-
 uint32_t HalCoreInfoType::get_processor_index(
     HalProcessorClassType processor_class, uint32_t processor_type_idx) const {
     uint32_t processor_class_idx = utils::underlying_type<HalProcessorClassType>(processor_class);
-    // TODO(HalProcessorClassType): fix this after DM0 and DM1 are the same processor class
-    if (processor_class == HalProcessorClassType::DM) {
-        TT_ASSERT(processor_type_idx < static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
-        processor_class_idx = processor_type_idx;
-        processor_type_idx = 0;
-    }
     uint32_t processor_index = 0;
     for (uint32_t i = 0; i < processor_class_idx; i++) {
         processor_index += this->get_processor_types_count(i);
@@ -117,10 +90,6 @@ std::pair<HalProcessorClassType, uint32_t> HalCoreInfoType::get_processor_class_
         processor_index -= processor_count;
     }
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
-    // TODO(HalProcessorClassType): fix this after DM0 and DM1 are the same processor class
-    if (processor_class_idx < static_cast<uint32_t>(HalProcessorClassType::COMPUTE)) {
-        return {HalProcessorClassType::DM, processor_class_idx};
-    }
     return {static_cast<HalProcessorClassType>(processor_class_idx), processor_index};
 }
 

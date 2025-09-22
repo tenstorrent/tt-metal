@@ -154,22 +154,14 @@ std::vector<JitBuildState> create_build_state(
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
             JitBuiltStateConfig config{
                 .core_type = static_cast<HalProgrammableCoreType>(programmable_core),
-                .processor_class = HalProcessorClassType::DM,
-                // TODO(HalProcessorClassType): Current hal implementation (and its user) processor_class = DM / DM+1
-                // to distinguish brisc and ncrisc.  This should be changed to processor_class = DM and processor_id =
-                // 0/1.
-                .processor_id = processor_class,
+                .processor_class = static_cast<HalProcessorClassType>(processor_class),
                 .is_fw = is_fw,
                 .dispatch_message_addr = dispatch_message_addr,
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
             for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
-                if (programmable_core == static_cast<uint32_t>(HalProgrammableCoreType::TENSIX) &&
-                    processor_class == static_cast<uint32_t>(HalProcessorClassType::COMPUTE)) {
-                    config.processor_class = HalProcessorClassType::COMPUTE;
-                    config.processor_id = processor_type;
-                }
+                config.processor_id = processor_type;
                 build_states.emplace_back(build_env, config);
             }
         }
