@@ -6,6 +6,25 @@
 #include "accessor/tensor_accessor.h"
 #include "accessor/tensor_accessor_args.h"
 
+//
+// Reader (sender-side) kernel — batched DRAM→L1 copies into CB.
+//
+// What this does:
+// - Pulls tensor pages from the source buffer into the local L1 Circular Buffer (CB c_0).
+// - Works in small groups (4 pages): reserve CB space, queue N async reads, wait once, then publish N pages.
+// - Grouping avoids a barrier per page and lets the writer drain the CB while we fetch the next group.
+//
+// How it works (per group):
+//   1) cb_reserve_back(CB_ID, N) + get_write_ptr() → reserve N pages in CB and get an L1 base pointer.
+//   2) Issue N noc_async_read() calls back-to-back into that reserved L1 range.
+//   3) noc_async_read_barrier() → wait until all N reads complete.
+//   4) cb_push_back(CB_ID, N) → make the N pages visible to the writer.
+//
+// Notes:
+// - The CB lives in L1. The host sizes it large enough (8 pages) so reader and writer can overlap.
+// - NUM_PAGES and PAGE_SIZE come from compile-time args. src_base comes from runtime args.
+//
+
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
     constexpr uint32_t CTA_BASE = ta_args.next_compile_time_args_offset();

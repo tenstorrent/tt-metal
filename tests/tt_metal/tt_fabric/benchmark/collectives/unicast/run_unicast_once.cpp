@@ -141,7 +141,34 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     tt::tt_metal::EnqueueWriteBuffer(cq_dst, *dst_buf, zeros, /*blocking=*/true);
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
-    // Receiver program waits on a global semaphore bump from sender.
+    /*
+Unicast bench — top-level flow:
+
+┌────────────────────────────┐                               ┌────────────────────────────┐
+│ Device SRC (chip p.src)    │                               │ Device DST (chip p.dst)    │
+│                            │                               │                            │
+│  DRAM src_buf ──► Reader   │ pages →  L1 CB (c_0)  ──►     │  L1/DRAM dst_buf           │
+│                 (RISCV_0)  │            ▲          │       │        ▲                   │
+│                            │            │          │       │        │                   │
+│       Writer (RISCV_1) ────┴────────────┴──────────┼──────►│  Receiver wait kernel      │
+│       + fabric send adapter|            payload+hdr│       │  (RISCV_0) on GLOBAL sem   │
+│                            │                       │       │                            │
+│ after last page: send      │                       │       │ fabric delivers all data   │
+│ atomic_inc to dst.sem ─────┼───────────────────────┼──-───►│ then sem++ → receiver exit │
+└────────────────────────────┘      (Fabric link)            └────────────────────────────┘
+
+Flow:
+1) Reader DMA-batches DRAM → CB. 2) Writer drains CB, sends packets over fabric.
+3) Writer finally sends a semaphore INC to DST. Fabric orders this after payloads.
+4) Receiver sees sem++ and returns. Host verifies bytes.
+
+Notes:
+- We use a GLOBAL semaphore on DST so a different core can observe the signal.
+- Route setup uses current 2D API. This will change soon. The 1D reference shape is in linear/api.h.
+*/
+
+    // Global semaphore so a remote chip can signal it.
+    // Fabric guarantees payload is visible before the bump is seen.
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
     auto gsem = tt::tt_metal::CreateGlobalSemaphore(
         dst_dev,
@@ -217,6 +244,9 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
         (uint32_t)gsem.address()       // 5: receiver L1 semaphore addr
     };
 
+    // Pack the fabric-connection runtime args for the writer kernel.
+    // This establishes the send path (routing/link identifiers) for fabric traffic.
+    // The device kernel must unpack these in the same order via build_from_args(...).
     tt::tt_fabric::append_fabric_connection_rt_args(
         src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);

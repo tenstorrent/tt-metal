@@ -15,6 +15,11 @@
 using namespace tt;
 using namespace tt::tt_fabric;
 
+//
+// Writer (fabric sender) kernel — sends pages from CB c_0 to the dst device.
+// Per page: wait for one CB page → build header to dst → send payload → send header.
+// After all pages: flush, then atomic-inc the receiver’s global semaphore (completion signal).
+//
 // CT args:
 //   0: TOTAL_PAGES
 //   1: PAGE_SIZE
@@ -42,14 +47,18 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
-    // Build fabric connection from remaining RT args
+    // Build a fabric send adapter from the runtime args that the host packed.
+    // Needed before sending over fabric: binds this core to a specific routing/link.
     auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
 
-    // Reusable packet header in L1
+    // TEMP (2D API): manual packet header. Post-uplift this becomes implicit.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)header, sizeof(PACKET_HEADER_TYPE));
 
-    // Fabric header (2D dynamic routing): route to (dst_mesh_id, dst_dev_id)
+    // Fabric route setup (temporary 2D API):
+    // Program a fixed unicast route to (dst_mesh_id, dst_dev_id). Dynamic routing is not
+    // supported in this path (see guard below). This API will change soon. The future 2D
+    // interface will mirror the 1D style. See linear/api.h for the reference shape.
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
 #if defined(DYNAMIC_ROUTING_ENABLED)
     static_assert(false, "Dynamic routing is not supported");
@@ -70,6 +79,7 @@ void kernel_main() {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
+        // Pace transmissions so we don’t overrun the fabric send queue.
         sender.wait_for_empty_write_slot();
 
         // Compute destination NOC address (DRAM or L1 interleaved)
@@ -79,6 +89,7 @@ void kernel_main() {
         fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
         header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
 
+        // TEMP (2D API): payload then header. Will be a single call after uplift
         // 1) send payload (no header)
         sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
         // 2) send header (completes the packet)
