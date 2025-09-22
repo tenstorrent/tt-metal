@@ -349,7 +349,15 @@ def run_demo_whisper_for_audio_classification_inference(
     total_inputs = num_inputs * batch_size
 
     if not label and len(input_data) < total_inputs:
-        raise ValueError("num_inputs exceeds number of audio files available in folder")
+        # Repeat inputs cyclically to match total_inputs
+        logger.info(
+            f"Only {len(input_data)} audio files available, repeating cyclically to match {total_inputs} total inputs"
+        )
+        original_input_data = input_data.copy()
+        while len(input_data) < total_inputs:
+            input_data.extend(original_input_data)
+        # Trim to exact size needed
+        input_data = input_data[:total_inputs]
 
     for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
         current_batch_size = min(batch_size, total_inputs - i)
