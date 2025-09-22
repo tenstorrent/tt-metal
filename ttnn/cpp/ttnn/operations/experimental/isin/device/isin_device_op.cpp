@@ -11,6 +11,8 @@
 namespace ttnn::operations::experimental::isin {
 
 using namespace common;
+using namespace tt;
+using namespace tt::tt_metal;
 
 IsInDeviceOperation::program_factory_t IsInDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -67,9 +69,9 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
 IsInDeviceOperation::invocation_result_t IsInDeviceOperation::invoke(
     const Tensor& elements_tensor,
     const Tensor& test_elements_tensor,
-    const uint32_t& single_fetch_subchunk_size,
-    const bool& assume_unique,
-    const bool& invert,
+    uint32_t single_fetch_subchunk_size,
+    bool assume_unique,
+    bool invert,
     const std::optional<Tensor>& optional_out) {
     return {{assume_unique, invert, single_fetch_subchunk_size}, {elements_tensor, test_elements_tensor, optional_out}};
 }

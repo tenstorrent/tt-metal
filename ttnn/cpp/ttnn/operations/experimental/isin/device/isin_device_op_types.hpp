@@ -12,10 +12,6 @@
 
 namespace ttnn::operations::experimental::isin {
 
-using namespace common;
-using namespace ttnn;
-using namespace tt::tt_metal;
-
 struct operation_attributes_t {
     const bool assume_unique;
     const bool invert;

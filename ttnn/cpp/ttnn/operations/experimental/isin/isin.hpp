@@ -17,8 +17,8 @@ struct IsInOperation {
     static Tensor invoke(
         const Tensor& elements,
         const Tensor& test_elements,
-        const bool& assume_unique = false,
-        const bool& invert = false,
+        bool assume_unique = false,
+        bool invert = false,
         const std::optional<Tensor>& opt_out = std::nullopt);
 };
 
