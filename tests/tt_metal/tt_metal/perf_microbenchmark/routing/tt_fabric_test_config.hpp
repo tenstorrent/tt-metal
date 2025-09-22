@@ -129,7 +129,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
-inline void append_with_separator(std::string& target, std::string_view separator, Args&&... args) {
+void append_with_separator(std::string& target, std::string_view separator, const Args&... args) {
     // Calculate total size needed
     size_t total_size = target.size();
     auto add_size = [&total_size, &separator](const auto& arg) {

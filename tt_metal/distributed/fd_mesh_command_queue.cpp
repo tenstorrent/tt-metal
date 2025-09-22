@@ -59,15 +59,17 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
+// Don't use std::forward since we are in a loop.
+// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <typename Container, typename Func>
 void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& func) {
-    for (auto it = container.begin(); it != container.end(); ++it) {
-        const auto& coord = *it;
+    std::for_each(std::cbegin(container), std::cend(container), [&](const auto& coord) {
         if (mesh_device->is_local(coord)) {
-            func(coord);
+            std::invoke(func, coord);
         }
-    }
+    });
 }
+// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
