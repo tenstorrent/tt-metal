@@ -159,32 +159,18 @@ class TransformerBlock(Module):
         rename_substate(state, "ff_context.net.0.proj", "ff_context.ff1")
         rename_substate(state, "ff_context.net.2", "ff_context.ff2")
 
-        def _shuffle_ada_norm_linear(prefix: str) -> None:
-            # Rearrange QKV projections such column-fracturing shards the heads
-            def _shuffle(x, in_dim):
-                ndev = self.parallel_config.tensor_parallel.factor
-                x = x.T
-                cur_in_dim = x.shape[0]  # in_dim for weight, 1 for bias
-                expansions = x.shape[-1] // in_dim
-                x = x.reshape(-1, expansions, ndev, in_dim // ndev)
-                x = x.permute(0, 2, 1, 3)
-                x = x.reshape(cur_in_dim, -1)
-                assert x.shape[1] == in_dim * expansions
-                x = x.T
-                return x
-
-            weight_key = f"{prefix}.weight"
-            bias_key = f"{prefix}.bias"
-
-            if weight_key in state:
-                in_dim = state[weight_key].shape[1]
-
-                state[weight_key] = _shuffle(state[weight_key], in_dim)
-                if bias_key in state:
-                    state[bias_key] = _shuffle(state[bias_key].reshape(-1, 1), in_dim).squeeze()
-
-        _shuffle_ada_norm_linear("norm1_linear")
-        _shuffle_ada_norm_linear("norm1_context_linear")
+        _shuffle_linear_output(
+            state,
+            prefix="norm1_linear",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=6,
+        )
+        _shuffle_linear_output(
+            state,
+            prefix="norm1_context_linear",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=2 if self.context_pre_only else 6,
+        )
 
     def forward(
         self,
@@ -302,3 +288,20 @@ class TransformerBlock(Module):
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
+
+
+def _shuffle_linear_output(state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int) -> None:
+    weight_key = f"{prefix}.weight"
+    bias_key = f"{prefix}.bias"
+
+    weight = state.get(weight_key)
+    bias = state.get(bias_key)
+
+    if weight is not None:
+        _, in_dim = weight.shape
+        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
+        state[weight_key] = weight
+
+    if bias is not None:
+        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
+        state[bias_key] = bias
