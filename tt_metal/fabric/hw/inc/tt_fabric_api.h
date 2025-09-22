@@ -141,7 +141,7 @@ void fabric_set_unicast_route(
     packet_header->routing_fields.value = 0;
     packet_header->mcast_params_16 = 0;
     if (my_mesh_id != dst_mesh_id) {
-        // TODO
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
         // dst_dev_id = exit_node;
     }
 
@@ -214,7 +214,7 @@ void fabric_set_mcast_route(
     packet_header->mcast_params_16 = ((uint16_t)s_num_hops << 12) | ((uint16_t)n_num_hops << 8) |
                                      ((uint16_t)w_num_hops << 4) | ((uint16_t)e_num_hops);
     if (my_mesh_id != dst_mesh_id) {
-        // TODO
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
         // dst_dev_id = exit_node;
         // fabric_set_unicast_route(packet_header, my_mesh_id, dst_dev_id, dst_mesh_id, ew_dim);
         // return;
@@ -266,7 +266,7 @@ bool fabric_set_unicast_route(
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && dst_mesh_id != routing_table->my_mesh_id) {
-        // TODO
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
         // dst_dev_id = exit_node;
     }
 
