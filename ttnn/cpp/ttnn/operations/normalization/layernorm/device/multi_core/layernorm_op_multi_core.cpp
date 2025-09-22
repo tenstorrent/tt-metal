@@ -777,6 +777,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (is_post_all_gather && !skip_write_back) {
         out_reshard_CB_size = block_wt_resharded * block_ht * out_single_tile_size;
     }
+
+    // For Welford
+    // The number of tiles needed to pack block_ht tiles into combine buffer.
+    // Each mean/var tile will have TILE_HEIGHT valid entries, which means normally
+    // TILE_HW / TILE_HEIGHT tiles could be packed into a combine buffer tile. However, since Welford's
+    // puts the valid tile data at every other element, only TILE_HW / (TILE_HEIGHT * 2) mean (or var)
+    // tiles can be packed into a single combine buffer tile.
+    uint32_t num_combine_tiles_needed = tt::div_up(block_ht, tt::constants::TILE_HW / (TILE_HEIGHT * 2));
+    uint32_t combine_cb_size = num_combine_tiles_needed * single_tile_size;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -1072,13 +1082,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         // worth of data at a time.
         uint32_t cb_datum_size_bytes = cb_data_format == tt::DataFormat::Float32 ? 4 : /*Float16_b*/ 2;
         uint32_t num_bytes_copy_to_combine = 2 * tt::constants::TILE_HEIGHT * cb_datum_size_bytes;
-
-        // The number of tiles needed to pack block_ht tiles into combine buffer.
-        // Each mean/var tile will have 32 valid entries, which means normally
-        // 32 tiles could be packed into a combine buffer tile. However, since Welford's
-        // puts the valid tile data at every other element, only 16 mean/var
-        // tiles can be packed into a single combine buffer tile.
-        uint32_t num_combine_tiles_needed = tt::div_up(block_ht, 16);
 
         reader_sender_cta[8] = num_bytes_copy_to_combine;
         reader_sender_cta[9] = num_combine_tiles_needed;
@@ -1424,13 +1427,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         // use_welford ? ex_combine : ex all-gather reduce result
         uint32_t ex_cb_index = tt::CBIndex::c_9;
         tt::tt_metal::CircularBufferConfig ex_cb_config =
-            tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex_cb_index, cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(
+                use_welford ? combine_cb_size : ex_CB_size, {{ex_cb_index, cb_data_format}})
                 .set_page_size(ex_cb_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_config);
         // use_welford ? varx_global : ex_external
         uint32_t ex_cb_external_index = tt::CBIndex::c_10;
         tt::tt_metal::CircularBufferConfig ex_cb_external_config =
-            tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external_index, cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(
+                use_welford ? ex_global_CB_size : ex_external_CB_size, {{ex_cb_external_index, cb_data_format}})
                 .set_page_size(ex_cb_external_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
@@ -1443,7 +1448,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // use_welford ? varx_combine : ex2
     uint32_t ex2_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig ex2_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(use_welford ? combine_cb_size : ex_CB_size, {{ex2_cb_index, cb_data_format}})
             .set_page_size(ex2_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
     if (!use_welford) {
