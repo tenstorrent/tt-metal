@@ -115,7 +115,7 @@ def run_yolov9c_demo(
             processed = preprocess([img], res=(640, 640))
             preprocessed_im.append(processed)
 
-        if len(preprocessed_im) >= batch_size:
+        if len(preprocessed_im) > batch_size:
             break
 
         im = torch.cat(preprocessed_im, dim=0)
@@ -271,7 +271,7 @@ def run_yolov9c_demo_dataset(
     [
         (
             1,
-            "models/demos/yolov9c/demo/images",
+            "models/demos/yolov9c/demo/images/image.png",
         ),
     ],
 )
@@ -357,7 +357,7 @@ def test_demo_detect_dataset(
     [
         (
             1,
-            "models/demos/yolov9c/demo/images",
+            "models/demos/yolov9c/demo/images/image.png",
         ),
     ],
 )
@@ -443,7 +443,7 @@ def test_demo_detect_dataset_dp(
     [
         (
             1,
-            "models/demos/yolov9c/demo/images",
+            "models/demos/yolov9c/demo/images/image.png",
         ),
     ],
 )
@@ -529,7 +529,7 @@ def test_demo_segment_dataset(
     [
         (
             1,
-            "models/demos/yolov9c/demo/images",
+            "models/demos/yolov9c/demo/images/image.png",
         ),
     ],
 )
