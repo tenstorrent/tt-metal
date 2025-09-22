@@ -463,7 +463,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
     CompareKernelVsComposite({64U, 1U, 256U, 384U});
 }
 
-// Test training-like shapes with NanoGPT dimensions
+// Test training-like shapes with LLaMA 7B dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
     CompareKernelVsComposite({1U, 1U, 512U, 4096U});
 }
