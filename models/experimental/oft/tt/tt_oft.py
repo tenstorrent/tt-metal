@@ -91,13 +91,13 @@ def calculate_initialization_parameters(
         )
         btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    top_left_bc_tt = ttnn.reshape(top_left_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
-    btm_right_bc_tt = ttnn.reshape(btm_right_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
-    top_right_bc_tt = ttnn.reshape(top_right_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
-    btm_left_bc_tt = ttnn.reshape(btm_left_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
+    top_left_bc_tt = ttnn.reshape(top_left_bc_tt, [batch_size, grid_h, 1, grid_w * top_left_bc_tt.shape[-1]])
+    btm_right_bc_tt = ttnn.reshape(btm_right_bc_tt, [batch_size, grid_h, 1, grid_w * btm_right_bc_tt.shape[-1]])
+    top_right_bc_tt = ttnn.reshape(top_right_bc_tt, [batch_size, grid_h, 1, grid_w * top_right_bc_tt.shape[-1]])
+    btm_left_bc_tt = ttnn.reshape(btm_left_bc_tt, [batch_size, grid_h, 1, grid_w * btm_left_bc_tt.shape[-1]])
 
-    visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     return (
         [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
         visible_tt,
@@ -206,18 +206,10 @@ class OFT:
         btm_left = ttnn.permute(btm_left, (0, 2, 1, 3))
         btm_left = ttnn.to_layout(btm_left, ttnn.TILE_LAYOUT)
 
-        vox_feats = ttnn.subtract(top_left, top_right)
-        vox_feats = ttnn.add(vox_feats, btm_right)
-        vox_feats = ttnn.subtract(vox_feats, btm_left)
-
-        vox_feats = ttnn.mul(vox_feats, self.area)  # mull because area is 1/area
-        vox_feats = ttnn.mul(vox_feats, self.visible)
+        vox_feats = (top_left - top_right + btm_right - btm_left) * self.area * self.visible
 
         n, h, w, c = vox_feats.shape
         logger.debug(f"TTNN: {n=}, {h=}, {w=}, {c=}")
-
-        # vox_feats = ttnn.permute(vox_feats, (0, 2, 3, 1))
-        # vox_feats = ttnn.reshape(vox_feats, (1, 1, w, h * c))  # PCC 0.0019216915015543698
 
         if vox_feats.get_layout() != ttnn.TILE_LAYOUT:
             vox_feats = ttnn.to_layout(vox_feats, ttnn.TILE_LAYOUT)

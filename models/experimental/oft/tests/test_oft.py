@@ -136,23 +136,3 @@ def test_oft_forward(
             )
 
     assert all(all_passed), f"OFT module outputs did not pass the PCC check {all_passed=}"
-
-
-def test_compare_tensors():
-    ref_vox_feats_sub_1 = np.load("ref_vox_feats_sub_1.npy").flatten()
-    ref_vox_feats_add_1 = np.load("ref_vox_feats_add_1.npy").flatten()
-    ref_vox_feats_sub_2 = np.load("ref_vox_feats_sub_2.npy").flatten()
-    ref_vox_feats_mul_1 = np.load("ref_vox_feats_mul_1.npy").flatten()
-    ref_vox_feats_mul_2 = np.load("ref_vox_feats_mul_2.npy").flatten()
-    ref_vox_feats = np.load("ref_vox_feats.npy").flatten()
-    ref_vox_feats_pre_linear = np.load("ref_vox_feats_pre_linear.npy").flatten()
-
-    vox_feats_sub_1 = np.load("vox_feats_sub_1.npy").flatten()
-    vox_feats_add_1 = np.load("vox_feats_add_1.npy").flatten()
-    vox_feats_sub_2 = np.load("vox_feats_sub_2.npy").flatten()
-    vox_feats_mul_1 = np.load("vox_feats_mul_1.npy").flatten()
-    vox_feats_mul_2 = np.load("vox_feats_mul_2.npy").flatten()
-    vox_feats = np.load("vox_feats.npy").flatten()
-    vox_feats_pre_linear = np.load("vox_feats_pre_linear.npy").flatten()
-
-    print(ref_vox_feats_mul_1.mean(), vox_feats_mul_1.mean())
