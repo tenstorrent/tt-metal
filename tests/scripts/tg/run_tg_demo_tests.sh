@@ -139,6 +139,13 @@ run_tg_sentence_bert_tests() {
 
 }
 
+run_tg_whisper_tests() {
+
+  pytest models/demos/tg/whisper/demo/demo.py::test_demo_for_conditional_generation
+
+}
+
+
 run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
@@ -157,6 +164,8 @@ run_tg_demo_tests() {
     run_tg_sd35_demo_tests
   elif [[ "$1" == "sentence_bert" ]]; then
     run_tg_sentence_bert_tests
+  elif [[ "$1" == "whisper" ]]; then
+    run_tg_whisper_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
