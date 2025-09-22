@@ -133,29 +133,6 @@ def run_max_pool(
     else:
         ttnn_input = ttnn.from_torch(torch_input_permuted, in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    pre_shard = shard_scheme == None
-    if pre_shard:
-        parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            batch_size=in_n,
-            input_channels=in_c,
-            output_height=out_h,
-            output_width=out_w,
-            output_channels=in_c,
-            input_channels_alignment=32,
-            compute_grid_size=device.compute_with_storage_grid_size(),
-            block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            enable_channels_padding=False,
-            is_shard_height_tile_multiple=in_dtype == ttnn.bfloat8_b,
-            is_shard_width_tile_multiple=in_dtype == ttnn.bfloat8_b,
-        )
-        sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            tensor_shape=ttnn_input.shape,
-            parallel_config=parallel_config,
-            tile_size=32 if in_dtype == ttnn.bfloat8_b else 1,
-        )
-        ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
-
     # run ttnn maxpool2d
     ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
