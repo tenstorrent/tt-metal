@@ -228,6 +228,6 @@ struct tensix_fabric_connections_l1_info_t {
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "fabric/hw/inc/fabric_routing_table_interface.h"
+#include "fabric/hw/inc/fabric_routing_direction_interface.h"
 #include "fabric/hw/inc/fabric_routing_path_interface.h"
 #endif
