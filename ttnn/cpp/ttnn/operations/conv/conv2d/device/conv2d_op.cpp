@@ -337,16 +337,9 @@ tt::tt_metal::operation::OpPerformanceModel OptimizedConvNew::create_op_performa
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
-    const auto& t = output_tensors.at(0);
-    if (t.storage_type() != StorageType::DEVICE) {
-        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
-    }
-
-    auto arch = t.storage_type() == StorageType::DEVICE
-                    ? t.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
-    const int tensix_mul_adds_per_cycle_lofi = (arch == tt::ARCH::WORMHOLE_B0) ? 4096 : 2048;
+    const CoreCoord compute_grid = output_tensors.at(0).device()->compute_with_storage_grid_size();
+    const int num_cores = compute_grid.x * compute_grid.y;
+    constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
     auto [output_height, output_width] = calculate_output_image_size(
