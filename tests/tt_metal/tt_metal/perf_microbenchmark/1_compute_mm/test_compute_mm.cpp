@@ -321,16 +321,7 @@ int main(int argc, char** argv) {
         } else if (!fast_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
-#if !defined(TRACY_ENABLE)
-            log_error(
-                tt::LogTest,
-                "In the slow dispatch mode, device profiler is used to measure the "
-                "profiler option using ./build_metal.sh --enable-profiler");
-
-            TT_ASSERT(false);
-#endif
-
-            auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
             TT_FATAL(
                 device_profiler,
                 "Before running the program, do one of the following in a shell: "
