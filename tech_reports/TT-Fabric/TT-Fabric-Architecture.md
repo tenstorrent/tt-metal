@@ -48,17 +48,19 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [2.3. TT-transport (Layer 4)](#layer_4)
 
-[2.3.1. Fabric Virtual Channel](#fvc)
+[2.3.1. Dateline Virtual Channel](#dvc)
 
-[2.3.2. Fabric Control Virtual Channel](#fvcc)
+[2.3.2. Control Virtual Channel](#cvc)
 
 [2.4. TT-session (Layer 5)](#layer_5)
-
-[2.4.1. Sockets over TT-Fabric](#sockets)
 
 [3. Fabric Router](#router)
 
 [3.1. Buffers and Virtual Channels](#rb_per_vc)
+
+[3.1.1. 1D Line Virtual Channel](#1dlvc)
+
+[3.1.2. 2D Mesh Virtual Channel](#2dmvc)
 
 [4. Read/Write API Specification](#rw_api)
 
@@ -76,53 +78,49 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [4.7. Asynchronous Atomic Read and Increment](#async_atomic_rd_inc)
 
-[5. Socket API Specification](#socket_api)
+[5. Sockets over TT-Fabric](#socket_api)
 
-[5.1. Socket Open](#socket_open)
+[6. Reliability](#reliability)
 
-[5.2. Socket Close](#socket_close)
+[6.1. Automatic Traffic Rerouting](#rerouting)
 
-[5.3. Socket Connect](#socket_connect)
+[7. Deadlock Avoidance and Mitigation](#deadlocks)
 
-[5.4. Socket Send](#socket_send)
+[7.1. Dimension Ordered Routing](#dim_order_routing)
 
-[6. Deadlock Avoidance and Mitigation](#deadlocks)
+[7.2. Edge Disjoint Routing](#disjoint_routing)
 
-[6.1. Dimension Ordered Routing](#dim_order_routing)
+[7.3. Fabric Virtual Channels](#fab_vcs)
 
-[6.2. Edge Disjoint Routing](#disjoint_routing)
+[7.4. Time To Live (TTL)](#ttl)
 
-[6.3. Fabric Virtual Channels](#fab_vcs)
+[7.5. Timeout](#timeout)
 
-[6.4. Time To Live (TTL)](#ttl)
+[7.6. Limitations](#limits)
 
-[6.5. Timeout](#timeout)
+[8. TT-Fabric Model](#model)
 
-[6.6. Limitations](#limits)
+[8.1. Serialization and Visualization](#visualization)
 
-[7. TT-Fabric Model](#model)
+[8.2. Data Plane Simulator](#simulator)
 
-[7.1. Serialization and Visualization](#visualization)
+[8.3. Modelling External Disruptors and Buffer Limits](#disruptors)
 
-[7.2. Data Plane Simulator](#simulator)
+[9. System Specification](#system_spec)
 
-[7.3. Modelling External Disruptors and Buffer Limits](#disruptors)
+[9.1. System Components](#system_components)
 
-[8. System Specification](#system_spec)
+[9.2. TG](#tg)
 
-[8.1. System Components](#system_components)
+[9.3. Multi-Host TGG](#tgg)
 
-[8.2. TG](#tg)
+[9.4. Quanta 2 Galaxy System](#ubb_galaxy)
 
-[8.3. Multi-Host TGG](#tgg)
+[10. Resource Allocation](#resource_alloc)
 
-[8.4. Quanta 2 Galaxy System](#ubb_galaxy)
+[10.1. Available Dispatch Cores](#available_cores)
 
-[9. Resource Allocation](#resource_alloc)
-
-[9.1. Available Dispatch Cores](#available_cores)
-
-[9.2. Fast Dispatch and Fabric Kernel Resouces](#fd_and_fabric)
+[10.2. Fast Dispatch and Fabric Kernel Resouces](#fd_and_fabric)
 
 # 1 Overview <a id="overview"></a>
 
@@ -369,27 +367,15 @@ The following diagram shows how the four ethernet ports per direction on WH mesh
 
 ![](images/image012.png)
 
-### 2.2.3 Automatic Traffic Rerouting <a id="rerouting"></a>
-
-TT-Fabric supports device meshes that can scale up to hundreds of thousands of devices. On such a large scale, the probability of some ethernet links going down is non-negligible. An interconnect that does not implement link redundancy and is not able to work around some broken ethernet links will face frequent work interruptions and require a lot of system management calls. We intend to build redundancy into TT-Fabric network stack such that if some ethernet links on a fabric node go down, fabric can automatically reroute blocked traffic over an available ethernet link. If there is at least 1 available link in the same direction as the broken link, TT-Fabric's redundancy implementation will be completely transparent to workloads running on the system. End user applications may notice a temporary pause and lower data rates but should not otherwise require any intervention. TT-Fabric will also notify Control Plane of the rerouting status so that appropriate action may be taken on the system management front to service the broken ethernet links. User workload will be able to reach its next checkpoint without network interruption at degraded data rates. At that point Control plane can update routing tables to take out broken links from routing network. System maintenance can also be performed to fix ethernet link issues before resuming user work.
-
-To support redundancy, each fabric router has an Ethernet Fallback Channel (EFC) that is brought into service by other fabric routers in a node when their dedicated ethernet links become unreliable or completely dysfunctional. EFC can be shared by multiple routers when multiple ethernet links lose connection. EFC is not virtualized and operates at Layer 2. When routers push data into EFC, special layer 2 headers are appended to traffic so that impacted fabric router’s native FVCs can be reliably connected to their receiver channels on either side of the broken ethernet links.
-
-Fabric routers exchange credits with each for traffic flow control rather than the EFC so that EFC is available for all reroute traffic. Any FVC back pressure is kept within the fabric router buffers and does not propagate to EFC layer buffers.
-
-The following diagram shows how traffic gets rerouted when Eth A link becomes inactive. Broken arrows show all the rerouted FVC traffic in both directions.
-
-![](images/image013.png)
-
 ## 2.3 TT-transport (Layer 4) <a id="layer_4"></a>
 
 TT-Transport implements virtual channels that are used to carry packets in the routing netowrk. A virtual channel is composed of multiple buffers where each buffer holds packets packets from a dedicated source. Virtual channel buffer size depends upon amount of available SRAM space on fabric router. Traffic from multiple sources on a virtual channel serialized. All traffic on the same virtual channel is guaranteed to be ordered. TT-Fabric currently supports 1 user visible virtual channel per router.
 
-### 2.3.1 Dateline Virtual Channel <a id="fvc"></a>
+### 2.3.1 Dateline Virtual Channel <a id="dvc"></a>
 
 To avoid cyclic dependency deadlocks on Ring/Torus topologies, TT-Fabric has an internal dateline virtual channel. TT-Session APIs can only inject traffic into the data virtual channels. When packets cross the dateline, tt-fabric routers automatically switch the packet flow to the dateline virtual channel to avoid deadlock.
 
-### 2.3.2 Control Virtual Channel <a id="fvcc"></a>
+### 2.3.2 Control Virtual Channel <a id="cvc"></a>
 
 TT-Fabric uses a dedicated virtual channel to route all control messages in the system. This prevents control traffic from interfering and competing with data traffic.
 
@@ -475,7 +461,7 @@ The following diagrams show the supported 1D and 2D TT-Fabric topologies.
                 █  : Fabric Router
                 ┄┄ : 1-D Row Ring Fabric. There are 8 independent ring instances.
                 ┇  : 1-D Column Ring Fabric. There are 4 independent ring instances.
- 
+
              ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐
              ┊         ┌●            ┌○            ┌◎            ┌┅┅┅┅┅┅┅┅┅┅┅┅┐
              ┊         ┇             ┇             ┇             ┇         ┊  ┇
@@ -599,7 +585,7 @@ The following diagrams show the supported 1D and 2D TT-Fabric topologies.
              ║  ┌──────┼──────┬──────┼──────┬──────┼──────┬──────┼──────┐  ║  ║
              ║  │0     █      │1     █      │2     █      │3     █      │  ║  ║
              ║  │      ║      │      ║      │      ║      │      ║      │  ║  ║
-             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║ 
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
                 │      ║      │      ║      │      ║      │      ║      │     ║
                 │      █      │      █      │      █      │      █      │     ║
                 ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
@@ -607,19 +593,19 @@ The following diagrams show the supported 1D and 2D TT-Fabric topologies.
              ★  │      ║      │      ║      │      ║      │      ║      │  ★  ║
              ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
                 │      ║      │      ║      │      ║      │      ║      │     ║
-                │      █      │      █      │      █      │      █      │     ║         
-                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║         
-                │8     █      │9     █      │10    █      │11    █      │     ║         
-             ☆  │      ║      │      ║      │      ║      │      ║      │  ☆  ║         
-             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║         
-                │      ║      │      ║      │      ║      │      ║      │     ║         
-                │      █      │      █      │      █      │      █      │     ║         
-                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║         
-                │12    █      │13    █      │14    █      │15    █      │     ║         
-             ✦  │      ║      │      ║      │      ║      │      ║      │  ✦  ║         
-             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║         
+                │      █      │      █      │      █      │      █      │     ║
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
+                │8     █      │9     █      │10    █      │11    █      │     ║
+             ☆  │      ║      │      ║      │      ║      │      ║      │  ☆  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
                 │      ║      │      ║      │      ║      │      ║      │     ║
-                │      █      │      █      │      █      │      █      │     ║    
+                │      █      │      █      │      █      │      █      │     ║
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
+                │12    █      │13    █      │14    █      │15    █      │     ║
+             ✦  │      ║      │      ║      │      ║      │      ║      │  ✦  ║
+             ╚══┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼█═════╬═════█┼══╝  ║
+                │      ║      │      ║      │      ║      │      ║      │     ║
+                │      █      │      █      │      █      │      █      │     ║
                 ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ║
                 │16    █      │17    █      │18    █      │19    █      │     ║
              ✧  │      ║      │      ║      │      ║      │      ║      │  ✧  ║
@@ -646,7 +632,7 @@ The following diagrams show the supported 1D and 2D TT-Fabric topologies.
                 │      █      │      █      │      █      │      █      │     ║
                 └──────┼──────┴──────┼──────┴──────┼──────┴──────┼──────┘     ║
                        ║             ║             ║             ║            ║
-                       ╚═●           ╚═○           ╚═◎           ╚════════════╝     
+                       ╚═●           ╚═○           ╚═◎           ╚════════════╝
 
 ```
 
@@ -656,7 +642,7 @@ A virtual channel is compirsed of several buffers used to transport incoming and
 
 TT-Fabric supports one user visible bidirectional virtual channel per fabric router. The number of virtual channels as well as the number of sender and receiver channels in a virtual channel depens on fabric topology. The number of slots in sender/receiver channel depend on amount of memory available for buffering.
 
-### 3.1.1 1D Line Virtual Channel <a id="2dmvc"></a>
+### 3.1.1 1D Line Virtual Channel <a id="1dlvc"></a>
 Basic architecture of a 1D line virtual channel is shown in the following diagram. In a 1D line, the outgoing traffic on a router is either passthrough packets from the fabric node's neighbor or the traffic originating from node's worker. Hence the router requires 2 Sender Channels. Fabric router round-robbins through the 2 sender channels and forwards packets over ethernet. A virtual channel only requires 1 Receiver channel. Fabric router examines the headers of packets arriving in the Receiver Channel to make processing decisions. A packet in the receiver channel might be passing through the router's node, or destined for the router's node or both (in the case of a multi-cast packet)
 
 ```
@@ -676,18 +662,18 @@ Basic architecture of a 1D line virtual channel is shown in the following diagra
             └───────────────┬───┘       │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │              │  E T H E R N E T │◀═══▶
                             ▲           │  └───────────────────────────────┘  │      ╔═════◀═└──────────────────┘
                             ║           ├─────────────────────────────────────┤      ║
-                            ║           │  RECEIVER CHANNEL (1)               │      ║  
-                            ║           │  ┌───────────────────────────────┐  │      ║  
-                            ║           │  │ Receiver Channel 0 (16 slots) │  │      ║  
-                            ║           │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║  
-                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════╝  
+                            ║           │  RECEIVER CHANNEL (1)               │      ║
+                            ║           │  ┌───────────────────────────────┐  │      ║
+                            ║           │  │ Receiver Channel 0 (16 slots) │  │      ║
+                            ║           │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║
+                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════╝
                                         │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
                                         │  └───────────────────────────────┘  │
                                         └─────────────────────────────────────┘
 
 ```
 
-### 3.1.1 2D Mesh Virtual Channel <a id="2dmvc"></a>
+### 3.1.2 2D Mesh Virtual Channel <a id="2dmvc"></a>
 Basic architecture of a 2D mesh virtual channel is shown in the following diagram. In a 2D mesh, the outgoing traffic on a router is either passthrough packets from three of the fabric node's neighbors or the traffic originating from node's worker. Hence the router requires 4 Sender Channels. Fabric router iterates over the channels and processes the packets similar to 1D topology.
 
 
@@ -716,7 +702,7 @@ Basic architecture of a 2D mesh virtual channel is shown in the following diagra
                             ║       ║   │  ┌───────────────────────────────┐  │       ║  ║
                             ║       ║   │  │ Sender Channel 3 (8 slots)    │  │       ║  ║
                             ║       ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │       ║  ║
-                            ║       ╚═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╝  ║    
+                            ║       ╚═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╝  ║
                             ║           │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │          ║
                             ║           │  └───────────────────────────────┘  │          ║
                             ║           ├─────────────────────────────────────┤          ║
@@ -724,7 +710,7 @@ Basic architecture of a 2D mesh virtual channel is shown in the following diagra
                             ║           │  ┌───────────────────────────────┐  │          ║
                             ║           │  │ Receiver Channel 0 (16 slots) │  │          ║
                             ║           │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │          ║
-                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════════╝     
+                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════════╝
                                         │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
                                         │  └───────────────────────────────┘  │
                                         └─────────────────────────────────────┘
@@ -746,7 +732,7 @@ The following sections describe supported APIs and their operation.
 ```
 Point to API Header
 ```
-Asynchronous write is used to write data to a remote receiver. Sender does not need to wait for all the data to be written to receiver. Data is guaranteed to be written ordered. 
+Asynchronous write is used to write data to a remote receiver. Sender does not need to wait for all the data to be written to receiver. Data is guaranteed to be written ordered.
 
 ## 4.2 Asynchronous Atomic Increment <a id="async_atomic_inc"></a>
 ```
@@ -772,13 +758,26 @@ Multicast write is used to write to more than one remote receiver with the same 
 We have implemented sockets as send and receive operatoins that use tt-fabric asynchronous write APIs to implement flowcontroled data transfer between a sender and receiver.
 TODO: Add more information on send/receive operations.
 
-# 6 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
+# 6 Reliability <a id="reliability"></a>
+## 6.1 Automatic Traffic Rerouting <a id="rerouting"></a>
+
+TT-Fabric supports device meshes that can scale up to hundreds of thousands of devices. On such a large scale, the probability of some ethernet links going down is non-negligible. An interconnect that does not implement link redundancy and is not able to work around some broken ethernet links will face frequent work interruptions and require a lot of system management calls. We intend to build redundancy into TT-Fabric network stack such that if some ethernet links on a fabric node go down, fabric can automatically reroute blocked traffic over an available ethernet link. If there is at least 1 available link in the same direction as the broken link, TT-Fabric's redundancy implementation will be completely transparent to workloads running on the system. End user applications may notice a temporary pause and lower data rates but should not otherwise require any intervention. TT-Fabric will also notify Control Plane of the rerouting status so that appropriate action may be taken on the system management front to service the broken ethernet links. User workload will be able to reach its next checkpoint without network interruption at degraded data rates. At that point Control plane can update routing tables to take out broken links from routing network. System maintenance can also be performed to fix ethernet link issues before resuming user work.
+
+To support redundancy, each fabric router has an Ethernet Fallback Channel (EFC) that is brought into service by other fabric routers in a node when their dedicated ethernet links become unreliable or completely dysfunctional. EFC can be shared by multiple routers when multiple ethernet links lose connection. EFC is not virtualized and operates at Layer 2. When routers push data into EFC, special layer 2 headers are appended to traffic so that impacted fabric router’s native FVCs can be reliably connected to their receiver channels on either side of the broken ethernet links.
+
+Fabric routers exchange credits with each for traffic flow control rather than the EFC so that EFC is available for all reroute traffic. Any FVC back pressure is kept within the fabric router buffers and does not propagate to EFC layer buffers.
+
+The following diagram shows how traffic gets rerouted when Eth A link becomes inactive. Broken arrows show all the rerouted FVC traffic in both directions.
+
+![](images/image013.png)
+
+# 7 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
 
 Like any other network, TT-Fabric faces deadlock hazards. Circular dependencies, resource contention, buffer exhaustion are some of the conditions that can lead to deadlocks in the routing network. We are building features into TT-Fabric to minimize chances of hitting deadlocks. In the event of a deadlock, TT-Fabric should be able to detect it, try to mitigate the effects and notify the Control Plane.
 
 The following sections describe the TT-Fabric features for deadlock avoidance and mitigation.
 
-## 6.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
+## 7.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
 
 Cyclic dependency deadlock happens when a set of nodes form a cyclic traffic pattern. Each node’s outgoing traffic is waiting on resources in the next hop to make progress. Since the traffic pattern is a cycle, all nodes end up waiting for the next hop’s resource and form a routing deadlock.
 
@@ -807,15 +806,15 @@ Packet from D2 to D3 and D3 to D2 are routed in X direction first thus avoiding 
 
 TT-Fabric is not limited to just one kind of routing bias. Since routing tables are fully instantiated, any reasonable routing scheme can be devised and mapped onto fabric router tables.
 
-## 6.2 Edge Disjoint Routing <a id="disjoint_routing"></a>
+## 7.2 Edge Disjoint Routing <a id="disjoint_routing"></a>
 
 Edge disjoint routing uses different entry/exit nodes on network edges for traffic that is incoming/outgoing from current network. In TT-Fabric, we can set up L1 routing tables such that cross traffic between meshes uses different exit nodes. Opposite traffic flows will go through different fabric routers which can reduce chances of resource contention.
 
-## 6.3 Fabric Virtual Channels <a id="fab_vcs"></a>
+## 7.3 Fabric Virtual Channels <a id="fab_vcs"></a>
 
 As stated earlier, FVCs guarantee independent progress of traffic relative to other FVCs. Traffic that is expected to contend for network or endpoint resources can be routed via unique FVCs so that one traffic stream does not get stuck behind other traffic that is stalled due to a stalled endpoint.
 
-## 6.4 Time To Live (TTL) <a id="ttl"></a>
+## 7.4 Time To Live (TTL) <a id="ttl"></a>
 
 TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets have a TTL parameter. On traffic initiating end or router, TTL is initialized to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
 
@@ -841,19 +840,19 @@ With a TTL of 10 the packet hops are shown in the table below. As the packet loo
 | 7 | 1 |
 | 11 | 0  Fabric Router at Device 11 drops the packet with expired TTL |
 
-## 6.5 Timeout <a id="timeout"></a>
+## 7.5 Timeout <a id="timeout"></a>
 
 Timeouts are TT-Fabric's last line of defense against deadlocks. Timeout is a detection mechanism rather than a prevention mechanism. Schemes mentioned in previous sections are meant to prevent or minimize deadlocks. If a routing deadlock slips through, TT-Fabric will detect it through timeout. If a packet head is not able to make progress through a fabric router within the specified timeout, it may indicate some deadlock due to resource contention, erroneous routing, stalled endpoint etc. Fabric router encountering routing timeout will drop the packet and drain its data from the fabric buffers. The Fabric router will also notify Control Plane of the event.
 
-## 6.6 Limitations <a id="limits"></a>
+## 7.6 Limitations <a id="limits"></a>
 
 TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
 
-# 7 TT-Fabric Model <a id="model"></a>
+# 8 TT-Fabric Model <a id="model"></a>
 
 TT-Fabric Model is a software functional model of all components of the Fabric. The purpose of the Fabric Model is to fully simulate the ethernet traffic in the Fabric. It will provide a ground truth for the state of any configuration of the Fabric, to help with debug and rerouting decisions. The Fabric Model will include a new piece of software to emulate the physical data plane, but otherwise shares the software components of the TT-Control Plane and Fabric Router.
 
-## 7.1 Serialization and Visualization <a id="visualization"></a>
+## 8.1 Serialization and Visualization <a id="visualization"></a>
 
 TT-Fabric Model will serialize these components of the Fabric:
 
@@ -866,7 +865,7 @@ TT-Fabric Model will serialize these components of the Fabric:
 * Packet traffic across data plane
   + We should be able to download traffic serialization from software simulator to run on hardware, and vice versa.
 
-## 7.2 Data Plane Simulator <a id="simulator"></a>
+## 8.2 Data Plane Simulator <a id="simulator"></a>
 
 The data plane simulator will model all paths ethernet packets may take across the hardware, except for NOC activity between a device and the Fabric. Key components:
 
@@ -877,15 +876,15 @@ The data plane simulator will model all paths ethernet packets may take across t
 * Directed single threaded testing for buffer limits and rerouting
 * Random testing with multi-threading. One thread per device to simulate requests to the Fabric and one thread for external disruptors.
 
-## 7.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
+## 8.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
 
 TT-Fabric Model will have hooks to simulate failed links, to trigger and verify rerouting in the control plane. It will also have SW APIs to simulate back-pressured buffers and VCs, to detect possible deadlock scenarios.
 
-# 8 System Specification <a id="system_spec"></a>
+# 9 System Specification <a id="system_spec"></a>
 
 To configure and launch TT-Fabric on a physical system we need to specify the hardware components of the system in a hierarchy that is modular and scalable. System specification should be in a format that can be parsed by the Control Plane. The following sections describe our current approach which is to use a yaml to describe the topology of a physical machine. The system specification file contains all the necessary information to enable a user to build their AI workload offline. Before launching the workload, Control Plane validates the physical connectivity of the system to ascertain that it conforms to the system specification yaml file.
 
-## 8.1 System Components <a id="system_components"></a>
+## 9.1 System Components <a id="system_components"></a>
 
 To be able to describe the topology of a physical system, we need to identify the basic building blocks that are used to build an AI machine. This section lists the building blocks for a physical Tenstorrent machine.
 
@@ -907,7 +906,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 
 * **Graph**: A set of meshes that makes up the full system. Two neighboring meshes are not required to be fully connected. In addition, all the meshes are not required to be connected to each other. Traffic from a source mesh can traverse multiple other meshes before it reaches its destination mesh.
 
-## 8.2 TG <a id="tg"></a>
+## 9.2 TG <a id="tg"></a>
 
 ![](images/image020.png)
 
@@ -993,7 +992,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 </table>
 
 
-## 8.3 Multi-Host TGG <a id="tgg"></a>
+## 9.3 Multi-Host TGG <a id="tgg"></a>
 
 ![](images/image021.png)
 <table>
@@ -1115,7 +1114,7 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 
 </table>
 
-## 8.4 Quanta 2 Galaxy System <a id="ubb_galaxy"></a>
+## 9.4 Quanta 2 Galaxy System <a id="ubb_galaxy"></a>
 
 <table>
   <tr>
@@ -1163,10 +1162,10 @@ To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh 
 
 </table>
 
-# 9 Resource Allocation <a id="resource_alloc"></a>
+# 10 Resource Allocation <a id="resource_alloc"></a>
 This seciton estimates the hardware resources required to implement different TT-Fabric workers.
 
-## 9.1 Available Dispatch Cores <a id="available_cores"></a>
+## 10.1 Available Dispatch Cores <a id="available_cores"></a>
 
 | Idle Eth Core | Worker (ROW) | Worker (COL) | Idle Eth Core |
 | --- | --- | --- | --- |
@@ -1177,7 +1176,7 @@ This seciton estimates the hardware resources required to implement different TT
 | Blackhole Chip |  |  |  |
 | Galaxy Blackhole Chip |  |  |  |
 
-## 9.2 Fast Dispatch and Fabric Kernel Resouces <a id="fd_and_fabric"></a>
+## 10.2 Fast Dispatch and Fabric Kernel Resouces <a id="fd_and_fabric"></a>
 
 ![](images/image022.png)
 
