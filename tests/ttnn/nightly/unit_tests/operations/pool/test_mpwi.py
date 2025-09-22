@@ -47,6 +47,8 @@ def test_max_pool2d_with_indices(device):
         out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
+    print("computed output shape:", (in_n, out_h, out_w, in_c))
+
     # Create tensor filled with height and width coordinates
     torch.manual_seed(0)
     # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -101,11 +103,9 @@ def test_max_pool2d_with_indices(device):
     )
     ttnn_outputs_exactly_equal = True
 
-    print("\nTTNN max pool results:")
-    print("Output shape:", ttnn.to_torch(ttnn_output).shape)
-    # print("Output:\n", ttnn.to_torch(ttnn_output))
-    print("Indices shape:", ttnn.to_torch(indices).shape)
-    # print("Indices:\n", ttnn.to_torch(indices))
+    # Compare outputs using allclose
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+    ttnn_indices_torch = ttnn.to_torch(indices)
 
     # Check that ttnn_output_base is exactly equal to ttnn_output
     ttnn_output_base = ttnn.max_pool2d(
@@ -125,7 +125,7 @@ def test_max_pool2d_with_indices(device):
         reallocate_halo_output=True,
         return_indices=False,
     )
-    ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
+    ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn_output_torch)
     print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
 
     # Run PyTorch max pool for reference
@@ -148,21 +148,28 @@ def test_max_pool2d_with_indices(device):
     torch_output_reshaped = torch_output.permute(0, 2, 3, 1)  # N, H, W, C
     torch_indices_reshaped = torch_indices.permute(0, 2, 3, 1)  # N, H, W, C
 
-    print("PyTorch max pool results:")
+    print("PyTorch output shapes:")
     print("Output shape:", torch_output_reshaped.shape)
     # print("Output:\n", torch_output_reshaped)
     print("Indices shape:", torch_indices_reshaped.shape)
     # print("Indices:\n", torch_indices_reshaped)
-
-    # Compare outputs using allclose
-    ttnn_output_torch = ttnn.to_torch(ttnn_output)
-    ttnn_indices_torch = ttnn.to_torch(indices)
 
     # Reshape TTNN outputs to match PyTorch shape for comparison
     # TTNN output is in shape (1, 1, out_h*out_w, channels)
     # Calculate output dimensions using the pooling formula
     ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
     ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
+
+    print("\nTTNN output shapes:")
+    print("Output shape:", ttnn_output_reshaped.shape)
+    # print("Output:\n", ttnn.to_torch(ttnn_output))
+    print("Indices shape:", ttnn_indices_reshaped.shape)
+    # print("Indices:\n", ttnn.to_torch(indices))
+
+    # print("TTNN:")
+    # print(ttnn_indices_reshaped[0, :, :, 0])
+    # print("PyTorch:")
+    # print(torch_indices_reshaped[0, :, :, 0])
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if ttnn_dtype == ttnn.bfloat8_b:
