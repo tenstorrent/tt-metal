@@ -110,6 +110,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
+          alert-all: 'true'
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
