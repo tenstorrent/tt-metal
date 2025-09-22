@@ -57,7 +57,8 @@ inline void _llk_pack_dest_section_done_()
 }
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout>
-inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
+inline void _llk_init_packer_dest_offset_registers_(
+    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
 {
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
 

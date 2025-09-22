@@ -19,10 +19,10 @@ using namespace ckernel::unpacker;
 // transpose is unused, math is adjusted to take into account srca face layout when transpose=true
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
-    const bool transpose,
+    [[maybe_unused]] const bool transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
-    const std::uint32_t kt_dim,
+    [[maybe_unused]] const std::uint32_t kt_dim,
     const bool unpA_partial_face,
     const bool unpB_partial_face)
 {
@@ -242,8 +242,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const bool unpA_partial_face        = false,
     const bool unpB_partial_face        = false)
 {
-    const bool reuse_a = ct_dim >= rt_dim;
-
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
@@ -291,13 +289,13 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t tile_index_b,
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const bool unpA_partial_face        = false,
-    const bool unpB_partial_face        = false,
-    std::uint32_t ct_dim                = 1,
-    const std::uint32_t rt_dim          = 1,
-    const std::uint32_t kt_dim          = 1)
+    [[maybe_unused]] const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
+    [[maybe_unused]] const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
+    const bool unpA_partial_face                         = false,
+    const bool unpB_partial_face                         = false,
+    std::uint32_t ct_dim                                 = 1,
+    const std::uint32_t rt_dim                           = 1,
+    const std::uint32_t kt_dim                           = 1)
 {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA

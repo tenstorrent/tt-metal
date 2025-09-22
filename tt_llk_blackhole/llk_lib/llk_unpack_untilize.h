@@ -68,7 +68,10 @@ inline void _llk_unpack_untilize_hw_configure_(
 }
 
 inline void _llk_unpack_untilize_init_(
-    const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim                 = FACE_R_DIM,
+    [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
     const std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
                                             : (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2

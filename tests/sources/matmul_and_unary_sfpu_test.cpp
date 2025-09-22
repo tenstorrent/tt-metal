@@ -29,10 +29,6 @@ volatile uint32_t* const buffer_A_tilized = reinterpret_cast<volatile uint32_t*>
 
 void run_kernel()
 {
-    std::uint32_t ct_dim = 1;
-    std::uint32_t rt_dim = 1;
-    std::uint32_t kt_dim = 1;
-
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_AB_matmul_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
         formats_array[run].unpack_src, formats_array[run].unpack_src, formats_array[run].unpack_dst, formats_array[run].unpack_dst);

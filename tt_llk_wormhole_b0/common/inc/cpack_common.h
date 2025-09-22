@@ -159,11 +159,8 @@ inline void packer_addr_counter_init()
     TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
 }
 
-inline void set_packer_strides(const uint pack_src_format, const uint pack_dst_format)
+inline void set_packer_strides(const uint pack_src_format, [[maybe_unused]] const uint pack_dst_format)
 {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
     uint x_stride = (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float32)   ? 4
                     : (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float16) ? 2
                                                                                                         : 1;
@@ -359,9 +356,6 @@ inline void set_packer_l1_offset(const uint pack_dst_format, const uint face_r_d
 template <bool is_fp32_dest_acc_en>
 inline void reconfig_packer_data_format(const uint pack_src_format, const uint pack_dst_format, const uint tile_size = 0, const uint face_r_dim = FACE_R_DIM)
 {
-    // Get pointer to registers for current state ID
-    volatile uint* cfg = get_cfg_pointer();
-
     // Configure packers
     pack_config_u config;
     config.val[2] = 0; // Only need to modify word[2][15:0]

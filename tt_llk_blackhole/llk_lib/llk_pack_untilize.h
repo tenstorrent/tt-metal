@@ -33,20 +33,18 @@ full_ct_dim represents the total number of input tiles.
 */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
 inline void _llk_pack_untilize_mop_config_(
-    const std::uint32_t face_r_dim      = FACE_R_DIM,
-    const std::uint32_t num_faces       = 4,
-    bool narrow_row                     = false,
-    std::uint32_t row_num_datums        = TILE_C_DIM,
-    const std::uint32_t tile_dst_offset = 0)
+    const std::uint32_t face_r_dim                = FACE_R_DIM,
+    const std::uint32_t num_faces                 = 4,
+    bool narrow_row                               = false,
+    [[maybe_unused]] std::uint32_t row_num_datums = TILE_C_DIM,
+    const std::uint32_t tile_dst_offset           = 0)
 {
     /*
     Outer loop iterates over the rows in the block, while the inner loop iterates
     over each tile in the block.
     */
-    constexpr uint MEGAROW          = 1;
-    constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr uint MOP_INNER_LOOP   = block_ct_dim;
-    const uint MOP_OUTER_LOOP       = face_r_dim;
+    constexpr uint MOP_INNER_LOOP = block_ct_dim;
+    const uint MOP_OUTER_LOOP     = face_r_dim;
 
     // For narrow row, the faces are stored in the first column of the tile, therefore requiring only one packer interface.
     const uint PACK_INTF_SEL = (narrow_row) ? p_pacr::SINGLE_INTF_ACTIVE : ((num_faces > 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::SINGLE_INTF_ACTIVE);
@@ -187,10 +185,10 @@ template <
     uint32_t tile_dst_ct_offset  = 0>
 inline void _llk_pack_untilize_(
     const std::uint32_t address,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim         = FACE_R_DIM,
-    const std::uint32_t num_faces          = 4,
-    const std::uint32_t tile_dst_rt_offset = 0)
+    [[maybe_unused]] const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim                          = FACE_R_DIM,
+    const std::uint32_t num_faces                           = 4,
+    [[maybe_unused]] const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
 
@@ -202,7 +200,6 @@ inline void _llk_pack_untilize_(
     // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
     program_packer_destination(address);
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
-    const uint PACK_INTF_SEL = (narrow_row) ? p_pacr::SINGLE_INTF_ACTIVE : ((num_faces > 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::SINGLE_INTF_ACTIVE);
 
     TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 zw counters
     TT_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 xy counters

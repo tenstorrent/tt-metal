@@ -449,7 +449,7 @@ inline void reduce_configure_mop()
 }
 
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, int MATH_FIDELITY_DESC = 0, bool enforce_fp32_accumulation = false>
-inline void _llk_math_reduce_init_(const std::uint32_t within_face_16x16_transpose = 0)
+inline void _llk_math_reduce_init_([[maybe_unused]] const std::uint32_t within_face_16x16_transpose = 0)
 { // within_face_16x16_transpose used for unpack, ignored by math
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
