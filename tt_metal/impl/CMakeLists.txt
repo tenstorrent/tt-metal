@@ -135,7 +135,6 @@ set_source_files_properties(
             TRUE
 )
 
-
 # Define dependency for CI small build for clang-tidy
 if(TARGET all_generated_files)
     add_custom_target(
