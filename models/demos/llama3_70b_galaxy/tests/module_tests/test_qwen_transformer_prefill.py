@@ -198,7 +198,6 @@ def test_qwen_transformer_inference_prefill(
 
         # Measure PCC if also running reference model
         if run_ref_pt:
-            breakpoint()
             passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))

@@ -238,26 +238,9 @@ class TtTransformerBlock(LightweightModule):
             batch_size=batch_size,
         )
         if mode == "prefill":
-            h = ttnn.add(x, attn_out)  # , dtype=ttnn.bfloat16)
+            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             x.deallocate(True)
-            # ff_in_sharded, _ = self.ff_norm(h, None, mode)
-            inp_torch = ttnn.to_torch(
-                h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
-            )[:, :1, :, :]
-            ff_in_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + self.ff_norm.norm.eps)
-            ff_in_torch = ff_in_torch * self.ff_norm_weight
-            ff_in_sharded = ttnn.from_torch(
-                ff_in_torch,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=(None, 3),
-                    mesh_shape=(8, 4),
-                ),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-            )
+            ff_in_sharded, _ = self.ff_norm(h, None, mode)
 
         if mode == "decode":
             # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
@@ -271,7 +254,7 @@ class TtTransformerBlock(LightweightModule):
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             if self.args.qk_norm:
                 h = ttnn.to_memory_config(h, skip_mem_cfg)
-            out = ttnn.add(ff_out, h)  # , dtype=ttnn.bfloat16)
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             # if mode == "decode":
             #     ff_out.deallocate(True)
             if mode == "prefill":
