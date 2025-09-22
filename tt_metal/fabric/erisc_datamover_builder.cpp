@@ -176,7 +176,7 @@ static void update_sender_channel_servicing(
 
 static size_t get_num_riscv_cores() {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
-        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         if (nriscs > 1) {
             log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
