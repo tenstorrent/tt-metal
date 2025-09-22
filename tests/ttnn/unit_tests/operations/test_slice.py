@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from .test_utils import round_up
 import math
@@ -1229,6 +1229,9 @@ def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, m
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
+
+    if pad_value == 16 and is_blackhole():
+        pytest.skip("Blackhole has DRAM Alignment of 64 bytes, or 32 elements for bfloat16.")
 
     if pad_value == 16 and layout == ttnn.TILE_LAYOUT:
         pytest.skip("Tile layout has alignment of 32.")
