@@ -10,7 +10,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 143.94],
+        [1, 159.00],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
