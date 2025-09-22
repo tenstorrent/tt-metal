@@ -129,7 +129,7 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-        if self.args.sliding_window is not None:
+        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
             # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
             # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
             self.decode_sliding_mask_mat = get_decode_mask(
