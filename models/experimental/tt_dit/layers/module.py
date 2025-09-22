@@ -22,6 +22,10 @@ class IncompatibleKeys(NamedTuple):
     unexpected_keys: list[str]
 
 
+class ParameterLoadingError(Exception):
+    pass
+
+
 class Module:
     def __init__(self) -> None:
         self._children = {}
@@ -95,7 +99,11 @@ class Module:
 
         for name, parameter in self.named_parameters():
             if name in state_dict:
-                parameter.load_torch_tensor(state_dict.pop(name))
+                try:
+                    parameter.load_torch_tensor(state_dict.pop(name))
+                except ParameterLoadingError as err:
+                    msg = f"while loading {name}: {err}"
+                    raise ParameterLoadingError(msg) from err
             else:
                 missing_keys.append(name)
 
@@ -183,7 +191,9 @@ class Parameter:
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
-        assert shape == self.shape, f"expected tensor shape {self.shape}, got {shape}"
+        if shape != self.shape:
+            msg = f"expected tensor shape {self.shape}, got {shape}"
+            raise ParameterLoadingError(msg)
 
         self.data = ttnn.from_torch(
             torch_tensor,
