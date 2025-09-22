@@ -165,7 +165,6 @@ def test_transformer_motif(
         torch_output = torch_model.forward(spatial, timestep, prompt_embeddings, pooled)
 
     _, prompt_seq_len, _ = prompt.shape
-    spatial_seq_len = height * width // vae_scale_factor**2
 
     logger.info("running TT model...")
     tt_output = tt_model.forward(
@@ -173,8 +172,6 @@ def test_transformer_motif(
         prompt=tt_prompt,
         pooled=tt_pooled,
         timestep=tt_timestep,
-        spatial_sequence_length=spatial_seq_len,
-        prompt_sequence_length=prompt_seq_len,
     )
 
     shard_dims = [None, None]

@@ -124,9 +124,12 @@ class MotifTransformer(Module):
 
         self.patch_size = patch_size
         self.num_layers = num_layers
+        self.out_channels = out_channels
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+
+        tp_axis = parallel_config.tensor_parallel.mesh_axis
 
         self.pos_embed = PatchEmbed(
             height=128,
@@ -193,12 +196,15 @@ class MotifTransformer(Module):
         )
 
         self.register_tokens = Parameter(
-            shape=[1, register_token_num, inner_dim],
-            device=mesh_device,
+            shape=[1, register_token_num, inner_dim], device=mesh_device, mesh_mapping={tp_axis: 2}
         )
 
-        # TODO: mesh sharding?
-        self.t_token_proj = Linear(modulation_dim, inner_dim, mesh_device=mesh_device)
+        self.t_token_proj = ColParallelLinear(
+            modulation_dim,
+            inner_dim,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+        )
 
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
@@ -210,8 +216,6 @@ class MotifTransformer(Module):
         prompt: ttnn.Tensor,
         pooled: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        spatial_sequence_length: int,
-        prompt_sequence_length: int,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -221,60 +225,76 @@ class MotifTransformer(Module):
             pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
         """
+        batch_size, height, width, _ = spatial.shape
+        assert len(prompt.shape) == 3
+        assert len(pooled.shape) == 2
+        assert timestep.shape == [batch_size, 1]
+
+        assert prompt.shape[0] == batch_size
+        assert pooled.shape[0] == batch_size
+        assert timestep.shape[0] == batch_size
+
         time_embed = self.time_text_embed(timestep=timestep, pooled_projection=pooled)
-        ttnn.silu(time_embed, output_tensor=time_embed)
-        time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
+        time_embed = time_embed.reshape([batch_size, 1, time_embed.shape[-1]])
+        time_embed_silu = ttnn.silu(time_embed)
 
         spatial = ttnn.squeeze(self.pos_embed(spatial), 0)
         prompt = self.context_embedder(prompt)
 
-        # TODO
-        # hidden_states = torch.cat((self.register_tokens.expand(hidden_states.shape[0], -1, -1), hidden_states), dim=1)
-        # t_token = self.t_token_proj(temb).unsqueeze(1)
-        # encoder_hidden_states = torch.cat([encoder_hidden_states, t_token], dim=1)
+        # prepend register tokens
+        register_tokens = ttnn.repeat(self.register_tokens.data, [batch_size, 1, 1])
+        spatial = ttnn.concat([register_tokens, spatial], dim=1)
+
+        # append time token
+        t_token = self.t_token_proj(time_embed)
+        t_token = ttnn.clone(t_token, dtype=prompt.dtype)
+        prompt = ttnn.concat([prompt, t_token], dim=1)
+
+        _, spatial_sequence_length, _ = spatial.shape
 
         for i, block in enumerate(self.transformer_blocks, start=1):
             spatial, prompt = block.forward(
                 spatial=spatial,
                 prompt=prompt,
-                time_embed=time_embed,
+                time_embed=time_embed_silu,
                 spatial_sequence_length=spatial_sequence_length,
-                skip_time_embed_activation=True,
+                skip_time_embed_activation_fn=True,
             )
 
             if i % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
 
-        # hidden_states = hidden_states[:, self.register_tokens.shape[1] :]
+        spatial = spatial[:, self.register_tokens.shape[1] :]
 
-        # Flux:
-        # spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
-        # spatial_time = self.time_embed_out(time_embed)
-        # [scale, shift] = _chunk_time3d(spatial_time, 2)
         # spatial = all_gather(
-        #     spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
+        #     spatial, dim=1, parallel_factor=self.parallel_config.sequence_parallel, ccl_manager=self.ccl_manager
         # )
-        # spatial = spatial * (1 + scale) + shift
-        # return self.proj_out(spatial)
-
-        spatial_time = self.norm_out_linear(
-            ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG), core_grid=self.core_grid
-        )
-        scale, shift = chunk_time(spatial_time, 2)
-
-        spatial = all_gather(
-            spatial, dim=1, parallel_factor=self.parallel_config.sequence_parallel, ccl_manager=self.ccl_manager
-        )
         spatial = all_gather(
             spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
         )
 
-        spatial = self.norm_out_norm(spatial) * (1 + scale) + shift
+        # same as in SD3 but without norm and silu
+        spatial_time = self.time_embed_out(time_embed)  # , core_grid=self.core_grid)
+        scale, shift = _chunk_time3d(spatial_time, 2)
 
-        return self.proj_out(spatial, core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config)
+        spatial = spatial * (1 + scale) + shift
 
-        # NOTE: While we should be able to gather on sequence after norm and proj, it leads to
-        # terrible outputs for 2x2sp1tp0. Need to debug.
+        spatial = self.proj_out(
+            spatial  # , core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config
+        )
+
+        # unpatchify
+        spatial = spatial.reshape(
+            [
+                batch_size,
+                height // self.patch_size,
+                width // self.patch_size,
+                self.patch_size,
+                self.patch_size * self.out_channels,
+            ]
+        )
+        spatial = ttnn.transpose(spatial, 2, 3)
+        return spatial.reshape([batch_size, height, width, self.out_channels])
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         ### First, convert Motif state dict to diffusers compatible (as far as possible) state dict.

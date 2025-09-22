@@ -183,7 +183,7 @@ class TransformerBlock(Module):
         *,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        skip_time_embed_activation: bool = False,
+        skip_time_embed_activation_fn: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the model forward.
 
@@ -194,7 +194,10 @@ class TransformerBlock(Module):
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
         """
-        if not skip_time_embed_activation:
+        assert len(spatial.shape) == 3
+        assert len(prompt.shape) == 3
+
+        if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         spatial_time = self.norm1_linear(time_embed, core_grid=self.core_grid)
