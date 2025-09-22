@@ -30,6 +30,7 @@ void send_aggregated_gradients_from_workers_to_optimizer(
     bool is_ddp = false) {
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
+        fmt::println("Aggregator before sending gradients to optimizer with name: {}", name);
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
@@ -47,6 +48,7 @@ void send_aggregated_gradients_from_workers_to_optimizer(
             tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
         }
         socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
+        fmt::println("Aggregator after sending gradients to optimizer with name: {}", name);
     }
 }
 
@@ -58,12 +60,14 @@ void send_weights_from_optimizer_to_workers(
     int workers) {
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
+        fmt::println("Aggregator before receiving weights from optimizer with name: {}", name);
         auto tensor = tensor_ptr->get_value();
         socket_manager.recv(tensor, aggregator_and_optimizer_ctx, ttml::core::distributed::Rank{optimizer_rank});
-
+        fmt::println("Aggregator after receiving weights from optimizer with name: {}", name);
         for (int worker_id = 0; worker_id < workers; ++worker_id) {
             socket_manager.send(tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{worker_id});
         }
+        fmt::println("Aggregator after sending weights to workers with name: {}", name);
     }
 }
 
@@ -87,11 +91,11 @@ int main(int argc, char **argv) {
 
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
-            throw std::runtime_error(fmt::format(
-                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
-                device_config.mesh_shape));
-        }
+        // if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
+        //     throw std::runtime_error(fmt::format(
+        //         "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
+        //         device_config.mesh_shape));
+        // }
     }
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
 
@@ -113,7 +117,7 @@ int main(int argc, char **argv) {
             }
         },
         config.transformer_config);
-
+    fmt::println("Aggregator before model creation");
     auto model = std::visit(
         [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
@@ -134,10 +138,10 @@ int main(int argc, char **argv) {
             }
         },
         config.transformer_config);
-
+    fmt::println("Aggregator after model creation");
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
-
+    fmt::println("Aggregator after model parameters");
     auto workers = config.num_mh_workers;
 
     auto workers_and_aggregator_ranks =
@@ -149,10 +153,10 @@ int main(int argc, char **argv) {
         std::vector<int>{distributed_ctx->rank().get(), distributed_ctx->rank().get() + 1};
     auto aggregator_and_optimizer_ctx =
         ttml::autograd::ctx().get_distributed_context()->create_sub_context(aggregator_and_optimizer_ranks);
-
+    fmt::println("Aggregator before sending weights to workers");
     send_weights_from_optimizer_to_workers(
         socket_manager, workers_and_aggregator_ctx, aggregator_and_optimizer_ctx, sorted_model_parameters, workers);
-
+    fmt::println("Aggregator after sending weights to workers");
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {

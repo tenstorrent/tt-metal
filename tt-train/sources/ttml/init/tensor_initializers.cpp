@@ -18,8 +18,9 @@ void uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, Unifor
     size_t volume = shape.volume();
     std::vector<float> vec(volume);
     uniform_init(vec, range);
-
+    fmt::println("      BEFORE FROM VECTOR SHAPE {}", shape);
     t->set_value(ttml::core::from_vector(vec, shape, device));
+    fmt::println("      AFTER FROM VECTOR SHAPE {}", shape);
 }
 
 void normal_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, NormalParams params) {

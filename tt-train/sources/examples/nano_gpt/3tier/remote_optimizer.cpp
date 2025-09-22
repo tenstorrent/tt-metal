@@ -59,6 +59,7 @@ SortedParameters RemoteOptimizer::get_sorted_parameters() const {
 void RemoteOptimizer::send_gradients() {
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
+            fmt::println("Worker sending gradients with name: {}", name);
             auto grad = tensor_ptr->get_grad();
             m_socket_manager.send(grad, m_distributed_ctx, m_aggregator_rank);
         }
@@ -67,6 +68,7 @@ void RemoteOptimizer::send_gradients() {
 
 void RemoteOptimizer::receive_weights() {
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
+        fmt::println("Worker receiving weights with name: {}", name);
         auto tensor = tensor_ptr->get_value();
         m_socket_manager.recv(tensor, m_distributed_ctx, m_aggregator_rank);
         tensor_ptr->set_value(tensor);

@@ -124,21 +124,35 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
 
     const auto tensor_layout =
         ttnn::TensorLayout(data_type, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
+    fmt::println("      BEFORE CREATE DISTRIBUTED TENSOR");
     auto output = (mesh_mapper != nullptr) ? ttnn::distributed::create_distributed_tensor(
                                                  ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper)
                                            : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
-
-    const size_t MAX_TILE_DIMENSION = 16384;
+    fmt::println("      AFTER CREATE DISTRIBUTED TENSOR");
+    // const size_t MAX_TILE_DIMENSION = 16384;
     // Temporary workaround for the issue with tilize for large size
     // https://github.com/tenstorrent/tt-metal/issues/15950
-    if (shape[-1] >= MAX_TILE_DIMENSION && layout == ttnn::Layout::TILE) {
-        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
-        output = ttnn::to_device(output, device, output_mem_config);
-    } else {
-        output = ttnn::to_device(output, device, output_mem_config);
-        if (layout == ttnn::Layout::TILE) {
-            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-        }
+    // if (shape[-1] >= MAX_TILE_DIMENSION && layout == ttnn::Layout::TILE) {
+    //     output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
+    //     output = ttnn::to_device(output, device, output_mem_config);
+    // } else {
+    //     output = ttnn::to_device(output, device, output_mem_config);
+    //     if (layout == ttnn::Layout::TILE) {
+    //         output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
+    //     }
+    // }
+
+    fmt::println("      BEFORE TO DEVICE");
+    std::flush(std::cout);
+    output = ttnn::to_device(output, device, output_mem_config);
+    fmt::println("      AFTER TO DEVICE");
+    std::flush(std::cout);
+    if (layout == ttnn::Layout::TILE) {
+        fmt::println("      BEFORE TILIZE WITH ZERO PADDING");
+        std::flush(std::cout);
+        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ false);
+        fmt::println("      AFTER TILIZE WITH ZERO PADDING");
+        std::flush(std::cout);
     }
 
     return output;

@@ -675,13 +675,13 @@ int main(int argc, char **argv) {
 
     if (config.socket_type == SocketType::FABRIC) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
-            throw std::runtime_error(fmt::format(
-                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
-                device_config.mesh_shape));
-        }
+        // if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
+        //     throw std::runtime_error(fmt::format(
+        //         "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
+        //         device_config.mesh_shape));
+        // }
     } else if (device_config.enable_tp || device_config.enable_ddp) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);

@@ -17,23 +17,33 @@ from pathlib import Path
 # --------------------------
 DEFAULT_METAL_HOME = os.environ.get("TT_METAL_HOME", "~/git/tt-metal")
 DEFAULT_CONFIG = "training_shakespeare_nanogpt_3tier_mpi.yaml"
-SSH_USER = "ttuser"
+SSH_USER = "local-rfurko"
 BINARIES = ("nano_gpt", "nano_gpt_aggregator", "nano_gpt_optimizer")
 SCP_OPTS = ["-p"]  # preserve times & modes
 
 HOSTS = [
-    "metal-wh-01",
-    "metal-wh-05",
-    "metal-wh-03",
-    "metal-wh-04",
-    "metal-wh-06",
+    # "metal-wh-01",
+    # "metal-wh-05",
+    # "metal-wh-03",
+    # "metal-wh-04",
+    # "metal-wh-06",
+    "wh-glx-a03u02",
+    "wh-glx-a03u08",
+    "wh-glx-a03u14",
+    "wh-glx-a04u02",
+    "wh-glx-a04u08",
+    "wh-glx-a04u14",
 ]
 
 # Default MESH_IDS per global rank; falls back to rank id if list is shorter than TOTAL_RANKS
-DEFAULT_MESH_IDS = [0, 0, 0, 0, 0]
+DEFAULT_MESH_IDS = [0, 0, 0, 0, 0, 0]
 # If config contains "socket_type: fabric", override MESH_IDS with this:
-FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
-MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.yaml"
+# FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
+# MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.yaml"
+FABRIC_MESH_IDS = [0, 1, 2, 3, 4, 5]
+MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor.yaml"
+# FABRIC_MESH_IDS = [0, 1, 2, 3, 4]
+# MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor_5boxes.yaml"
 
 
 # --------------------------
@@ -358,7 +368,21 @@ def main():
             print("Content of app file:")
             print(f.read())
 
-        mpi_cmd = ["mpirun", "--hostfile", str(hostfile), "--app", str(appfile)]
+        # --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0
+        mpi_cmd = [
+            "mpirun-ulfm",
+            "--hostfile",
+            str(hostfile),
+            "--app",
+            str(appfile),
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_include",
+            "ens5f0np0",
+            "--tag-output",
+        ]
 
         print(
             "Launching MPI 3-tier demo with "

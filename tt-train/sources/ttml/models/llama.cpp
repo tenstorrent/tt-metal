@@ -52,13 +52,19 @@ Llama::Llama(const LlamaConfig& config) {
             "embedding_dim={}",
             embedding_dim));
     }
+    fmt::println("BEFORE FC CREATION");
     auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
+    fmt::println("AFTER FC CREATION");
+
+    fmt::println("BEFORE EMBEDDING CREATION");
     if (config.weight_tying == WeightTyingType::Enabled) {
         tok_emb = std::make_shared<ttml::modules::Embedding>(last_fc->get_weight());
     } else {
         tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
     }
+    fmt::println("AFTER EMBEDDING CREATION");
 
+    fmt::println("BEFORE ROPE SCALING PARAMS CREATION");
     // Create RoPE scaling params if they are set
     ops::RopeScalingParams rope_scaling_params;
     if (config.scaling_factor != 0.0F && config.original_context_length != 0U) {
@@ -79,14 +85,19 @@ Llama::Llama(const LlamaConfig& config) {
         /*head_dim=*/embedding_dim / num_heads,
         /*theta=*/theta,
         /*rope_scaling_params=*/rope_scaling_params);
+    fmt::println("AFTER ROPE SCALING PARAMS CREATION");
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        fmt::println("BEFORE BLOCK CREATION {}", block_idx);
         blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(
             embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim));
+        fmt::println("AFTER BLOCK CREATION {}", block_idx);
     }
+    fmt::println("AFTER BLOCK CREATION");
+    fmt::println("BEFORE RMS NORM LAYER CREATION");
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = last_fc;
-
+    fmt::println("AFTER RMS NORM LAYER CREATION");
     create_name("llama");
     register_module(tok_emb, "tok_emb");
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {

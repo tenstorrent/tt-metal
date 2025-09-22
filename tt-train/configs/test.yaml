@@ -3,7 +3,7 @@ training_config:
   model_type: "llama"
   seed: 5489
   model_save_interval: 500
-  batch_size: 1 # 32
+  batch_size: 32
   num_epochs: 1
   max_steps: 5000
   learning_rate: 0.0003
@@ -37,5 +37,5 @@ eval_config:
   top_p: 1.0
 
 device_config:
-  enable_ddp: false
+  enable_ddp: true
   mesh_shape: [1, 32]

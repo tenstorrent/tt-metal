@@ -584,30 +584,49 @@ DeviceStorage replicate_to_mesh_buffer(
         input_size_bytes,
         expected_packed_buffer_size_bytes);
 
+    fmt::println("              BEFORE ENQUEUE WRITE MESH BUFFER");
+    std::flush(std::cout);
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(
         mesh_buffer, data_to_write.data(), /*blocking=*/false);
-
+    fmt::println("              AFTER ENQUEUE WRITE MESH BUFFER");
+    std::flush(std::cout);
+    fmt::println("              BEFORE CREATING COORDS");
+    std::flush(std::cout);
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(mesh_device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         coords.push_back(coord);
     }
-    return DeviceStorage(mesh_buffer, std::move(coords));
+    fmt::println("              AFTER ENQUEUE WRITE MESH BUFFER");
+    std::flush(std::cout);
+
+    fmt::println("              BEFORE RETURNING DEVICE STORAGE");
+    std::flush(std::cout);
+    auto device_storage = DeviceStorage(mesh_buffer, std::move(coords));
+    fmt::println("              AFTER RETURNING DEVICE STORAGE");
+    std::flush(std::cout);
+    return device_storage;
 }
 
 DeviceStorage write_to_mesh_buffer(
     const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     ttnn::QueueId cq_id) {
+    fmt::println("              BEFORE ENQUEUE WRITE MESH BUFFER");
     mesh_buffer->device()->mesh_command_queue(*cq_id).enqueue_write(
         mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+    fmt::println("              AFTER ENQUEUE WRITE MESH BUFFER");
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(distributed_host_buffer.shard_coords().size());
     std::copy(
         distributed_host_buffer.shard_coords().begin(),
         distributed_host_buffer.shard_coords().end(),
         std::back_inserter(coords));
-    return DeviceStorage(mesh_buffer, std::move(coords));
+
+    fmt::println("              BEFORE RETURNING DEVICE STORAGE");
+    auto device_storage = DeviceStorage(mesh_buffer, std::move(coords));
+    fmt::println("              AFTER RETURNING DEVICE STORAGE");
+    return device_storage;
 }
 
 }  // namespace
@@ -626,6 +645,9 @@ DeviceStorage to_device_mesh_buffer(
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();
                 if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
                     host_storage_shape == distributed::MeshShape(1, 1)) {
+                    fmt::println(
+                        "              SPECIAL CASE OF REPLICATING TENSORS ON 1x1 MESH ACROSS THE ENTIRE MESH DEVICE");
+                    std::flush(std::cout);
                     // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
                     const auto device_buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
                     return replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id);
@@ -662,9 +684,16 @@ Tensor to_device(
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
+    fmt::println("          BEFORE DEVICE BUFFER ALLOCATION");
+    std::flush(std::cout);
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
+    fmt::println("          AFTER DEVICE BUFFER ALLOCATION");
+    std::flush(std::cout);
+    fmt::println("          BEFORE TO DEVICE MESH BUFFER");
     DeviceStorage mesh_storage =
         to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, cq_id);
+    fmt::println("          AFTER TO DEVICE MESH BUFFER");
+    std::flush(std::cout);
     return Tensor(std::move(mesh_storage), *tensor_spec, tensor.tensor_topology());
 }
 
