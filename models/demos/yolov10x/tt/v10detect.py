@@ -102,9 +102,6 @@ class TtnnV10Detect:
             parameters.one2one_cv3[0][0][0],
             self.conv_pt[f"{path}.one2one_cv3.0.0.0"],
             is_detect=True,
-            # core_count=64,
-            # enable_act_double_buffer=True,
-            # enable_weights_double_buffer=False,
         )
         self.cv3_0_0_1 = Conv(
             device,
@@ -119,9 +116,6 @@ class TtnnV10Detect:
             parameters.one2one_cv3[0][1][0],
             self.conv_pt[f"{path}.one2one_cv3.0.1.0"],
             is_detect=True,
-            # core_count=64,
-            # enable_act_double_buffer=True,
-            # enable_weights_double_buffer=False,
         )
         self.cv3_0_1_1 = Conv(
             device,

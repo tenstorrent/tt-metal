@@ -40,7 +40,6 @@ class TtYolov10Conv2D:
         config_override=None,
         auto_shard=False,
         deallocate_activation=False,
-        # act_block_h_override=0,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=False,
         core_count=None,
