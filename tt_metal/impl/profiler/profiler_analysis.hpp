@@ -90,6 +90,7 @@ struct DurationAnalysisResults : public AnalysisResults {
         uint64_t start_timestamp = UINT64_MAX;
         uint64_t end_timestamp = 0;
         uint64_t duration = 0;
+        bool done_searching_for_end_timestamp = false;
     };
 
     std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const override {
@@ -138,6 +139,8 @@ std::unique_ptr<AnalysisResults> generateAnalysisForDeviceMarkers(
 void writeAnalysisResultsToCSV(
     const std::vector<std::unique_ptr<const AnalysisResults>>& analysis_results,
     const std::filesystem::path& report_path);
+
+std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
 }  // namespace tt_metal
 
 }  // namespace tt
