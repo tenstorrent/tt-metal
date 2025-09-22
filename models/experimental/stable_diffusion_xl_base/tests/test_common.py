@@ -182,8 +182,8 @@ def batch_encode_prompt_on_device(
     num_devices = ttnn_device.get_num_devices()
     num_prompts = len(prompt)
     if use_cfg_parallel and num_prompts < num_devices:
-        # Pad prompts by cycling through existing ones to match num_devices
-        prompt = [prompt[i % len(prompt)] for i in range(num_devices)]
+        # Pad prompts by appending empty strings to match num_devices
+        prompt = prompt + [""] * (num_devices - len(prompt))
 
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert prompt_2 is None, "Prompt 2 is not supported currently"
