@@ -753,6 +753,11 @@ Point to API Header
 ```
 Multicast write is used to write to more than one remote receiver with the same data. Multicast starts at the origin device of the multicast grid. The extent of multicast is specified by the number of hops around the origin device. All devices within the specified depth are written with single async multicast write command.
 
+## 4.4 Scatter Write (a NOC command)
+```
+Point to API Header
+```
+
 # 5 Sockets over TT-Fabric <a id="socket_api"></a>
 
 We have implemented sockets as send and receive operatoins that use tt-fabric asynchronous write APIs to implement flowcontroled data transfer between a sender and receiver.
