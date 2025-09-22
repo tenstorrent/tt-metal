@@ -354,6 +354,18 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>();
+
+    this->set_iram_text_size_func_ = [](dev_msgs::launch_msg_t::View launch_msg,
+                                        HalProgrammableCoreType programmable_core_type,
+                                        HalProcessorClassType processor_class,
+                                        uint32_t processor_type_idx,
+                                        uint32_t iram_text_size) {
+        // Only NCRISC on Wormhole needs to set the field ncrisc_kernel_size16 in launch message.
+        if (programmable_core_type == HalProgrammableCoreType::TENSIX && processor_class == HalProcessorClassType::DM &&
+            processor_type_idx == 1) {
+            launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
+        }
+    };
 }
 
 }  // namespace tt_metal
