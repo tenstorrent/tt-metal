@@ -294,29 +294,31 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         const chip_id_t src_chip_id = src_instance.local_id;
         const chip_id_t dst_chip_id = dst_instance.local_id;
 
-        if (src_mesh_id != dst_mesh_id) {
-            // Intermesh Connection
-            auto& edge = this->inter_mesh_connectivity_[*src_mesh_id][src_chip_id];
-            auto [it, is_inserted] = edge.insert(
-                {dst_mesh_id,
-                 RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
-                     .connected_chip_ids = {dst_chip_id},
-                     .weight = 0}});
-            if (!is_inserted) {
-                it->second.connected_chip_ids.push_back(dst_chip_id);
-            }
-        } else {
-            // Intramesh Connection
-            auto& edge = this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id];
-            auto [it, is_inserted] = edge.insert(
-                {dst_chip_id,
-                 RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
-                     .connected_chip_ids = {dst_chip_id},
-                     .weight = 0}});
-            if (!is_inserted) {
-                it->second.connected_chip_ids.push_back(dst_chip_id);
+        for (unsigned int i = 0; i < connection_data.count; i++) {
+            if (src_mesh_id != dst_mesh_id) {
+                // Intermesh Connection
+                auto& edge = this->inter_mesh_connectivity_[*src_mesh_id][src_chip_id];
+                auto [it, is_inserted] = edge.insert(
+                    {dst_mesh_id,
+                     RouterEdge{
+                         .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                         .connected_chip_ids = {dst_chip_id},
+                         .weight = 0}});
+                if (!is_inserted) {
+                    it->second.connected_chip_ids.push_back(dst_chip_id);
+                }
+            } else {
+                // Intramesh Connection
+                auto& edge = this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id];
+                auto [it, is_inserted] = edge.insert(
+                    {dst_chip_id,
+                     RouterEdge{
+                         .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                         .connected_chip_ids = {dst_chip_id},
+                         .weight = 0}});
+                if (!is_inserted) {
+                    it->second.connected_chip_ids.push_back(dst_chip_id);
+                }
             }
         }
     }
