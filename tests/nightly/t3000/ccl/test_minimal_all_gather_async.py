@@ -331,10 +331,12 @@ def test_all_gather_async(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
         # Gather on dim 0
+        ([24, 3, 128, 96], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Gather on dim 1
+        ([3, 24, 128, 96], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -360,6 +362,8 @@ def test_all_gather_async(
         "tt_training_test_ten",
         "tt_training_test_eleven",
         "tt_training_test_twelve",
+        "tt_training_test_thirteen",
+        "tt_training_test_fourteen",
     ],
 )
 @pytest.mark.parametrize(

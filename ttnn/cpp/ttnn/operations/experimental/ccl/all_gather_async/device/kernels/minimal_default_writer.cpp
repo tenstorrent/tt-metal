@@ -359,10 +359,14 @@ void kernel_main() {
         num_channels_processed++;
         if (gather_dim == 1 && num_channels_processed == input_tensor_C) {
             tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
-            num_channels_processed = 0;
         } else {
             tile_id_start += output_tensor_Wt * output_tensor_Ht;
         }
+
+        if (num_channels_processed == input_tensor_C) {
+            num_channels_processed = 0;
+        }
+
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
         pages_read_in_row = start_pages_read_in_row;
@@ -506,10 +510,14 @@ void kernel_main() {
             num_channels_processed++;
             if (gather_dim == 1 && num_channels_processed == input_tensor_C) {
                 tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
-                num_channels_processed = 0;
             } else {
                 tile_id_start += output_tensor_Wt * output_tensor_Ht;
             }
+
+            if (num_channels_processed == input_tensor_C) {
+                num_channels_processed = 0;
+            }
+
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
             row_offset = start_row_offset;

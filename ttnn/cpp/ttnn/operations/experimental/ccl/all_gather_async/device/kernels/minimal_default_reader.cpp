@@ -247,10 +247,14 @@ void kernel_main() {
                 if (gather_dim == 1 && num_channels_processed == input_tensor_C) {
                     output_tile_id_start +=
                         output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
-                    num_channels_processed = 0;
                 } else {
                     output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
                 }
+
+                if (num_channels_processed == input_tensor_C) {
+                    num_channels_processed = 0;
+                }
+
                 pages_read_in_row = start_pages_read_in_row;
                 row_offset = start_row_offset;
                 tiles_read = input_tile_id_start;
