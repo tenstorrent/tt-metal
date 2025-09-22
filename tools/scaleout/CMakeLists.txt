@@ -50,6 +50,7 @@ target_link_libraries(
         umd::device
     PRIVATE
         enchantum::enchantum
+        tt-logger::tt-logger
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )

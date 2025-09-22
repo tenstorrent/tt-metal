@@ -714,10 +714,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, compute_grid_size, out_channels, shard_orientation, is_mm_conv);
+        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
