@@ -15,6 +15,7 @@ struct operation_attributes_t {
     float lr{};
     float momentum{0.0F};
     float dampening{0.0F};
+    float weight_decay{0.0F};
 };
 
 struct tensor_args_t {
