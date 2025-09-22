@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "mobilenetv2_infra.h"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "helper_funcs.h"

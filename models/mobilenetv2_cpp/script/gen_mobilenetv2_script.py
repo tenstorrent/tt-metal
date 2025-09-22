@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import os
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
