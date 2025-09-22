@@ -97,6 +97,41 @@ jobs:
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
 
+  publish-to-pypi:
+    needs: [build-test-publish, create-tag]
+    runs-on: ubuntu-latest
+    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ttnn/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download ALL wheels (separate folders)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: eager-dist-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Remove profiler artifacts
+        run: |
+          find artifacts -maxdepth 1 -type d -name '*profiler*' -print -exec rm -rf {} +
+
+      - name: Flatten into dist/
+        run: |
+          mkdir -p dist
+          # copy wheel/sdist files from remaining artifact dirs
+          find artifacts -type f -name '*.whl' -exec cp {} dist/ \;
+          find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -l dist
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: ${{ !inputs.dry-run }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+
 
   create-changelog:
     needs: [create-tag, build-test-publish]
