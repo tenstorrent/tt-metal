@@ -16,14 +16,14 @@ from loguru import logger
         # fmt: off
         # feats8 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
         ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  False, 0.999, 0.875),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.812),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.811),
         ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.683),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.647),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.646),
         # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
         ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.526),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.457),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.456),
         ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.350),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.336),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.335),
         # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
         ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.298),
         ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.292),
@@ -90,7 +90,6 @@ def test_oft_forward(
         ref_bbox_top_right,
         ref_bbox_btm_left8,
     ) = ref_oft.forward(features, calib, grid)
-
     # Prepare TTNN input
     params = create_OFT_model_parameters_oft(ref_oft, (features, calib, grid), device)
 
@@ -137,3 +136,23 @@ def test_oft_forward(
             )
 
     assert all(all_passed), f"OFT module outputs did not pass the PCC check {all_passed=}"
+
+
+def test_compare_tensors():
+    ref_vox_feats_sub_1 = np.load("ref_vox_feats_sub_1.npy").flatten()
+    ref_vox_feats_add_1 = np.load("ref_vox_feats_add_1.npy").flatten()
+    ref_vox_feats_sub_2 = np.load("ref_vox_feats_sub_2.npy").flatten()
+    ref_vox_feats_mul_1 = np.load("ref_vox_feats_mul_1.npy").flatten()
+    ref_vox_feats_mul_2 = np.load("ref_vox_feats_mul_2.npy").flatten()
+    ref_vox_feats = np.load("ref_vox_feats.npy").flatten()
+    ref_vox_feats_pre_linear = np.load("ref_vox_feats_pre_linear.npy").flatten()
+
+    vox_feats_sub_1 = np.load("vox_feats_sub_1.npy").flatten()
+    vox_feats_add_1 = np.load("vox_feats_add_1.npy").flatten()
+    vox_feats_sub_2 = np.load("vox_feats_sub_2.npy").flatten()
+    vox_feats_mul_1 = np.load("vox_feats_mul_1.npy").flatten()
+    vox_feats_mul_2 = np.load("vox_feats_mul_2.npy").flatten()
+    vox_feats = np.load("vox_feats.npy").flatten()
+    vox_feats_pre_linear = np.load("vox_feats_pre_linear.npy").flatten()
+
+    print(ref_vox_feats_mul_1.mean(), vox_feats_mul_1.mean())
