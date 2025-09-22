@@ -706,7 +706,6 @@ BatchedTransfers assemble_runtime_args_commands(
             continue;
         }
         CoreType core_type = hal.get_core_type(index);
-        uint32_t processor_classes = hal.get_processor_classes_count(index);
 
         // Unique RTAs - Unicast
         // Set by the user based on the kernel and core coord
@@ -769,7 +768,9 @@ BatchedTransfers assemble_runtime_args_commands(
         // On ETH use unicast
         if (!use_kernel_group_crta_multicast ||
             !tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
-            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+            // Note: it's wrong to use HAL processor classes here, because it only has DM/COMPUTE,
+            // whereas CRTA is separate for DM0/DM1/COMPUTE.
+            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
                 const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
                 uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
                 if (common_size == 0) {
