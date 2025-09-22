@@ -51,6 +51,8 @@ on:
       - "Nightly tt-metal L2 tests"
       - "Package and release"
       - "Build test and publish upstream tests"
+      - "Multi-Host Deployment (Physical)"
+      - "Galaxy Multi-user Isolation Tests"
     types:
       - completed
 
