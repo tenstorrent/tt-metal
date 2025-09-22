@@ -67,6 +67,7 @@ def test_math_matmul(
     dest_acc = format_dest_acc_and_dims[1]
     input_A_dimensions = format_dest_acc_and_dims[2][0]
     input_B_dimensions = format_dest_acc_and_dims[2][1]
+    dst_index = format_dest_acc_and_dims[4]
 
     torch_format = format_dict[formats.output_format]
 
@@ -139,6 +140,7 @@ def test_math_matmul(
         "unpack_transpose_faces": transpose,
         "unpack_transpose_within_face": transpose,  # matmul transposes both faces and within faces, there is no option for one or the other
         "throttle": throttle,
+        "dst_index": dst_index,
     }
 
     res_address = write_stimuli_to_l1(

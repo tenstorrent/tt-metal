@@ -279,6 +279,10 @@ def generate_build_header(
     header_content.append("// Multi-tile test configuration")
     header_content.append(f"constexpr int TILE_CNT = {tile_cnt};")
 
+    # Destination index configuration
+    dst_index = test_config.get("dst_index", 0)
+    header_content.append(f"constexpr int DST_INDEX = {dst_index};")
+
     # Unpack + result buffer addresses arrays generations
     buffer_A_address = test_config.get("buffer_A_address", 0x1A000)
     buffer_B_address = test_config.get("buffer_B_address", 0x1B000)
