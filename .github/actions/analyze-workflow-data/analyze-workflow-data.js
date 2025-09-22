@@ -166,9 +166,9 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
 
     // If we found FAILED lines but the run has no failing job, suppress false positives
     // Only do this if the API check succeeded; on API failure, keep the snippets.
-    if ((snippets && snippets.length > 0) && apiCheckSucceeded && !hasFailingJob) {
-      snippets = [];
-    }
+    // if ((snippets && snippets.length > 0) && apiCheckSucceeded && !hasFailingJob) {
+    //   snippets = [];
+    // }
 
     // If we did not find FAILED lines but the run has a failing job, emit synthetic entry
     if ((!snippets || snippets.length === 0) && hasFailingJob) {
