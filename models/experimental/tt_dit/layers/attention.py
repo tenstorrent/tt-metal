@@ -135,7 +135,7 @@ class Attention(Module):
         if "added_head_factors" in state:
             factors = state["added_head_factors"]
             if self.padding_config is not None:
-                pad = (0, self.padding_config.self.head_padding)
+                pad = (0, self.padding_config.head_padding)
                 factors = torch.nn.functional.pad(factors, pad)
             state["added_head_factors"] = factors.reshape([-1, 1, 1])
 
