@@ -78,7 +78,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 20
+        iterations: 25
 
   - name: "FullRingUnicast"
     benchmark_mode: true
