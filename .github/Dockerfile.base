@@ -5,21 +5,22 @@ SHELL ["/bin/bash", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
     build-essential \
-    python3-pip \
-    python3-wheel \
+    curl \
+    doxygen \
+    gh \
     git \
+    jq \
+    lcov \
     libhwloc-dev \
+    libnsl2 \
     libyaml-cpp-dev \
     libzmq3-dev \
-    libnsl2 \
-    pkg-config \
     linux-tools-generic \
+    pkg-config \
+    python3-pip \
+    python3-wheel \
+    software-properties-common \
     wget \
-    doxygen \
-    curl \
-    jq \
-    gh \
-    lcov && \
+    zip && \
     apt-get clean && rm -rf /var/lib/apt/lists/*

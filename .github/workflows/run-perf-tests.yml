@@ -22,7 +22,7 @@ jobs:
     name: "🔍 Detect changes"
     runs-on: ubuntu-latest
     if: |
-      contains('workflow_dispatch,workflow_call,schedule', github.event_name) ||
+      contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
       (github.event_name == 'pull_request' &&
        contains(github.event.pull_request.labels.*.name, 'performance-tests'))
     outputs:
@@ -100,10 +100,9 @@ jobs:
     name: "✅ Check all green"
     if: |
       always() && (
-        github.event_name == 'workflow_dispatch' ||
-        github.event_name == 'workflow_call' ||
-        (github.event_name == 'pull_request' &&
-         contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+      contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
       )
     needs:
       - build-images
