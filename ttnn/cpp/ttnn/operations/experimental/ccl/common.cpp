@@ -151,11 +151,6 @@ bool use_composite_all_gather(
         return true;
     }
 
-    // Use composite if gathering on dim 0 or dim 1, and input_shape[0] != 1 or input_shape[1] != 1
-    if ((gather_dim == 0 || gather_dim == 1) && (input_shape[0] != 1 || input_shape[1] != 1)) {
-        return true;
-    }
-
     return false;
 }
 

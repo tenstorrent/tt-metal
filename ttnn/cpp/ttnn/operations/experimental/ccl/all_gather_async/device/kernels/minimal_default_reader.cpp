@@ -198,8 +198,13 @@ void kernel_main() {
             uint32_t stride_Wt = output_tensor_Wt;
             if (gather_dim == 3) {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Wt;
-            } else {
+            } else if (gather_dim == 2) {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Ht * input_tensor_Wt;
+            } else if (gather_dim == 1) {
+                // TODO: (GR)
+            } else {
+                output_tile_id_start =
+                    actual_sender_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
             }
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                 chunk_count = 0;
