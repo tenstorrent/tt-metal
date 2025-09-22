@@ -700,11 +700,11 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    // if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-    //     this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-    // } else {
+    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
+        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    } else {
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-    // }
+    }
 
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
@@ -728,11 +728,11 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    // if (this->supports_dma_operations(chip_id, size_in_bytes)) {
-    //     this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
-    // } else {
+    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+        this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
+    } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
-    // }
+    }
 }
 
 void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
