@@ -29,7 +29,6 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     const auto& elements_dtype = elements_tensor.dtype();
     const auto& test_elements_dtype = test_elements_tensor.dtype();
 
-    const bool& assume_unique = args.assume_unique;
     const bool& invert = args.invert;
     const uint32_t& single_fetch_subchunk_size = args.single_fetch_subchunk_size;
     const auto memory_config = elements_tensor.memory_config();
