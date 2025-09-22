@@ -24,6 +24,7 @@ class TtSegformerDWConv:
                 height_sharding=False,
                 act_block_h=32,
                 dtype=ttnn.bfloat8_b,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
             )
         elif dim == 640:
             self.dwconv = Conv(
@@ -33,9 +34,16 @@ class TtSegformerDWConv:
                 height_sharding=False,
                 act_block_h=32,
                 dtype=ttnn.bfloat8_b,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
             )
         else:
-            self.dwconv = Conv([1, 1, 1, 1], parameters=parameters["dwconv"], groups=dim, dtype=ttnn.bfloat8_b)
+            self.dwconv = Conv(
+                [1, 1, 1, 1],
+                parameters=parameters["dwconv"],
+                groups=dim,
+                dtype=ttnn.bfloat8_b,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+            )
 
     def __call__(
         self,
