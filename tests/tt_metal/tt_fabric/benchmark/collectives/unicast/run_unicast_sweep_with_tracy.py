@@ -184,7 +184,7 @@ def main():
                     "warmup",
                     "p50_ms",
                     "p95_ms",
-                    "mean_gbps",
+                    "mean_GB_s",
                 ]
             )
 

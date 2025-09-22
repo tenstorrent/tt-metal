@@ -39,7 +39,7 @@ def main():
     ap.add_argument("--sizes", default="4096,32768,1048576")
     ap.add_argument("--out-dir", default="generated/profiler/.logs/unicast")
     ap.add_argument("--csv", default="")
-    ap.add_argument("--min-p50-gbps", type=float, default=None)  # simple single floor
+    ap.add_argument("--min-p50-GB-s", type=float, default=None)  # simple single floor
     ap.add_argument("--p50-targets", type=str, default="")  # per-size: "4096:0.04,32768:0.28,1048576:2.45"
     ap.add_argument("--tolerance-pct", type=float, default=5.0)
     args = ap.parse_args()
@@ -91,30 +91,30 @@ def main():
                 print(f"FAIL: no row for size {size}", file=sys.stderr)
                 failed = True
                 continue
-            measured = float(row["p50_gbps"])
+            measured = float(row["p50_GB_s"])
             if size in targets:
                 lo = targets[size] * (1.0 - args.tolerance_pct / 100.0)
                 if measured < lo:
                     print(
-                        f"FAIL size {size}: p50_gbps={measured:.3f} < {lo:.3f} "
+                        f"FAIL size {size}: p50_GB_s={measured:.3f} < {lo:.3f} "
                         f"(target {targets[size]:.3f} -{args.tolerance_pct:.1f}%)",
                         file=sys.stderr,
                     )
                     failed = True
                 else:
                     print(
-                        f"PASS size {size}: p50_gbps={measured:.3f} ≥ {lo:.3f} "
+                        f"PASS size {size}: p50_GB_s={measured:.3f} ≥ {lo:.3f} "
                         f"(target {targets[size]:.3f} -{args.tolerance_pct:.1f}%)"
                     )
             else:
                 print(f"NOTE: no target for size {size}, measured p50={measured:.3f} GB/s")
         if failed:
             sys.exit(1)
-    elif args.min_p50_gbps is not None:
-        last_p50 = float(rows[-1]["p50_gbps"])
-        if last_p50 < args.min_p50_gbps:
-            sys.exit(f"FAIL: p50_gbps={last_p50} < min={args.min_p50_gbps}")
-        print(f"PASS: p50_gbps={last_p50} ≥ min={args.min_p50_gbps}")
+    elif args.min_p50_GB_s is not None:
+        last_p50 = float(rows[-1]["p50_GB_s"])
+        if last_p50 < args.min_p50_GB_ss:
+            sys.exit(f"FAIL: p50_GB_s={last_p50} < min={args.min_p50_GB_s}")
+        print(f"PASS: p50_GB_s={last_p50} ≥ min={args.min_p50_GB_s}")
     else:
         print("NOTE: no CI guard thresholds provided.")
 

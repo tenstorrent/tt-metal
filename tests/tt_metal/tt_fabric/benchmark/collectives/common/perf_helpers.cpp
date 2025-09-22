@@ -54,11 +54,11 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
 
     std::vector<double> v_ms;
     v_ms.reserve(pts.size());
-    std::vector<double> v_gbps;
-    v_gbps.reserve(pts.size());
+    std::vector<double> v_GB_s;
+    v_GB_s.reserve(pts.size());
     for (const auto& p : pts) {
         v_ms.push_back(p.ms);
-        v_gbps.push_back(p.gbps);
+        v_GB_s.push_back(p.GB_s);
     }
 
     s.mean_ms = mean_of(v_ms);
@@ -68,13 +68,13 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
     s.min_ms = *std::min_element(v_ms.begin(), v_ms.end());
     s.max_ms = *std::max_element(v_ms.begin(), v_ms.end());
     // throughput stats
-    s.mean_gbps = mean_of(v_gbps);
-    s.std_gbps = stddev_of(v_gbps, s.mean_gbps);
-    s.p50_gbps = percentile(v_gbps, 50.0);
-    s.p10_gbps = percentile(v_gbps, 10.0);
-    s.min_gbps = *std::min_element(v_gbps.begin(), v_gbps.end());
-    s.max_gbps = *std::max_element(v_gbps.begin(), v_gbps.end());
-    s.cv_gbps_pct = (s.mean_gbps > 0.0) ? (s.std_gbps / s.mean_gbps) * 100.0 : 0.0;
+    s.mean_GB_s = mean_of(v_GB_s);
+    s.std_GB_s = stddev_of(v_GB_s, s.mean_GB_s);
+    s.p50_GB_s = percentile(v_GB_s, 50.0);
+    s.p10_GB_s = percentile(v_GB_s, 10.0);
+    s.min_GB_s = *std::min_element(v_GB_s.begin(), v_GB_s.end());
+    s.max_GB_s = *std::max_element(v_GB_s.begin(), v_GB_s.end());
+    s.cv_GB_s_pct = (s.mean_GB_s > 0.0) ? (s.std_GB_s / s.mean_GB_s) * 100.0 : 0.0;
     return s;
 }
 

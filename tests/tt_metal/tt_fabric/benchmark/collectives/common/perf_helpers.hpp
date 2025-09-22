@@ -19,7 +19,7 @@ struct PerfPoint {
     uint64_t bytes{};
     double sec{};
     double ms{};
-    double gbps{};
+    double GB_s{};
 };
 
 struct PerfParams {
@@ -39,7 +39,7 @@ struct PerfStats {
     // latency (ms)
     double mean_ms{}, std_ms{}, p50_ms{}, p95_ms{}, min_ms{}, max_ms{};
     // throughput (GB/s)
-    double mean_gbps{}, std_gbps{}, p50_gbps{}, p10_gbps{}, min_gbps{}, max_gbps{}, cv_gbps_pct{};
+    double mean_GB_s{}, std_GB_s{}, p50_GB_s{}, p10_GB_s{}, min_GB_s{}, max_GB_s{}, cv_GB_s_pct{};
 };
 
 PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p);
