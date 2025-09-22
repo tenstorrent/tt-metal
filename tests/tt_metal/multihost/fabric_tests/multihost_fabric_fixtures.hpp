@@ -30,6 +30,12 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,
         "Multi-Host Routing tests require multiple hosts in the system");
+
+    // Print out cluster description
+    log_info(
+        tt::LogTest,
+        "Cluster description: \n{}",
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->serialize());
 }
 
 inline const std::vector<eth_coord_t>& get_eth_coords_for_2x4_t3k() {
