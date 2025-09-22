@@ -53,7 +53,7 @@ jobs:
             num_devices: 4
           - name: DeskBox Demo tests
             runner-label: BH-DeskBox
-            extra-tag: pipeline-functional
+            extra-tag: pipeline-perf
             num_devices: 2
           # - name: RackBox Demo tests
           #   runner-label: BH-RackBox

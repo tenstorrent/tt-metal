@@ -61,6 +61,8 @@ def standardize_hf_keys_multimodal(state_dict):
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
         elif "model.vision_tower.vision_model." in k:
             new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
+        elif "model.vision_model." in k:
+            new_state_dict[k.replace("model.vision_model.", "vision_model.")] = state_dict[k]
         elif "model.language_model." in k:
             new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
         else:
@@ -91,103 +93,13 @@ def convert_vision_hf_to_meta(state_dict, head_dim):
     return state_dict
 
 
-def map_hf_to_meta_keys(loaded_weights):
-    hf_to_meta = {
-        # Top level mappings
-        "model.embed_tokens.weight": "tok_embeddings.weight",
-        "model.norm.weight": "norm.weight",
-        "lm_head.weight": "output.weight",
-        # Layer level mappings
-        "input_layernorm.weight": "attention_norm.weight",
-        "post_attention_layernorm.weight": "ffn_norm.weight",
-        # Attention module mappings
-        "self_attn.q_proj.weight": "attention.wq.weight",
-        "self_attn.k_proj.weight": "attention.wk.weight",
-        "self_attn.v_proj.weight": "attention.wv.weight",
-        "self_attn.o_proj.weight": "attention.wo.weight",
-        "self_attn.q_proj.bias": "attention.wq.bias",
-        "self_attn.k_proj.bias": "attention.wk.bias",
-        "self_attn.v_proj.bias": "attention.wv.bias",
-        "self_attn.q_norm.weight": "attention.q_norm.weight",
-        "self_attn.k_norm.weight": "attention.k_norm.weight",
-        "self_attn.o_proj.bias": "attention.wo.bias",
-        # Feed forward module mappings
-        "mlp.gate_proj.weight": "feed_forward.w1.weight",
-        "mlp.up_proj.weight": "feed_forward.w3.weight",
-        "mlp.down_proj.weight": "feed_forward.w2.weight",
-        # MLP bias mappings
-        "mlp.gate_proj.bias": "feed_forward.w1.bias",
-        "mlp.up_proj.bias": "feed_forward.w3.bias",
-        "mlp.down_proj.bias": "feed_forward.w2.bias",
-        # === Additional FFN layernorms (Gemma3 specific) ===
-        "pre_feedforward_layernorm.weight": "pre_feedforward_layernorm.weight",
-        "post_feedforward_layernorm.weight": "post_feedforward_layernorm.weight",
-        # Direct module mappings
-        "gate_proj.weight": "w1.weight",
-        "down_proj.weight": "w2.weight",
-        "up_proj.weight": "w3.weight",
-        "q_proj.weight": "wq.weight",
-        "k_proj.weight": "wk.weight",
-        "v_proj.weight": "wv.weight",
-        "o_proj.weight": "wo.weight",
-        "q_proj.bias": "wq.bias",
-        "k_proj.bias": "wk.bias",
-        "v_proj.bias": "wv.bias",
-        "q_norm.weight": "q_norm.weight",
-        "k_norm.weight": "k_norm.weight",
-        "o_proj.bias": "wo.bias",
-        # Direct MLP bias mappings
-        "gate_proj.bias": "w1.bias",
-        "up_proj.bias": "w3.bias",
-        "down_proj.bias": "w2.bias",
-        "weight": "emb.weight",  # For host embeddings
-        # Full path layer mappings
-        "model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
-        "model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
-        "model.layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
-        "model.layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
-        "model.layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
-        "model.layers.{layer}.self_attn.o_proj.weight": "layers.{layer}.attention.wo.weight",
-        "model.layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
-        "model.layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
-        "model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
-        "model.layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
-        "model.layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
-        "model.layers.{layer}.self_attn.o_proj.bias": "layers.{layer}.attention.wo.bias",
-        "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
-        "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
-        "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
-        # Full path MLP bias mappings
-        "model.layers.{layer}.mlp.gate_proj.bias": "layers.{layer}.feed_forward.w1.bias",
-        "model.layers.{layer}.mlp.up_proj.bias": "layers.{layer}.feed_forward.w3.bias",
-        "model.layers.{layer}.mlp.down_proj.bias": "layers.{layer}.feed_forward.w2.bias",
-        "model.layers.{layer}.pre_feedforward_layernorm.weight": "layers.{layer}.pre_feedforward_layernorm.weight",
-        "model.layers.{layer}.post_feedforward_layernorm.weight": "layers.{layer}.post_feedforward_layernorm.weight",
-    }
-
-    meta_state_dict = {}
-    for key, tensor in loaded_weights.items():
-        # Remove known prefix if present
-        prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
-        key = key.replace(prefix, _get_known_prefixes_mapping().get(prefix, ""), 1)
-
-        new_key = key
-        if key in hf_to_meta:
-            # Direct match for top-level keys
-            new_key = hf_to_meta[key]
-        elif key.startswith("model.layers."):
-            # Extract layer number and form a template key
-            parts = key.split(".")
-            layer_num = parts[2]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
-            template_key = "model.layers.{layer}." + ".".join(parts[3:])
-            if template_key in hf_to_meta:
-                new_key = hf_to_meta[template_key].format(layer=layer_num)
-            else:
-                new_key = key[len("model.") :]  # Remove "model." prefix
-
-        meta_state_dict[new_key] = tensor
-
-    return meta_state_dict
+def convert_hf_to_meta_mllama(state_dict, head_dim, config):
+    state_dict = split_hf_keys(state_dict)
+    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
+    state_dict = convert_pos_embeddings(state_dict)
+    state_dict = flatten_conv_linear(state_dict)
+    return state_dict
 
 
 def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
@@ -485,6 +397,155 @@ def replace_keys(state_dict, replacements):
         pattern = pattern[:-1] if pattern.endswith(".") else pattern
         pattern = pre + pattern + post
         state_dict = {re.sub(pattern, replacement, k): v for k, v in state_dict.items()}
+    return state_dict
+
+
+def map_hf_to_meta_keys_mllama(loaded_weights, config):
+    replacements = [
+        (r"^model.norm.weight", r"text_model.norm.weight"),
+        (r"^lm_head.weight", r"text_model.output.weight"),
+        (r"^model.embed_tokens", r"text_model.tok_embeddings"),
+        (r"^vision_model.patch_embedding", r"vision_model.conv1._linear"),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.q_proj",
+            r"vision_model.\1.resblocks.\2.attn.wq",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.k_proj",
+            r"vision_model.\1.resblocks.\2.attn.wk",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.v_proj",
+            r"vision_model.\1.resblocks.\2.attn.wv",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).self_attn.o_proj",
+            r"vision_model.\1.resblocks.\2.attn.wo",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).mlp.fc1",
+            r"vision_model.\1.resblocks.\2.mlp.c_fc",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).mlp.fc2",
+            r"vision_model.\1.resblocks.\2.mlp.c_proj",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).input_layernorm",
+            r"vision_model.\1.resblocks.\2.ln_1",
+        ),
+        (
+            r"^vision_model.(global_transformer|transformer).layers.(\d+).post_attention_layernorm",
+            r"vision_model.\1.resblocks.\2.ln_2",
+        ),
+        (
+            r"^vision_model.global_transformer.layers.(\d+).(gate_ffn|gate_attn)",
+            r"vision_model.global_transformer.resblocks.\1.\2",
+        ),
+        (r"^vision_model.layernorm_(pre|post).(weight|bias)", r"vision_model.ln_\1.\2"),
+        (r"^vision_model.gated_positional_embedding.embedding", r"vision_model.positional_embedding"),
+        (r"^vision_model.gated_positional_embedding.tile_embedding.weight", r"vision_model.gated_positional_embedding"),
+        (r"^vision_model.gated_positional_embedding.gate", r"vision_model.gated_positional_embedding_gate"),
+        (r"^vision_model.pre_tile_positional_embedding.embedding.weight", r"vision_model.pre_tile_pos_embed.embedding"),
+        (
+            r"^vision_model.post_tile_positional_embedding.embedding.weight",
+            r"vision_model.post_tile_pos_embed.embedding",
+        ),
+        (r"^vision_model.pre_tile_positional_embedding.gate", r"vision_model.pre_tile_pos_embed.gate"),
+        (r"^vision_model.post_tile_positional_embedding.gate", r"vision_model.post_tile_pos_embed.gate"),
+        (r"^vision_model.", r"vision_model.vision_encoder."),
+        (r"^model.multi_modal_projector.", r"vision_model.vision_projection."),
+    ]
+
+    self_attn_replacements = {
+        (r"^model.layers.(\d+).mlp.gate_proj.", r"text_model.layers.\1.feed_forward.w1."),
+        (r"^model.layers.(\d+).mlp.down_proj.", r"text_model.layers.\1.feed_forward.w2."),
+        (r"^model.layers.(\d+).mlp.up_proj.", r"text_model.layers.\1.feed_forward.w3."),
+        (r"^model.layers.(\d+).input_layernorm.weight", r"text_model.layers.\1.attention_norm.weight"),
+        (r"^model.layers.(\d+).post_attention_layernorm.weight", r"text_model.layers.\1.ffn_norm.weight"),
+        (r"^model.layers.(\d+).self_attn.(q|k|v|o)_proj.weight", r"text_model.layers.\1.attention.w\2.weight"),
+    }
+    cross_attn_replacements = {
+        (r"^model.layers.(\d+).mlp.gate_proj.weight", r"text_model.cross_attention_layers.\1.feed_forward.w1.weight"),
+        (r"^model.layers.(\d+).mlp.down_proj.weight", r"text_model.cross_attention_layers.\1.feed_forward.w2.weight"),
+        (r"^model.layers.(\d+).mlp.up_proj.weight", r"text_model.cross_attention_layers.\1.feed_forward.w3.weight"),
+        (r"^model.layers.(\d+).input_layernorm.weight", r"text_model.cross_attention_layers.\1.attention_norm.weight"),
+        (
+            r"^model.layers.(\d+).post_attention_layernorm.weight",
+            r"text_model.cross_attention_layers.\1.ffn_norm.weight",
+        ),
+        (r"^model.layers.(\d+).cross_attn_attn_gate", r"text_model.cross_attention_layers.\1.gate_attn"),
+        (r"^model.layers.(\d+).cross_attn_mlp_gate", r"text_model.cross_attention_layers.\1.gate_ffwd"),
+        (r"^model.layers.(\d+).cross_attn.(q|k|v|o)_proj", r"text_model.cross_attention_layers.\1.attention.w\2"),
+        (r"^model.layers.(\d+).cross_attn.(q|k)_norm", r"text_model.cross_attention_layers.\1.attention.\2_norm"),
+    }
+
+    idx_cross_attn = 0
+    for i in range(config.text_config.num_hidden_layers):
+        if i in config.text_config.cross_attention_layers:
+            cur_replacements = [
+                (
+                    k.replace(r"layers.(\d+).", rf"layers.{i}."),
+                    v.replace(r"cross_attention_layers.\1.", rf"cross_attention_layers.{idx_cross_attn}.").replace(
+                        r"\2", r"\1"
+                    ),
+                )
+                for k, v in cross_attn_replacements
+            ]
+            idx_cross_attn += 1
+        else:
+            cur_replacements = [
+                (
+                    k.replace(r"layers.(\d+).", rf"layers.{i}."),
+                    v.replace(r"layers.\1.", rf"layers.{i-idx_cross_attn}.").replace(r"\2", r"\1"),
+                )
+                for k, v in self_attn_replacements
+            ]
+        replacements.extend(cur_replacements)
+
+    return replace_keys(loaded_weights, replacements)
+
+
+def convert_pos_embeddings(state_dict):
+    do_convert = lambda key: (
+        ("tile_pos_embed.embedding" in key) or (key == "vision_model.vision_encoder.gated_positional_embedding")
+    )
+    state_dict = {k: invert_pre_compute_positional_embedding(v) if do_convert(k) else v for k, v in state_dict.items()}
+    return state_dict
+
+
+def invert_pre_compute_positional_embedding(precomputed_embeddings):
+    """Inverts https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L122-L148"""
+
+    # TBD: remove hardcode
+    if tuple(precomputed_embeddings.shape) == (9, 5120):
+        max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1, 1280
+    elif tuple(precomputed_embeddings.shape) == (9, 8197120):
+        max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1601, 1280
+    else:
+        raise ValueError(f"Unknown embedding shape: {precomputed_embeddings.shape}")
+
+    precomputed_embeddings = precomputed_embeddings.reshape(
+        max_aspect_ratio_id + 1, max_num_tiles, num_patches, hidden_size
+    )
+
+    from transformers.models.mllama.image_processing_mllama import get_all_supported_aspect_ratios
+
+    supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
+
+    embedding = torch.zeros(max_num_tiles, max_num_tiles, num_patches, hidden_size, dtype=precomputed_embeddings.dtype)
+
+    for i, (height, width) in enumerate(supported_aspect_ratios):
+        aspect_ratio_id = i + 1
+        current_embedding = precomputed_embeddings[aspect_ratio_id, : height * width]
+        embedding[:height, :width] = current_embedding.reshape(height, width, num_patches, hidden_size)
+
+    return embedding
+
+
+def flatten_conv_linear(state_dict):
+    do_flatten = lambda key: (("conv" in key) and ("_linear.weight" in key))
+    state_dict = {k: v.flatten(start_dim=1) if do_flatten(k) else v for k, v in state_dict.items()}
     return state_dict
 
 

@@ -22,7 +22,7 @@ graph_templates {
       node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
     }
     internal_connections {
-      key: "QSFP"
+      key: "QSFP_DD"
       value {
         connections { port_a { path: ["node3"] tray_id: 4 port_id: 3 } port_b { path: ["node2"] tray_id: 4 port_id: 3 } }
         connections { port_a { path: ["node3"] tray_id: 4 port_id: 4 } port_b { path: ["node1"] tray_id: 4 port_id: 4 } }
