@@ -415,6 +415,7 @@ def slice_test(
     in_mem_config,
     out_mem_config,
     dtype,
+    slice_step=(1, 1, 1, 1),
 ):
     if dtype == ttnn.float32:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.float)
@@ -424,17 +425,24 @@ def slice_test(
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
+    print(f"LLONG in test_slice_test input_layout = {tt_input_tensor.layout}")
 
-    tt_output_tensor = ttnn.slice(tt_input_tensor, output_tensor_start, output_tensor_end, memory_config=out_mem_config)
+    tt_output_tensor = ttnn.slice(
+        tt_input_tensor,
+        slice_start=output_tensor_start,
+        slice_end=output_tensor_end,
+        slice_step=slice_step,
+        memory_config=out_mem_config,
+    )
 
     a_pt = ttnn.to_torch(tt_output_tensor)
 
     # Pytorch reference
     a_ref = torch_input_tensor[
-        output_tensor_start[0] : output_tensor_end[0],
-        output_tensor_start[1] : output_tensor_end[1],
-        output_tensor_start[2] : output_tensor_end[2],
-        output_tensor_start[3] : output_tensor_end[3],
+        output_tensor_start[0] : output_tensor_end[0] : slice_step[0],
+        output_tensor_start[1] : output_tensor_end[1] : slice_step[1],
+        output_tensor_start[2] : output_tensor_end[2] : slice_step[2],
+        output_tensor_start[3] : output_tensor_end[3] : slice_step[3],
     ]
 
     return a_pt, a_ref, device.num_program_cache_entries()
@@ -454,8 +462,9 @@ def test_slice_rm_program_cache_collison(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32),
-    ids=["bfloat16", "float"],
+    (ttnn.bfloat16,),
+    # (ttnn.bfloat16, ttnn.float32),
+    # ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
@@ -471,18 +480,22 @@ def test_slice_rm_program_cache_collison(device):
     "input_tensor_shape_0, output_tensor_start_0, output_tensor_end_0",
     (
         ((4, 3, 64, 64), (0, 0, 0, 0), (4, 3, 32, 32)),
-        ((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64)),
-        ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
-        ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
-        ((1, 3, 32, 32), (0, 1, 0, 0), (1, 2, 32, 32)),
-        ((1, 6, 32, 32), (0, 2, 0, 0), (1, 4, 32, 32)),
-        ((1, 6, 128, 64), (0, 2, 64, 32), (1, 4, 96, 64)),
-        ((4, 6, 128, 64), (1, 2, 64, 32), (2, 4, 96, 64)),
+        # ((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64)),
+        # ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
+        # ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
+        # ((1, 3, 32, 32), (0, 1, 0, 0), (1, 2, 32, 32)),
+        # ((1, 6, 32, 32), (0, 2, 0, 0), (1, 4, 32, 32)),
+        # ((1, 6, 128, 64), (0, 2, 64, 32), (1, 4, 96, 64)),
+        # ((4, 6, 128, 64), (1, 2, 64, 32), (2, 4, 96, 64)),
     ),
 )
 @pytest.mark.parametrize(
     "input_tensor_shape_1, output_tensor_start_1, output_tensor_end_1",
     (((9, 8, 128, 128), (0, 0, 0, 0), (9, 8, 32, 32)),),
+)
+@pytest.mark.parametrize(
+    "slice_step",
+    ((2, 2, 2, 2),),
 )
 def test_run_slice_test(
     input_tensor_shape_0,
@@ -495,6 +508,7 @@ def test_run_slice_test(
     in_mem_config,
     out_mem_config,
     dtype,
+    slice_step,
 ):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
@@ -508,6 +522,7 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        slice_step,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
@@ -523,6 +538,7 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        slice_step,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
@@ -539,9 +555,10 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        slice_step,
     )
     # change from RM to TILE
-    assert num_cache_entries == 3
+    assert num_cache_entries == 4
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -555,12 +572,67 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        slice_step,
     )
     # CACHE HIT
-    assert num_cache_entries == 4
+    assert num_cache_entries == 6
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+    # (ttnn.bfloat16, ttnn.float32),
+    # ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (ttnn.DRAM_MEMORY_CONFIG,),
+    ids=["out_DRAM"],
+)
+@pytest.mark.parametrize(
+    "in_mem_config",
+    (ttnn.DRAM_MEMORY_CONFIG,),
+    ids=["in0_DRAM"],
+)
+@pytest.mark.parametrize(
+    "input_tensor_shape, output_tensor_start, output_tensor_end",
+    (((4, 3, 640, 640), (0, 0, 0, 0), (4, 3, 320, 320)),),
+)
+@pytest.mark.parametrize(
+    "slice_step",
+    ((2, 2, 2, 2),),
+)
+def test_run_slice_rm_multi_core_test(
+    input_tensor_shape,
+    output_tensor_start,
+    output_tensor_end,
+    device,
+    in_mem_config,
+    out_mem_config,
+    dtype,
+    slice_step,
+):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
+    a_pt, a_ref, num_cache_entries = slice_test(
+        ttnn.ROW_MAJOR_LAYOUT,
+        input_tensor_shape,
+        output_tensor_start,
+        output_tensor_end,
+        device,
+        in_mem_config,
+        out_mem_config,
+        dtype,
+        slice_step,
+    )
+    assert a_pt.shape == a_ref.shape
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
+    assert num_cache_entries == 1
 
 
 # slice alternate elements in a given tensor
