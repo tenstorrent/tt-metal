@@ -9,7 +9,9 @@ from ...utils.tensor import bf16_tensor
 from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
-from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
+from ...layers.feedforward import ParallelFeedForward
+from ...layers.linear import ColParallelLinear, Linear
+from ttnn.distributed.distributed import ConcatMeshToTensor
 
 
 class CLIPConfig:
@@ -60,7 +62,10 @@ class CLIPConfig:
         self.max_prompt_length = max_prompt_length
         self.layer_norm_eps = layer_norm_eps
         self.attention_dropout = attention_dropout
-        self.hidden_act = hidden_act
+        if hidden_act == "gelu":
+            self.hidden_act = "decomposed_gelu"
+        else:
+            self.hidden_act = hidden_act
 
 
 class CLIPEncoder:
@@ -76,6 +81,13 @@ class CLIPEncoder:
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         self.embeddings = TextEmbeddings(config, mesh_device)
         self.eos_token_id = eos_token_id
@@ -117,52 +129,94 @@ class CLIPEncoder:
             weight=self.final_layer_norm,
             bias=self.final_layer_norm_bias,
             epsilon=self.config.layer_norm_eps,
+            compute_kernel_config=self.compute_kernel_config,
         )
-
-        encoder_output.append(normalized_final_state)
 
         # gather eos
         if self.eos_token_id is None:
             self.eos_token_id = 2
 
-        pooled_output = _gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
+        pooled_output = self._gather_eos(
+            normalized_final_state,
+            prompt_tokenized,
+            self.eos_token_id,
+            mesh_device=mesh_device,
+            ccl_manager=self.ccl_manager,
+        )
 
         # apply text projection if specified
         if with_projection:
             if self.text_projection is None:
                 raise ValueError("projection weights are not loaded")
             text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
-            projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+            projected_output = ttnn.matmul(
+                pooled_output, text_projection_transposed, compute_kernel_config=self.compute_kernel_config
+            )
             # sequence embedding, pooled embedding with projection
             return encoder_output, projected_output
         else:
             # sequence embedding, pooled embedding without projection
             return encoder_output, pooled_output
 
+    def _pool_eos_from_torch_tensors(self, ids_t: torch.Tensor, seq_t: torch.Tensor, eos_token_id: int) -> torch.Tensor:
+        """Helper function to pool EOS tokens from torch tensors.
 
-def _gather_eos(seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device) -> ttnn.Tensor:
-    ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+        Args:
+            ids_t: Token IDs tensor [B, S]
+            seq_t: Sequence embeddings tensor [B, S, H]
+            eos_token_id: EOS token ID to search for
 
-    # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
-    if eos_token_id == 2:
-        # use argmax (highest token ID position)
-        eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
-    else:
-        # search for specific eos_token_id
-        eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
-        eos_idx = eos_mask.argmax(dim=-1)
+        Returns:
+            Pooled tensor [B, H]
+        """
+        # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
+        if eos_token_id == 2:
+            # use argmax (highest token ID position)
+            eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
+        else:
+            # search for specific eos_token_id
+            eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
+            eos_idx = eos_mask.argmax(dim=-1)
 
-    seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
-    b = torch.arange(seq_t.size(0))
-    pooled_t = seq_t[b, eos_idx]  # [B, H]
+        # Use vectorized indexing to get pooled output
+        b = torch.arange(seq_t.size(0))
+        pooled_t = seq_t[b, eos_idx]  # [B, H]
+        return pooled_t
 
-    return ttnn.from_torch(
-        pooled_t,
-        dtype=seq_emb.get_dtype(),
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+    def _gather_eos(
+        self,
+        seq_emb: ttnn.Tensor,
+        input_ids: ttnn.Tensor,
+        eos_token_id: int,
+        mesh_device: ttnn.Device,
+        ccl_manager: CCLManager,
+    ) -> ttnn.Tensor:
+        if ccl_manager is not None:
+            ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+            seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
+
+            pooled_t = self._pool_eos_from_torch_tensors(ids_t, seq_t, eos_token_id)
+
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        else:
+            ids_t = ttnn.to_torch(input_ids, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
+            seq_t = ttnn.to_torch(seq_emb, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
+
+            pooled_t = self._pool_eos_from_torch_tensors(ids_t, seq_t, eos_token_id)
+
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
+            )
 
 
 class CLIPStack:
@@ -174,6 +228,14 @@ class CLIPStack:
         parallel_config: EncoderParallelConfig,
     ) -> None:
         self.config = config
+        self.mesh_device = mesh_device
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.layers = [
             CLIPEncoderLayer(config, mesh_device, ccl_manager, parallel_config) for _ in range(config.num_hidden_layers)
         ]
@@ -211,10 +273,18 @@ class CLIPEncoderLayer:
     ) -> None:
         self.config = config
         self.mesh_device = mesh_device
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.layer_norm1 = None
         self.layer_norm2 = None
         self.layer_norm_eps = config.layer_norm_eps
         self.self_attn = CLIPAttention(config, mesh_device, ccl_manager, parallel_config)
+        self.parallel_config = parallel_config
         self.mlp = ParallelFeedForward(
             dim=config.embed_dim,
             dim_out=config.embed_dim,
@@ -223,7 +293,6 @@ class CLIPEncoderLayer:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
         )
-        self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
     def load_state_dict(self, state_dict):
@@ -261,16 +330,26 @@ class CLIPEncoderLayer:
     ) -> ttnn.Tensor:
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
-            hidden_states, weight=self.layer_norm1, bias=self.layer_norm1_bias, epsilon=self.layer_norm_eps
+            hidden_states,
+            weight=self.layer_norm1,
+            bias=self.layer_norm1_bias,
+            epsilon=self.layer_norm_eps,
+            compute_kernel_config=self.compute_kernel_config,
         )
         attn_output = self.self_attn(hidden_states, causal_attention_mask)
         hidden_states = residual + attn_output
 
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
-            hidden_states, weight=self.layer_norm2, bias=self.layer_norm2_bias, epsilon=self.layer_norm_eps
+            hidden_states,
+            weight=self.layer_norm2,
+            bias=self.layer_norm2_bias,
+            epsilon=self.layer_norm_eps,
+            compute_kernel_config=self.compute_kernel_config,
         )
-        mlp_output_fractured = self.mlp(hidden_states)  # fractured on columns
+        mlp_output_fractured = self.mlp(
+            hidden_states, compute_kernel_config=self.compute_kernel_config
+        )  # fractured on columns
         hidden_states_shape = list(mlp_output_fractured.shape)
 
         mlp_output_fractured = ttnn.unsqueeze(mlp_output_fractured, 0)
@@ -310,6 +389,13 @@ class CLIPAttention:
     ) -> None:
         self.config = config
         self.mesh_device = mesh_device
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
@@ -319,38 +405,40 @@ class CLIPAttention:
         self.scale = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
 
-        self.q_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
-        )
-        self.k_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
-        )
-        self.v_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
-        )
-        self.o_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=True,
-        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            self.q_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+            self.k_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+            self.v_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+            self.o_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+        else:
+            self.q_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.k_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.v_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.o_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
         self.q_proj.load_state_dict(substate(state_dict, "q_proj"))
@@ -361,9 +449,9 @@ class CLIPAttention:
     def __call__(self, hidden_states, causal_attention_mask):
         batch_size, seq_length, _ = hidden_states.shape
 
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
+        q = self.q_proj(hidden_states, compute_kernel_config=self.compute_kernel_config)
+        k = self.k_proj(hidden_states, compute_kernel_config=self.compute_kernel_config)
+        v = self.v_proj(hidden_states, compute_kernel_config=self.compute_kernel_config)
 
         q = q * self.scale
 
@@ -379,14 +467,18 @@ class CLIPAttention:
         k = ttnn.transpose(k, 1, 2)
         v = ttnn.transpose(v, 1, 2)
 
-        scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))  # [batch_size, num_heads, seq_length, seq_length]
+        scores = ttnn.matmul(
+            q, ttnn.transpose(k, -2, -1), compute_kernel_config=self.compute_kernel_config
+        )  # [batch_size, num_heads, seq_length, seq_length]
 
         if causal_attention_mask is not None:
             scores = scores + causal_attention_mask
 
-        attn_weights = ttnn.softmax(scores, dim=-1)
+        attn_weights = ttnn.softmax(
+            scores, dim=-1, compute_kernel_config=self.compute_kernel_config, numeric_stable=True
+        )
 
-        attn_output = ttnn.matmul(attn_weights, v)
+        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=self.compute_kernel_config)
 
         attn_output = ttnn.transpose(attn_output, 1, 2)  # [batch_size, seq_length, num_heads, head_dim]
         attn_output = ttnn.reshape(attn_output, (1, batch_size, seq_length, self.embed_dim // num_devices))
@@ -407,7 +499,7 @@ class CLIPAttention:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-        dense_out = self.o_proj(attn_output)
+        dense_out = self.o_proj(attn_output, compute_kernel_config=self.compute_kernel_config)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = ttnn.experimental.all_gather_async(
