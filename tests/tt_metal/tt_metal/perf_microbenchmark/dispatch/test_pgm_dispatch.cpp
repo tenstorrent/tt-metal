@@ -688,7 +688,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         mesh_device = MeshDevice::create_unit_mesh(
-            device_id, DEFAULT_L1_SMALL_SIZE, 100 * 1024 * 1024, 1, DispatchCoreConfig{dispatch_core_type});
+            device_id, DEFAULT_L1_SMALL_SIZE, 1000 * 1024 * 1024, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
 
         std::vector<tt_metal::SubDevice> sub_devices;
