@@ -514,6 +514,7 @@ class TtSDXLPipeline(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
             )
+            tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
 
             for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
                 ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
