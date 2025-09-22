@@ -535,7 +535,6 @@ std::vector<Tensor> all_gather_async(
             memory_config,
             topology,
             sub_device_id,
-            ttnn::ccl::get_active_physical_devices(input_tensors),
             cluster_axis,
             use_all_gather_async_llama_sharded,
             use_optimal_ccl_for_llama,
