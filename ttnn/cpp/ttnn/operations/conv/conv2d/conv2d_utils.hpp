@@ -259,5 +259,6 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
 uint32_t calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
 
+void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 }  // namespace operations::conv
 }  // namespace ttnn

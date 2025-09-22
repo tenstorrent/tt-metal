@@ -1131,7 +1131,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
         uint32_t slice_rounding_value = 1;
         if (conv_config.output_layout == tt_metal::Layout::TILE &&
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH) {
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
             // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
             slice_rounding_value = tt::constants::TILE_HEIGHT;
         }
@@ -1147,7 +1147,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         const uint32_t min_output_slice_size =
             tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
             slice_rounding_value;
-            
+
         if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_height = min_output_slice_size;
             input_height =
@@ -1299,6 +1299,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         original_weights_out_channels,
         out_channels);
 
+    log_info(tt::LogOp, "Conv2d Weights Params : {}", params);
     uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(params.input_parallel_config);
     uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(params.output_parallel_config);
     uint32_t out_channels_padded = calculate_out_channels_padded(out_channels, params.output_parallel_config);
@@ -1344,6 +1345,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
     if (params.parameters_on_device) {
         weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     }
+    log_info(tt::LogOp, "Conv2d Weights Tensor : {}", weight_tensor_);
 
     return weight_tensor_;
 }
