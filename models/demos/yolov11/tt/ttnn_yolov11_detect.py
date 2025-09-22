@@ -3,7 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors
+from models.demos.yolov11.tt.common import (
+    TtnnConv,
+    Yolov11Conv2D,
+    deallocate_tensors,
+    sharded_concat_2,
+    sharded_concat_3,
+)
 
 
 def p(x, a="x"):
@@ -50,10 +56,6 @@ class TtnnDetect:
         self.strides = conv_pt.strides
 
     def __call__(self, device, y1, y2, y3):
-        print("shape are", y1.shape, y2.shape, y3.shape)
-        p(y1, "y1")
-        p(y2, "y2")
-        p(y3, "y3")
         x1 = self.cv2_0_0(device, y1)
         x1 = self.cv2_0_1(device, x1)
         x1 = self.cv2_0_2(x1)
@@ -83,16 +85,33 @@ class TtnnDetect:
         x6 = self.cv3_2_1_1(device, x6)
         x6 = self.cv3_2_2_0(x6)
 
-        x1 = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x3 = ttnn.sharded_to_interleaved(x3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y1 = ttnn.concat((x1, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y2 = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y3 = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x1 = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x3 = ttnn.sharded_to_interleaved(x3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # if x1.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        #     x1 = ttnn.to_layout(x1, ttnn.ROW_MAJOR_LAYOUT)
+        # if x4.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        #     x4 = ttnn.to_layout(x4, ttnn.ROW_MAJOR_LAYOUT)
+        y1 = sharded_concat_2(x1, x4)
+        p(y1, "y1")
+        y2 = sharded_concat_2(x2, x5)
+        p(y2, "y2")
+        y3 = sharded_concat_2(x3, x6)
+        p(y3, "y3")
+        y = sharded_concat_3(y1, y2, y3, dim=2)
+        y = ttnn.sharded_to_interleaved(y, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # p(x2,"x2")
+        # p(x3,"x3")
+        # p(x4,"x4")
+        # p(x5,"x5")
+        # p(x6,"x6")
+        # y1 = ttnn.concat((x1, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # y2 = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # y3 = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]
         deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
@@ -123,6 +142,7 @@ class TtnnDetect:
         z = ttnn.concat((z2, z1), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         z = ttnn.multiply(z, strides)
         yb = ttnn.permute(yb, (0, 2, 1))
+        yb = ttnn.to_layout(yb, layout=ttnn.TILE_LAYOUT)
         yb = ttnn.sigmoid(yb)
         deallocate_tensors(c, z1, z2, c1, c2, anchor, strides)
         z = ttnn.reallocate(z)
