@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <string>
+#include <tt-logger/tt-logger.hpp>
 #include <type_traits>
 #include <fstream>
 
@@ -11,6 +13,26 @@
 #include "impl/context/metal_context.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
+
+namespace tracy {
+NLOHMANN_JSON_SERIALIZE_ENUM(
+    TTDeviceMarkerType,
+    {{TTDeviceMarkerType::ZONE_START, "ZONE_START"},
+     {TTDeviceMarkerType::ZONE_END, "ZONE_END"},
+     {TTDeviceMarkerType::ZONE_TOTAL, "ZONE_TOTAL"},
+     {TTDeviceMarkerType::TS_DATA, "TS_DATA"},
+     {TTDeviceMarkerType::TS_EVENT, "TS_EVENT"}});
+
+NLOHMANN_JSON_SERIALIZE_ENUM(
+    RiscType,
+    {{RiscType::BRISC, "BRISC"},
+     {RiscType::NCRISC, "NCRISC"},
+     {RiscType::TRISC_0, "TRISC_0"},
+     {RiscType::TRISC_1, "TRISC_1"},
+     {RiscType::TRISC_2, "TRISC_2"},
+     {RiscType::TENSIX_RISC_AGG, "TENSIX_RISC_AGG"},
+     {RiscType::ERISC, "ERISC"}});
+}  // namespace tracy
 
 namespace tt {
 
@@ -52,6 +74,7 @@ DurationAnalysisResults parse_duration(
 
     std::unordered_map<uint64_t, DurationAnalysisResults::SingleResult> results_per_runtime_id;
     std::unordered_map<uint64_t, std::unordered_set<CoreCoord>> fw_cores_per_runtime_id;
+    std::unordered_map<uint64_t, bool> start_end_timestamp_pair_found_per_runtime_id;
 
     for (const auto& marker_ref : markers) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
@@ -59,12 +82,16 @@ DurationAnalysisResults parse_duration(
             if (results_per_runtime_id.find(marker.runtime_host_id) == results_per_runtime_id.end()) {
                 results_per_runtime_id[marker.runtime_host_id].start_timestamp = marker.timestamp;
                 results_per_runtime_id[marker.runtime_host_id].start_marker = marker_ref.get();
+                start_end_timestamp_pair_found_per_runtime_id[marker.runtime_host_id] = false;
+            } else if (start_end_timestamp_pair_found_per_runtime_id[marker.runtime_host_id]) {
+                // log_warning(tt::LogMetal, "");
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
             if (results_per_runtime_id.find(marker.runtime_host_id) != results_per_runtime_id.end()) {
                 results_per_runtime_id[marker.runtime_host_id].end_timestamp = marker.timestamp;
                 results_per_runtime_id[marker.runtime_host_id].end_marker = marker_ref.get();
+                start_end_timestamp_pair_found_per_runtime_id[marker.runtime_host_id] = true;
             }
         }
 
@@ -175,6 +202,80 @@ void writeAnalysisResultsToCSV(
     }
 
     log_file_ofs.close();
+}
+
+NLOHMANN_JSON_SERIALIZE_ENUM(AnalysisType, {{AnalysisType::OP_FIRST_TO_LAST_MARKER, "OP_FIRST_TO_LAST_MARKER"}});
+NLOHMANN_JSON_SERIALIZE_ENUM(AnalysisDimension, {{AnalysisDimension::OP, "OP"}});
+
+void from_json(const nlohmann::json& j, AnalysisResultsConfig& config) {
+    j.at("analysis_name").get_to(config.analysis_name);
+    config.display_start_and_end_timestamps = j.value("display_start_and_end_timestamps", false);
+    config.start_timestamp_header = j.contains("start_timestamp_header")
+                                        ? std::make_optional(j.at("start_timestamp_header").get<std::string>())
+                                        : std::nullopt;
+    config.end_timestamp_header = j.contains("end_timestamp_header")
+                                      ? std::make_optional(j.at("end_timestamp_header").get<std::string>())
+                                      : std::nullopt;
+}
+
+void from_json(const nlohmann::json& j, AnalysisStartEndConfig& config) {
+    if (j.contains("risc")) {
+        if (j["risc"].is_array()) {
+            uint8_t risc_val = 0;
+            for (const auto& risc : j["risc"]) {
+                risc_val |= static_cast<std::underlying_type_t<AnalysisRisc>>(risc.get<AnalysisRisc>());
+            }
+            config.risc = static_cast<AnalysisRisc>(risc_val);
+        } else {
+            j.at("risc").get_to(config.risc);
+        }
+    } else {
+        config.risc = AnalysisRiscAny;
+    }
+
+    if (j.contains("marker_type")) {
+        if (j["marker_type"].is_array()) {
+            uint8_t marker_type_val = 0;
+            for (const auto& marker_type : j["marker_type"]) {
+                marker_type_val |=
+                    static_cast<std::underlying_type_t<AnalysisMarkerType>>(marker_type.get<AnalysisMarkerType>());
+            }
+            config.marker_type = static_cast<AnalysisMarkerType>(marker_type_val);
+        } else {
+            j.at("marker_type").get_to(config.marker_type);
+        }
+    } else {
+        config.marker_type = AnalysisMarkerTypeAny;
+    }
+
+    if (j.contains("marker_name_keywords")) {
+        for (const auto& marker_name_keyword : j["marker_name_keywords"]) {
+            config.marker_name_keywords.insert(
+                tracy::MarkerDetails::marker_name_keywords_map.at(marker_name_keyword.get<std::string>()));
+        }
+    } else {
+        config.marker_name_keywords = AnalysisMarkerNameKeywords();
+    }
+}
+
+void from_json(const nlohmann::json& j, AnalysisConfig& config) {
+    j.at("type").get_to(config.type);
+    j.at("dimension").get_to(config.dimension);
+    j.at("results_config").get_to(config.results_config);
+    j.at("start_config").get_to(config.start_config);
+    j.at("end_config").get_to(config.end_config);
+}
+
+std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path) {
+    TT_ASSERT(std::filesystem::exists(json_path));
+    std::ifstream json_ifs(json_path);
+    const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
+
+    std::vector<AnalysisConfig> configs;
+    for (const auto& config_json : configs_json) {
+        configs.push_back(config_json.get<AnalysisConfig>());
+    }
+    return configs;
 }
 }  // namespace tt_metal
 
