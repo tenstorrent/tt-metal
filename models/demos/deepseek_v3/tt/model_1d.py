@@ -6,6 +6,7 @@ from typing import Any, Sequence
 
 import numpy as np
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -320,9 +321,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
 
+        logger.info(f"forward_decode")
         x = Embedding1D.forward_decode(x, cfg["embedding"])
-
-        x_hidden = []
 
         # Stage 1: MLP Decoder Block
         mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
@@ -336,6 +336,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ):
                 if is_padding_layer:
                     continue
+                # logger.info(f" DecoderBlock layer {layer_idx} at meta index {meta_layer_idx} on row {row_idx}")
+
                 x_next = DecoderBlock.forward_decode(
                     x,
                     position_idxs,
@@ -344,11 +346,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
                     rope_tensors,
                     page_tables[layer_idx],
                 )
-                x_hidden.append(x_next)
-
                 ttnn.deallocate(x)
-                x = ttnn.clone(x_next)
-
+                x = x_next
             # Transfer rows
             cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
 
@@ -365,6 +364,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ):
                 if is_padding_layer:
                     continue
+                # logger.info(f" MoEDecoderBlock layer {layer_idx} at meta index {meta_layer_idx} on row {row_idx}")
                 x_next = MoEDecoderBlock.forward_decode(
                     x,
                     position_idxs,
@@ -373,10 +373,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
                     rope_tensors,
                     page_tables[layer_idx],
                 )
-                x_hidden.append(x_next)
-
                 ttnn.deallocate(x)
-                x = ttnn.clone(x_next)
+                x = x_next
 
             # Transfer rows
             cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
@@ -435,6 +433,34 @@ class Model1D(SharedStateAddOn, AbstractModule):
 
             # Transfer rows
             cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+
+        # Stage 2: MOE Decoder Block
+        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
+            cfg["num_rows"], cfg["num_mlp_layers"], cfg["num_mlp_layers"] + cfg["num_moe_layers"]
+        )
+
+        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
+            zip(moe_is_padding_layer.transpose(0, 1), moe_meta_layer_indices.transpose(0, 1), strict=True)
+        ):
+            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
+                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
+            ):
+                if is_padding_layer:
+                    continue
+                x = MoEDecoderBlock.forward_prefill(
+                    x,
+                    user_id,
+                    row_idx,
+                    cfg["moe_decoder_block"][meta_layer_idx],
+                    rope_tensors,
+                    page_tables[layer_idx],
+                )
+
+            # Transfer rows
+            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+
+        x_resharded = ttnn.to_memory_config(x, **cfg["norm_reshard"])  # TODO: fix
+        ttnn.deallocate(x)
 
         # Norm (no resharding needed for prefill)
         x_norm = DistributedRMSNorm.forward_prefill(x, cfg["norm"])

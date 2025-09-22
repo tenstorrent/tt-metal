@@ -6,6 +6,7 @@ from typing import cast
 
 import torch
 import ttnn.experimental
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -151,6 +152,7 @@ class Embedding1D(AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(0),
                 "num_links": ccl.get_max_links(0),
             },
         }
@@ -174,6 +176,7 @@ class Embedding1D(AbstractModule):
     def forward_decode(cls, x, cfg):
         assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
 
+        logger.info(f" Embedding1D input shape: {x.shape}")
         # TODO: remove this padding once all gather async supports subtile gathering
         # Add padding so that the batch dimension is divisible by TILE_SIZE
         _, _, original_seq_len = x.shape

@@ -11,7 +11,7 @@ from typing import Any, overload
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase
 
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
@@ -126,10 +126,9 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
-    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(
-        weight_config_item, SavedWeight
-    ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
-        return load_weight(weight_config_item, model_state_config_item.mesh_device)
+    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
+        # Always use multihost format since that's what the test is using
+        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
 
     if weight_config_item is None:
         assert not isinstance(
@@ -343,14 +342,13 @@ def is_op_config(obj: Any) -> bool:
     return issubclass(type(obj), OpConfigBase) and is_dataclass(obj)
 
 
-def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
+def load_weight(saved_weight: str, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
     """
 
     return ttnn.load_tensor(
-        saved_weight.path,
+        saved_weight,
     ).to(
         device=device,
-        mem_config=saved_weight.memory_config,
     )

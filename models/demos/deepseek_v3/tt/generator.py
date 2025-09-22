@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -69,12 +71,14 @@ class DeepseekGenerator:
         single_layer: str | None = None,
     ) -> None:
         self.mesh_device = mesh_device
+        # self.mesh_device.disable_and_clear_program_cache()
         self.model_path = str(model_path)
         self.batch_size = min(MAX_BATCH_SIZE, batch_size)
 
         # Load HF config + tokenizer
         self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         self._ensure_max_seq_len(self.hf_config)
+
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -88,17 +92,29 @@ class DeepseekGenerator:
                 pass
         # Tokenizer is optional; caller can pass a tokenizer or handle failure.
         self.tokenizer = tokenizer
-
+        # self.hf_config.num_hidden_layers = 8
         # Runtime helpers
         self.ccl = CCL1D(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
 
+        logger.info(f" hf_config: {self.hf_config}")
         # Paged attention setup
         self.paged_config = MLA1D.get_valid_paged_config(self.hf_config.max_seq_len, MAX_BATCH_SIZE, self.dp_factor)
-        self.page_table_tt, _ = MLA1D.create_page_table(
-            MAX_BATCH_SIZE, dp_factor=self.dp_factor, config=self.paged_config, mesh_device=mesh_device
+        torch_page_tables = [
+            MLA1D.create_rand_page_table(
+                MAX_BATCH_SIZE,
+                dp_factor=self.dp_factor,
+                config=self.paged_config,
+                mesh_device=mesh_device,
+            )
+            for _ in range(self.hf_config.num_hidden_layers)
+        ]
+        self.page_tables_tt = tuple(
+            MLA1D.create_page_table(torch_page_table, self.paged_config, mesh_device)
+            for torch_page_table in torch_page_tables
         )
+
         self.rope = RotarySetup(device=mesh_device, batch_size=MAX_BATCH_SIZE, hf_config=self.hf_config)
 
         # Prepare weights/configs
@@ -108,20 +124,20 @@ class DeepseekGenerator:
 
     @staticmethod
     def _ensure_max_seq_len(hf_config) -> None:
-        if getattr(hf_config, "max_seq_len", None) is not None:
-            return
-        try:
-            if getattr(hf_config, "rope_scaling", None):
-                factor = hf_config.rope_scaling.get("factor")
-                orig = hf_config.rope_scaling.get("original_max_position_embeddings")
-                if factor and orig:
-                    hf_config.max_seq_len = int(factor * orig)
-                    return
-            if getattr(hf_config, "max_position_embeddings", None):
-                hf_config.max_seq_len = int(hf_config.max_position_embeddings)
-                return
-        except Exception:
-            pass
+        # if getattr(hf_config, "max_seq_len", None) is not None:
+        #     return
+        # try:
+        #     if getattr(hf_config, "rope_scaling", None):
+        #         factor = hf_config.rope_scaling.get("factor")
+        #         orig = hf_config.rope_scaling.get("original_max_position_embeddings")
+        #         if factor and orig:
+        #             hf_config.max_seq_len = int(factor * orig)
+        #             return
+        #     if getattr(hf_config, "max_position_embeddings", None):
+        #         hf_config.max_seq_len = int(hf_config.max_position_embeddings)
+        #         return
+        # except Exception:
+        #     pass
         hf_config.max_seq_len = 4096
 
     def _prepare_run_configs(self, cache_dir: str | Path | None) -> None:
@@ -154,38 +170,65 @@ class DeepseekGenerator:
                 or k.startswith("lm_head.")
             }
         else:
+            logger.info(f" self.hf_config = {self.hf_config}")
             logger.info("Loading HF weights (this may take a while)...")
             hf_weights = load_model_weights(self.model_path)
             logger.info("HF weights loaded")
 
-            # Split weight dicts for Model1D and LMHead
-            stripped = _strip_model_prefix(hf_weights)
-            if "lm_head.weight" not in stripped:
+            if "lm_head.weight" not in hf_weights:
                 raise RuntimeError(
                     "No HF safetensors found in model path or missing 'lm_head.weight'. "
                     "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
                 )
+            # logger.info("Dequantizing HF weights...")
+            # hf_weights = dict(dequantize_state_dict(hf_weights, self.hf_config))
+            # logger.info("HF weights dequantized.")
             model1d_state = {
                 k: v
-                for k, v in stripped.items()
-                if k.startswith("embed_tokens.")
-                or k.startswith("layers.")
-                or k.startswith("norm.")
+                for k, v in hf_weights.items()
+                if k.startswith("model.embed_tokens.")
+                or k.startswith("model.layers.")
+                or k.startswith("model.norm.")
                 or k.startswith("lm_head.")
             }
+
         # Convert weights to TT tensors-on-disk and build weight_config
-        logger.info("Converting weights to TTNN SavedWeight format (Model1D)...")
-        self.model1d_weight_config = Model1D.convert_weights(
-            self.hf_config, model1d_state, weights_out / "model_1d", self.mesh_device
-        )  # Build model and head decode configs + states
+        deepseek_cache_path = Path(os.getenv("DEEPSEEK_V3_CACHE", "/proj_sw/user_dev/deepseek-v3-cache"))
+        weights_type = "random" if self.random_weights else "hf_real"
+        cache_dir = deepseek_cache_path / f"model_{self.hf_config.num_hidden_layers}_layers" / weights_type
+        tensor_cache_path = cache_dir / "ttnn_tensors_cache"
+        weight_config_path = cache_dir / "weight_config.json"
+        # save this weight config to json file if it doesn't exist
+        if not weight_config_path.exists():
+            logger.info(f"Weight config not found at {weight_config_path}, creating new one.")
+            self.model1d_weight_config = Model1D.convert_weights(
+                self.hf_config, [model1d_state], tensor_cache_path, self.mesh_device
+            )
+            with open(weight_config_path, "w") as f:
+                json.dump(self.model1d_weight_config, f)
+            logger.info(f"Saved weight config to {weight_config_path}")
+        else:
+            logger.info(f"Weight config found at {weight_config_path}, loading existing one.")
+            with open(weight_config_path, "r") as f:
+                self.model1d_weight_config = json.load(f)
+            logger.info(f"Loaded weight config from {weight_config_path}")
+
         model_decode_cfg = Model1D.decode_model_config(self.hf_config, self.mesh_device)
+        logger.info(f"Model decode config done")
         model_state = Model1D.create_state(
-            self.hf_config, self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
+            hf_config=self.hf_config,
+            paged_config=self.paged_config,
+            mesh_device=self.mesh_device,
+            ccl=self.ccl,
+            mla_caches=None,
         )
-        model_shared_state = Model1D.create_shared_state(self.hf_config, self.mesh_device)
+        logger.info(f"create_state done")
+        model_shared_state = Model1D.create_shared_state(hf_config=self.hf_config, mesh_device=self.mesh_device)
+        logger.info(f"create_shared_state done")
         self.model1d_run_config = create_run_config(
             model_decode_cfg, self.model1d_weight_config, model_state, model_shared_state
         )
+        logger.info(f"Run config done")
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
@@ -228,7 +271,11 @@ class DeepseekGenerator:
 
         # Model forward
         logits_tt = Model1D.forward_decode(
-            tt_tokens, tt_positions, rope_tensors, self.page_table_tt, self.model1d_run_config
+            tt_tokens,
+            tt_positions,
+            self.model1d_run_config,
+            rope_tensors,
+            self.page_tables_tt,
         )
         # Gather to host
         logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
@@ -310,6 +357,9 @@ class DeepseekGenerator:
             # Collect only for the original batch size
             for i in range(len(prompts)):
                 generations[i].append(int(next_tokens[i].item()))
+                logger.info(
+                    f"new token generated = {self.tokenizer.decode(int(next_tokens[i].item()), skip_special_tokens=True)}"
+                )
 
         return generations
 

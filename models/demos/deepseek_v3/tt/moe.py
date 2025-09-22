@@ -18,7 +18,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllToAllDispatchConfig,
     MeshDeviceStub,
     MulConfig,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -91,14 +91,14 @@ class MoE(SharedStateAddOn, AbstractModule):
             "expert_mapping_tensors": expert_mapping_tensors,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "num_links": 1,
+                "num_links": 3,
             },
             "all_to_all_combine": {
-                "num_links": 1,
+                "num_links": 3,
             },
             "final_output_reduce_scatter": {
-                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
+                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
+                "barrier_semaphore": ccl.get_barrier_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
             "revert_tp": {
@@ -138,7 +138,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
             "num_dispatch_devices": mesh_device.shape[0],
-            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=False),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -150,11 +150,9 @@ class MoE(SharedStateAddOn, AbstractModule):
             "output_memory_config": memory_config,
             "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
             "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
-            "final_output_reduce_scatter": ReduceScatterAsyncConfig(
-                mesh_device=MeshDeviceStub(mesh_device.shape),
+            "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,
                 dim=3,
-                math_op=ttnn.ReduceType.Sum,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
             ),
@@ -231,7 +229,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
         )
         post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-        post_combine_output_tensor = ttnn.experimental.reduce_scatter_async(
+        post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             post_combine_output_tensor, **cfg["final_output_reduce_scatter"]
         )
 

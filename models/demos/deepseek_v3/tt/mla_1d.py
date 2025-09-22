@@ -20,7 +20,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -302,11 +302,9 @@ class MLA1D(AbstractModule):
         # Set up CCLs
 
         # Q
-        wq_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_device.shape),
+        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -568,11 +566,9 @@ class MLA1D(AbstractModule):
         # Set up CCLs
 
         # Q
-        wq_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -592,11 +588,9 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        wq_a2a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a2a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -619,11 +613,9 @@ class MLA1D(AbstractModule):
                 packer_l1_acc=True,
             ),
         }
-        wkv_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wkv_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -636,11 +628,9 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        flash_mla_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        flash_mla_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -723,6 +713,43 @@ class MLA1D(AbstractModule):
         )
 
     @classmethod
+    def create_rand_page_table(
+        cls,
+        batch_size: int,
+        dp_factor: int,
+        config: PagedAttentionConfig,
+        mesh_device: ttnn.MeshDevice,
+    ) -> ttnn.Tensor:
+        """Helper funtion to create the page table for MLA1D.
+
+        When doing DP, this function replicates the page table across DP shards.
+        Assumptions:
+            - If user X on DP shard 1 is on position N, with page id P,
+                and if user X on DP shard 2 is also on position N, it will also be on page id P.
+                As such, the max_num_blocks is only cut by the batch size of the DP shard, not the total batch size.
+
+        Args:
+            batch_size: Batch size for the model
+            dp_factor: Data parallelism factor, indicating how many DP shards are present
+            config: PagedAttentionConfig containing page table configuration
+            mesh_device: TTNN mesh device
+
+        Returns:
+            A tensor representing the page table
+        """
+        assert cls.is_device_supported(
+            mesh_device
+        ), f"Mesh device shape {mesh_device.shape} must be supported by MLA1D."
+
+        max_num_blocks = config.max_num_blocks
+        batch_per_shard = even_int_div(batch_size, dp_factor)
+
+        page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigourous
+        page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
+
+        return page_table
+
+    @classmethod
     def create_page_table(
         cls,
         page_table: torch.Tensor,
@@ -748,6 +775,7 @@ class MLA1D(AbstractModule):
         assert cls.is_device_supported(
             mesh_device
         ), f"Mesh device shape {mesh_device.shape} must be supported by MLA1D."
+
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
@@ -790,12 +818,13 @@ class MLA1D(AbstractModule):
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
-            "from_remote_multi_device_global_semaphore": ccl.get_from_sem(axis=axis),
-            "to_remote_multi_device_global_semaphore": ccl.get_to_sem(axis=axis),
+            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         get_ag_params = lambda axis: {
             "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         ccl_states_prefill = {
@@ -864,7 +893,7 @@ class MLA1D(AbstractModule):
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_decode"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_decode"])
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
@@ -905,7 +934,7 @@ class MLA1D(AbstractModule):
             tt_q, **cfg["wq_a2a_ag_decode"]
         )  # [1, num_heads, bsz_local, kv_lora_rank + qk_rope_head_dim]
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a2a_rs_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a2a_rs_decode"])
         tt_q = tt_q * scale  # Scale the input tensor
 
         # KVPE Stuff
@@ -946,7 +975,7 @@ class MLA1D(AbstractModule):
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
-        tt_kvpe = ttnn.experimental.reduce_scatter_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
+        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
 
@@ -981,7 +1010,7 @@ class MLA1D(AbstractModule):
             attn_out, **cfg["flash_mla_ag_decode"]
         )  # [1, bsz, num_heads, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
-        attn_out = ttnn.experimental.reduce_scatter_async(
+        attn_out = ttnn.experimental.reduce_scatter_minimal_async(
             attn_out, **cfg["flash_mla_rs_decode"]
         )  # [1, num_heads_local, bsz, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, bsz, num_heads_local, kv_lora_rank]
@@ -1041,7 +1070,7 @@ class MLA1D(AbstractModule):
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs_prefill"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_prefill"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_prefill"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])

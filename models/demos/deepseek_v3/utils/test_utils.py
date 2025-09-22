@@ -71,26 +71,23 @@ def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.T
 
 
 def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
-    dequantized_state_dict = {}
-
+    # Use generator to avoid holding all tensors in memory at once
     for name, tensor in state_dict.items():
         if name.endswith("_scale_inv"):
             continue
 
         if tensor is not None:
-            # Look for corresponding scale tensor
             scale_name = name + "_scale_inv"
             if scale_name in state_dict:
                 scale_tensor = state_dict[scale_name]
-                # Dequantize using the scale
-                dequantized_tensor = dequantize(
-                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
+                yield name, dequantize(tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]).to(
+                    dtype
                 )
-                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
             else:
-                dequantized_state_dict[name] = tensor.to(dtype)
+                yield name, tensor.to(dtype)
 
-    return dequantized_state_dict
+
+# Usage: dict(dequantize_state_dict(...))
 
 
 def add_inv_scale_to_state_dict(
