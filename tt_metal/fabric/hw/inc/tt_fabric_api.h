@@ -264,23 +264,15 @@ template <bool compressed = true, bool target_as_dev = true>
 bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
     if constexpr (compressed) {
         if constexpr (target_as_dev) {
-            return decode_route_to_buffer_by_dev(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+            return decode_route_to_buffer_by_dev(target_num, (uint8_t*)&packet_header->routing_fields.value);
         } else {
-            return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+            return decode_route_to_buffer_by_hops(target_num, (uint8_t*)&packet_header->routing_fields.value);
         }
     } else {
+        static_assert(target_as_dev, "uncompressed 1D routing only supports target_as_dev=true");
         tt_l1_ptr routing_path_t<1, compressed>* routing_info =
             reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
-        if constexpr (target_as_dev) {
-            tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-                reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-            uint16_t my_device_id = routing_table->my_device_id;
-            uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;
-            return routing_info->decode_route_to_buffer(hops, (volatile uint8_t*)&packet_header->routing_fields.value);
-        } else {
-            return routing_info->decode_route_to_buffer(
-                target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
-        }
+        return routing_info->decode_route_to_buffer(target_num, (uint8_t*)&packet_header->routing_fields.value);
     }
 }
 
