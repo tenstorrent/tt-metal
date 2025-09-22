@@ -12,7 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import nearest_y
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
@@ -44,7 +44,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-class MLA1D(AbstractModule):
+class MLA(AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
     """
@@ -694,7 +694,7 @@ class MLA1D(AbstractModule):
     def get_valid_paged_config(
         cls, max_seq_len: int, batch_size: int, dp_factor: int, block_size: int = ttnn.TILE_SIZE
     ) -> PagedAttentionConfig:
-        """Get a valid paged attention configuration for MLA1D.
+        """Get a valid paged attention configuration for MLA.
 
         This function also calculates max_num_blocks such that each user will have max_seq_len available.
         For DP, the max_num_blocks is divided by the batch size of the DP shard, not the total batch size.
@@ -729,7 +729,7 @@ class MLA1D(AbstractModule):
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        """Helper function to allocate the page table for MLA1D on device.
+        """Helper function to allocate the page table for MLA on device.
 
         When doing DP, this function replicates the page table across DP shards.
         Assumptions:
@@ -745,9 +745,7 @@ class MLA1D(AbstractModule):
         Returns:
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
-        assert cls.is_device_supported(
-            mesh_device
-        ), f"Mesh device shape {mesh_device.shape} must be supported by MLA1D."
+        assert cls.is_device_supported(mesh_device), f"Mesh device shape {mesh_device.shape} must be supported by MLA."
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
@@ -765,7 +763,7 @@ class MLA1D(AbstractModule):
         hf_config: PretrainedConfig,
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
-        ccl: CCL1D,
+        ccl: CCL,
         caches: Sequence[torch.Tensor] | None = None,
     ) -> ModelState:
         kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
@@ -834,7 +832,7 @@ class MLA1D(AbstractModule):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """Forward pass of MLA1D in decode mode.
+        """Forward pass of MLA in decode mode.
 
         Args:
             x: Input tensor of shape (batch_size, seq_len, dim)
@@ -843,7 +841,7 @@ class MLA1D(AbstractModule):
             rope_tensors: Dictionary containing RoPE tensors
             page_table: Page table tensor for paged attention
         Returns:
-            Output tensor after MLA1D computation
+            Output tensor after MLA computation
 
         """
         _, mla_tp_factor = mesh_shape = cfg["mesh_shape"]
@@ -1010,7 +1008,7 @@ class MLA1D(AbstractModule):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """Forward pass of MLA1D in prefill mode.
+        """Forward pass of MLA in prefill mode.
 
         Args:
             x: Input tensor

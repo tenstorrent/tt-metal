@@ -8,7 +8,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -60,14 +60,14 @@ class MoE(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        ccl: CCL1D,
+        ccl: CCL,
     ) -> ModelState:
         """Create model state containing CCL-related communication configurations.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL1D instance for communication configuration
+            ccl: CCL instance for communication configuration
         Returns:
             ModelState containing CCL configurations
         """
