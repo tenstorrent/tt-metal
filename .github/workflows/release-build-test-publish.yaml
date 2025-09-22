@@ -145,7 +145,7 @@ jobs:
       - build-artifact
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
-    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || inputs.dry-run }}
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     with:
       os: ${{ inputs.distro || 'ubuntu' }}-${{ inputs.version || '22.04' }}
       version: ${{ inputs.tag-version }}
