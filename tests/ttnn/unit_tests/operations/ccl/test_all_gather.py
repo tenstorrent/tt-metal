@@ -50,7 +50,7 @@ def is_unsupported_case(
         L1_util = L1_util + tensor_size_bytes
     if mem_config_input is not None:
         if mem_config_input.buffer_type == ttnn.BufferType.L1:
-            L1_util = L1_util + tensor_size_bytes / num_devices
+            L1_util += tensor_size_bytes / num_devices
 
     if L1_util > num_l1_banks * 1536 * 1024:
         return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
