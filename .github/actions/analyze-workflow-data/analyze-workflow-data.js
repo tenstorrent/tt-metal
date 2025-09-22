@@ -813,6 +813,7 @@ async function run() {
     const previousCachePath = core.getInput('previous-cache-path', { required: false });
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
+    const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true';
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -876,6 +877,56 @@ async function run() {
 
     // Generate primary report
     const mainReport = await buildReport(filteredGrouped, octokit, github.context);
+
+    // Optional: Build Slack-ready alert message for all failing workflows with owner mentions
+    let alertAllMessage = '';
+    if (alertAll && failedWorkflows.length > 0) {
+      const mention = (owners) => {
+        const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
+        const ids = arr.map(o => (o && o.id) ? `<@${o.id}>` : '').filter(Boolean);
+        return ids.length ? ids.join(' ') : '';
+      };
+
+      const failingItems = [];
+      for (const [name, runs] of filteredGrouped.entries()) {
+        const mainRuns = runs
+          .filter(r => r.head_branch === 'main')
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        if (!mainRuns[0] || mainRuns[0].conclusion === 'success') continue;
+        // Try to attach owners from the first failing run's label via snippets; fallback to job name
+        // Use the latest failing run for snippet-based owner detection
+        const latestFail = mainRuns.find(r => r.conclusion !== 'success');
+        let owners = undefined;
+        try {
+          const errs = await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 10);
+          // Aggregate owners from snippets
+          const ownerSet = new Map();
+          for (const e of (errs || [])) {
+            if (Array.isArray(e.owner)) {
+              for (const o of e.owner) {
+                if (!o) continue;
+                const key = `${o.id || ''}|${o.name || ''}`;
+                ownerSet.set(key, o);
+              }
+            }
+          }
+          owners = Array.from(ownerSet.values());
+        } catch (_) { /* ignore */ }
+        // Fallback: try to resolve owners from the workflow name
+        if (!owners || owners.length === 0) {
+          owners = findOwnerForLabel(name);
+        }
+        const ownerMentions = mention(owners) || '(no owner found)';
+        const wfUrl = getWorkflowLink(github.context, runs[0]?.path);
+        failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}`.trim());
+      }
+      if (failingItems.length) {
+        alertAllMessage = [
+          '*Alerts: failing workflows on main*',
+          ...failingItems
+        ].join('\n');
+      }
+    }
 
     // Compute status changes vs previous and write JSON
     const computeLatestConclusion = (runs) => {
@@ -1183,6 +1234,7 @@ async function run() {
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
     core.setOutput('report', finalReport);
+    if (alertAll) core.setOutput('alert_all_message', alertAllMessage || '');
     core.setOutput('regressed_workflows', JSON.stringify(regressedDetails));
 
     await core.summary.addRaw(finalReport).write();
