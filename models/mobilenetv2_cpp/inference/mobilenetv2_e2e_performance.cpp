@@ -1,8 +1,8 @@
 #include "mobilenetv2_e2e_performance.h"
 #include "helper_funcs.h"
-#include "cpp/ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
-#include "cpp/ttnn/distributed/api.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
+#include "ttnn/distributed/api.hpp"
 
 MobileNetV2Trace2CQ::MobileNetV2Trace2CQ() 
     : device_ptr_(nullptr), op_event(0, nullptr, 0, ttnn::MeshCoordinateRange({})), write_event(0, nullptr, 0, ttnn::MeshCoordinateRange({})), test_infra(nullptr)
@@ -22,7 +22,7 @@ void MobileNetV2Trace2CQ::initialize_mobilenetv2_trace_2cqs_inference(std::share
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
 
     // First run configures convs JIT
-    tt::tt_metal::write_tensor(m_tt_inputs_host, m_tt_image_res, ttnn::QueueId(1));
+    tt::tt_metal::write_tensor(m_tt_inputs_host, m_tt_image_res, false, ttnn::QueueId(1));
     write_event = ttnn::events::record_mesh_event(device_ptr_.get(), ttnn::QueueId(1));
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), write_event);
 
@@ -34,7 +34,7 @@ void MobileNetV2Trace2CQ::initialize_mobilenetv2_trace_2cqs_inference(std::share
 
     // Optimized run
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
-    tt::tt_metal::write_tensor(m_tt_inputs_host, m_tt_image_res, ttnn::QueueId(1));
+    tt::tt_metal::write_tensor(m_tt_inputs_host, m_tt_image_res, false, ttnn::QueueId(1));
     write_event = ttnn::events::record_mesh_event(device_ptr_.get(), ttnn::QueueId(1));
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), write_event);
 
@@ -45,18 +45,18 @@ void MobileNetV2Trace2CQ::initialize_mobilenetv2_trace_2cqs_inference(std::share
     
     // Capture  
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
-    tt::tt_metal::write_tensor(m_tt_inputs_host, m_tt_image_res, ttnn::QueueId(1));
+    tt::tt_metal::write_tensor(m_tt_inputs_host, m_tt_image_res, false, ttnn::QueueId(1));
     write_event = ttnn::events::record_mesh_event(device_ptr_.get(), ttnn::QueueId(1));
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), write_event);
     (*test_infra).setInputTensor(ttnn::to_memory_config(m_tt_image_res, m_input_mem_config));
     op_event = ttnn::events::record_mesh_event(device_ptr_.get(), ttnn::QueueId(0));
     auto trace_input_addr = get_ttbuffer_address((*test_infra).getInputTensor());
-    ttnn::TensorSpec spec = (*test_infra).getInputTensor().get_tensor_spec();
+    ttnn::TensorSpec spec = (*test_infra).getInputTensor().tensor_spec();
     //Important dealloc here: Deallocate the previous output tensor here so that we will allocate our input tensor at the right address afterwards
     (*test_infra).deallocOutput();
     tid = ttnn::operations::trace::begin_trace_capture(device_ptr_.get(), /*cq_id=*/ttnn::QueueId(0));
     (*test_infra).run();
-    m_input_tensor = ttnn::operations::core::allocate_tensor_on_device(spec, device_ptr_.get());
+    m_input_tensor = tt::tt_metal::allocate_tensor_on_device(spec, device_ptr_.get());
     auto allocate_addr = get_ttbuffer_address(m_input_tensor);
     TT_FATAL(trace_input_addr == allocate_addr, "trace input addr allocate_tensor_on_device error!");
     ttnn::operations::trace::end_trace_capture(device_ptr_.get(), tid.value(), /*cq_id=*/ttnn::QueueId(0));
@@ -66,7 +66,7 @@ void MobileNetV2Trace2CQ::execute_mobilenetv2_trace_2cqs_inference(const ttnn::T
     assert((test_infra && tid.has_value()) && "call initialize_mobilenetv2_trace_2cqs_inference first!");
 
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(1), op_event);
-    tt::tt_metal::write_tensor(tt_inputs_host, m_tt_image_res, ttnn::QueueId(1));
+    tt::tt_metal::write_tensor(tt_inputs_host, m_tt_image_res, false, ttnn::QueueId(1));
     write_event = ttnn::events::record_mesh_event(device_ptr_.get(), ttnn::QueueId(1));
     ttnn::events::wait_for_mesh_event(ttnn::QueueId(0), write_event);
 

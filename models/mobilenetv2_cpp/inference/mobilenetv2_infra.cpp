@@ -1,5 +1,5 @@
 #include "mobilenetv2_infra.h"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "helper_funcs.h"
 
 MobileNetv2TestInfra::MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size)
@@ -36,11 +36,9 @@ MobileNetv2TestInfra::OneConfResult MobileNetv2TestInfra::setupL1ShardedInput(to
     uint32_t shard_h = divup(n * w * h, num_cores);
     ttnn::CoreRangeSet shard_grid({ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(7, 7))});
     tt::tt_metal::ShardSpec shard_spec(shard_grid, {shard_h, 16}, ttnn::ShardOrientation::ROW_MAJOR);
-    ttnn::MemoryConfig input_mem_config{
-                                        .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED, 
-                                        .buffer_type = ttnn::BufferType::L1, 
-                                        .shard_spec = shard_spec
-                                    };
+    ttnn::MemoryConfig input_mem_config(ttnn::TensorMemoryLayout::HEIGHT_SHARDED, 
+                                    ttnn::BufferType::L1, 
+                                    shard_spec);
 
     torch_input_tensor = torch_input_tensor.permute({0, 2, 3, 1});
     torch_input_tensor = torch_input_tensor.reshape({1, 1, h * w * n, c});
@@ -57,18 +55,16 @@ MobileNetv2TestInfra::TwoConfResult MobileNetv2TestInfra::setupDramShardedInput(
     ttnn::CoreRangeSet dram_shard_grid({
         ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))
     });
-    ttnn::Shape input_shape = tt_inputs_host.get_logical_shape();
+    ttnn::Shape input_shape = tt_inputs_host.logical_shape();
     tt::tt_metal::ShardSpec dram_shard_spec(dram_shard_grid, 
                                     {
-                                        divup(tt_inputs_host.volume() / input_shape[-1], dram_grid_size.x * dram_grid_size.y),
+                                        divup(tt_inputs_host.logical_volume() / input_shape[-1], dram_grid_size.x * dram_grid_size.y),
                                         16
                                     },
                                     ttnn::ShardOrientation::ROW_MAJOR);
-    ttnn::MemoryConfig sharded_mem_config_DRAM{
-                                                .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED, 
-                                                .buffer_type = ttnn::BufferType::DRAM, 
-                                                .shard_spec = dram_shard_spec
-                                            };
+    ttnn::MemoryConfig sharded_mem_config_DRAM(ttnn::TensorMemoryLayout::HEIGHT_SHARDED, 
+                                            ttnn::BufferType::DRAM, 
+                                            dram_shard_spec);
 
     return {tt_inputs_host, sharded_mem_config_DRAM, input_mem_config};
 }

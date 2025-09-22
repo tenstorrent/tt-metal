@@ -6,10 +6,10 @@
 #define MOBILENETV2_CPP_INFERENCE_MOBILENETV2_E2E_PERFOMANCE
 
 #include <memory>
-#include "cpp/ttnn/device.hpp"
-#include "cpp/ttnn/tensor/tensor.hpp"
-#include "cpp/ttnn/events.hpp"
-#include "cpp/ttnn/operations/trace.hpp"
+#include "ttnn/device.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/events.hpp"
+#include "ttnn/operations/trace.hpp"
 #include "mobilenetv2_infra.h"
 
 class MobileNetV2Trace2CQ {

@@ -10,11 +10,11 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
-#include <ATen/Tensor.h>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device.hpp"
+#include "ttnn/types.hpp"
+#include <torch/torch.h>
 #include <torch/script.h>
-#include "cpp/ttnn/tensor/tensor.hpp"
-#include "cpp/ttnn/device.hpp"
-#include "cpp/ttnn/types.hpp"
 
 class TtMobileNetV2;
 

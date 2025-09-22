@@ -9,10 +9,12 @@
 #include <unordered_map>
 #include <vector>
 #include <memory>
-#include "cpp/ttnn/types.hpp"
-#include "cpp/ttnn/tensor/types.hpp"
-#include "cpp/ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "cpp/ttnn/operations/core/core.hpp"
+#include <optional>
+#include "ttnn/types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 class TtMobileNetV2Conv2D {    
 public:
@@ -30,11 +32,10 @@ public:
         bool width_shard = false,
         int act_blocks = 32,
         bool enable_act_double_buffer = false,
-        bool enable_split_reader = false,
-        bool reshard_if_not_optimal = false,
-        bool use_shallow_covariant = false,
+        bool reshard_if_not_optimal = true,
         ttnn::DataType activation_dtype = ttnn::DataType::BFLOAT8_B,
-        ttnn::TensorMemoryLayout shard_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED
+        ttnn::TensorMemoryLayout shard_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt
     );
 
     ttnn::Tensor operator()(const ttnn::Tensor& x, int& h, int& w);
@@ -57,13 +58,12 @@ private:
     bool width_shard;
     int act_blocks;
     bool enable_act_double_buffer;
-    bool enable_split_reader;
     bool reshard_if_not_optimal;
     int batch_size;
     ttnn::TensorMemoryLayout shard_layout;
-    bool use_shallow_covariant;
     ttnn::operations::conv::conv2d::Conv2dConfig conv_config;
     ttnn::DeviceComputeKernelConfig compute_config;
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation;
 };
 
 class TtInvertedResidual {

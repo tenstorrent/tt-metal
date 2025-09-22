@@ -4,12 +4,11 @@
 #include <iostream>
 #include <algorithm>
 #include <fmt/format.h>
-#include <torch/torch.h>
 #include <stdlib.h>
 #include "ttnn_mobilenetv2.h"
-#include "cpp/ttnn/tensor/tensor_impl.hpp"
-#include "cpp/ttnn/tensor/storage.hpp"
-#include "cpp/ttnn/distributed/api.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/distributed/api.hpp"
 
 template<typename T>
 ttnn::Tensor create_concrete(torch::Tensor &contiguous_tensor, tt::tt_metal::TensorSpec &spec)
@@ -102,37 +101,28 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
 template <typename T>
 tt::tt_metal::HostBuffer create_row_major_host_buffer(
     tt::tt_metal::HostBuffer host_buffer, const tt::tt_metal::TensorSpec& tensor_spec, const bool padded_output) {
-    assert((!tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec.has_value()) &&
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
     if (padded_output) {
         if (tensor_spec.layout() == ttnn::Layout::TILE) {
-            auto data = tt::tt_metal::tensor_impl::convert_layout_tile_to_row_major(
-                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::MakeConstSpan(host_buffer.view_as<T>()));
-            return tt::tt_metal::host_buffer::create(std::move(data));
+            auto row_major_data = tt::tt_metal::tensor_impl::convert_layout_tile_to_row_major(
+                tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
+            return tt::tt_metal::HostBuffer(std::move(row_major_data));
         }
         return host_buffer;
     }
 
     // No modifications needed; direclty return buffer
-    if (tensor_spec.layout() == ttnn::Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
+    if (tt::tt_metal::tensor_impl::logical_matches_physical(tensor_spec)) {
         return host_buffer;
     }
 
-    // TODO: Switch to use span in decode_tensor_data and avoid data copy here
-    auto typed_view = tt::tt_metal::host_buffer::get_as<T>(host_buffer);
-    std::vector<T> physical_data(typed_view.begin(), typed_view.end());
-
-    // See implementation for documentation
-    auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data<T>(std::move(physical_data), tensor_spec);
-
-    return tt::tt_metal::host_buffer::create<T>(std::move(logical_data));
+    auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
+    return tt::tt_metal::HostBuffer(std::move(logical_data));
 }
 
 tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tensor, const bool padded_output) {
-    TT_ASSERT(is_cpu_tensor(tt_tensor) || is_multi_device_host_tensor(tt_tensor), "Tensor must be on host for padding");
+    TT_ASSERT(tt::tt_metal::is_cpu_tensor(tt_tensor), "Tensor must be on host for padding");
 
-    const auto& tensor_spec = tt_tensor.get_tensor_spec();
+    const auto& tensor_spec = tt_tensor.tensor_spec();
     auto convert_to_logical = [&tensor_spec, padded_output](const tt::tt_metal::HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
@@ -163,7 +153,7 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                                                : unpack_bfp4_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                auto input_float_buffer = tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data));
+                auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
                 return create_row_major_host_buffer<float>(input_float_buffer, tensor_spec, padded_output);
             }
             default: {
@@ -173,34 +163,32 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
         }
     };
 
-    auto copy_if_borrowed = [](const tt::tt_metal::HostBuffer& buffer) {
-        if (buffer.is_borrowed()) {
-            return buffer.deep_copy();
-        }
-        return buffer;
-    };
-
-    return copy_if_borrowed(convert_to_logical(std::visit(
+    return convert_to_logical(std::visit(
         tt::stl::overloaded{
-            [](const tt::tt_metal::HostStorage& storage) { return storage.buffer; },
-            [](const tt::tt_metal::MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.buffers[0];
+            [](const tt::tt_metal::HostStorage& storage) {
+                std::vector<tt::tt_metal::HostBuffer> buffers;
+                storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
+                TT_FATAL(
+                    buffers.size() == 1,
+                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
+                    "to concatenate multi-device shards.",
+                    storage.buffer().shape());
+                return buffers.front();
             },
             [&tt_tensor](auto&&) -> tt::tt_metal::HostBuffer {
                 TT_THROW(
                     "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
             },
         },
-        tt_tensor.get_storage())));
+        tt_tensor.storage()));
 }
 
 torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
-    auto logical_shape = tensor.get_logical_shape();
+    auto logical_shape = tensor.logical_shape();
     auto data_type = tensor.dtype();
     auto torch_dtype = torch::kFloat;
-    auto tensor_spec = tensor.get_tensor_spec();
+    auto tensor_spec = tensor.tensor_spec();
     auto view = logical_shape.view();
     std::vector<int64_t> torch_shape(view.begin(), view.end());
 
@@ -249,7 +237,7 @@ torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
     torch_tensor.copy_(torch::from_blob(data_ptr, torch_shape, at::TensorOptions().dtype(torch_dtype).requires_grad(false)));
     // If the tensor is padded, we need to reshape it to the padded shape
     if (padded_output) {
-        auto shape = tensor.get_padded_shape();
+        auto shape = tensor.padded_shape();
         torch_shape = std::vector<int64_t>{shape.cbegin(), shape.cend()};
     }
     torch_tensor = torch_tensor.reshape(torch_shape);
@@ -389,16 +377,15 @@ uint32_t get_ttbuffer_address(const ttnn::Tensor& tensor) {
                             if (s.mesh_buffer) {
                                 return s.mesh_buffer->address();
                             } else {
-                                TT_FATAL(s.buffer != nullptr, "Tensor is not allocated.");
-                                return s.buffer->address();
+                                TT_THROW("Tensor is not allocated.");
                             }
                         },
                         [](auto&&) -> uint32_t {
-                            TT_THROW("HostStorage && MultiDeviceHostStorage doesn't support buffer_address method");
+                            TT_THROW("HostStorage doesn't support buffer_address method");
                             return 0;
                         }
                     },
-                    tensor.get_storage());
+                    tensor.storage());
 }
 
 std::tuple<bool, double> comp_pcc(const torch::Tensor& golden, const torch::Tensor& calculated, const double pcc_threshold)

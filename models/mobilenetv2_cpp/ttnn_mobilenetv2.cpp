@@ -1,10 +1,11 @@
 #include "ttnn_mobilenetv2.h"
-#include "cpp/ttnn/operations/matmul/matmul.hpp"
-#include "cpp/ttnn/operations/eltwise/unary/unary.hpp"
-#include "cpp/ttnn/operations/eltwise/binary/binary.hpp"
-#include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "cpp/ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace TT_conv2d = ttnn::operations::conv::conv2d;
 namespace TT_matmul = ttnn::operations::matmul;
@@ -23,11 +24,10 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
     bool width_shard/* = false*/,
     int act_blocks/* = 32*/,
     bool enable_act_double_buffer/* = false*/,
-    bool enable_split_reader/* = false*/,
     bool reshard_if_not_optimal/* = false*/,
-    bool use_shallow_covariant/* = false*/,
     ttnn::DataType activation_dtype/* = ttnn::DataType::BFLOAT8_B*/,
-    ttnn::TensorMemoryLayout shard_layout/* = ttnn::TensorMemoryLayout::HEIGHT_SHARDED*/
+    ttnn::TensorMemoryLayout shard_layout/* = ttnn::TensorMemoryLayout::HEIGHT_SHARDED*/,
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation/* = std::nullopt*/
 ) : device_(device),
     parameters(parameters),
     activation_dtype(activation_dtype),
@@ -41,11 +41,10 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
     width_shard(width_shard),
     act_blocks(act_blocks),
     enable_act_double_buffer(enable_act_double_buffer),
-    enable_split_reader(enable_split_reader),
     reshard_if_not_optimal(reshard_if_not_optimal),
     batch_size(batch_size),
     shard_layout(shard_layout),
-    use_shallow_covariant(use_shallow_covariant) {
+    activation(activation) {
     
     if (block_shard) {
         shard_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
@@ -60,7 +59,7 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
 
 ttnn::Tensor TtMobileNetV2Conv2D::operator()(const ttnn::Tensor& x, int& h, int& w) {
     int input_height, input_width;
-    const ttnn::Shape &logical_shape = x.get_logical_shape();
+    const ttnn::Shape &logical_shape = x.logical_shape();
     if (logical_shape[1] != 1) {
         input_height = logical_shape[1];
         input_width = logical_shape[2];
@@ -84,6 +83,7 @@ ttnn::Tensor TtMobileNetV2Conv2D::operator()(const ttnn::Tensor& x, int& h, int&
         /*padding=*/std::array<uint32_t, 2>{input_params[2], input_params[2]},
         /*dilation=*/std::array<uint32_t, 2>{dilation, dilation},
         groups,
+        /*dtype=*/activation_dtype,
         /*bias_tensor=*/parameters.second,
         conv_config,
         compute_config,
@@ -116,20 +116,17 @@ ttnn::Tensor TtMobileNetV2Conv2D::operator()(const ttnn::Tensor& x, int& h, int&
 
 TT_conv2d::Conv2dConfig TtMobileNetV2Conv2D::initialize_conv_config() {
     TT_conv2d::Conv2dConfig config;
-    config.dtype = activation_dtype;
+    // config.dtype = activation_dtype;
     config.weights_dtype = ttnn::DataType::BFLOAT8_B;
-    config.activation = "";
+    config.activation = activation;
     config.shard_layout = shard_layout;
-    config.input_channels_alignment = use_shallow_covariant ? 16 : 32;
     config.act_block_w_div = 1;
-    config.transpose_shards = false;
     config.deallocate_activation = deallocate_activation;
     config.enable_act_double_buffer = enable_act_double_buffer;
-    config.enable_split_reader = enable_split_reader;
-    config.enable_subblock_padding = false;
     config.output_layout = output_layout;
     config.reallocate_halo_output = false;
     config.reshard_if_not_optimal = reshard_if_not_optimal;
+    config.enable_weights_double_buffer = true;
 
     if (act_block_h) {
         config.act_block_h_override = act_blocks;
@@ -186,14 +183,15 @@ TtInvertedResidual::TtInvertedResidual(
             /*dilation=*/1,
             /*act_block_h=*/false,
             /*block_shard=*/false,
-            /*deallocate_activation=*/false,
+            /*deallocate_activation=*/!use_res_connect,
             /*output_layout=*/ttnn::Layout::TILE,
             /*width_shard=*/false,
             /*act_blocks=*/32,
-            /*enable_act_double_buffer=*/false,
-            /*enable_split_reader=*/false,
-            /*reshard_if_not_optimal=*/(id > 6),
-            /*use_shallow_covariant=*/false
+            /*enable_act_double_buffer=*/true,
+            /*reshard_if_not_optimal=*/true,
+            /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
+            /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+            /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
         );
     }
 
@@ -209,14 +207,15 @@ TtInvertedResidual::TtInvertedResidual(
         /*dilation=*/1,
         /*act_block_h=*/false,
         /*block_shard=*/block_shard,
-        /*deallocate_activation=*/false,
+        /*deallocate_activation=*/true,
         /*output_layout=*/ttnn::Layout::TILE,
         /*width_shard=*/false,
         /*act_blocks=*/32,
-        /*enable_act_double_buffer=*/false,
-        /*enable_split_reader=*/false,
-        /*reshard_if_not_optimal=*/(id >= 6),
-        /*use_shallow_covariant=*/false
+        /*enable_act_double_buffer=*/block_shard,
+        /*reshard_if_not_optimal=*/true,
+        /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
+        /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
     );
 
     conv3 = std::make_unique<TtMobileNetV2Conv2D>(
@@ -231,14 +230,11 @@ TtInvertedResidual::TtInvertedResidual(
         /*dilation=*/1,
         /*act_block_h=*/false,
         /*block_shard=*/(10 <= id && id <= 16) ? false : block_shard,
-        /*deallocate_activation=*/false,
+        /*deallocate_activation=*/true,
         /*output_layout=*/ttnn::Layout::TILE,
         /*width_shard=*/false,
         /*act_blocks=*/32,
-        /*enable_act_double_buffer=*/false,
-        /*enable_split_reader=*/false,
-        /*reshard_if_not_optimal=*/(id >= 6),
-        /*use_shallow_covariant=*/false
+        /*enable_act_double_buffer=*/true
     );
 }
 
@@ -249,14 +245,18 @@ ttnn::Tensor TtInvertedResidual::operator()(const ttnn::Tensor& x) {
 
     if (conv1) {
         out = (*conv1)(x, h, w);
-        out = ttnn::relu6(out);
     }
     out = (*conv2)(out, h, w);
-    out = ttnn::relu6(out);
     out = (*conv3)(out, h, w);
 
     if (use_res_connect) {
-        return ttnn::add(identity, out);
+        if(identity.memory_config() != out.memory_config()) {
+            identity = ttnn::to_memory_config(identity, out.memory_config());
+        }
+        auto tmp = ttnn::add(identity, out);
+        identity.deallocate(true);
+        out.deallocate(true);
+        return tmp;
     }
     return out;
 }
@@ -279,10 +279,11 @@ TtMobileNetV2::TtMobileNetV2(
         /*output_layout=*/ttnn::Layout::TILE,
         /*width_shard=*/false,
         /*act_blocks=*/32,
-        /*enable_act_double_buffer=*/false,
-        /*enable_split_reader=*/false,
+        /*enable_act_double_buffer=*/true,
         /*reshard_if_not_optimal=*/false,
-        /*use_shallow_covariant=*/true
+        /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
+        /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
     );
 
     conv2 = std::make_unique<TtMobileNetV2Conv2D>(
@@ -290,14 +291,35 @@ TtMobileNetV2::TtMobileNetV2(
         std::make_pair(model_parameters.at("fused_conv_1_weight"), model_parameters.at("fused_conv_1_bias")),
         device_,
         batchsize,
-        /*groups=*/32
+        /*groups=*/32,
+        /*dilation=*/1,
+        /*act_block_h=*/false,
+        /*block_shard=*/false,
+        /*deallocate_activation=*/true,
+        /*output_layout=*/ttnn::Layout::TILE,
+        /*width_shard=*/false,
+        /*act_blocks=*/32,
+        /*enable_act_double_buffer=*/true,
+        /*reshard_if_not_optimal=*/false,
+        /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
+        /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
     );
 
     conv3 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{1, 1, 0, 16},
         std::make_pair(model_parameters.at("conv_0_weight"), model_parameters.at("conv_0_bias")),
         device_,
-        batchsize
+        batchsize,
+        /*groups=*/1,
+        /*dilation=*/1,
+        /*act_block_h=*/false,
+        /*block_shard=*/false,
+        /*deallocate_activation=*/true,
+        /*output_layout=*/ttnn::Layout::TILE,
+        /*width_shard=*/false,
+        /*act_blocks=*/32,
+        /*enable_act_double_buffer=*/true
     );
 
     // Define InvertedResidual blocks
@@ -329,11 +351,13 @@ TtMobileNetV2::TtMobileNetV2(
         /*block_shard=*/false,
         /*deallocate_activation=*/true,
         /*output_layout=*/ttnn::Layout::TILE,
-        /*width_shard=*/true,
+        /*width_shard=*/false,
         /*act_blocks=*/32,
         /*enable_act_double_buffer=*/false,
-        /*enable_split_reader=*/false,
-        /*reshard_if_not_optimal=*/true
+        /*reshard_if_not_optimal=*/true,
+        /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
+        /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
     );
 
     l1_weight = model_parameters.at("classifier_1_weight");
@@ -343,27 +367,23 @@ TtMobileNetV2::TtMobileNetV2(
 ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
     int h, w;
     auto output_tensor = (*conv1)(x, h, w);
-    output_tensor = ttnn::relu6(output_tensor);
-
     output_tensor = (*conv2)(output_tensor, h, w);
-    output_tensor = ttnn::relu6(output_tensor);
-
     output_tensor = (*conv3)(output_tensor, h, w);
 
     // Process all the InvertedResidual blocks
     output_tensor = process_blocks(output_tensor);
 
     output_tensor = (*conv4)(output_tensor, h, w);
-    output_tensor = ttnn::relu6(output_tensor);
 
+    output_tensor = ttnn::to_layout(output_tensor, ttnn::Layout::ROW_MAJOR);
+    auto tensor_shape = output_tensor.logical_shape();
+    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{batchsize, h, w, tensor_shape[3]});
     if (output_tensor.is_sharded()) {
         output_tensor = ttnn::sharded_to_interleaved(output_tensor, ttnn::L1_MEMORY_CONFIG, std::nullopt);
     }
-    output_tensor = ttnn::to_layout(output_tensor, ttnn::Layout::ROW_MAJOR, std::nullopt, std::nullopt, (ttnn::MeshDevice*)nullptr);
-    auto tensor_shape = output_tensor.get_logical_shape();
-    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{batchsize, h, w, tensor_shape[3]});
+
     output_tensor = ttnn::global_avg_pool2d(output_tensor);
-    output_tensor = ttnn::reshape(output_tensor, tt::stl::Span<const int32_t>{batchsize, -1});
+    output_tensor = ttnn::reshape(output_tensor, tt::tt_metal::infer_dims_for_reshape(output_tensor, std::vector<int>{batchsize, -1}));
 
     auto compute_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),
@@ -395,11 +415,9 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
         ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(7, 7))
     });
     auto shard_spec = tt::tt_metal::ShardSpec(shard_grid, {32, 32});
-    auto width_sharded_mem_config = ttnn::MemoryConfig{
-        .memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-        .buffer_type = ttnn::BufferType::L1,
-        .shard_spec = shard_spec
-    };
+    auto width_sharded_mem_config = ttnn::MemoryConfig(ttnn::TensorMemoryLayout::WIDTH_SHARDED,
+                                                        ttnn::BufferType::L1,
+                                                        shard_spec);
 
     output_tensor = ttnn::to_memory_config(output_tensor, width_sharded_mem_config);
     output_tensor = ttnn::linear(

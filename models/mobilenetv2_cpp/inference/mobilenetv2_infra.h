@@ -9,7 +9,7 @@
 #include <torch/script.h>
 #include <memory>
 #include "ttnn_mobilenetv2.h"
-#include "cpp/ttnn/types.hpp"
+#include "ttnn/types.hpp"
 
 // Main Test Infrastructure class
 class MobileNetv2TestInfra : public std::enable_shared_from_this<MobileNetv2TestInfra> {

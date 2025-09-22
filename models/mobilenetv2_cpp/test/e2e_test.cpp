@@ -3,9 +3,9 @@
 #include <vector>
 #include <chrono>
 #include <fmt/format.h>
-#include "cpp/ttnn/device.hpp"
+#include "ttnn/device.hpp"
 #include "inference/mobilenetv2_e2e_performance.h"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "helper_funcs.h"
 #include "util/profiler.hpp"
 

@@ -1,10 +1,10 @@
 import torch
 import os
-from models.experimental.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 
-weights_path = "models/experimental/mobilenetv2/mobilenet_v2-b0353104.pth"
+weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
 if not os.path.exists(weights_path):
-    os.system("bash models/experimental/mobilenetv2/weights_download.sh")
+    os.system("bash models/demos/mobilenetv2/weights_download.sh")
 
 state_dict = torch.load(weights_path)
 ds_state_dict = {k: v for k, v in state_dict.items()}
