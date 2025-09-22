@@ -97,10 +97,12 @@ std::string KernelSource::generate_elf_path(
     const std::string& jit_target_path) const {
 
     if (this->source_type_ == KernelSource::BINARY_PATH) {
-        // For BINARY_PATH kernels, construct path using device prefix + hash + kernel name
+        // For BINARY_PATH kernels, construct path to match JIT cache structure
         const std::string& device_prefix = device->get_kernel_binary_path_prefix();
-        const std::string kernel_hash = kernel->compute_hash();
-        const std::string kernel_name = kernel->name();
+
+        // Extract the kernel full name which contains: kernel_name/hash/
+        // The kernel_full_name_ is set during JIT compilation as: kernel_name/hash/
+        const std::string& kernel_full_name = kernel->get_full_kernel_name();
 
         // Use HAL jit build query to get the correct processor directory name
         const auto& hal = MetalContext::instance().hal();
@@ -113,8 +115,9 @@ std::string KernelSource::generate_elf_path(
         };
         std::string processor_dir = jit_build_query.target_name(params);
 
-        // Construct full path: prefix/kernel_name/kernel_hash/processor_dir/processor_dir.elf
-        return fmt::format("{}/{}/{}/{}/{}.elf", device_prefix, kernel_name, kernel_hash, processor_dir, processor_dir);
+        // Construct full path matching JIT structure: prefix/kernel_full_name/processor_dir/processor_dir.elf
+        // kernel_full_name already contains trailing slash
+        return fmt::format("{}{}{}/{}.elf", device_prefix, kernĻel_full_name, processor_dir, processor_dir);
     } else {
         // For JIT-compiled kernels, return the provided target path
         return jit_target_path;
