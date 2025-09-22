@@ -49,7 +49,7 @@ tt_metal/lite_fabric/ @nhuang-tt @abhullar-tt @tenstorrent/metalium-codeowners-l
 tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @tenstorrent/metalium-codeowners-large-changes # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @tenstorrent/metalium-codeowners-large-changes
-tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT lpremovicTT ncvetkovicTT fvranicTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
@@ -60,7 +60,7 @@ tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT 
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/context/ @jbaumanTT @aliuTT @cfjchu @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes
-tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT lpremovicTT ncvetkovicTT fvranicTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @tt-vjovanovic @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
@@ -72,8 +72,8 @@ tt_metal/impl/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeow
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
-tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT lpremovicTT ncvetkovicTT fvranicTT @tenstorrent/metalium-codeowners-large-changes
-tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT lpremovicTT ncvetkovicTT fvranicTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/kernels/ @abhullar-tt @tenstorrent/metalium-codeowners-large-changes # these should go away or get moved to tests
@@ -99,7 +99,7 @@ tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @aliuTT @ayero
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 
-tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT lpremovicTT ncvetkovicTT fvranicTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/metalium-codeowners-large-changes
 
 # metal tests
