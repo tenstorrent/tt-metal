@@ -38,10 +38,12 @@ logging.basicConfig(
 async def startup():
     global model
     device_id = 0
-    device = ttnn.CreateDevice(device_id, l1_small_size=YOLOV11_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2)
+    device = ttnn.CreateDevice(
+        device_id, l1_small_size=YOLOV11_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
+    )
     device.enable_program_cache()
     model = YOLOv11PerformantRunner(device)
-    # model._capture_yolov11_trace_2cqs()
+    # model._capture_yolov11_trace_2cqs() # Disabled to save memory
 
 
 @app.on_event("shutdown")
