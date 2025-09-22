@@ -4,14 +4,14 @@ on:
   workflow_call:
     inputs:
       version:
-        required: true
+        required: false
         type: string
       os:
-        required: true
+        required: false
         type: string
         default: ubuntu-22.04
       tag-latest:
-        required: true
+        required: false
         type: boolean
         default: false
       timeout:
