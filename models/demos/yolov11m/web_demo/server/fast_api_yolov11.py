@@ -15,7 +15,6 @@ from models.demos.yolov11m.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11m.runner.performant_runner import YOLOv11PerformantRunner
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
-
 app = FastAPI(
     title="YOLOv11 object detection",
     description="Inference engine to detect objects in image.",
