@@ -35,7 +35,26 @@
     "t3k_mistral_tests": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" },
     "t3k_qwen3_tests": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" },
     "t3k_qwen25_vl_tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k_gemma3_tests": { "id": "U08TJ70UFRT", "name": "Harry Andrews" }
+    "t3k_gemma3_tests": { "id": "U08TJ70UFRT", "name": "Harry Andrews" },
+
+    "t3k ttmetal tests": { "id": "ULMEPM2MA", "name": "Sean Nijjar" },
+    "t3k ttnn tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
+    "t3k tt_metal multiprocess tests": { "id": "U03NG0A5ND7", "name": "Aditya Saigal" },
+    "t3k ttnn multiprocess tests": { "id": "U013121KDH9", "name": "Austin Ho" },
+    "t3k falcon7b tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
+    "t3k falcon40b tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
+    "t3k llama3-small tests": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" },
+    "t3k llama3.2-11b tests": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" },
+    "t3k llama3.2-11b-vision tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
+    "t3k n300 mesh llama3.2-11b-vision tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
+    "t3k llama3.2-90b-vision tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
+    "t3k llama3.2-90b tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
+    "t3k mixtral tests": { "id": "U03PUAKE719", "name": "Harry Zhou" },
+    "t3k grok tests": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" },
+    "t3k unet shallow tests": { "id": "U06ECNVR0EN", "name": "Evan Smal" },
+    "t3k mistral tests": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" },
+    "t3k qwen25_vl tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
+    "t3k gemma3-small tests": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" }
   },
   "contains": [
     { "needle": "vllm-tests / vllm-tests ([WH-T3K] Llama-3.1-8B-Instruct", "owner": [
@@ -104,6 +123,60 @@
     { "needle": "t3k_qwen25_vl_tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
 
     { "needle": "t3000-demo-tests / t3k_gemma3_tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
-    { "needle": "t3k_gemma3_tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } }
+    { "needle": "t3k_gemma3_tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
+
+    { "needle": "t3000-unit-tests / t3k ttmetal tests", "owner": { "id": "ULMEPM2MA", "name": "Sean Nijjar" } },
+    { "needle": "t3k ttmetal tests", "owner": { "id": "ULMEPM2MA", "name": "Sean Nijjar" } },
+
+    { "needle": "t3000-unit-tests / t3k ttnn tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+    { "needle": "t3k ttnn tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+
+    { "needle": "t3000-unit-tests / t3k tt_metal multiprocess tests", "owner": { "id": "U03NG0A5ND7", "name": "Aditya Saigal" } },
+    { "needle": "t3k tt_metal multiprocess tests", "owner": { "id": "U03NG0A5ND7", "name": "Aditya Saigal" } },
+
+    { "needle": "t3000-unit-tests / t3k ttnn multiprocess tests", "owner": { "id": "U013121KDH9", "name": "Austin Ho" } },
+    { "needle": "t3k ttnn multiprocess tests", "owner": { "id": "U013121KDH9", "name": "Austin Ho" } },
+
+    { "needle": "t3000-unit-tests / t3k falcon7b tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+    { "needle": "t3k falcon7b tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+
+    { "needle": "t3000-unit-tests / t3k falcon40b tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "t3k falcon40b tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "t3000-unit-tests / t3k llama3-small tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" } },
+    { "needle": "t3k llama3-small tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" } },
+
+    { "needle": "t3000-unit-tests / t3k llama3.2-11b tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" } },
+    { "needle": "t3k llama3.2-11b tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" } },
+
+    { "needle": "t3000-unit-tests / t3k llama3.2-11b-vision tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "t3k llama3.2-11b-vision tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
+    { "needle": "t3000-unit-tests / t3k n300 mesh llama3.2-11b-vision tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "t3k n300 mesh llama3.2-11b-vision tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
+    { "needle": "t3000-unit-tests / t3k llama3.2-90b-vision tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "needle": "t3k llama3.2-90b-vision tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+
+    { "needle": "t3000-unit-tests / t3k llama3.2-90b tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "needle": "t3k llama3.2-90b tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+
+    { "needle": "t3000-unit-tests / t3k mixtral tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
+    { "needle": "t3k mixtral tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
+
+    { "needle": "t3000-unit-tests / t3k grok tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+    { "needle": "t3k grok tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+
+    { "needle": "t3000-unit-tests / t3k unet shallow tests", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
+    { "needle": "t3k unet shallow tests", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
+
+    { "needle": "t3000-unit-tests / t3k mistral tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
+    { "needle": "t3k mistral tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
+
+    { "needle": "t3000-unit-tests / t3k qwen25_vl tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "needle": "t3k qwen25_vl tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+
+    { "needle": "t3000-unit-tests / t3k gemma3-small tests", "owner": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" } },
+    { "needle": "t3k gemma3-small tests", "owner": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" } }
   ]
 }
