@@ -81,9 +81,7 @@ def test_ttnn_fpn(device, use_pretrained_weight, reset_seeds):
         train_cfg=None,
     )
     if use_pretrained_weight == True:
-        state_dict = torch.load(
-            "/home/ubuntu/punith/tt-metal/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
-        )["state_dict"]
+        state_dict = torch.load("hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth")["state_dict"]
         reference_model.load_state_dict(state_dict)
     reference_model.eval()
     reference_model = reference_model.pts_neck
@@ -97,7 +95,9 @@ def test_ttnn_fpn(device, use_pretrained_weight, reset_seeds):
     ttnn_inputs = inputs[:]
     for i in range(len(ttnn_inputs)):
         input_0 = ttnn_inputs[i].permute(0, 2, 3, 1)
-        ttnn_inputs[i] = ttnn.from_torch(input_0, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn_inputs[i] = ttnn.from_torch(
+            input_0, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
     reference_output = reference_model(inputs=inputs)
 

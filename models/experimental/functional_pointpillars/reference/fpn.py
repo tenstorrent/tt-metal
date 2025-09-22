@@ -164,7 +164,11 @@ class FPN(nn.Module):
         assert len(inputs) == len(self.in_channels)
 
         # build laterals
-        laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
+        # laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
+        laterals = []
+        for i, lateral_conv in enumerate(self.lateral_convs):
+            lateral = lateral_conv(inputs[i + self.start_level])
+            laterals.append(lateral)
 
         # build top-down path
         used_backbone_levels = len(laterals)

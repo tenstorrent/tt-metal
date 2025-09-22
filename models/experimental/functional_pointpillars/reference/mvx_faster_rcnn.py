@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Optional, Sequence, Dict
-
 from torch import Tensor
 from torch import nn as nn
 
@@ -391,7 +390,10 @@ class MVXFasterRCNN(nn.Module):
         ), "please pass at least one type of data_samples"
 
         if data_instances_2d is None:
+            print("2ddd")
             data_instances_2d = [InstanceData() for _ in range(len(data_instances_3d))]
+            print("Orig data_instances_2d[0]:", data_instances_2d[0].__dict__.keys())
+
         if data_instances_3d is None:
             data_instances_3d = [InstanceData() for _ in range(len(data_instances_2d))]
 
@@ -450,15 +452,17 @@ class MVXFasterRCNN(nn.Module):
         img_feats, pts_feats = self.extract_feat(batch_inputs_dict, batch_input_metas)
         if pts_feats and self.with_pts_bbox:
             outs = self.pts_bbox_head(pts_feats)
+            # results_list_3d = self.pts_bbox_head.predict(pts_feats, batch_data_samples, **kwargs)
         else:
-            outs = None
-
-        if img_feats and self.with_img_bbox:
-            # TODO check this for camera modality
-            results_list_2d = self.predict_imgs(img_feats, batch_data_samples, **kwargs)
-        else:
-            results_list_2d = None
-
-        # print("results_list_3d", results_list_3d)
-        # detsamples = self.add_pred_to_datasample(batch_data_samples, results_list_3d, results_list_2d)
+            results_list_3d = None
         return outs
+
+        # # Post processing
+        # if img_feats and self.with_img_bbox:
+        #     # TODO check this for camera modality
+        #     results_list_2d = self.predict_imgs(img_feats, batch_data_samples, **kwargs)
+        # else:
+        #     results_list_2d = None
+
+        # detsamples = self.add_pred_to_datasample(batch_data_samples, results_list_3d, results_list_2d)
+        # return detsamples
