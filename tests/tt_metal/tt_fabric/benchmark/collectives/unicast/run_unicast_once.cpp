@@ -269,15 +269,15 @@ Notes:
     // Perf point
     const double e2e_sec = std::chrono::duration<double>(t1 - t0).count();
     const uint64_t bytes = static_cast<uint64_t>(p.tensor_bytes);
-    const double gb = static_cast<double>(bytes) / 1e9;
-    const double gbps = (e2e_sec > 0.0) ? (gb / e2e_sec) : 0.0;
+    const double GB = static_cast<double>(bytes) / 1e9;          // gigabytes
+    const double GB_s = (e2e_sec > 0.0) ? (GB / e2e_sec) : 0.0;  // GB per second
     const double ms = e2e_sec * 1000.0;
 
     return PerfPoint{
         .bytes = bytes,
         .sec = e2e_sec,
         .ms = ms,
-        .gbps = gbps,
+        .GB_s = GB_s,
     };
 }
 
