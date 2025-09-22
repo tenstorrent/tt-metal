@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -211,6 +211,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
+    uint32_t MAX_EFFECTIVE_TILES = (kernel_h * kernel_w * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
+    if (MAX_EFFECTIVE_TILES > 3) {
+        MAX_EFFECTIVE_TILES = 3;
+    }
+    constexpr uint32_t effective_tiles = (kernel_h * kernel_w * in_ntiles_c * 32 + 1023) / 1024;
     if constexpr (return_indices) {
         static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
         max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
@@ -297,7 +302,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         if constexpr (!is_large_kernel) {
             if (reader_id == 0 || !return_indices) {
                 noc_async_read_barrier();
-                cb_push_back(in_cb_id, 1);
+                cb_push_back(in_cb_id, MAX_EFFECTIVE_TILES);
             }
             if constexpr (reader_id == 1 && return_indices) {
                 constexpr uint32_t num_faces_in_output_tile = 2;
@@ -423,6 +428,7 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
+    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(46);
 
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
@@ -453,21 +459,21 @@ void kernel_main() {
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            cb_push_back(clear_value_cb_id, 1);
-        }
-        if constexpr (reader_id == 1) {
-            cb_wait_front(clear_value_cb_id, 1);
-        }
-        // for average pool clear out tiles runs in loop, no need to initialize here
-        // TODO do we really need to init the in CB for return indices?
-        // - yes until LLK is updated for arbitrary kernel sizes, for now we rely on init
-        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-        }
-    }
+    // if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+    //     if constexpr (reader_id == 0) {
+    //         fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+    //         cb_push_back(clear_value_cb_id, 1);
+    //     }
+    //     if constexpr (reader_id == 1) {
+    //         cb_wait_front(clear_value_cb_id, 1);
+    //     }
+    //     // for average pool clear out tiles runs in loop, no need to initialize here
+    //     // TODO do we really need to init the in CB for return indices?
+    //     // - yes until LLK is updated for arbitrary kernel sizes, for now we rely on init
+    //     if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
+    //         clear_out_tiles<in_cb_id, clear_value_cb_id>();
+    //     }
+    // }
 
     if constexpr (reader_id == 0 && return_indices) {
         initialize_return_indices_data<
@@ -487,12 +493,17 @@ void kernel_main() {
             down_left_wrap_inc_cb_id,
             up_left_wrap_inc_cb_id>();
     }
+    if constexpr (reader_id == 0) {
+        fill_with_val(get_write_ptr(weight_cb_id), 512, 0x3f80);
+    } else {
+        fill_with_val(get_write_ptr(weight_cb_id) + 1024, 512, 0x3f80);
+    }
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
-        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
-        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
-        // between the first and second face.
+        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the
+        // values for the remaining faces will be reused from the first one. This is safe here because there’s no
+        // difference between the first and second face.
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), FACE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
     }

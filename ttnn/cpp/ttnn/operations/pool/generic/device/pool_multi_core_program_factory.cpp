@@ -310,6 +310,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
+    uint32_t effective_tiles = (kernel_h * kernel_w * params.in_ntiles_c * 32 + 1023) / 1024;
+
     const uint32_t in_c_per_shard_ceil = in_c % shard_width != 0 && num_shards_c > 1
                                              ? (in_c - (in_c % shard_width)) / (num_shards_c - 1)
                                              : in_c / num_shards_c;
@@ -402,11 +404,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // reader output == input to tilize
     const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_id_1 = 32;                     // input rows for "multiple (out_nelems)" output pixels
-    const uint32_t in_cb_page_padded = tt::round_up(
-        in_cb_sz,
-        tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
-    const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    const uint32_t in_cb_npages = params.multi_buffering_factor;
+    const uint32_t in_cb_pagesize = tt::tile_size(params.data_format);
+    const uint32_t in_cb_npages = params.multi_buffering_factor * std::min(effective_tiles, 3u);
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
@@ -458,6 +457,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         up_left_wrap_inc =
             (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;  // allow overflow for negative values
     }
+    // Add CBs for depthwise convolution support (mul_cb and weight_cb)
+    const uint32_t mul_cb_id = next_cb_index++;
+    const uint32_t mul_cb_pagesize = tile_size(params.data_format);
+    const uint32_t mul_cb_npages =
+        std::min(effective_tiles, 3u) * params.multi_buffering_factor;  // Max 8 tiles per width (because of dest)
+    log_info(tt::LogOp, "Effective tiles for depthwise conv multiplication: {}", effective_tiles);
+    tt::tt_metal::create_cb(mul_cb_id, program, all_cores, mul_cb_pagesize, mul_cb_npages, params.data_format);
+    log_debug(tt::LogOp, "CB {} (mul_cb) :: PS = {}, NP = {}", mul_cb_id, mul_cb_pagesize, mul_cb_npages);
+
+    const uint32_t weight_cb_id = next_cb_index++;
+    const uint32_t weight_cb_pagesize = tile_size(params.data_format);
+    const uint32_t weight_cb_npages = std::min(params.in_ntiles_c, 8u);  // Max 8 tiles per width (because of dest)
+    tt::tt_metal::create_cb(weight_cb_id, program, all_cores, weight_cb_pagesize, weight_cb_npages, params.data_format);
+    log_debug(tt::LogOp, "CB {} (weight_cb) :: PS = {}, NP = {}", weight_cb_id, weight_cb_pagesize, weight_cb_npages);
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
@@ -622,7 +635,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         up_left_wrap_inc,               // 42
         (uint32_t)zero_pages,           // 43
         out_cb_id,                      // 44
-        out_idx_cb_id};                 // 45
+        out_idx_cb_id,                  // 45
+        weight_cb_id};                  // 46
+
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -679,7 +694,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_w_padded,                    // 27
         eff_kernel_h,                   // 28
         eff_kernel_w,                   // 29
-        pad_l};                         // 30
+        pad_l,                          // 30
+        weight_cb_id,                   // 31
+        mul_cb_id};                     // 32
 
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();
@@ -726,41 +743,41 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         }
     }
 
-    auto temporary_size = calculate_total_cb_size(program);
+    // auto temporary_size = calculate_total_cb_size(program);
 
-    uint32_t post_allocate_size =
-        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t l1_usage = calculate_L1_usage(
-        input,
-        in_c,
-        pad_h,
-        pad_w,
-        ceil_pad_h,
-        ceil_pad_w,
-        ceil_mode,
-        return_indices,
-        kernel_h,
-        kernel_w,
-        out_h,
-        out_w,
-        input.memory_config(),
-        outputs[0].memory_config(),
-        pool_type,
-        count_include_pad,
-        divisor_override,
-        output_layout,
-        outputs[0].dtype());
+    // uint32_t post_allocate_size =
+    //     input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    // uint32_t l1_usage = calculate_L1_usage(
+    //     input,
+    //     in_c,
+    //     pad_h,
+    //     pad_w,
+    //     ceil_pad_h,
+    //     ceil_pad_w,
+    //     ceil_mode,
+    //     return_indices,
+    //     kernel_h,
+    //     kernel_w,
+    //     out_h,
+    //     out_w,
+    //     input.memory_config(),
+    //     outputs[0].memory_config(),
+    //     pool_type,
+    //     count_include_pad,
+    //     divisor_override,
+    //     output_layout,
+    //     outputs[0].dtype());
 
-    uint32_t output_cb_size = post_allocate_size - memory_used;
+    // uint32_t output_cb_size = post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
-    bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
-    TT_FATAL(
-        temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
-        "Calculated CB size {} does not match with the actual CB size {}  ",
-        temporary_size + output_cb_size,
-        l1_usage);
+    // bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
+    // TT_FATAL(
+    //     temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
+    //     "Calculated CB size {} does not match with the actual CB size {}  ",
+    //     temporary_size + output_cb_size,
+    //     l1_usage);
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);

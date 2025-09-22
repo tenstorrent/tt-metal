@@ -143,6 +143,8 @@ static std::vector<Tensor> pool2d_invoke(
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
+        log_info(tt::LogOp, "num_cores_nhw: {}, num_cores_c: {}", num_cores_nhw, num_cores_c);
+
         // This is the code path of the non sharded input tensor, this means that input channels
         // can be whatever number here so we need to have the shard_width aligned to the l1 memory alignment
         // which is 8, in case shard_width is multiple of 16 or 32 we will take largest number possible. We are aligning
