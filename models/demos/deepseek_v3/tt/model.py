@@ -9,10 +9,10 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
-from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
+from models.demos.deepseek_v3.tt.embedding import Embedding
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -31,7 +31,7 @@ from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-class Model1D(SharedStateAddOn, AbstractModule):
+class Model(SharedStateAddOn, AbstractModule):
     @classmethod
     def convert_weights(
         cls,
@@ -63,7 +63,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
         )
 
         return {
-            "embedding": Embedding1D.convert_weights(
+            "embedding": Embedding.convert_weights(
                 hf_config, (sub_state_dict(state_dict, "model.embed_tokens."),), output_path / "embedding", mesh_device
             ),
             "mlp_decoder_block": [
@@ -142,9 +142,28 @@ class Model1D(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
+        mlp_is_padding_layer, _ = cls.get_meta_layer_mapping(mesh_device.shape[0], hf_config.first_k_dense_replace)
+        moe_is_padding_layer, _ = cls.get_meta_layer_mapping(
+            mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
+        )
         return {
-            "embedding": Embedding1D.prefill_model_config(hf_config, mesh_device),
-            "mlp_decoder_block": [DecoderBlock.prefill_model_config(hf_config, mesh_device)],
+            "embedding": Embedding.prefill_model_config(hf_config, mesh_device),
+            "mlp_decoder_block": [
+                DecoderBlock.prefill_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=is_padding_layer,
+                )
+                for is_padding_layer in mlp_is_padding_layer
+            ],
+            "moe_decoder_block": [
+                MoEDecoderBlock.prefill_model_config(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=is_padding_layer,
+                )
+                for is_padding_layer in moe_is_padding_layer
+            ],
             "transfer_row": {"topology": ttnn.Topology.Linear},
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
             "lm_head": LMHead.prefill_model_config(hf_config, mesh_device, input_row_idx=0),
@@ -164,7 +183,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
         )
 
         return {
-            "embedding": Embedding1D.decode_model_config(hf_config, mesh_device),
+            "embedding": Embedding.decode_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
                 DecoderBlock.decode_model_config(
                     hf_config,
@@ -227,7 +246,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
-        ccl: CCL1D,
+        ccl: CCL,
         mla_caches: Sequence[torch.Tensor] | None = None,
     ) -> Any:
         """Create the state for the 1D model."""
@@ -249,7 +268,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
             mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
         )
         return {
-            "embedding": Embedding1D.create_state(hf_config, mesh_device, ccl),
+            "embedding": Embedding.create_state(hf_config, mesh_device, ccl),
             "mlp_decoder_block": [
                 DecoderBlock.create_state(
                     hf_config,
@@ -320,7 +339,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
 
-        x = Embedding1D.forward_decode(x, cfg["embedding"])
+        x = Embedding.forward_decode(x, cfg["embedding"])
 
         x_hidden = []
 
@@ -410,7 +429,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
         """Forward pass for prefill mode."""
 
         # Embedding
-        x = Embedding1D.forward_prefill(x, cfg["embedding"])
+        x = Embedding.forward_prefill(x, cfg["embedding"])
 
         # Stage 1: MLP Decoder Block
         mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
@@ -429,6 +448,31 @@ class Model1D(SharedStateAddOn, AbstractModule):
                     user_id,
                     row_idx,
                     cfg["mlp_decoder_block"][meta_layer_idx],
+                    rope_tensors,
+                    page_tables[layer_idx],
+                )
+
+            # Transfer rows
+            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+
+        # Stage 2: MOE Decoder Block
+        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
+            cfg["num_rows"], cfg["num_mlp_layers"], cfg["num_mlp_layers"] + cfg["num_moe_layers"]
+        )
+
+        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
+            zip(moe_is_padding_layer.transpose(0, 1), moe_meta_layer_indices.transpose(0, 1), strict=True)
+        ):
+            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
+                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
+            ):
+                if is_padding_layer:
+                    continue
+                x = MoEDecoderBlock.forward_prefill(
+                    x,
+                    user_id,
+                    row_idx,
+                    cfg["moe_decoder_block"][meta_layer_idx],
                     rope_tensors,
                     page_tables[layer_idx],
                 )
