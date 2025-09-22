@@ -121,7 +121,6 @@ class MotifTransformer(Module):
         in_channels = self.SD3_LATENT_CHANNEL
         out_channels = self.SD3_LATENT_CHANNEL
         inner_dim = num_attention_heads * attention_head_dim
-        sample_size = 64
 
         self.patch_size = patch_size
         self.num_layers = num_layers
@@ -130,8 +129,8 @@ class MotifTransformer(Module):
         self.ccl_manager = ccl_manager
 
         self.pos_embed = PatchEmbed(
-            height=sample_size,
-            width=sample_size,
+            height=128,
+            width=128,
             patch_size=patch_size,
             in_channels=in_channels,
             embed_dim=inner_dim,
@@ -211,24 +210,18 @@ class MotifTransformer(Module):
         prompt: ttnn.Tensor,
         pooled: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        guidance: ttnn.Tensor | None = None,
-        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
         Args:
-            spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, in_channels].
+            spatial: Tensor with shape [batch_size, latent_height, latent_width, channels].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, joint_attention_dim].
             pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
-            guidance: Optional tensor with shape [batch_size, 1].
-            spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
-            prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
         """
-        time_embed = self.time_text_embed(timestep=timestep, guidance=guidance, pooled_projection=pooled)
+        time_embed = self.time_text_embed(timestep=timestep, pooled_projection=pooled)
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
@@ -245,8 +238,6 @@ class MotifTransformer(Module):
                 spatial=spatial,
                 prompt=prompt,
                 time_embed=time_embed,
-                spatial_rope=spatial_rope,
-                prompt_rope=prompt_rope,
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation=True,
             )
