@@ -331,7 +331,8 @@ CPMAddPackage(
 CPMAddPackage(
     NAME capnproto
     GITHUB_REPOSITORY capnproto/capnproto
-    GIT_TAG d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
+    GIT_TAG
+        d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
     OPTIONS
         "BUILD_TESTING OFF"
         "CAPNP_LITE OFF"
