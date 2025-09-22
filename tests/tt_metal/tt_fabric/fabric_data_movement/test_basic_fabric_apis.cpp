@@ -58,7 +58,7 @@ using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
 
 std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     uint32_t size,
     CoreRangeSet& logical_crs,
     std::vector<uint32_t>& fill_data) {
@@ -169,8 +169,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         }
     }
 }
-
-void RunGetRoutingInfoTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
+void RunSetUnicastRouteTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
     CoreCoord logical_core = {0, 0};
     const auto& devices = fixture->get_devices();
     const size_t NUM_DEVICES = devices.size();
@@ -231,7 +230,7 @@ void RunGetRoutingInfoTest(BaseFabricFixture* fixture, bool is_multi_mesh = fals
 
         auto kernel = tt_metal::CreateKernel(
             programs[src_idx],
-            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_get_routing_info.cpp",
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_fabric_set_unicast_route.cpp",
             {logical_core},
             tt_metal::DataMovementConfig{.defines = defines});
 
@@ -1197,14 +1196,19 @@ TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE3HopsW4Hops) {
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric1DFixture, TestGetRoutingInfo) { RunGetRoutingInfoTest(this, false); }
-
-// 1 mesh all-to-all
-TEST_F(Fabric2DFixture, TestGetRoutingInfo) {
+TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
-    RunGetRoutingInfoTest(this, false);
+    RunSetUnicastRouteTest(this, false);
+}
+
+// 1 mesh all-to-all
+TEST_F(Fabric2DFixture, TestSetUnicastRoute) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        GTEST_SKIP() << "Test applicable only on T3K";
+    }
+    RunSetUnicastRouteTest(this, false);
 }
 
 }  // namespace fabric_router_tests

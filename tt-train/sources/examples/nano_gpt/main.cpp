@@ -681,7 +681,7 @@ int main(int argc, char **argv) {
                 device_config.mesh_shape));
         }
     } else if (device_config.enable_tp || device_config.enable_ddp) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);

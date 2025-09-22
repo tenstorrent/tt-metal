@@ -13,12 +13,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.demos.t3000.llama2_70b.reference.llama.llama.generation import (
     load_chunked_checkpoints,
     load_sharded_checkpoints,
 )
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 MAX_SEQ_LEN = 4096
 MAX_SEQ_LEN_LLAMA3 = 8192

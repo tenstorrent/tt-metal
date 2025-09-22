@@ -12,7 +12,7 @@ from models.experimental.yolov3.reference.models.common import (
     DetectMultiBackend,
 )
 from models.experimental.yolov3.tt.yolov3_concat import TtConcat
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
     torch2tt_tensor,

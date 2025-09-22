@@ -46,9 +46,9 @@ void kernel_main() {
     const uint32_t start_tile_id = start_id;   // start tile id
     const uint32_t dst_num_tiles = num_tiles;  // num tiles per core
 
-    constexpr auto predicate_cb = tt::CBIndex::c_0;
-    constexpr auto true_cb = tt::CBIndex::c_1;
-    constexpr auto false_cb = tt::CBIndex::c_2;
+    constexpr auto predicate_cb = get_compile_time_arg_val(0);
+    constexpr auto true_cb = get_compile_time_arg_val(1);
+    constexpr auto false_cb = get_compile_time_arg_val(2);
 
     // Compile-time args layout mirrors no-bcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
     constexpr auto src0_args = TensorAccessorArgs<3>();
@@ -107,10 +107,6 @@ void kernel_main() {
     uint32_t false_next_n_shift = false_n_stride - false_c_stride * C;
     uint32_t false_next_d_shift = false_d_stride - false_n_stride * N;
     uint32_t false_next_nd_shift = false_nD_stride - false_d_stride * D;
-
-    // DEBUG: Print main loop info
-    DPRINT << "Starting main tile read loop, dst_num_tiles = " << dst_num_tiles << ENDL();
-    DPRINT << "Ht = " << Ht << ", Wt = " << Wt << ", C = " << C << ", N = " << N << ", D = " << D << ENDL();
 
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {

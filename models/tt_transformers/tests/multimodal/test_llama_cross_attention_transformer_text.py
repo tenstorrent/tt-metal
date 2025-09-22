@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_single_rot_mat
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -16,7 +17,6 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
     TtLlamaCrossAttentionTransformerText,
 )
 from models.tt_transformers.tt.rope import get_rot_mats
-from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

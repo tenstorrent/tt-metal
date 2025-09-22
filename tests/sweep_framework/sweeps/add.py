@@ -109,14 +109,14 @@ def run(
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=input_b_memory_config,
+        memory_config=input_a_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=input_b_memory_config,
     )
     start_time = start_measuring_time()
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

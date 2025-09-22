@@ -53,7 +53,7 @@ HEX/OCT/DEC:
 
 void RunTest(
     DPrintMeshFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool active,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
     auto device = mesh_device->get_devices()[0];
@@ -115,7 +115,7 @@ TEST_F(DPrintMeshFixture, ActiveEthTestPrint) {
             log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
             this->RunTestOnDevice(
-                [=](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                [=](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                     CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, true, dm_processor);
                 },
                 mesh_device);
@@ -141,7 +141,7 @@ TEST_F(DPrintMeshFixture, IdleEthTestPrint) {
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
             this->RunTestOnDevice(
-                [=](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                [=](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                     CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, false, dm_processor);
                 },
                 mesh_device);

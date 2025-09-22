@@ -203,7 +203,7 @@ struct Attribute final {
         move_storage{other.move_storage},
         implementations{other.implementations} {}
 
-    Attribute(Attribute&& other) :
+    Attribute(Attribute&& other) noexcept :
         pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
         delete_storage{other.delete_storage},
         copy_storage{other.copy_storage},
@@ -225,7 +225,7 @@ struct Attribute final {
         return *this;
     }
 
-    Attribute& operator=(Attribute&& other) {
+    Attribute& operator=(Attribute&& other) noexcept {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;

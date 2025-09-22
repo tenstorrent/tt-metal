@@ -139,6 +139,10 @@ public:
     // Method to access sender configurations for traffic analysis
     const std::unordered_map<CoreCoord, TestSender>& get_senders() const { return senders_; }
 
+    const std::unordered_map<RoutingDirection, std::set<uint32_t>>& get_used_fabric_connections() const {
+        return used_fabric_connections_;
+    }
+
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     std::vector<uint32_t> get_fabric_connection_args(CoreCoord core, RoutingDirection direction, uint32_t link_idx);
@@ -241,7 +245,12 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
     std::optional<RoutingDirection> outgoing_direction;
     std::vector<uint32_t> outgoing_link_indices;
     // either we will have hops specified or the dest node id
-    if (config.hops.has_value()) {
+    // With 2d unicast, we have bugs where we try to follow the input hop count but the routing tables
+    // cause the packets to fail to reach the destination properly in some cases, due to torus links
+    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
+                               (config.parameters.is_2D_routing_enabled) &&
+                               (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
+    if (config.hops.has_value() && !is_torus_2d_unicast) {
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
         outgoing_link_indices =
             this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());

@@ -7,7 +7,7 @@ import torchvision
 from ttnn.model_preprocessing import convert_torch_model_to_ttnn_model, fold_batch_norm2d_into_conv2d
 
 import ttnn
-from models.utility_functions import pad_and_fold_conv_filters_for_unity_stride
+from models.common.utility_functions import pad_and_fold_conv_filters_for_unity_stride
 
 
 def preprocess_conv_parameter(parameter, *, dtype):

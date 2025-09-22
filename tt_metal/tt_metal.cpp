@@ -6,7 +6,6 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include "assert.hpp"
-#include "dev_msgs.h"
 #include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
@@ -40,6 +39,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
+#include "hal.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -56,6 +56,7 @@
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "get_platform_architecture.hpp"
 
 namespace tt {
 
@@ -352,6 +353,10 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
         &regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
+}
+
+std::string get_physical_architecture_name() {
+    return tt::get_string_lowercase(tt::tt_metal::get_physical_architecture());
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -716,10 +721,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t* msg =
-                    &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
-                msg->kernel_config.host_assigned_id = program.get_runtime_id();
+                auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+                kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
@@ -730,14 +733,14 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),
                     physical_core,
-                    msg,
-                    go_msg,
+                    kg->launch_msg.view(),
+                    kg->go_msg.view(),
                     device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
             // Wait for all cores to be done
-            llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
@@ -758,7 +761,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
             not_done_cores.insert(physical_core);
         }
     }
-    llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+    llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
@@ -848,7 +851,8 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
-            uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
+            auto kernel_config = kg->launch_msg.view().kernel_config();
+            uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -863,9 +867,9 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                 kernel->get_kernel_programmable_core_type(),
                                 kernel->get_kernel_processor_class(),
                                 kernel->get_kernel_processor_type(0));
-                            const auto& rta_offset = kg->launch_msg.kernel_config.rta_offset[processor_index];
+                            auto rta_offset = kernel_config.rta_offset()[processor_index];
                             if (rt_args.size() > 0) {
-                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset;
+                                auto rt_args_addr = kernel_config_base + rta_offset.rta_offset();
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -882,7 +886,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (common_rt_args.size() > 0) {
-                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset;
+                                auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -1078,6 +1082,20 @@ KernelHandle CreateEthernetKernel(
         "cores because both NOCs are in use!",
         kernel->name());
 
+    // Due to conflict with eth fw using noc0 at the same time, ensure each risc only uses their own noc
+    // https://github.com/tenstorrent/tt-metal/issues/25058
+    // E.g., risc0 -> noc0, risc1 -> noc1
+    if (config.processor != DataMovementProcessor::RISCV_0 && config.eth_mode != Eth::IDLE &&
+        !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+        TT_FATAL(
+            static_cast<uint32_t>(config.noc) == static_cast<uint32_t>(config.processor),
+            "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+            "cores because NOC {} is not supported for processor {}. Dynamic NOC is not supported for Ethernet "
+            "kernels.",
+            kernel->name(),
+            config.noc,
+            config.processor);
+    }
     return program.impl().add_kernel(kernel, eth_core_type);
 }
 
@@ -1352,6 +1370,27 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
             }
         }
     }
+}
+
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
+    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    cq_stack.push_back(cq_id);
+}
+
+uint8_t PopCurrentCommandQueueIdForThread() {
+    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    TT_FATAL(!cq_stack.empty(), "Current command queue id stack is empty!");
+    uint8_t cq_id = cq_stack.back();
+    cq_stack.pop_back();
+    return cq_id;
+}
+
+uint8_t GetCurrentCommandQueueIdForThread() {
+    const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    if (cq_stack.empty()) {
+        return 0;
+    }
+    return cq_stack.back();
 }
 
 namespace experimental {

@@ -42,6 +42,7 @@ def run_all_gather_impl(
     num_buffers_per_channel=None,
     allowed_pcc=1,
     skip_check=False,
+    all_gather_function=ttnn.experimental.all_gather_async,
 ):
     torch.manual_seed(0)
 
@@ -126,7 +127,7 @@ def run_all_gather_impl(
     tt_all_gather_out_tensor_list = []
 
     def run_op(i):
-        tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
+        tt_all_gather_out_tensor = all_gather_function(
             input_tensor_mesh_list[i],
             persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
             dim=dim,
@@ -181,11 +182,39 @@ def run_all_gather_impl(
             tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
+            # Create expected output tensor based on which function is used
+            is_reversed = all_gather_function == ttnn.experimental.all_gather_async_reversed
+            if is_reversed:
+                # For reversed all-gather, we need to reverse the order along the gather dimension
+                expected_tensor = torch_ag_out_tensor.clone()
+                shard_size = torch_ag_out_tensor.shape[dim] // num_devices
+
+                # Reverse the shards along the gather dimension
+                for device_id in range(num_devices):
+                    src_start = device_id * shard_size
+                    src_end = (device_id + 1) * shard_size
+                    dst_start = (num_devices - 1 - device_id) * shard_size
+                    dst_end = (num_devices - device_id) * shard_size
+
+                    if dim == 0:
+                        expected_tensor[dst_start:dst_end] = torch_ag_out_tensor[src_start:src_end]
+                    elif dim == 1:
+                        expected_tensor[:, dst_start:dst_end] = torch_ag_out_tensor[:, src_start:src_end]
+                    elif dim == 2:
+                        print(f"dst_start: {dst_start}, dst_end: {dst_end}, src_start: {src_start}, src_end: {src_end}")
+                        expected_tensor[:, :, dst_start:dst_end] = torch_ag_out_tensor[:, :, src_start:src_end]
+                    elif dim == 3:
+                        expected_tensor[:, :, :, dst_start:dst_end] = torch_ag_out_tensor[:, :, :, src_start:src_end]
+                    else:
+                        raise NotImplementedError(f"Reverse all-gather not implemented for dim {dim}")
+            else:
+                expected_tensor = torch_ag_out_tensor
+
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
             tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-            tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
-            logger.info(f"{output}, iteration {i}")
+            tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
+            eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
+            logger.info(f"{output}, iteration {i}, reversed={is_reversed}")
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
@@ -196,21 +225,21 @@ def run_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, is_training_shape",
+    "ag_output_shape, dim, layout, ag_input_dtype",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Composite-AG tests
-        ([1, 1, 8, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "dit_shape",  # this one triggers the default chunks_per_sync
@@ -268,7 +297,6 @@ def test_all_gather_async(
     dim,
     num_links,
     ag_input_dtype,
-    is_training_shape,
     layout,
     mem_config_input,
     mem_config_ag,
@@ -400,7 +428,7 @@ def test_all_gather_async_training_shapes(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout",
+    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type",
     [
         (
             [1, 1, 32, 3072],
@@ -411,6 +439,7 @@ def test_all_gather_async_training_shapes(
             (32, 512),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [1, 1, 384, 1024],
@@ -421,6 +450,7 @@ def test_all_gather_async_training_shapes(
             (64, 1024),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [1, 1, 384, 3072],
@@ -431,6 +461,19 @@ def test_all_gather_async_training_shapes(
             (384, 512),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        # Composite-AG
+        (
+            [1, 1, 384, 240],
+            3,
+            (64, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (64, 256),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
         ),
     ],
 )
@@ -464,6 +507,7 @@ def test_all_gather_async_sharded_to_sharded(
     output_shard_shape,
     output_shard_grid,
     output_mem_layout,
+    buffer_type,
     enable_trace,
     all_gather_topology,
     num_iters,
@@ -479,10 +523,8 @@ def test_all_gather_async_sharded_to_sharded(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    mem_config_input = ttnn.MemoryConfig(
-        input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
-    )
-    mem_config_ag = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
+    mem_config_input = ttnn.MemoryConfig(input_mem_layout, buffer_type=buffer_type, shard_spec=input_shard_spec)
+    mem_config_ag = ttnn.MemoryConfig(output_mem_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
 
     run_all_gather_impl(
         mesh_device,
@@ -509,7 +551,7 @@ def test_all_gather_async_sharded_to_sharded(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout",
+    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, buffer_type",
     [
         (
             [1, 1, 32, 3072],
@@ -517,6 +559,7 @@ def test_all_gather_async_sharded_to_sharded(
             (32, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [1, 1, 384, 1024],
@@ -524,6 +567,16 @@ def test_all_gather_async_sharded_to_sharded(
             (64, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        # Composite AG
+        (
+            [1, 1, 384, 240],
+            3,
+            (64, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
         ),
     ],
 )
@@ -554,6 +607,7 @@ def test_all_gather_async_sharded_to_interleaved(
     input_shard_shape,
     input_shard_grid,
     input_mem_layout,
+    buffer_type,
     enable_trace,
     all_gather_topology,
     num_iters,
@@ -564,10 +618,8 @@ def test_all_gather_async_sharded_to_interleaved(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    mem_config_input = ttnn.MemoryConfig(
-        input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
-    )
-    mem_config_ag = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    mem_config_input = ttnn.MemoryConfig(input_mem_layout, buffer_type=buffer_type, shard_spec=input_shard_spec)
+    mem_config_ag = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
 
     run_all_gather_impl(
         mesh_device,
@@ -593,7 +645,7 @@ def test_all_gather_async_sharded_to_interleaved(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, output_shard_shape, output_shard_grid, output_mem_layout",
+    "ag_output_shape, dim, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type",
     [
         (
             [1, 1, 32, 3072],
@@ -601,6 +653,7 @@ def test_all_gather_async_sharded_to_interleaved(
             (32, 512),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
         ),
         (
             [1, 1, 384, 1024],
@@ -608,6 +661,16 @@ def test_all_gather_async_sharded_to_interleaved(
             (64, 1024),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        # Composite AG
+        (
+            [1, 1, 384, 240],
+            3,
+            (64, 256),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
         ),
     ],
 )
@@ -638,6 +701,7 @@ def test_all_gather_async_interleaved_to_sharded(
     output_shard_shape,
     output_shard_grid,
     output_mem_layout,
+    buffer_type,
     enable_trace,
     all_gather_topology,
     num_iters,
@@ -648,8 +712,8 @@ def test_all_gather_async_interleaved_to_sharded(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    mem_config_ag = ttnn.MemoryConfig(output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec)
+    mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+    mem_config_ag = ttnn.MemoryConfig(output_mem_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
 
     run_all_gather_impl(
         mesh_device,

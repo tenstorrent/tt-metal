@@ -51,9 +51,9 @@ enum class MeshScope {
 
 class ControlPlane {
 public:
-    explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
+    explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
+        const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     ~ControlPlane();
@@ -188,6 +188,9 @@ public:
 
     // Query the local intermesh link table containing the local to remote link mapping
     const IntermeshLinkTable& get_local_intermesh_link_table() const;
+
+    // Collect router port directions map from all hosts via MPI and merge into local map
+    void collect_and_merge_router_port_directions_from_all_hosts();
 
     // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
     // by SPI-ROM firmware)

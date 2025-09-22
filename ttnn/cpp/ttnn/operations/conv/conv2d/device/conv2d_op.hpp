@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -80,10 +81,6 @@ struct Conv2dConfig {
     // This will increase perf, but it will take more L1 space.
     bool full_inner_dim = false;
 
-    // Only for height sharding.
-    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
-    bool enable_split_reader = false;
-
     // Re-use input tensor storage when creating output tensor
     bool in_place = false;
 
@@ -112,6 +109,13 @@ struct Conv2dConfig {
     // It can be enabled for height sharding only and boosts im2col performance,
     // so its meant to be used for reader-bound convolutions.
     bool enable_activation_reuse = false;
+
+    // Force split reader overrides split_reader heuristic.
+    // Split reader can be enabled for height sharding only and boosts im2col performance (if not weights reader bound),
+    // so its meant to be used for reader-bound convolutions.
+    // If not Height sharded and activation block size height is not greater than 32, then this is ignored.
+    // If not set, then split reader heuristic is used to determine if it should be enabled.
+    std::optional<bool> force_split_reader = std::nullopt;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -131,10 +135,10 @@ struct Conv2dConfig {
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "full_inner_dim",
-        "enable_split_reader",
         "in_place",
         "enable_kernel_stride_folding",
-        "enable_activation_reuse");
+        "enable_activation_reuse",
+        "force_split_reader");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -153,10 +157,10 @@ struct Conv2dConfig {
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->full_inner_dim),
-            std::cref(this->enable_split_reader),
             std::cref(this->in_place),
             std::cref(this->enable_kernel_stride_folding),
-            std::cref(this->enable_activation_reuse));
+            std::cref(this->enable_activation_reuse),
+            std::cref(this->force_split_reader));
     }
 };
 
@@ -240,10 +244,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
-    bool enable_split_reader,
     bool full_inner_dim,
     bool enable_activation_reuse,
-    bool config_tensors_in_dram);
+    bool config_tensors_in_dram,
+    std::optional<bool> force_split_reader);
 
 // new micro op
 struct OptimizedConvNew {
@@ -261,10 +265,10 @@ struct OptimizedConvNew {
     bool enable_act_double_buffer;
     bool enable_weights_double_buffer;
     bool full_inner_dim;
-    bool enable_split_reader;
     bool enable_activation_reuse;
     bool config_tensors_in_dram;
     uint32_t pre_op_l1_allocation_size_bytes{};
+    std::optional<bool> force_split_reader = std::nullopt;
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
@@ -281,27 +285,27 @@ struct OptimizedConvNew {
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
         bool full_inner_dim,
-        bool enable_split_reader,
         bool enable_activation_reuse,
-        bool config_tensors_in_dram) :
+        bool config_tensors_in_dram,
+        std::optional<bool> force_split_reader) :
         output_channels(output_channels),
         groups(groups),
         sliding_window_config(sliding_window_config),
         untilize_out(untile_out),
         has_bias(has_bias),
-        activation(activation),
+        activation(std::move(activation)),
         parallelization_config(p_config),
         block_config(b_config),
-        memory_config(memory_config),
+        memory_config(std::move(memory_config)),
         dtype(dtype),
         input_tensor_shape(input_tensor_shape),
         compute_kernel_config(compute_kernel_config),
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
         full_inner_dim(full_inner_dim),
-        enable_split_reader(enable_split_reader),
         enable_activation_reuse(enable_activation_reuse),
-        config_tensors_in_dram(config_tensors_in_dram) {};
+        config_tensors_in_dram(config_tensors_in_dram),
+        force_split_reader(force_split_reader) {};
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -330,9 +334,9 @@ struct OptimizedConvNew {
         "input_tensor_shape",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
-        "enable_split_reader",
         "enable_activation_reuse",
-        "config_tensors_in_dram");
+        "config_tensors_in_dram",
+        "force_split_reader");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -348,9 +352,9 @@ struct OptimizedConvNew {
             std::cref(this->input_tensor_shape),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
-            std::cref(this->enable_split_reader),
             std::cref(this->enable_activation_reuse),
-            std::cref(this->config_tensors_in_dram));
+            std::cref(this->config_tensors_in_dram),
+            std::cref(this->force_split_reader));
     }
 };
 
@@ -372,9 +376,9 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool full_inner_dim = false,
-    bool enable_split_reader = false,
     bool enable_activation_reuse = false,
-    bool config_tensors_in_dram = false);
+    bool config_tensors_in_dram = false,
+    std::optional<bool> force_split_reader = std::nullopt);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -394,13 +398,15 @@ conv_op_l1_usage calculate_L1_usage(
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
-    sliding_window::SlidingWindowConfig sliding_window_config,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     tt::tt_metal::DataType input_datatype,
     tt::tt_metal::DataType output_datatype,
     uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
+    uint32_t input_channels_padded,
     bool skip_act_cb_create = false);
 
 }  // namespace conv2d

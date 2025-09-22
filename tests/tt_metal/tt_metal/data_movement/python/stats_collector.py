@@ -6,8 +6,8 @@ from loguru import logger  # type: ignore
 from collections import defaultdict
 import numpy as np
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
@@ -105,7 +105,7 @@ class StatsCollector:
 
         # Gather stats from csv
         if not self.verbose:
-            logger.disable("tt_metal.tools.profiler.process_device_log")
+            logger.disable("tracy.process_device_log")
 
         return import_log_run_stats(setup)
 

@@ -714,10 +714,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, compute_grid_size, out_channels, shard_orientation, is_mm_conv);
+        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
@@ -879,12 +877,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         // and the bigger the act block height the better the reuse since we apply optimization within single act block
         if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
             conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-            // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
-            if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-                !conv_is_1d_deptwise) {
-                // Split reader needs at least 2 tiles in height to work.
-                conv_config.act_block_h_override *= 2;
-            }
         }
 
         const uint32_t input_channels_alignment =
@@ -948,12 +940,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             opt_conv_op_parallel_config,
             weights_shape,
             sliding_window_config,
+            dilation,
             conv_config,
             input_datatype,
             output_datatype,
             output_width,
             enable_bias,
-            conv_is_1d_deptwise);
+            conv_is_1d_deptwise,
+            in_channels_padded);
 
         auto halo_input_memory_config = std::get<1>(determine_input_memory_config(
             conv_config.shard_layout.value(),
@@ -1206,18 +1200,25 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         SlidingWindowConfig sliding_window_config{
             .input_hw = {params.input_height, params.input_width},
             .window_hw = {params.kernel_size[0], params.kernel_size[1]}};
+        const uint32_t input_channels_alignment = get_input_channels_alignment(
+            conv_config.shard_layout.value(), conv_config.output_layout, params.mm_conv, std::nullopt);
+        const uint32_t in_channels_padded = tt::round_up(
+            params.in_channels,
+            get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
         conv_op_l1_usage l1_usage = calculate_L1_usage(
             params.compute_kernel_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
             folded_weights_shape,
             sliding_window_config,
+            params.dilation,
             conv_config,
             params.input_datatype,
             params.output_datatype,
             output_slice_width,
-        params.enable_bias,
-            false);
+            params.enable_bias,
+            false,
+            in_channels_padded);
 
         auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
 
@@ -1370,13 +1371,15 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
-    SlidingWindowConfig sliding_window_config,
+    const SlidingWindowConfig& sliding_window_config,
+    std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
     const DataType output_datatype,
     const uint32_t output_image_width,
     const bool enable_bias,
     bool is_1d_depthwise_conv,
+    uint32_t input_channels_padded,
     bool skip_act_cb_create) {
     // Input shard doesn't affect L1 usage calculation.
     std::array<uint32_t, 2> dummy_input_shard_shape = {0, 0};
@@ -1387,6 +1390,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         weights_shape,
         {sliding_window_config.window_hw.first, sliding_window_config.window_hw.second},
         {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
+        dilation,
         conv_config,
         input_datatype,
         output_datatype,
@@ -1394,7 +1398,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         output_image_width,
         enable_bias,
         is_1d_depthwise_conv,
-        skip_act_cb_create);
+        skip_act_cb_create,
+        input_channels_padded);
     uint32_t total_CB_size = 0;
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {
