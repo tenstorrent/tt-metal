@@ -38,9 +38,6 @@ class Module:
     def named_parameters(self) -> Iterator[tuple[str, Parameter]]:
         yield from self._parameters.items()
 
-    def add_child(self, name: str, child: Module) -> None:
-        self._children[name] = child
-
     def __setattr__(self, name: str, value: Any) -> None:  # noqa: ANN401
         super().__setattr__(name, value)
 
@@ -152,7 +149,13 @@ class ModuleList(Module):
         super().__init__()
 
         for i, m in enumerate(modules):
-            self.add_child(str(i), m)
+            self._children[str(i)] = m
+
+    def __len__(self) -> int:
+        return len(self._children)
+
+    def __getitem__(self, key: int) -> Module:
+        return self._children[str(key)]
 
 
 class Parameter:
