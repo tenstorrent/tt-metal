@@ -20,7 +20,11 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, co
     mesh_workload.add_program(device_range, std::move(program));
 }
 
-void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
+void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, bool compile_only) {
+    if (compile_only) {
+        mesh_workload.impl().compile_in_background(mesh_cq.device());
+        return;
+    }
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);

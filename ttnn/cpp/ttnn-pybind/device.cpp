@@ -75,6 +75,23 @@ void ttnn_device(py::module& module) {
         R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
+
+    module.def(
+        "wait_for_compile_threadpool",
+        [](ttnn::MeshDevice& device) { device.wait_for_kernel_compilation_thread_pool(); },
+        py::arg("device"),
+        R"doc(
+        Wait for all operations in the device thread pool to complete.
+
+        Args:
+            device (ttnn.Device): The device to wait for.
+
+        Example:
+            >>> device_id = 0
+            >>> device = ttnn.open_device(device_id=device_id)
+            >>> # Queue some operations on the device
+            >>> ttnn.wait_for_threadpool(device)
+    )doc");
 }
 
 }  // namespace

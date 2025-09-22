@@ -30,6 +30,7 @@ private:
     bool runs_on_noc_multicast_only_cores();
     bool runs_on_noc_unicast_only_cores();
     void compile(MeshDevice* mesh_device);
+    void compile_in_background(MeshDevice* mesh_device);
     void load_binaries(MeshCommandQueue& mesh_cq);
     void generate_dispatch_commands(MeshCommandQueue& mesh_cq);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
@@ -59,7 +60,8 @@ private:
 
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
-    friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
+    friend void EnqueueMeshWorkload(
+        MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, bool compile_only);
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
 

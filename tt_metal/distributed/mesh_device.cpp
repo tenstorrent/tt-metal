@@ -17,10 +17,12 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -89,6 +91,31 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice
     } else {
         return create_device_bound_thread_pool(physical_devices);
     }
+}
+
+std::shared_ptr<ThreadPool> create_kernel_compilation_thread_pool() {
+    // Create a thread pool optimized for kernel compilation parallelization
+    // Use all available CPU cores for maximum compilation throughput
+    uint32_t num_threads = std::thread::hardware_concurrency();
+
+    // Allow override via environment variable for debugging/testing
+    if (const char* env_threads = std::getenv("TT_MESH_KERNEL_COMPILATION_THREADS")) {
+        try {
+            num_threads = std::stoul(env_threads);
+        } catch (...) {
+            log_warning(
+                tt::LogMetal,
+                "Invalid TT_MESH_KERNEL_COMPILATION_THREADS value: {}, using default: {}",
+                env_threads,
+                num_threads);
+        }
+    }
+
+    // Ensure at least 1 thread
+    num_threads = std::max(1u, num_threads);
+
+    log_debug(tt::LogMetal, "Creating kernel compilation thread pool with {} threads", num_threads);
+    return create_boost_thread_pool(num_threads);
 }
 
 // Helper function to verify all devices in the MeshDevice have the same value
@@ -224,7 +251,8 @@ MeshDevice::MeshDevice(
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
+    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
+    kernel_compilation_thread_pool_(create_kernel_compilation_thread_pool()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -297,6 +325,12 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { dispatch_thread_pool_->enqueue(std::move(f)); }
 
 void MeshDevice::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
+
+void MeshDevice::enqueue_to_kernel_compilation_thread_pool(std::function<void()>&& f) {
+    kernel_compilation_thread_pool_->enqueue(std::move(f));
+}
+
+void MeshDevice::wait_for_kernel_compilation_thread_pool() { kernel_compilation_thread_pool_->wait(); }
 
 std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const std::vector<int>& device_ids,

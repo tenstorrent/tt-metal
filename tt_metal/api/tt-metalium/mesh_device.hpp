@@ -121,6 +121,7 @@ private:
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
+    std::shared_ptr<ThreadPool> kernel_compilation_thread_pool_;
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
@@ -314,6 +315,10 @@ public:
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
     void wait_for_thread_pool();
+
+    // Kernel compilation thread pool interface for maximum parallelization
+    void enqueue_to_kernel_compilation_thread_pool(std::function<void()>&& f);
+    void wait_for_kernel_compilation_thread_pool();
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
