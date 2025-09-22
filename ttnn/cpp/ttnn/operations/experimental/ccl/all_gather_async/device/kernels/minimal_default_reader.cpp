@@ -209,7 +209,7 @@ void kernel_main() {
                     actual_sender_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
             }
 
-            uint32_t num_channels_processed = 0;
+            uint32_t num_channels_processed_in_current_batch = 0;
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                 chunk_count = 0;
                 while (tiles_read < tiles_to_read) {
@@ -243,16 +243,16 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
                 }
-                num_channels_processed++;
-                if (gather_dim == 1 && num_channels_processed == input_tensor_C) {
+                num_channels_processed_in_current_batch++;
+                if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
                     output_tile_id_start +=
                         output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
                 } else {
                     output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
                 }
 
-                if (num_channels_processed == input_tensor_C) {
-                    num_channels_processed = 0;
+                if (num_channels_processed_in_current_batch == input_tensor_C) {
+                    num_channels_processed_in_current_batch = 0;
                 }
 
                 pages_read_in_row = start_pages_read_in_row;

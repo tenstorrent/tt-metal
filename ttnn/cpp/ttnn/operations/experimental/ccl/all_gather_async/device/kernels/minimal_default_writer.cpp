@@ -237,7 +237,7 @@ void kernel_main() {
         32});
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
 
-    uint32_t num_channels_processed = 0;
+    uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         chunk_count = 0;
@@ -356,15 +356,15 @@ void kernel_main() {
             }
         }
 
-        num_channels_processed++;
-        if (gather_dim == 1 && num_channels_processed == input_tensor_C) {
+        num_channels_processed_in_current_batch++;
+        if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
             tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
         } else {
             tile_id_start += output_tensor_Wt * output_tensor_Ht;
         }
 
-        if (num_channels_processed == input_tensor_C) {
-            num_channels_processed = 0;
+        if (num_channels_processed_in_current_batch == input_tensor_C) {
+            num_channels_processed_in_current_batch = 0;
         }
 
         tiles_read = input_tile_id_start;
@@ -437,7 +437,7 @@ void kernel_main() {
             tile_id_start = actual_slice_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
         }
 
-        num_channels_processed = 0;
+        num_channels_processed_in_current_batch = 0;
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             chunk_count = 0;
 
@@ -507,15 +507,15 @@ void kernel_main() {
                 tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
             }
 
-            num_channels_processed++;
-            if (gather_dim == 1 && num_channels_processed == input_tensor_C) {
+            num_channels_processed_in_current_batch++;
+            if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
                 tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
             } else {
                 tile_id_start += output_tensor_Wt * output_tensor_Ht;
             }
 
-            if (num_channels_processed == input_tensor_C) {
-                num_channels_processed = 0;
+            if (num_channels_processed_in_current_batch == input_tensor_C) {
+                num_channels_processed_in_current_batch = 0;
             }
 
             tiles_read = input_tile_id_start;
