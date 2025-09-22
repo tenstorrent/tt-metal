@@ -206,14 +206,14 @@ class MotifTransformer(Module):
     # supported by `reduce_scatter_minimal_async`.
     def forward(
         self,
+        *,
         spatial: ttnn.Tensor,
         prompt: ttnn.Tensor,
         pooled: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        guidance: ttnn.Tensor,
-        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
-        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
-        # combined_rope: tuple[ttnn.Tensor, ttnn.Tensor],
+        guidance: ttnn.Tensor | None = None,
+        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
     ) -> ttnn.Tensor:

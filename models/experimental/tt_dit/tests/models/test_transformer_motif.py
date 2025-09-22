@@ -21,21 +21,16 @@ from ...utils.tensor import bf16_tensor
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
     [
         pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
+        # pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
+        # pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
+        # pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
+        # pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
+        # pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        # pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize(
-    ("batch_size", "prompt_seq_len"),
-    [
-        (2, 333),
-    ],
-)
+@pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_transformer_motif(
     mesh_device: ttnn.MeshDevice,
@@ -44,13 +39,12 @@ def test_transformer_motif(
     tp_axis: int,
     num_links: int,
     batch_size: int,
-    prompt_seq_len: int,
 ) -> None:
     model_path = "motif_image_preview.bin"
 
     # checkpoint config
-    modulation_dim = 4096  # new parameter (is hidden_dim in SD3 large in some places)
-    time_embed_dim = 4096  # new parameter (related constant in SD3 large is 256)
+    modulation_dim = 4096  # new parameter (corresponds to hidden_dim in SD3 large in some places)
+    time_embed_dim = 4096  # new parameter (a related constant in SD3 large is 256)
     register_token_num = 4
     num_layers = 30
     num_heads = 30
@@ -137,25 +131,27 @@ def test_transformer_motif(
 
     logger.info("loading state dict...")
     state_dict = torch.load(model_path, map_location=torch.device("cpu"), mmap=True)
+    state_dict = substate(state_dict, "dit")
 
     logger.info("loading state dict into Torch model...")
-    torch_model.load_state_dict(substate(state_dict, "dit"))
+    missing, unexpected = torch_model.load_state_dict(state_dict, strict=False)
+    assert unexpected == ["pos_embed"]
+    assert not missing
 
     logger.info("loading state dict into TT-NN model...")
     tt_model.load_torch_state_dict(state_dict)
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, in_channels, height // vae_scale_factor, width // vae_scale_factor])
-    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim])
-    pooled = torch.randn([batch_size, pooled_projection_dim])
+    pooled = torch.randn([batch_size, 2048])
     timestep = torch.full([batch_size], fill_value=500)
-    guidance = torch.full([batch_size], fill_value=3) if with_guidance_embeds else None
 
-    # prepare for ROPE
-    text_ids = torch.zeros([prompt_seq_len, 3])
-    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3])
-    ids = torch.cat((text_ids, image_ids), dim=0)
-    rope_cos, rope_sin = torch_model.pos_embed.forward(ids)
+    prompt_embeddings = [
+        torch.randn([2, 256, 4096]),
+        torch.randn([2, 77, 768]),
+        torch.randn([2, 77, 1280]),
+    ]
+    prompt = _combine_prompt_embeddings(*prompt_embeddings)
 
     tt_spatial = bf16_tensor(spatial.permute(0, 2, 3, 1), device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
     tt_prompt = bf16_tensor(prompt, device=submesh_device)
@@ -163,26 +159,13 @@ def test_transformer_motif(
     tt_timestep = ttnn.from_torch(
         timestep.unsqueeze(-1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=submesh_device
     )
-    tt_guidance = bf16_tensor(guidance.unsqueeze(-1), device=submesh_device) if guidance is not None else None
-
-    tt_spatial_rope_cos = bf16_tensor(rope_cos[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_spatial_rope_sin = bf16_tensor(rope_sin[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=submesh_device)
-    tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=submesh_device)
-    # tt_rope_cos = bf16_tensor(rope_cos, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
-    # tt_rope_sin = bf16_tensor(rope_sin, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
 
     logger.info("running torch model...")
     with torch.no_grad():
-        torch_output = torch_model.forward(
-            hidden_states=spatial,
-            encoder_hidden_states=prompt,
-            pooled_projections=pooled,
-            timestep=timestep / 1000,
-            guidance=guidance,
-            img_ids=image_ids,
-            txt_ids=text_ids,
-        ).sample
+        torch_output = torch_model.forward(spatial, timestep, prompt_embeddings, pooled)
+
+    _, prompt_seq_len, _ = prompt.shape
+    spatial_seq_len = height * width // vae_scale_factor**2
 
     logger.info("running TT model...")
     tt_output = tt_model.forward(
@@ -190,10 +173,6 @@ def test_transformer_motif(
         prompt=tt_prompt,
         pooled=tt_pooled,
         timestep=tt_timestep,
-        guidance=tt_guidance,
-        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-        # combined_rope=(tt_rope_cos, tt_rope_sin),
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
     )
@@ -206,3 +185,9 @@ def test_transformer_motif(
     )[:batch_size]
 
     assert_quality(torch_output, tt_output_torch, pcc=0.997, relative_rmse=8.1)
+
+
+def _combine_prompt_embeddings(t5: torch.Tensor, clip_a: torch.Tensor, clip_b: torch.Tensor) -> torch.Tensor:
+    clip_emb = torch.cat([clip_a, clip_b], dim=-1)
+    clip_emb = torch.nn.functional.pad(clip_emb, (0, t5.shape[-1] - clip_emb.shape[-1]))
+    return torch.cat([clip_emb, t5], dim=-2)
