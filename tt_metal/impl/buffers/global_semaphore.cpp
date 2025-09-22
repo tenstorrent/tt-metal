@@ -58,6 +58,11 @@ void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_typ
 
 IDevice* GlobalSemaphore::device() const { return device_; }
 
+std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semaphore) {
+    tt::stl::reflection::operator<<(os, global_semaphore);
+    return os;
+}
+
 DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->address(); }
 
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
