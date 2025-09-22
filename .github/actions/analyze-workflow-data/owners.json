@@ -54,7 +54,20 @@
     "t3k unet shallow tests": { "id": "U06ECNVR0EN", "name": "Evan Smal" },
     "t3k mistral tests": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" },
     "t3k qwen25_vl tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k gemma3-small tests": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" }
+    "t3k gemma3-small tests": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
+
+    "Galaxy Fabric tests": { "id": "UJ45FEC7M", "name": "Allan Liu" },
+    "Galaxy Llama3-70b unit tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
+    "Galaxy DRAM Prefetcher unit tests": { "id": "U044T8U8DEF", "name": "Johanna Rock" },
+    "Galaxy distributed ops tests": { "id": "U044T8U8DEF", "name": "Johanna Rock" },
+
+    "Galaxy Llama3 frequent tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
+    "Galaxy resnet50 frequent tests": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" },
+    "Galaxy unit/distributed frequent tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
+    "Galaxy unit_distributed frequent tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
+    "Galaxy SD3.5 frequent tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
+
+    "profiler tests": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" }
   },
   "contains": [
     { "needle": "vllm-tests / vllm-tests ([WH-T3K] Llama-3.1-8B-Instruct", "owner": [
@@ -177,6 +190,36 @@
     { "needle": "t3k qwen25_vl tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
 
     { "needle": "t3000-unit-tests / t3k gemma3-small tests", "owner": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" } },
-    { "needle": "t3k gemma3-small tests", "owner": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" } }
+    { "needle": "t3k gemma3-small tests", "owner": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" } },
+
+    { "needle": "galaxy-unit-tests / Galaxy Fabric tests", "owner": { "id": "UJ45FEC7M", "name": "Allan Liu" } },
+    { "needle": "Galaxy Fabric tests", "owner": { "id": "UJ45FEC7M", "name": "Allan Liu" } },
+
+    { "needle": "galaxy-unit-tests / Galaxy Llama3-70b unit tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "Galaxy Llama3-70b unit tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "galaxy-unit-tests / Galaxy DRAM Prefetcher unit tests", "owner": { "id": "U044T8U8DEF", "name": "Johanna Rock" } },
+    { "needle": "Galaxy DRAM Prefetcher unit tests", "owner": { "id": "U044T8U8DEF", "name": "Johanna Rock" } },
+
+    { "needle": "galaxy-unit-tests / Galaxy distributed ops tests", "owner": { "id": "U044T8U8DEF", "name": "Johanna Rock" } },
+    { "needle": "Galaxy distributed ops tests", "owner": { "id": "U044T8U8DEF", "name": "Johanna Rock" } },
+
+    { "needle": "galaxy-frequent-tests / Galaxy Llama3 frequent tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "Galaxy Llama3 frequent tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "galaxy-frequent-tests / Galaxy resnet50 frequent tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
+    { "needle": "Galaxy resnet50 frequent tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
+
+    { "needle": "galaxy-frequent-tests / Galaxy unit/distributed frequent tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+    { "needle": "Galaxy unit/distributed frequent tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+
+    { "needle": "galaxy-frequent-tests / Galaxy unit_distributed frequent tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+    { "needle": "Galaxy unit_distributed frequent tests", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+
+    { "needle": "galaxy-frequent-tests / Galaxy SD3.5 frequent tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "Galaxy SD3.5 frequent tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
+    { "needle": "profiler-tests / profiler tests", "owner": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" } },
+    { "needle": "profiler tests", "owner": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" } }
   ]
 }
