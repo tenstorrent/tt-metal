@@ -32,7 +32,6 @@ void bind_split_qkv(py::module& module) {
                 * :attr:`num_heads`: Number of heads to split the tensor into
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input_tensor.memory_config()
                 * :attr:`output_tensors`: preallocated output tensors
-                * :attr:`queue_id`: command queue id
         )doc",
         ttnn::pybind_overload_t{
             [](const SplitOperationType& self,
@@ -40,23 +39,16 @@ void bind_split_qkv(py::module& module) {
                const CoreCoord& compute_with_storage_grid_size,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const uint32_t num_heads,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors,
-               QueueId queue_id) {
+               std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors) {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    compute_with_storage_grid_size,
-                    memory_config,
-                    num_heads,
-                    optional_output_tensors);
+                    input_tensor, compute_with_storage_grid_size, memory_config, num_heads, optional_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("compute_with_storage_grid_size").noconvert(),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("num_heads") = 16,
-            py::arg("output_tensors") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensors") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail
