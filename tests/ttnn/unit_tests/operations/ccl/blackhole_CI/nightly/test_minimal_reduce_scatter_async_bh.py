@@ -128,9 +128,6 @@ def run_reduce_scatter_impl(
         input_tensors = torch.chunk(rs_input_tensor, num_devices, dim)
         torch_input_tensor_list.append(input_tensors)
 
-        mesh_mapper = ttnn.MeshMapperConfig(
-            [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()], ttnn.MeshShape(num_devices, 1)
-        )
         input_tensor_mesh = ttnn.from_torch(
             rs_input_tensor,
             device=bh_1d_mesh_device,
@@ -139,7 +136,9 @@ def run_reduce_scatter_impl(
             memory_config=mem_config_input,
             mesh_mapper=ttnn.create_mesh_mapper(
                 bh_1d_mesh_device,
-                mesh_mapper,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
             ),
         )
 
