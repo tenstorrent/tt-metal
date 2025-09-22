@@ -40,8 +40,8 @@ inline void calculate_isinf() {
         vFloat in = dst_reg[0];
         sfpi::vInt exp = sfpi::exexp(in);
         sfpi::vInt man = sfpi::exman9(in);
-        vFloat out = 0.0f;
-        v_if(exp == 128 && man == 0) { out = 1.0f; }
+        vFloat out = sfpi::vConst0;
+        v_if(exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
         dst_reg[0] = out;
         dst_reg++;
@@ -55,8 +55,8 @@ inline void calculate_isposinf() {
         vFloat in = dst_reg[0];
         sfpi::vInt exp = sfpi::exexp(in);
         sfpi::vInt man = sfpi::exman9(in);
-        vFloat out = 0.0f;
-        v_if(in > 0 && exp == 128 && man == 0) { out = 1.0f; }
+        vFloat out = sfpi::vConst0;
+        v_if(in > 0 && exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
         dst_reg[0] = out;
         dst_reg++;
@@ -70,8 +70,8 @@ inline void calculate_isneginf() {
         vFloat in = dst_reg[0];
         sfpi::vInt exp = sfpi::exexp(in);
         sfpi::vInt man = sfpi::exman9(in);
-        vFloat out = 0.0f;
-        v_if(in < 0 && exp == 128 && man == 0) { out = 1.0f; }
+        vFloat out = sfpi::vConst0;
+        v_if(in < 0 && exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
         dst_reg[0] = out;
         dst_reg++;
@@ -85,8 +85,8 @@ inline void calculate_isnan() {
         vFloat in = dst_reg[0];
         sfpi::vInt exp = sfpi::exexp(in);
         sfpi::vInt man = sfpi::exman9(in);
-        vFloat out = 0.0f;
-        v_if(exp == 128 && man != 0) { out = 1.0f; }
+        vFloat out = sfpi::vConst0;
+        v_if(exp == 128 && man != 0) { out = sfpi::vConst1; }
         v_endif;
         dst_reg[0] = out;
         dst_reg++;
