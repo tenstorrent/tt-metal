@@ -85,7 +85,7 @@ void MetalContext::initialize(
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
                 force_reinit_ = false;
-                log_warning(
+                log_debug(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
                 teardown();
@@ -848,10 +848,8 @@ void MetalContext::initialize_firmware(
                                        .get_target_out_path("");
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
-                    if (riscv_id + build_idx == 1) {  // TODO: clean up how brisc/ncrisc are handled
-                        // In this context, ncrisc_kernel_size16 is the size of the fw
-                        launch_msg.kernel_config().ncrisc_kernel_size16() = (fw_size + 15) >> 4;
-                    }
+                    hal_->set_iram_text_size(
+                        launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
@@ -1251,6 +1249,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");
+}
+
+// Command queue id stack for thread
+thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
+
+MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
+    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 uint32_t MetalContext::get_active_erisc_launch_flag_addr() {

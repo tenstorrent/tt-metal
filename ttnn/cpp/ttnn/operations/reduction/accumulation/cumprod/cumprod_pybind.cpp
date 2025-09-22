@@ -13,7 +13,6 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
@@ -93,9 +92,8 @@ void bind_reduction_cumprod_operation(py::module& module) {
                std::optional<DataType>& dtype,
                const bool& reverse_order,
                std::optional<Tensor> optional_out,
-               const std::optional<MemoryConfig>& memory_config,
-               const QueueId& queue_id = DefaultQueueId) -> Tensor {
-                return self(queue_id, input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
+               const std::optional<MemoryConfig>& memory_config) -> Tensor {
+                return self(input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
@@ -103,8 +101,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("reverse_order") = false,
             py::arg("out") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

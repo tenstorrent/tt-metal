@@ -871,6 +871,19 @@ private:
         }
     }
 
+    unsigned int get_device_frequency_mhz(const FabricNodeId& device_id) {
+        if (!device_freq_mhz_map_.contains(device_id)) {
+            auto physical_chip_id =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
+                    device_id);
+            device_freq_mhz_map_[device_id] =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
+        }
+        auto freq_mhz = device_freq_mhz_map_.at(device_id);
+        TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
+        return freq_mhz;
+    }
+
     void calculate_bandwidth(const TestConfig& config) {
         log_debug(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
 
@@ -890,8 +903,48 @@ private:
         uint32_t device_freq = std::numeric_limits<uint32_t>::max();
         std::set<uint32_t> num_devices_set;
 
+        // Pre-compute topology information (moved outside inner loop)
+        const auto mesh_shape = fixture_->get_mesh_shape();
+        const auto topology = fixture_->get_topology();
+        // Pre-compute sender config lookup cache to avoid O(n³) search in inner loop
+        std::unordered_map<std::string, std::tuple<uint32_t, uint32_t, uint32_t>> config_cache;
+        for (const auto& [device_coord, test_device] : test_devices_) {
+            const auto& device_id = test_device.get_node_id();
+            for (const auto& [core, sender] : test_device.get_senders()) {
+                for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
+                    RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
+                    uint32_t config_link_id = config.link_id.value_or(0);
+
+                    // Create cache key: device_id + direction + link_id
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                                            std::to_string(static_cast<int>(config_direction)) + "_" +
+                                            std::to_string(config_link_id);
+
+                    config_cache[cache_key] = std::make_tuple(
+                        config.parameters.payload_size_bytes,
+                        config.parameters.num_packets,
+                        config.parameters.payload_size_bytes  // packet_size
+                    );
+                }
+            }
+        }
+
         for (const auto& [device_id, direction_map] : device_direction_cycles_) {
             for (const auto& [direction, link_map] : direction_map) {
+                // Calculate num_devices once per direction (moved outside link loop)
+                uint32_t num_devices = 0;
+                if (topology == Topology::Linear) {
+                    if (direction == RoutingDirection::N or direction == RoutingDirection::S) {
+                        num_devices = mesh_shape[0];
+                    } else {
+                        num_devices = mesh_shape[1];
+                    }
+                } else if (topology == Topology::Ring) {
+                    num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
+                } else if (topology == Topology::Mesh) {
+                    num_devices = mesh_shape[0] * mesh_shape[1];
+                }
+
                 for (const auto& [link_id, cycles] : link_map) {
                     if (cycles == 0) {
                         continue;  // Skip to avoid division by zero
@@ -906,41 +959,24 @@ private:
                     max_cycles = std::max(max_cycles, cycles);
                     max_traffic_count = std::max(max_traffic_count, total_traffic_count);
 
-                    // Find sender configs that send in this direction and link to get payload size and packet count
-                    for (const auto& [device_coord, test_device] : test_devices_) {
-                        if (test_device.get_node_id() != device_id) {
-                            continue;
-                        }
+                    // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                                            std::to_string(static_cast<int>(direction)) + "_" + std::to_string(link_id);
 
-                        bool found_connected_core = false;
-                        for (const auto& [core, sender] : test_device.get_senders()) {
-                            for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                                RoutingDirection config_direction =
-                                    fixture_->get_forwarding_direction(config.hops.value());
-                                uint32_t config_link_id = config.link_id.value_or(0);
-                                if (config_direction == direction && config_link_id == link_id) {
-                                    uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
-                                    num_packets = config.parameters.num_packets;
-                                    total_bytes =
-                                        static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
-                                    total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
-                                    packet_size = payload_size_bytes;
-                                    found_connected_core = true;
-                                    break;
-                                }
-                            }
-                            if (found_connected_core) {
-                                break;
-                            }
-                        }
-                    }
+                    TT_FATAL(
+                        config_cache.contains(cache_key),
+                        "Config not found in cache for device {} direction {} link {}",
+                        device_id.chip_id,
+                        static_cast<int>(direction),
+                        link_id);
+                    auto [payload_size_bytes, num_packets_val, packet_size_val] = config_cache.at(cache_key);
+                    num_packets = num_packets_val;
+                    packet_size = packet_size_val;
+                    total_bytes = static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
+                    total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
 
                     // Calculate bandwidth in Bytes/cycle and convert to GB/s
-                    const auto physical_chip_id = tt::tt_metal::MetalContext::instance()
-                                                      .get_control_plane()
-                                                      .get_physical_chip_id_from_fabric_node_id(device_id);
-                    const auto device_frequency_mhz =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
+                    const auto device_frequency_mhz = get_device_frequency_mhz(device_id);
                     uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
                     // use min frequency (in real senario we will have the same freq)
                     device_freq = std::min(device_freq, device_frequency_hz);
@@ -951,24 +987,6 @@ private:
                     double bandwidth_GB_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
                     double packets_per_second = static_cast<double>(total_packets) / duration_seconds;
 
-                    // TODO: need to figure out a better way to show the number of devices in a test.
-                    // Ex, we compute number of devices for linear topology test as NS and EW separated.
-                    // But in a mesh topology setup, how do we run linear topology and still show separate
-                    // number of devices? There will be even more choices for arbitrary unicast setups.
-                    uint32_t num_devices = 0;
-                    const auto mesh_shape = fixture_->get_mesh_shape();
-                    const auto topology = fixture_->get_topology();
-                    if (topology == Topology::Linear) {
-                        if (direction == RoutingDirection::N or direction == RoutingDirection::S) {
-                            num_devices = mesh_shape[0];
-                        } else {
-                            num_devices = mesh_shape[1];
-                        }
-                    } else if (topology == Topology::Ring) {
-                        num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
-                    } else if (topology == Topology::Mesh) {
-                        num_devices = mesh_shape[0] * mesh_shape[1];
-                    }
                     // save all possible num devices
                     num_devices_set.insert(num_devices);
 
@@ -1018,12 +1036,13 @@ private:
         double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
         double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
 
-        bandwidth_results_summary_.push_back(BandwidthResultSummary{
-            .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
-            .packet_size = packet_size,
-            .cycles = max_cycles,
-            .bandwidth_GB_s = bandwidth_GB_s,
-            .packets_per_second = packets_per_second});
+        bandwidth_results_summary_.push_back(
+            BandwidthResultSummary{
+                .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
+                .packet_size = packet_size,
+                .cycles = max_cycles,
+                .bandwidth_GB_s = bandwidth_GB_s,
+                .packets_per_second = packets_per_second});
     }
 
     void generate_bandwidth_csv(const TestConfig& config) {
@@ -1383,9 +1402,9 @@ private:
     tt::tt_fabric::fabric_tests::SenderMemoryMap sender_memory_map_;
     tt::tt_fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies_;
-    bool benchmark_mode_ = false;  // Benchmark mode for current test
+    bool benchmark_mode_ = false;     // Benchmark mode for current test
     bool telemetry_enabled_ = false;  // Telemetry enabled for current test
-    bool global_sync_ = false;     // Line sync for current test
+    bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 
     // Performance profiling data
@@ -1396,6 +1415,9 @@ private:
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
+
+    // Device frequency cache to avoid repeated calculations
+    std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
     double measured_bw_min_ = 0.0;
     double measured_bw_avg_ = 0.0;
     double measured_bw_max_ = 0.0;
