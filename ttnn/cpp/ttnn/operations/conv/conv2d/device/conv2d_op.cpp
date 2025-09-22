@@ -339,6 +339,8 @@ tt::tt_metal::operation::OpPerformanceModel OptimizedConvNew::create_op_performa
 
     const CoreCoord compute_grid = output_tensors.at(0).device()->compute_with_storage_grid_size();
     const int num_cores = compute_grid.x * compute_grid.y;
+    // The Wormhole/Blackhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+    // This is 2*8*16*16 = 4096 muladds in a single cycle.
     constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
