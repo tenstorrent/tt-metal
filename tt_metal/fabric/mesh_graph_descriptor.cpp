@@ -1071,7 +1071,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections(GlobalNodeId 
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id) {
-    // Iterate over all isntances in graph
+    // Iterate over all instances in graph
     auto& instance = instances_.at(graph_id);
 
     const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
