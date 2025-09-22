@@ -73,7 +73,9 @@ class Generator:
         model_id=-1,
         **kwargs,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_host(
+            prefill_ids, page_table=page_table, user_id=user_id
+        )
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
@@ -83,7 +85,7 @@ class Generator:
             rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
-            user_id=user_id,
+            user_id=transformed_inputs[3],
             kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
         )
@@ -98,7 +100,7 @@ class Generator:
             rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
-            user_id=user_id,
+            user_id=transformed_inputs[3],
             kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
         )
@@ -115,7 +117,7 @@ class Generator:
             rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
-            user_id=user_id,
+            user_id=transformed_inputs[3],
             kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
         )
@@ -180,7 +182,9 @@ class Generator:
         page_table=None,
         model_id=-1,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_host(
+            prefill_ids, page_table=page_table, user_id=user_id
+        )
 
         device_inputs = copy_host_to_device(host_inputs, device_tensors=device_inputs)
 

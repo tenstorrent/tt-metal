@@ -130,22 +130,29 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-    def prepare_prefill_inputs_host(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, user_id=0, start_pos=0):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
         host_inputs = self.prepare_inputs_prefill(
-            tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            user_id=user_id,
         )
         return host_inputs
 
-    def transform_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table, user_id):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table
+        return tt_tokens, tt_page_table, tt_chunk_page_table, user_id
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, user_id=0
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -164,9 +171,7 @@ class Transformer(LightweightModule):
         )
 
         # we do it this way because we want to run this when all our inputs are on the device
-        if trace_enabled:
-            tokens_embd = tokens
-        else:
+        if not trace_enabled:
             tokens_embd = self.embd(tokens)
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
@@ -211,7 +216,16 @@ class Transformer(LightweightModule):
             tt_chunk_page_table = None
 
         if trace_enabled:
-            return tokens_embd, tt_page_table, tt_chunk_page_table
+            user_id = ttnn.from_torch(
+                torch.tensor([user_id], dtype=torch.int32),
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        if trace_enabled:
+            return tokens, tt_page_table, tt_chunk_page_table, user_id
         else:
             return (
                 tokens_embd,
