@@ -2071,16 +2071,9 @@ void ControlPlane::exchange_intermesh_link_tables() {
                     reinterpret_cast<std::byte*>(&local_table_size_bytes), sizeof(local_table_size_bytes)),
                 distributed_context.rank());
 
-            // log_critical(tt::LogFabric, "Size of serialized local table: {}", local_table_size_bytes);
-
             distributed_context.broadcast(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
                 distributed_context.rank());
-
-            // for (const auto& [local_chan, remote_chan] : intermesh_link_table_.intermesh_links) {
-            //     log_critical(tt::LogFabric, "Rank {} sent intermesh link: {} -> {}", my_rank, local_chan,
-            //     remote_chan);
-            // }
 
         } else {
             // Acknowledge the broadcast issued by the root
@@ -2090,8 +2083,6 @@ void ControlPlane::exchange_intermesh_link_tables() {
                     reinterpret_cast<std::byte*>(&remote_table_size_bytes), sizeof(remote_table_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
 
-            // log_critical(tt::LogFabric, "Size of serialized remote table: {}", remote_table_size_bytes);
-
             serialized_remote_table.clear();
             serialized_remote_table.resize(remote_table_size_bytes);
             distributed_context.broadcast(
@@ -2100,11 +2091,6 @@ void ControlPlane::exchange_intermesh_link_tables() {
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
             tt_fabric::IntermeshLinkTable deserialized_remote_table =
                 tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
-
-            // for (const auto& [local_chan, remote_chan] : deserialized_remote_table.intermesh_links) {
-            //     log_critical(
-            //         tt::LogFabric, "Rank {} received intermesh link: {} -> {}", my_rank, local_chan, remote_chan);
-            // }
 
             peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id]
                                        [deserialized_remote_table.local_host_rank_id] =
@@ -2133,17 +2119,7 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
     }
     if (fabric_router_channels_on_chip.contains(chan_id)) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
-        log_warning(
-            tt::LogFabric,
-            "fabric_router_channels_on_chip_vec: {} chan_id: {}",
-            fabric_router_channels_on_chip_vec,
-            chan_id);
     } else {
-        log_critical(
-            tt::LogFabric,
-            "fabric_router_channels_on_chip_vec: {} chan_id: {}",
-            fabric_router_channels_on_chip_vec,
-            chan_id);
         log_debug(
             tt::LogFabric,
             "Control Plane: Disabling router on M{}D{} eth channel {}",
