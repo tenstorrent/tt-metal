@@ -173,6 +173,9 @@
     { "needle": "galaxy-model-perf-tests / Galaxy Sentence Bert tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
     { "needle": "Galaxy Sentence Bert tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
 
+    { "needle": "galaxy-deepseek-tests / (Galaxy) DeepSeek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+    { "needle": "(Galaxy) DeepSeek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+
     { "needle": "galaxy-nightly-tests / Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
     { "needle": "1_galaxy-nightly-tests _ Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
     { "needle": "Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
@@ -188,5 +191,67 @@
 
     { "needle": "galaxy-nightly-tests / Llama Galaxy Long Stress Test", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "needle": "Llama Galaxy Long Stress Test", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } }
+  ,
+    { "needle": "blackhole-multi-card-demo-tests / llama3.1-8b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "blackhole-multi-card-demo-tests / llama3.3-70b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+
+    { "needle": "blackhole-multi-card-post-commit-tests / CCL APC test", "owner": { "id": "U0883RN6CRE", "name": "William Ly" } },
+
+    { "needle": "t3000-fast-tests / t3k fabric tests", "owner": { "id": "UJ45FEC7M", "name": "Allan Liu" } },
+
+    { "needle": "t3000-nightly-tests / t3k_ccl_tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
+    { "needle": "t3000-nightly-tests / t3k_ccl_2d_tests", "owner": { "id": "U013121KDH9", "name": "Austin Ho" } },
+    { "needle": "t3000-nightly-tests / t3k_ccl_legacy_tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
+    { "needle": "t3000-nightly-tests / t3k_fabric_unit_tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
+    { "needle": "t3000-nightly-tests / t3k_dispatch_unit_tests", "owner": { "id": "U07R05K4WGJ", "name": "John Bauman" } },
+
+    { "needle": "t3000-perplexity-tests / t3k_falcon7b_tests", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+    { "needle": "t3000-perplexity-tests / t3k_falcon40b_tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "t3000-perplexity-tests / t3k_llama_70b_tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "t3000-perplexity-tests / t3k_mixtral_tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "t3000-perplexity-tests / t3k_mistral_tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
+    { "needle": "t3000-perplexity-tests / t3k_llama3_tests_single_card", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "t3000-perplexity-tests / t3k_llama3_tests_t3k", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "t3000-perplexity-tests / t3k_qwen25_tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "t3000-perplexity-tests / t3k_qwen3_tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "t3000-perplexity-tests / t3k_gemma3_tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
+
+    { "needle": "blackhole-nightly-tests / Nightly", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "blackhole-nightly-tests / whisper", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+    { "needle": "blackhole-nightly-tests / llama3.1-8b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+
+    { "needle": "galaxy-stress-tests / galaxy-stress", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "single-card-demo-tests / falcon7b", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+    { "needle": "single-card-demo-tests / llama3", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "single-card-demo-tests / vgg", "owner": { "id": "U06Q7ESTFEV", "name": "Borys Bradel" } },
+    { "needle": "single-card-demo-tests / bert_tiny", "owner": { "id": "U024A4EFV6U", "name": "Brian Liu" } },
+    { "needle": "single-card-demo-tests / bert", "owner": { "id": "U024A4EFV6U", "name": "Brian Liu" } },
+    { "needle": "single-card-demo-tests / resnet", "owner": { "id": "U0837MYG788", "name": "Marko Radosavljevic" } },
+    { "needle": "single-card-demo-tests / distilbert", "owner": { "id": "U013121KDH9", "name": "Austin Ho" } },
+    { "needle": "single-card-demo-tests / covnet_mnist", "owner": { "id": "U06LRK6JDGB", "name": "Saad Jameel" } },
+    { "needle": "single-card-demo-tests / mnist", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
+    { "needle": "single-card-demo-tests / squeezebert", "owner": { "id": "UBHPP2NDP", "name": "Joseph Chu" } },
+    { "needle": "single-card-demo-tests / roberta", "owner": { "id": "U06F3ER8X9A", "name": "Stuti Raizada" } },
+    { "needle": "single-card-demo-tests / stable_diffusion", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "single-card-demo-tests / segformer", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "single-card-demo-tests / sentence_bert", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "single-card-demo-tests / yolov11m", "owner": { "id": "U04B9QAMM4N", "name": "Dimitri Gnidash" } },
+    { "needle": "single-card-demo-tests / yolov11", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "single-card-demo-tests / yolov9c", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
+    { "needle": "single-card-demo-tests / mobilenetv2", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartarians" } },
+    { "needle": "single-card-demo-tests / yolov8s_world", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
+    { "needle": "single-card-demo-tests / ufld_v2", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
+    { "needle": "single-card-demo-tests / swin_s", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
+    { "needle": "single-card-demo-tests / vanilla_unet", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "single-card-demo-tests / yolov8x", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
+    { "needle": "single-card-demo-tests / yolov8s", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
+    { "needle": "single-card-demo-tests / vgg_unet", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "single-card-demo-tests / yolov4", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "single-card-demo-tests / efficientnet_b0", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
+    { "needle": "single-card-demo-tests / qwen25_vl", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "needle": "single-card-demo-tests / gemma3", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
+    { "needle": "single-card-demo-tests / whisper", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+    { "needle": "single-card-demo-tests / mamba", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } }
   ]
 }
