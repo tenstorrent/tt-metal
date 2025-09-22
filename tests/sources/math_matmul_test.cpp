@@ -78,7 +78,7 @@ void run_kernel()
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (uint32_t j = 0; j < kt_dim; j++)
     {
-        _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor, THROTTLE_LEVEL>(0, UNPACK_TRANSPOSE_FACES, ct_dim, rt_dim, kt_dim);
+        _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor, THROTTLE_LEVEL>(DST_INDEX, UNPACK_TRANSPOSE_FACES, ct_dim, rt_dim, kt_dim);
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -106,7 +106,7 @@ void run_kernel()
     _llk_packer_wait_for_math_done_();
     for (int i = 0; i < TILE_CNT; i++)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(buffer_Res[i]));
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(DST_INDEX + i, L1_ADDRESS(buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
