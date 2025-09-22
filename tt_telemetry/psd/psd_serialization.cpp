@@ -199,10 +199,12 @@ void physical_system_descriptor_to_proto(const PSD& descriptor, tt::fabric::prot
 // Convert protobuf to PSD
 std::unique_ptr<PSD> proto_to_physical_system_descriptor(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::ARCH arch,
     const tt::fabric::proto::PSD& proto_desc,
     bool using_mock_cluster_desc) {
-    auto descriptor = std::make_unique<PSD>(cluster, arch, false, using_mock_cluster_desc);  // Don't run discovery
+    auto descriptor = std::make_unique<PSD>(
+        cluster, distributed_context, arch, false, using_mock_cluster_desc);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -298,6 +300,7 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PSD& de
 
 PSD deserialize_physical_system_descriptor_from_bytes(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::ARCH arch,
     const std::vector<uint8_t>& data,
     bool using_mock_cluster_desc) {
@@ -306,7 +309,8 @@ PSD deserialize_physical_system_descriptor_from_bytes(
         throw std::runtime_error("Failed to parse PSD from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(cluster, arch, proto_desc, using_mock_cluster_desc));
+    return std::move(
+        *proto_to_physical_system_descriptor(cluster, distributed_context, arch, proto_desc, using_mock_cluster_desc));
 }
 
 }  // namespace tt::tt_metal

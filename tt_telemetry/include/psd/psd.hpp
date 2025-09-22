@@ -13,6 +13,7 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -125,6 +126,7 @@ struct PhysicalConnectivityGraph {
 class PSD {
 public:
     PSD(const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         tt::ARCH arch,
         bool run_discovery = true,
         bool use_mock_cluster_desc = false);
@@ -180,6 +182,7 @@ private:
     void resolve_hostname_uniqueness();
     void validate_graphs();
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     const ARCH arch_;
     const bool using_mock_cluster_desc_;
     PhysicalConnectivityGraph system_graph_;

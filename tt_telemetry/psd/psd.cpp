@@ -102,8 +102,15 @@ struct EthEndpoint {
 }  // namespace
 
 PSD::PSD(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, ARCH arch, bool run_discovery, bool using_mock_cluster_desc) :
-    cluster_(cluster), arch_(arch), using_mock_cluster_desc_(using_mock_cluster_desc) {
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    ARCH arch,
+    bool run_discovery,
+    bool using_mock_cluster_desc) :
+    cluster_(cluster),
+    distributed_context_(distributed_context),
+    arch_(arch),
+    using_mock_cluster_desc_(using_mock_cluster_desc) {
     if (run_discovery) {
         this->run_discovery();
     }
@@ -112,22 +119,21 @@ PSD::PSD(
 void PSD::resolve_hostname_uniqueness() {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    auto my_rank = *(distributed_context.rank());
+    auto my_rank = *(distributed_context_->rank());
 
     if (my_rank == controller_rank) {
         std::vector<std::string> hostnames = {};
         hostnames.push_back(get_host_name());
-        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+        for (std::size_t rank = 0; rank < *(distributed_context_->size()); rank++) {
             if (rank != controller_rank) {
                 std::size_t peer_hostname_size = 0;
-                distributed_context.recv(
+                distributed_context_->recv(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
                     Rank{rank},
                     Tag{0});
                 std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
-                distributed_context.recv(
+                distributed_context_->recv(
                     tt::stl::as_writable_bytes(
                         tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
                     Rank{rank},
@@ -138,9 +144,9 @@ void PSD::resolve_hostname_uniqueness() {
         }
         all_hostnames_unique_ = std::set<std::string>(hostnames.begin(), hostnames.end()).size() == hostnames.size();
 
-        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+        for (std::size_t rank = 0; rank < *(distributed_context_->size()); rank++) {
             if (rank != controller_rank) {
-                distributed_context.send(
+                distributed_context_->send(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
                     Rank{rank},
@@ -151,17 +157,17 @@ void PSD::resolve_hostname_uniqueness() {
         auto host_name = get_host_name();
         auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
-        distributed_context.send(
+        distributed_context_->send(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_hostname_size), sizeof(serialized_hostname_size)),
             Rank{controller_rank},
             Tag{0});
-        distributed_context.send(
+        distributed_context_->send(
             tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
             Rank{controller_rank},
             Tag{0});
 
-        distributed_context.recv(
+        distributed_context_->recv(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
             Rank{controller_rank},
@@ -190,13 +196,12 @@ void PSD::clear() {
 void PSD::run_local_discovery() {
     this->clear();
     const auto& cluster_desc = cluster_->get_cluster_description();
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     const auto& chip_unique_ids = cluster_desc->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc->get_ethernet_connections();
     auto cross_host_eth_connections = cluster_desc->get_ethernet_connections_to_remote_devices();
 
-    auto my_rank = *(distributed_context.rank());
+    auto my_rank = *(distributed_context_->rank());
     auto hostname = this->my_host_name();
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
@@ -254,8 +259,7 @@ void PSD::run_local_discovery() {
 void PSD::run_global_discovery() {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    auto my_rank = *(distributed_context.rank());
+    auto my_rank = *(distributed_context_->rank());
     this->exchange_metadata(true);
     if (my_rank == controller_rank) {
         this->remove_unresolved_nodes();
@@ -305,24 +309,23 @@ void PSD::remove_unresolved_nodes() {
 void PSD::exchange_metadata(bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    if (*distributed_context.size() == 1) {
+    if (*(distributed_context_->size()) == 1) {
         return;
     }
-    auto my_rank = *(distributed_context.rank());
+    auto my_rank = *(distributed_context_->rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;
 
     if (issue_gather) {
         receiver_ranks.insert(controller_rank);
-        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+        for (std::size_t rank = 0; rank < *(distributed_context_->size()); rank++) {
             if (rank != controller_rank) {
                 sender_ranks.insert(rank);
             }
         }
     } else {
         sender_ranks.insert(controller_rank);
-        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+        for (std::size_t rank = 0; rank < *(distributed_context_->size()); rank++) {
             if (rank != controller_rank) {
                 receiver_ranks.insert(rank);
             }
@@ -334,12 +337,12 @@ void PSD::exchange_metadata(bool issue_gather) {
         std::size_t desc_size = serialized_desc.size();
 
         for (auto rank : receiver_ranks) {
-            distributed_context.send(
+            distributed_context_->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
                 Rank{rank},
                 Tag{0});
 
-            distributed_context.send(
+            distributed_context_->send(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
                 Rank{rank},
                 Tag{0});
@@ -347,23 +350,23 @@ void PSD::exchange_metadata(bool issue_gather) {
     } else {
         for (auto rank : sender_ranks) {
             std::size_t peer_descriptor_size = 0;
-            distributed_context.recv(
+            distributed_context_->recv(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
                 Rank{rank},
                 Tag{0});
             std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
-            distributed_context.recv(
+            distributed_context_->recv(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(
-                cluster_, arch_, serialized_peer_desc, using_mock_cluster_desc_);
+                cluster_, distributed_context_, arch_, serialized_peer_desc, using_mock_cluster_desc_);
             this->merge(std::move(peer_desc));
         }
     }
-    distributed_context.barrier();
+    distributed_context_->barrier();
 }
 
 void PSD::generate_cross_host_connections() {
@@ -690,7 +693,7 @@ std::string PSD::my_host_name() const {
     if (all_hostnames_unique_) {
         return get_host_name();
     }
-    auto my_rank = *(tt::tt_metal::MetalContext::instance().global_distributed_context().rank());
+    auto my_rank = *(distributed_context_->rank());
     return get_host_name() + "_" + std::to_string(my_rank);
 }
 
