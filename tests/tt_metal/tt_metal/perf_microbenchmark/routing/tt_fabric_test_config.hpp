@@ -409,6 +409,7 @@ private:
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test) {
         TestConfig resolved_test;
         resolved_test.name = parsed_test.name;
+        resolved_test.parametrized_name = parsed_test.parametrized_name;
         resolved_test.fabric_setup = parsed_test.fabric_setup;
         resolved_test.on_missing_param_policy = parsed_test.on_missing_param_policy;
         resolved_test.parametrization_params = parsed_test.parametrization_params;
@@ -515,9 +516,13 @@ private:
             ParsedTestConfig iteration_test = p_config;
             iteration_test.patterns.reset();  // Will be expanded into concrete senders.
 
+            // Initialize parametrized_name with original name if empty
+            if (iteration_test.parametrized_name.empty()) {
+                iteration_test.parametrized_name = iteration_test.name;
+            }
             if (max_iterations > 1) {
-                // Use optimized string concatenation utility
-                detail::append_with_separator(iteration_test.name, "_", "iter", i);
+                // Use optimized string concatenation utility for parametrized name
+                detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", i);
             }
 
             iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
@@ -595,8 +600,12 @@ private:
                             // Explicitly preserve benchmark_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
 
-                            // Update test name to include parameter name and value
-                            detail::append_with_separator(next_config.name, "_", param_name, value);
+                            // Initialize parametrized_name with original name if empty
+                            if (next_config.parametrized_name.empty()) {
+                                next_config.parametrized_name = next_config.name;
+                            }
+                            // Update parametrized name to include parameter name and value
+                            detail::append_with_separator(next_config.parametrized_name, "_", param_name, value);
 
                             ParsedTrafficPatternConfig param_default;
                             if (param_name == "ftype") {
@@ -617,8 +626,13 @@ private:
                             // Explicitly preserve benchmark_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
 
-                            // Update test name to include parameter name and value
-                            detail::append_with_separator(next_config.name, "_", param_name, std::to_string(value));
+                            // Initialize parametrized_name with original name if empty
+                            if (next_config.parametrized_name.empty()) {
+                                next_config.parametrized_name = next_config.name;
+                            }
+                            // Update parametrized name to include parameter name and value
+                            detail::append_with_separator(
+                                next_config.parametrized_name, "_", param_name, std::to_string(value));
 
                             if (param_name == "num_links") {
                                 // num_links is part of fabric_setup, not traffic pattern defaults
@@ -1461,7 +1475,13 @@ private:
     static void to_yaml(YAML::Emitter& out, const TestConfig& config) {
         out << YAML::BeginMap;
         out << YAML::Key << "name";
-        out << YAML::Value << config.name;
+        out << YAML::Value << config.parametrized_name;  // Use parametrized name for readability
+
+        // Optionally include original base name as metadata if different
+        if (!config.name.empty() && config.name != config.parametrized_name) {
+            out << YAML::Key << "base_name";
+            out << YAML::Value << config.name;  // Original name for reference
+        }
 
         if (config.seed != 0) {
             out << YAML::Key << "seed";
