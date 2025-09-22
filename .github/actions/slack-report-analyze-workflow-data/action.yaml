@@ -40,34 +40,14 @@ runs:
           else
             "Malformed regressions payload"
           end' "$tmp_file")
-
-        # MINIMAL CHANGE: Define message parts and build a Block Kit payload
-        # 1. Define the components of the message as separate variables
-        HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
-        ALERT_RAW='${{ inputs.alert_all_message }}'
-        ALERT=$(printf '%b' "$ALERT_RAW") # Safely interprets newlines like \n
-
-        # 2. Build the payload using blocks for guaranteed line breaks, with text fallback
-        PAYLOAD=$(jq -cn \
-          --arg header "$HEADER" \
-          --arg body "$TEXT" \
-          --arg alert "$ALERT" \
-          '
-          (
-            [
-              { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
-              { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
-            ]
-            + (if ($alert | length > 0) then
-                 [ { "type": "divider" }, { "type": "section", "text": { "type": "mrkdwn", "text": $alert } } ]
-               else [] end)
-          ) as $blocks
-          | {
-              text: ($header + "\n" + $body + (if $alert == "" then "" else "\n\n" + $alert end)),
-              blocks: $blocks
-            }
-        ')
-
+        AGG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        ALERT='${{ inputs.alert_all_message }}'
+        ALERT_SECTION=""
+        if [ -n "$ALERT" ]; then
+          ALERT_SECTION="\n\n$ALERT"
+        fi
+        FULL_TEXT="Aggregate Workflow Data run: <${AGG_URL}|this run> ${TEXT}${ALERT_SECTION}"
+        PAYLOAD=$(jq -cn --arg text "$FULL_TEXT" '{text:$text}')
         echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
 
     - name: Report Github Pipeline Status Slack Action
