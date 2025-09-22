@@ -125,9 +125,9 @@ add_custom_command(
 )
 list(APPEND IMPL_SRC ${INSPECTOR_RPC_GENERATED_SOURCE})
 
-# Disable clang-tidy for generated protobuf files
+# Disable clang-tidy for generated Inspector files
 set_source_files_properties(
-    ${INSPECTOR_RPC_GENERATED_SOURCE} ${INSPECTOR_RPC_GENERATED_HEADER}
+    ${INSPECTOR_RPC_GENERATED_SOURCE} ${INSPECTOR_RPC_GENERATED_HEADER} ${INSPECTOR_RPC_CAPNP_SOURCES}
     PROPERTIES
         SKIP_LINTING
             TRUE
