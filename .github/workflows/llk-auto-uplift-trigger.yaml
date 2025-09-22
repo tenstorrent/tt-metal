@@ -582,4 +582,3 @@ jobs:
 
           echo "✅ Updated PR body with test status"
           echo "✅ PR #$PR_NUMBER ready for review"
-          echo "✅ Auto-merge enabled"
