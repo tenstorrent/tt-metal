@@ -134,8 +134,6 @@ ttsl::hash::hash_t RMSNormBackwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
-    // TODO(maciek): Consider adding gamma shape to the hash as well. It is not strictly necessary, as gamma shape is
-    // derived from input shape, but it would make the hash more robust to changes in the code I guess.
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormBackwardDeviceOperation>(
         args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
 
