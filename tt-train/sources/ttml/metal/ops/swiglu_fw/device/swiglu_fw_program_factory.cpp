@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,9 @@
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <iostream>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <vector>
 
 #include "metal/ops/common/program_utils.hpp"
 
@@ -179,20 +180,21 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
 
     // TODO(maciek): Optimize memory access to minimize DRAM reads and redundant computation.
     // Key optimization ideas:
-    // 1. Cache M[r,:] in L1 memory if possible—this avoids recomputing M[r,:] for each matmul with W2.
-    // 2. Cache X[r,:] in L1 memory if possible—this avoids repeatedly streaming X[r,:] from DRAM for every M[r,:]
+    // 1. Cache M[r, :] in L1 memory if possible—this avoids recomputing M[r, :] for each matmul with W2.
+    // 2. Cache X[r, :] in L1 memory if possible—this avoids repeatedly streaming X[r, :] from DRAM for every M[r, :]
     // computation. Leveraging L1 caching for these tiles could significantly improve performance by reducing DRAM
-    // bandwidth pressure. Currently, all data is streamed from DRAM in blocks, and M[r,:] is recomputed each time it is
-    // needed.
+    // bandwidth pressure. Currently, all data is streamed from DRAM in blocks, and M[r, :] is recomputed each time it
+    // is needed.
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
 
-    // NOTE(maciek): It is likely that there is no way we can benefit from fp32 data type. The tricky things are:
-    // - input CBs must be bf16
-    // - output CBs must be bf16
-    // - matmul_tiles supports only one data format for both input and output CBs (otherwise produces some NaNs/infs)
-    // - matmul_tiles and accumulation is done on FPU, which supports only bfloat16
+    // NOTE(maciek):
+    // - fp32 input/output CBs are possible, but here both are always bf16 to match pipeline formats.
+    // - matmul_tiles seems to require matching input/output CB dtypes, otherwise NaNs/infs may occur.
+    //   TODO(maciek): make minimal repro and report if this is a bug.
+    // - Matmul runs on FPU; with fp32_dest_acc_en, accumulation is fp32.
+    // - Using all CBs as fp32 showed no observable precision improvement in tests.
     [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_w1 = create_circular_buffer(
@@ -258,11 +260,16 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     }
 
     SwiGLUForwardKernels kernels;
-    // Q: consider what kind of compiled time args should be passed
-    kernels.reader =
-        create_reader_kernel(program, all_cores, {block_size, Wt, hidden_Wt, mask_w, mask_hw}, {}, kReaderKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{block_size, Wt, hidden_Wt, mask_w, mask_hw};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(w1_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(w2_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(w3_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(program, all_cores, {block_size, Wt}, {}, kWriterKernelPath);
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(swiglu_buffer).append_to(writer_compile_time_args);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for swiglu_fw

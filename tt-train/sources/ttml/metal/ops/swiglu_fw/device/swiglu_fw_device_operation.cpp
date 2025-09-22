@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -105,11 +105,26 @@ tensor_return_value_t SwiGLUForwardDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t SwiGLUForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
+    const auto& input = tensor_args.input;
+    const auto& input_logical_shape = input.logical_shape();
+    const auto& w1 = tensor_args.w1;
+    const auto& w1_logical_shape = w1.logical_shape();
+    const auto& w2 = tensor_args.w2;
+    const auto& w2_logical_shape = w2.logical_shape();
+    const auto& w3 = tensor_args.w3;
+    const auto& w3_logical_shape = w3.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SwiGLUForwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args,
+        program_factory.index(),
+        input.dtype(),
+        input_logical_shape,
+        w1.dtype(),
+        w1_logical_shape,
+        w2.dtype(),
+        w2_logical_shape,
+        w3.dtype(),
+        w3_logical_shape);
 
     return hash;
 }
