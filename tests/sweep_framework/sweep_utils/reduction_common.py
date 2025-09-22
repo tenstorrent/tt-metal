@@ -36,7 +36,10 @@ def run_sum(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    dim = dim % len(input_shape)
+    if dim is None:
+        pass
+    else:
+        dim = dim % len(input_shape)
 
     torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
@@ -74,7 +77,10 @@ def run_prod(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    dim = dim % len(input_shape)
+    if dim is None:
+        pass
+    else:
+        dim = dim % len(input_shape)
 
     torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
