@@ -10,6 +10,7 @@
 #include "psd/psd.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "psd/psd_serialization.hpp"
+#include "psd/cluster_helpers.hpp"
 
 namespace tt::tt_metal {
 
@@ -33,7 +34,11 @@ static std::string get_mobo_name() {
     return motherboard;
 }
 
-static TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
+static TrayID get_tray_id_for_chip(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    chip_id_t chip_id,
+    const std::string& mobo_name,
+    bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
@@ -43,16 +48,17 @@ static TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_na
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = tt::tt_metal::MetalContext::instance().get_cluster().get_bus_id(chip_id);
+    auto bus_id = get_bus_id(cluster, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
     return TrayID{tray_id};
 }
 
-static std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id, bool using_mock_cluster_desc) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto cluster_desc = cluster.get_cluster_desc();
+static std::pair<TrayID, ASICLocation> get_asic_position(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip_id, bool using_mock_cluster_desc) {
+    const auto& cluster2 = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto cluster_desc = cluster2.get_cluster_desc();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
@@ -61,13 +67,13 @@ static std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id, bool
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
-        auto tray_id = get_tray_id_for_chip(chip_id, get_mobo_name(), using_mock_cluster_desc);
+        auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
-        if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+        if (cluster2.arch() == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
-            auto mmio_device = cluster.get_associated_mmio_device(chip_id);
-            auto tunnels = cluster.get_tunnels_from_mmio_device(mmio_device);
+            auto mmio_device = cluster2.get_associated_mmio_device(chip_id);
+            auto tunnels = cluster2.get_tunnels_from_mmio_device(mmio_device);
             for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
                 const auto& devices_on_tunnel = tunnels[tunnel];
                 auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
@@ -76,7 +82,7 @@ static std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id, bool
                     break;
                 }
             }
-        } else if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+        } else if (cluster2.arch() == tt::ARCH::BLACKHOLE) {
             // Query ASIC Location from the Cluster Descriptor for BH.
             asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
         } else {
@@ -95,7 +101,8 @@ struct EthEndpoint {
 
 }  // namespace
 
-PSD::PSD(bool run_discovery, bool using_mock_cluster_desc) : using_mock_cluster_desc_(using_mock_cluster_desc) {
+PSD::PSD(const std::unique_ptr<tt::umd::Cluster>& cluster, bool run_discovery, bool using_mock_cluster_desc) :
+    cluster_(cluster), using_mock_cluster_desc_(using_mock_cluster_desc) {
     if (run_discovery) {
         this->run_discovery();
     }
@@ -200,7 +207,7 @@ void PSD::run_local_discovery() {
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
-        auto [tray_id, asic_location] = get_asic_position(src, using_mock_cluster_desc_);
+        auto [tray_id, asic_location] = get_asic_position(cluster_, src, using_mock_cluster_desc_);
         asic_descriptors_[src_unique_id] =
             ASICDescriptor{TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
@@ -351,7 +358,8 @@ void PSD::exchange_metadata(bool issue_gather) {
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
-            auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
+            auto peer_desc = deserialize_physical_system_descriptor_from_bytes(
+                cluster_, serialized_peer_desc, using_mock_cluster_desc_);
             this->merge(std::move(peer_desc));
         }
     }

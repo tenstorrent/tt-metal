@@ -15,6 +15,10 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
+namespace tt::umd {
+class Cluster;
+}
+
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
@@ -119,7 +123,9 @@ struct PhysicalConnectivityGraph {
 
 class PSD {
 public:
-    PSD(bool run_discovery = true, bool use_mock_cluster_desc = false);
+    PSD(const std::unique_ptr<tt::umd::Cluster>& cluster,
+        bool run_discovery = true,
+        bool use_mock_cluster_desc = false);
     void run_discovery(bool run_global_discovery = true);
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
@@ -171,6 +177,7 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
+    const std::unique_ptr<tt::umd::Cluster>& cluster_;
     bool using_mock_cluster_desc_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;

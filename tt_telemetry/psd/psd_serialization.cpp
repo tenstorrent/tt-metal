@@ -8,6 +8,8 @@
 #include "psd/psd.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
 
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
+
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
@@ -193,8 +195,10 @@ void physical_system_descriptor_to_proto(const PSD& descriptor, tt::fabric::prot
 
 // Convert protobuf to PSD
 std::unique_ptr<PSD> proto_to_physical_system_descriptor(
-    const tt::fabric::proto::PSD& proto_desc, bool using_mock_cluster_desc) {
-    auto descriptor = std::make_unique<PSD>(false, using_mock_cluster_desc);  // Don't run discovery
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const tt::fabric::proto::PSD& proto_desc,
+    bool using_mock_cluster_desc) {
+    auto descriptor = std::make_unique<PSD>(cluster, false, using_mock_cluster_desc);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -288,13 +292,14 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PSD& de
     return result;
 }
 
-PSD deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data, bool using_mock_cluster_desc) {
+PSD deserialize_physical_system_descriptor_from_bytes(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, const std::vector<uint8_t>& data, bool using_mock_cluster_desc) {
     tt::fabric::proto::PSD proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PSD from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc, using_mock_cluster_desc));
+    return std::move(*proto_to_physical_system_descriptor(cluster, proto_desc, using_mock_cluster_desc));
 }
 
 }  // namespace tt::tt_metal
