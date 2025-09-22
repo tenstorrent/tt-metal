@@ -31,6 +31,7 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 constexpr uint32_t momentum = get_compile_time_arg_val(3);
+constexpr uint32_t one_minus_dampening = get_compile_time_arg_val(4);
 
 inline void pack_and_push_two_cbs(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
     cb_reserve_back(cb_output_1, block_size);
@@ -65,9 +66,8 @@ void MAIN {
                 const uint32_t grad_register = block_idx;
                 copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
 
-                // TODO: implement dampening
-                // binop_with_scalar_tile_init();
-                // mul_unary_tile(grad_register, dampening);
+                binop_with_scalar_tile_init();
+                mul_unary_tile(grad_register, one_minus_dampening);
 
                 copy_tile_init(cb_momentum_in_idx);
                 const uint32_t momentum_register = block_size + block_idx;
