@@ -1113,6 +1113,12 @@ uint32_t estimate_halo_output_elems(
     return approx_max_halo_size;
 };
 
+// Decide whether to slice along height or width based on input dimensions and output layout
+// We ideally want to slice along the width dimension as it results in smaller halo size
+// However, in case of very tall and narrow inputs, slicing along height is preferred to avoid
+// very small slice sizes
+// Additionally, for tiled outputs, there is a constraint that each slice's width must be a multiple of TILE_HEIGHT
+// In this case, slicing along height is preferred to avoid this constraint.
 Conv2dSliceConfig::SliceType determine_conv_slice_type(
     uint32_t input_height, uint32_t input_width, Layout output_layout) {
     if (output_layout == Layout::ROW_MAJOR) {
@@ -1127,8 +1133,7 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
         if (input_width < 200) {
             return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
         } else {
-            float threshold_ratio = 1;
-            if (input_height > input_width * threshold_ratio) {
+            if (input_height > input_width) {
                 return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
             }
             return Conv2dSliceConfig::SliceType::DRAM_WIDTH;

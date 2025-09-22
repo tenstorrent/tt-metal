@@ -265,5 +265,5 @@ def test_conv_dram(
         output_layout=input_layout,
         run_twice=True,
         fast_compare=True,
-        use_dram=True,
+        use_dram_slicing=True,
     )
