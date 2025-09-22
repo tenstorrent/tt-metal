@@ -70,34 +70,33 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - TILE, ROW_MAJOR
-
+                      - TILE, ROW_MAJOR
 
                 .. list-table:: weight (gamma) and bias (beta)
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 .. list-table:: input_mask
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16, BFLOAT8_B
-                        - TILE
+                      - TILE
 
                 .. list-table:: output_tensor
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - TILE, ROW_MAJOR
+                      - TILE, ROW_MAJOR
 
             Limitations:
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
