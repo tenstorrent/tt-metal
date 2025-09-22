@@ -1773,7 +1773,9 @@ def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     ],
 )
 def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
-    in_data = torch.tensor([float("-inf"), float("inf"), float("nan"), 5], dtype=torch_dtype)
+    in_data = torch.tensor(
+        [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45], dtype=torch_dtype
+    )
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn_op(input_tensor)
