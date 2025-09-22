@@ -74,7 +74,6 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* momentum_buffer_in,
     const tt::tt_metal::Buffer* momentum_buffer_out,
     const float lr,
-    const float momentum,
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -138,6 +137,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     const auto& lr = operation_attributes.lr;
     const auto& momentum = operation_attributes.momentum;
     const auto& dampening = operation_attributes.dampening;
+    const auto& weight_decay = operation_attributes.weight_decay;
 
     auto* device = param_in.device();
 
@@ -264,7 +264,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         block_size,                 // per_core_block_size
         Wt,                         // num_inner / TILE_W
         std::bit_cast<uint32_t>(momentum),
-        std::bit_cast<uint32_t>(1.0f - dampening)};
+        std::bit_cast<uint32_t>(1.0f - dampening),
+        std::bit_cast<uint32_t>(weight_decay)};
 
     kernels.compute_group_1 = create_compute_kernel(
         program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
@@ -275,7 +276,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
             block_size,                 // per_core_block_size
             Wt,                         // num_inner / TILE_W
             std::bit_cast<uint32_t>(momentum),
-            std::bit_cast<uint32_t>(1.0f - dampening)};
+            std::bit_cast<uint32_t>(1.0f - dampening),
+            std::bit_cast<uint32_t>(weight_decay)};
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
@@ -292,7 +294,6 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         momentum_in_buffer,
         momentum_out_buffer,
         lr,
-        momentum,
         output_buffer,
         num_cores,
         num_cores_y,
