@@ -548,7 +548,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
     ttnn::distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     ZoneScoped;

@@ -28,7 +28,7 @@ Tensor create_device_tensor_from_host_data(
     const host_buffer_data_type& host_data_type,
     std::function<HostBuffer(DataType)> get_host_data,
     ttnn::distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper);
 }

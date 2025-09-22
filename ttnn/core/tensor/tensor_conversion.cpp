@@ -61,7 +61,7 @@ Tensor create_typed_tt_tensor_from_host_data(
     const HostBuffer& host_data,
     const TensorSpec& tensor_spec,
     ttnn::distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     TT_FATAL(
@@ -115,7 +115,7 @@ Tensor create_tt_tensor_from_host_data(
     const HostBuffer& host_data,
     const TensorSpec& tensor_spec,
     ttnn::distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     auto create_concrete = [&]<typename T>() {
@@ -144,7 +144,7 @@ Tensor convert_host_buffer_to_tt_tensor_on_device(
     const HostBuffer& host_data,
     const TensorSpec& tensor_spec,
     ttnn::distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     const TensorPreparedConversion& strategy) {
@@ -186,7 +186,7 @@ Tensor convert_host_buffer_to_tt_tensor_on_host(
     const HostBuffer& host_data,
     const TensorSpec& tensor_spec,
     ttnn::distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     ZoneScoped;
@@ -426,7 +426,7 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
     const host_buffer_data_type& host_data_type,
     std::function<HostBuffer(DataType)> get_host_data,
     ttnn::distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     auto strategy = prepare_tensor_conversion(host_data_type, tensor_spec, device != nullptr);
