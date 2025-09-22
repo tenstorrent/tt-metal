@@ -924,7 +924,10 @@ class YoloV9:
         )  # 1
         self.repncspelan4_1 = TtnnRepncspelan4(device, parameters.conv_args[2], parameters, "model.2")  # 2
         self.adown_1 = TtnnADown(
-            device, parameters.conv_args[3], parameters, "model.3", use_1d_systolic_array=False
+            device,
+            parameters.conv_args[3],
+            parameters,
+            "model.3",
         )  # 3
         self.repncspelan4_2 = TtnnRepncspelan4(device, parameters.conv_args[4], parameters, "model.4")  # 4
         self.adown_2 = TtnnADown(device, parameters.conv_args[5], parameters, "model.5")  # 5
@@ -933,9 +936,7 @@ class YoloV9:
         self.repncspelan4_4 = TtnnRepncspelan4(device, parameters.conv_args[8], parameters, "model.8")  # 8
         self.ttnn_sppelan = TtnnSPPELAN(device, parameters.conv_args[9], parameters, "model.9")  # 9
         self.repncspelan4_5 = TtnnRepncspelan4(device, parameters.conv_args[12], parameters, "model.12")  # 12
-        self.repncspelan4_6 = TtnnRepncspelan4(
-            device, parameters.conv_args[15], parameters, "model.15", use_1d_systolic_array=False
-        )  # 15
+        self.repncspelan4_6 = TtnnRepncspelan4(device, parameters.conv_args[15], parameters, "model.15")  # 15
         self.adown_6 = TtnnADown(device, parameters.conv_args[16], parameters, "model.16")  # 16
         self.repncspelan4_7 = TtnnRepncspelan4(device, parameters.conv_args[18], parameters, "model.18")  # 18
         self.adown_7 = TtnnADown(device, parameters.conv_args[19], parameters, "model.19")  # 19
@@ -984,10 +985,10 @@ class YoloV9:
         x = ttnn.upsample(x, scale_factor=2)  # 13
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x = concat(-1, True, x, x4)  # 14
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x4)
 
-        x = interleaved_to_sharded(x)
+        # x = interleaved_to_sharded(x)
         x = self.repncspelan4_6(x)  # 15
         x16 = x
         x = self.adown_6(x)  # 16
