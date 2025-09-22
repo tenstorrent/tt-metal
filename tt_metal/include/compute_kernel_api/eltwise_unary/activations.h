@@ -73,7 +73,7 @@ ALWI void softsign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softsign_init
 */
 // clang-format on
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
-    MATH((llk_math_eltwise_unary_sfpu_celu<APPROX, ckernel::ActivationType::Celu>(idst, alpha, alpha_recip)));
+    MATH((llk_math_eltwise_unary_sfpu_celu<APPROX, DST_ACCUM_MODE>(idst, alpha, alpha_recip)));
 }
 
 /**
