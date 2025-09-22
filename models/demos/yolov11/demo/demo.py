@@ -262,7 +262,7 @@ def test_demo_dataset(device, model_type, use_weights_from_ultralytics, res, mod
 @pytest.mark.parametrize(
     "model_type",
     (
-        # "torch_model", # Uncomment to run the demo with torch model
+        "torch_model",  # Uncomment to run the demo with torch model
         "tt_model",
     ),
 )
