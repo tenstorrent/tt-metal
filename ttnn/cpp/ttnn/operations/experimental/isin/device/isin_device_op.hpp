@@ -11,10 +11,6 @@
 
 namespace ttnn::operations::experimental::isin {
 
-using namespace common;
-using namespace tt;
-using namespace tt::tt_metal;
-
 struct IsInDeviceOperation {
     using operation_attributes_t = operation_attributes_t;
     using tensor_args_t = tensor_args_t;
@@ -34,9 +30,9 @@ struct IsInDeviceOperation {
     static invocation_result_t invoke(
         const Tensor& elements,
         const Tensor& test_elements,
-        const uint32_t& single_fetch_subchunk_size,
-        const bool& assume_unique,
-        const bool& invert,
+        uint32_t single_fetch_subchunk_size,
+        bool assume_unique,
+        bool invert,
         const std::optional<Tensor>& optional_out);
 };
 
