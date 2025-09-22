@@ -233,7 +233,7 @@ def get_ops(timeseries):
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
                         or (
-                            risc == "CORE_AGG"
+                            risc == "TENSIX_RISC_AGG"
                             and timerID["zone_name"] == "TRACE-FW"
                             and timerID["type"] == "ZONE_START"
                         )
@@ -257,7 +257,11 @@ def get_ops(timeseries):
                     elif (
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                        or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
+                        or (
+                            risc == "TENSIX_RISC_AGG"
+                            and timerID["zone_name"] == "TRACE-FW"
+                            and timerID["type"] == "ZONE_END"
+                        )
                     ):
                         assert (
                             len(opCores[core]) == 1
@@ -273,7 +277,7 @@ def get_ops(timeseries):
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
                         or (
-                            risc == "CORE_AGG"
+                            risc == "TENSIX_RISC_AGG"
                             and timerID["zone_name"] == "TRACE-FW"
                             and timerID["type"] == "ZONE_START"
                         )
@@ -284,7 +288,11 @@ def get_ops(timeseries):
                 if (
                     (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
                     or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                    or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
+                    or (
+                        risc == "TENSIX_RISC_AGG"
+                        and timerID["zone_name"] == "TRACE-FW"
+                        and timerID["type"] == "ZONE_END"
+                    )
                 ):
                     opIsDone = True
             ops[-1]["timeseries"].append(ts)
