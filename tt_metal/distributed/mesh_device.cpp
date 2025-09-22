@@ -474,7 +474,11 @@ IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
 }
 
-std::vector<IDevice*> MeshDevice::get_devices() const { return view_->get_devices(); }
+std::vector<IDevice*> MeshDevice::get_devices() const {
+    auto devices = view_->get_devices();
+    TT_ASSERT(!devices.empty(), "Mesh Device should have at least 1 IDevice");
+    return devices;
+}
 
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
