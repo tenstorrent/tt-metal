@@ -10,12 +10,6 @@
 #include <fmt/format.h>
 
 using namespace tt::tt_metal;
-
-// #define py_log(...) \
-//     std::cout << fmt::format("{}:{} {} {}", __FILE__, __LINE__, __func__, fmt::format(__VA_ARGS__)) << std::endl;
-
-#define py_log(...)
-
 namespace {
 
 // Host buffer does not have an API to get the original number of elements,
@@ -180,7 +174,6 @@ Tensor convert_host_buffer_to_tt_tensor_on_device(
     if (output.dtype() != tensor_spec.data_type()) {
         // Need to perform final data conversion on device, typecast requires TILE layout.
         set_layout(Layout::TILE);
-        py_log("typecast to type {}", tensor_spec.data_type());
         output = ttnn::typecast(output, tensor_spec.data_type());
     }
 
@@ -273,10 +266,10 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
     // Mapping
     // `{input_torch_type, expected_ttnn_type, expected_layout}` -> `{on-host_tensor_layout, on-host_tensor_data_type,
     // torch_data_conversion}`
-    using HT = host_buffer_data_type;
+
     static std::unordered_map<HostBufferConversionInput, TensorPreparedConversion, HostBufferConversionInputHash>
         conversion_map = {
-            // clang-format off
+    // clang-format off
 
             // At the moment there are no cases that can be safely implemented with on-device
             // conversion, and bfloat16 cases are to be implemented in a follow-up PR to avoid
@@ -285,128 +278,131 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
             // in the other parts of the library
 
             // The mapping structure is
-            // {<Input-Type>, <Target-Type>, <Target-Layout>} -> {<Layout-To-Construct-On-Host>, <Type-To-Construct-On-Device>}
+            // {<Input-Type>, <Target-Type>, <Target-Layout>} -> {<Layout-To-Construct-On-Host>, <Type-To-Cast-On-Host>}
 
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT16, Layout::ROW_MAJOR},  TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT32 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::FLOAT64,      DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT16,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT32,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT8 }},
-            {HostBufferConversionInput{HT::INT64,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT8 }},
-            {HostBufferConversionInput{HT::UINT8,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+#if false
+            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT16, Layout::ROW_MAJOR},  {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::BFLOAT16,     DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT16,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT32,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::FLOAT64,      DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {{host_buffer_data_type::INT16,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT16,        DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT32,        DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::INT64,        DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::UINT16,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::INT64,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::UINT8 }},
+            {{host_buffer_data_type::INT64,        DataType::UINT8,     Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {{host_buffer_data_type::UINT8,        DataType::BFLOAT16,  Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::BFLOAT4_B, Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::BFLOAT8_B, Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::FLOAT32,   Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::FLOAT32,   Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::INT32,     Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::UINT8,        DataType::UINT16,    Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::UINT16,    Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::TILE,      DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32 }},
+            {{host_buffer_data_type::UINT8,        DataType::UINT8,     Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::UINT8 }},
+            {{host_buffer_data_type::UINT8,        DataType::UINT8,     Layout::TILE},      {Layout::TILE,      DataType::UINT8 }},
+#endif
+
             // clang-format on
         };
 
@@ -435,7 +431,6 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     auto strategy = prepare_tensor_conversion(host_data_type, tensor_spec, device != nullptr);
     Tensor output;
-    py_log("entry");
 
     DataType on_device_conversion_target;
     if (strategy) {
@@ -456,17 +451,7 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
         get_element_count(host_data),
         tensor_spec.logical_shape().volume());
 
-    if (device != nullptr) {
-        TT_FATAL(
-            strategy.has_value(),
-            "No strategy defined for {} {} {}",
-            host_data_type,
-            tensor_spec.data_type(),
-            tensor_spec.layout());
-    }
-
     if (strategy) {
-        py_log("has strategy");
         if (host_data.view_bytes().empty()) {
             // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
             // the tensor must be constructed on host.
@@ -477,7 +462,6 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
                 host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper, strategy.value());
         }
     } else {
-        py_log("no strategy");
         output =
             convert_host_buffer_to_tt_tensor_on_host(host_data, tensor_spec, device, cq_id, pad_value, mesh_mapper);
     }
