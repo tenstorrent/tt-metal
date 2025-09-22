@@ -656,7 +656,39 @@ A virtual channel is compirsed of several buffers used to transport incoming and
 
 TT-Fabric supports one user visible bidirectional virtual channel per fabric router. The number of virtual channels as well as the number of sender and receiver channels in a virtual channel depens on fabric topology. The number of slots in sender/receiver channel depend on amount of memory available for buffering.
 
-Basic architecture of a 2D mesh virtual channel is shown in the following diagram. In a 2D mesh, the outgoing traffic on a router is either passthrough packets from three of the fabric node's neighbors or the traffic originating from node's worker. Hence the router requires 4 Sender Channels. Fabric router round-robbins through the 4 sender channels and forwards packets over ethernet. A virtual channel only requires 1 Receiver channel. Fabric router examines the headers of packets arriving in the Receiver Channel to make processing decisions. A packet in the receiver channel might be passing through the router's node, or destined for the router's node or both (in the case of a multi-cast packet)
+### 3.1.1 1D Line Virtual Channel <a id="2dmvc"></a>
+Basic architecture of a 1D line virtual channel is shown in the following diagram. In a 1D line, the outgoing traffic on a router is either passthrough packets from the fabric node's neighbor or the traffic originating from node's worker. Hence the router requires 2 Sender Channels. Fabric router round-robbins through the 2 sender channels and forwards packets over ethernet. A virtual channel only requires 1 Receiver channel. Fabric router examines the headers of packets arriving in the Receiver Channel to make processing decisions. A packet in the receiver channel might be passing through the router's node, or destined for the router's node or both (in the case of a multi-cast packet)
+
+```
+                                        1D LINE VIRTUAL CHANNEL
+                                        ┌─────────────────────────────────────┐
+                                        │  SENDER CHANNELS (2)                │
+                                        │  ┌───────────────────────────────┐  │
+                                        │  │ Sender Channel 0 (8 slots)    │  │
+                                        │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │
+                                    ╔═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶═════════════╗
+                                    ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │      ║
+                                    ║   │  └───────────────────────────────┘  │      ║
+                                    ║   │  ┌───────────────────────────────┐  │      ║
+                                    ║   │  │ Sender Channel 1 (8 slots)    │  │      ║
+            ┌───────────────────┐   ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║
+            │  Network-On-Chip  ├═▶═╩═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶═════════════╩══════▶┌──────────────────┐
+            └───────────────┬───┘       │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │              │  E T H E R N E T │◀═══▶
+                            ▲           │  └───────────────────────────────┘  │      ╔═════◀═└──────────────────┘
+                            ║           ├─────────────────────────────────────┤      ║
+                            ║           │  RECEIVER CHANNEL (1)               │      ║  
+                            ║           │  ┌───────────────────────────────┐  │      ║  
+                            ║           │  │ Receiver Channel 0 (16 slots) │  │      ║  
+                            ║           │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║  
+                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════╝  
+                                        │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
+                                        │  └───────────────────────────────┘  │
+                                        └─────────────────────────────────────┘
+
+```
+
+### 3.1.1 2D Mesh Virtual Channel <a id="2dmvc"></a>
+Basic architecture of a 2D mesh virtual channel is shown in the following diagram. In a 2D mesh, the outgoing traffic on a router is either passthrough packets from three of the fabric node's neighbors or the traffic originating from node's worker. Hence the router requires 4 Sender Channels. Fabric router iterates over the channels and processes the packets similar to 1D topology.
 
 
 ```
@@ -697,6 +729,7 @@ Basic architecture of a 2D mesh virtual channel is shown in the following diagra
                                         │  └───────────────────────────────┘  │
                                         └─────────────────────────────────────┘
 ```
+
 
 The following table lists the sender/receiver channel counts for different fabric topologies.
 
