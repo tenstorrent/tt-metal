@@ -8,6 +8,13 @@ from typing import Optional, Tuple, Union
 import ttnn
 from models.demos.segformer.tt.ttnn_segformer_model import TtSegformerModel
 
+try:
+    pass
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 @dataclass
 class TtSegFormerImageClassifierOutput:

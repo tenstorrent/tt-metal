@@ -5,6 +5,13 @@
 import ttnn
 from models.demos.segformer.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSegformerDWConv:
     def __init__(self, parameters, dim):
@@ -37,6 +44,8 @@ class TtSegformerDWConv:
         height: int,
         width: int,
     ):
+        if use_signpost:
+            signpost(header="TtSegformerDWConv")
         if len(hidden_states.shape) == 3:
             batch_size, seq_len, num_channels = hidden_states.shape
         elif len(hidden_states.shape) == 4:
