@@ -138,6 +138,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     const auto& momentum = operation_attributes.momentum;
     const auto& dampening = operation_attributes.dampening;
     const auto& weight_decay = operation_attributes.weight_decay;
+    const auto& nesterov = operation_attributes.nesterov;
 
     auto* device = param_in.device();
 
@@ -265,7 +266,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         Wt,                         // num_inner / TILE_W
         std::bit_cast<uint32_t>(momentum),
         std::bit_cast<uint32_t>(1.0f - dampening),
-        std::bit_cast<uint32_t>(weight_decay)};
+        std::bit_cast<uint32_t>(weight_decay),
+        static_cast<uint32_t>(nesterov)};
 
     kernels.compute_group_1 = create_compute_kernel(
         program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
@@ -277,7 +279,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
             Wt,                         // num_inner / TILE_W
             std::bit_cast<uint32_t>(momentum),
             std::bit_cast<uint32_t>(1.0f - dampening),
-            std::bit_cast<uint32_t>(weight_decay)};
+            std::bit_cast<uint32_t>(weight_decay),
+            static_cast<uint32_t>(nesterov)};
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }

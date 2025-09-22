@@ -115,6 +115,7 @@ std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invok
     float momentum,
     float dampening,
     float weight_decay,
+    bool nesterov,
     const std::optional<ttnn::Tensor>& param_out,
     const std::optional<ttnn::Tensor>& momentum_in,
     const std::optional<ttnn::Tensor>& momentum_out) {
@@ -124,6 +125,7 @@ std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invok
             .momentum = momentum,
             .dampening = dampening,
             .weight_decay = weight_decay,
+            .nesterov = nesterov,
         },
         tensor_args_t{
             .param_in = param_in,
