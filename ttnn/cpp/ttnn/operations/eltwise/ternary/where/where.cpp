@@ -159,8 +159,7 @@ Tensor WhereOperation::invoke(
             // TSS case: tensor-scalar-scalar
             const auto& t_true = std::get<float>(value_true);
             const auto& t_false = std::get<float>(value_false);
-            std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
-                                                                      : std::optional<DataType>(predicate.dtype());
+
             unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
 
             return ttnn::operations::unary::Unary_chain::invoke(

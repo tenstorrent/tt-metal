@@ -64,7 +64,7 @@ void kernel_main() {
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(23);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(25);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(24);
 
     constexpr auto in0_args = TensorAccessorArgs<25>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
