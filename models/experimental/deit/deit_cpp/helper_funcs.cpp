@@ -22,8 +22,8 @@ ttnn::Tensor linear_transform(
     // auto output = ttnn::matmul(input, weight_transposed);
     
     // Add bias if provided
-    if (bias.has_value() && bias->get_layout() != ttnn::TILE_LAYOUT) {
-        bias = ttnn::to_layout(bias.value(), ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (ttnn::MeshDevice*)nullptr);
+    if (bias.has_value() && bias->layout() != ttnn::TILE_LAYOUT) {
+        bias = ttnn::to_layout(bias.value(), ttnn::TILE_LAYOUT, std::nullopt, std::nullopt);
     }
     
     // Perform linear transformation
@@ -79,7 +79,7 @@ ttnn::Tensor create_concrete(torch::Tensor &contiguous_tensor, tt::tt_metal::Ten
 template <typename T>
 tt::tt_metal::HostBuffer create_row_major_host_buffer(
     tt::tt_metal::HostBuffer host_buffer, const tt::tt_metal::TensorSpec& tensor_spec, const bool padded_output) {
-    assert((!tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec.has_value()) &&
+    assert((!tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value()) &&
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     if (padded_output) {
