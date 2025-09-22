@@ -25,7 +25,9 @@ namespace ll_api {
 
 namespace wormhole {
 
-int32_t get_static_tlb_index(CoreCoord target) {
+static constexpr uint32_t TENSIX_STATIC_TLB_START = 16;
+
+int32_t get_static_tlb_index_virtual(CoreCoord target) {
     bool is_eth_location =
         std::find(std::cbegin(tt::umd::wormhole::ETH_LOCATIONS), std::cend(tt::umd::wormhole::ETH_LOCATIONS), target) !=
         std::cend(tt::umd::wormhole::ETH_LOCATIONS);
@@ -75,6 +77,41 @@ int32_t get_static_tlb_index(CoreCoord target) {
     }
 }
 
+int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
+    auto eth_location = tt::umd::wormhole::ETH_LOCATIONS.at(target.y);
+    if (eth_location.y == 6) {
+        eth_location.y = 1;
+    }
+
+    if (eth_location.x >= 5) {
+        eth_location.x -= 1;
+    }
+    eth_location.x -= 1;
+
+    int flat_index = eth_location.y * 8 + eth_location.x;
+    int tlb_index = flat_index;
+    return tlb_index;
+}
+
+int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
+    return TENSIX_STATIC_TLB_START + target.y * 8 + target.x;
+}
+
+int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
+    if (target.coord_system == CoordSystem::VIRTUAL) {
+        return get_static_tlb_index_virtual({target.x, target.y});
+    }
+    if (target.coord_system == CoordSystem::LOGICAL) {
+        if (target.core_type == CoreType::ETH) {
+            return get_static_tlb_index_logical_eth({target.x, target.y});
+        }
+        if (target.core_type == CoreType::TENSIX) {
+            return get_static_tlb_index_logical_tensix({target.x, target.y});
+        }
+    }
+    return -1;
+}
+
 }  // namespace wormhole
 
 namespace blackhole {
@@ -85,7 +122,7 @@ static constexpr uint32_t NUM_DRAM_CHANNELS = 8;
 static constexpr uint32_t ETH_STATIC_TLB_START = 0;
 static constexpr uint32_t TENSIX_STATIC_TLB_START = 38;
 
-int32_t get_static_tlb_index(CoreCoord target) {
+int32_t get_static_tlb_index_virtual(CoreCoord target) {
     bool is_eth_location =
         std::find(
             std::cbegin(tt::umd::blackhole::ETH_LOCATIONS), std::cend(tt::umd::blackhole::ETH_LOCATIONS), target) !=
@@ -124,6 +161,39 @@ int32_t get_static_tlb_index(CoreCoord target) {
     return tlb_index;
 }
 
+int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
+    auto eth_location = tt::umd::blackhole::ETH_LOCATIONS.at(target.y);
+    eth_location.y--;
+    eth_location.x--;
+    if (eth_location.x >= 8) {
+        eth_location.x -= 2;
+    }
+
+    int y = eth_location.y;
+    int flat_index = y * 14 + eth_location.x;
+    int tlb_index = ETH_STATIC_TLB_START + flat_index;
+    return tlb_index;
+}
+
+int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
+    return TENSIX_STATIC_TLB_START + target.y * 14 + target.x;
+}
+
+int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
+    if (target.coord_system == CoordSystem::VIRTUAL) {
+        return get_static_tlb_index_virtual({target.x, target.y});
+    }
+    if (target.coord_system == CoordSystem::LOGICAL) {
+        if (target.core_type == CoreType::ETH) {
+            return get_static_tlb_index_logical_eth({target.x, target.y});
+        }
+        if (target.core_type == CoreType::TENSIX) {
+            return get_static_tlb_index_logical_tensix({target.x, target.y});
+        }
+    }
+    return -1;
+}
+
 // Returns last port of dram channel passed as the argument to align with dram_preferred_worker_endpoint
 // This core will be used for configuring 4GB TLB.
 tt_xy_pair ddr_to_noc0(unsigned i) {
@@ -134,7 +204,7 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 
 void configure_static_tlbs(
     tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
-    using get_static_tlb_index_ptr = std::int32_t (*)(tt_xy_pair);
+    using get_static_tlb_index_ptr = std::int32_t (*)(tt::umd::CoreCoord);
     get_static_tlb_index_ptr get_static_tlb_index;
 
     const uint32_t dynamic_tlb_count = 16;
@@ -165,7 +235,7 @@ void configure_static_tlbs(
     std::int32_t address = 0;
     // Setup static TLBs for all worker cores
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::LOGICAL)) {
-        auto tlb_index = get_static_tlb_index({core.x, core.y});
+        auto tlb_index = get_static_tlb_index(core);
         // TODO
         // Note: see issue #10107
         // Strict is less performant than Posted, however, metal doesn't presently
@@ -176,7 +246,7 @@ void configure_static_tlbs(
     }
     // Setup static TLBs for all eth cores
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::ETH, tt::umd::CoordSystem::LOGICAL)) {
-        auto tlb_index = get_static_tlb_index({core.x, core.y});
+        auto tlb_index = get_static_tlb_index(core);
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
 
