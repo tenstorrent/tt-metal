@@ -9,6 +9,13 @@ from models.demos.segformer.tt.common import Conv
 from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     input = ttnn.from_torch(input, ttnn.bfloat8_b)
@@ -49,6 +56,8 @@ class TtSegformerDecodeHead:
         self.config = config
 
     def __call__(self, device, encoder_hidden_states: ttnn.bfloat8_b, parameters) -> ttnn.Tensor:
+        if use_signpost:
+            signpost(header="TtSegformerDecodeHead")
         batch_size = encoder_hidden_states[-1].shape[0]
 
         all_hidden_states = ()

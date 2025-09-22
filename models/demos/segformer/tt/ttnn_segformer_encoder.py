@@ -9,6 +9,13 @@ import ttnn
 from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
 from models.demos.segformer.tt.ttnn_segformer_overlap_patch_embeddings import TtSegformerOverlapPatchEmbeddings
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 @dataclass
 class TtBaseModelOutput:
@@ -79,6 +86,8 @@ class TtSegformerEncoder:
         return_dict: Optional[bool] = True,
         parameters=None,
     ) -> Union[Tuple, TtBaseModelOutput]:
+        if use_signpost:
+            signpost(header="TtSegformerEncoder")
         all_hidden_states = () if output_hidden_states else None
         all_hidden_states_unfolded = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None

@@ -9,6 +9,13 @@ import ttnn
 from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
 from models.demos.segformer.tt.ttnn_segformer_model import TtSegformerModel
 
+try:
+    pass
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 @dataclass
 class TtSemanticSegmenterOutput:

@@ -8,6 +8,13 @@ from typing import Optional, Tuple, Union
 import ttnn
 from models.demos.segformer.tt.ttnn_segformer_encoder import TtSegformerEncoder
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 @dataclass
 class TtBaseModelOutput:
@@ -43,6 +50,8 @@ class TtSegformerModel:
         return_dict: Optional[bool] = None,
         parameters=None,
     ) -> Union[Tuple, TtBaseModelOutput]:
+        if use_signpost:
+            signpost(header="TtSegformerModel")
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states

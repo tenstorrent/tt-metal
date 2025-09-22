@@ -4,6 +4,13 @@
 
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 program_configs = {
     "linear_config_4096": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(4, 8),
@@ -55,6 +62,8 @@ class TtSegformerMLP:
         super().__init__()
 
     def __call__(self, device, hidden_states: ttnn.Tensor, parameters):
+        if use_signpost:
+            signpost(header="TtSegformerMLP")
         mm_f_x_strategy = ttnn.ShardStrategy.HEIGHT
         mm_f_x_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         mm_f_y = 8

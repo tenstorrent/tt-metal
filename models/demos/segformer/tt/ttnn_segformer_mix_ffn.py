@@ -5,6 +5,13 @@
 import ttnn
 from models.demos.segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSegformerMixFFN:
     def __init__(self, parameters, hidden_features):
@@ -12,6 +19,8 @@ class TtSegformerMixFFN:
         self.dwconv = TtSegformerDWConv(parameters["dwconv"], hidden_features)
 
     def __call__(self, device, hidden_states: ttnn.Tensor, height: int, width: int, parameters):
+        if use_signpost:
+            signpost(header="TtSegformerMixFFN")
         if len(hidden_states.shape) == 4:
             batch_size, __, seq_len, hidden_size = hidden_states.shape
         elif len(hidden_states.shape) == 3:

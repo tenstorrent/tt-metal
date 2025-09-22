@@ -5,6 +5,13 @@
 import ttnn
 from models.demos.segformer.tt.common import Conv
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSegformerEfficientSelfAttention:
     def __init__(self, hidden_size, num_attention_heads, parameters, sequence_reduction_ratio):
@@ -33,6 +40,8 @@ class TtSegformerEfficientSelfAttention:
         parameters,
         output_attentions=False,
     ):
+        if use_signpost:
+            signpost(header="TtSegformerEfficientSelfAttention")
         if len(hidden_states.shape) == 4:
             batch_size, __, seq_len, hidden_size = hidden_states.shape
         elif len(hidden_states.shape) == 3:
