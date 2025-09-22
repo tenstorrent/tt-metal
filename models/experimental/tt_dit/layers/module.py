@@ -13,7 +13,7 @@ import ttnn
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterator, Mapping
+    from collections.abc import Collection, Iterable, Iterator, Mapping
     from typing import Any
 
 
@@ -33,6 +33,9 @@ class Module:
 
     def named_parameters(self) -> Iterator[tuple[str, Parameter]]:
         yield from self._parameters.items()
+
+    def add_child(self, name: str, child: Module) -> None:
+        self._children[name] = child
 
     def __setattr__(self, name: str, value: Any) -> None:  # noqa: ANN401
         super().__setattr__(name, value)
@@ -134,6 +137,14 @@ class Module:
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         return self.forward(*args, **kwargs)
+
+
+class ModuleList(Module):
+    def __init__(self, modules: Iterable[Module] = ()) -> None:
+        super().__init__()
+
+        for i, m in enumerate(modules):
+            self.add_child(str(i), m)
 
 
 class Parameter:

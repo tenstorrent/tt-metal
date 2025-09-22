@@ -14,9 +14,10 @@ from ...layers.attention import all_gather
 from ...layers.embeddings import PatchEmbed
 from ...layers.feedforward import FeedForward
 from ...layers.linear import ColParallelLinear, Linear
-from ...layers.module import Module, Parameter
+from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import DistributedLayerNorm
 from ...layers.transformer_block import TransformerBlock
+from ...utils.substate import rename_substate
 from ...utils.tensor import bf16_tensor
 
 if TYPE_CHECKING:
@@ -51,14 +52,10 @@ class TimeTextProjection(Module):
         self.time_proj_factor = self._create_time_proj_factor(time_embed_dim)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        state["timestep_embedder"] = {
-            "ff1": state.get("timestep_embedder", {}).pop("linear_1"),
-            "ff2": state.get("timestep_embedder", {}).pop("linear_2"),
-        }
-        state["text_embedder"] = {
-            "ff1": state.get("text_embedder", {}).pop("linear_1"),
-            "ff2": state.get("text_embedder", {}).pop("linear_2"),
-        }
+        rename_substate(state, "timestep_embedder.linear_1", "timestep_embedder.ff1")
+        rename_substate(state, "timestep_embedder.linear_2", "timestep_embedder.ff2")
+        rename_substate(state, "text_embedder.linear_1", "text_embedder.ff1")
+        rename_substate(state, "text_embedder.linear_2", "text_embedder.ff2")
 
     def _create_time_proj_factor(self, num_channels: int) -> ttnn.Tensor:
         assert num_channels % 2 == 0
@@ -158,7 +155,7 @@ class MotifTransformer(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
         )
 
-        self.transformer_blocks = [
+        self.transformer_blocks = ModuleList(
             TransformerBlock(
                 dim=inner_dim,
                 num_heads=num_attention_heads,
@@ -171,7 +168,7 @@ class MotifTransformer(Module):
                 mesh_device=mesh_device,
             )
             for i in range(num_layers)
-        ]
+        )
 
         self.time_embed_out = Linear(
             inner_dim,
@@ -317,6 +314,7 @@ class MotifTransformer(Module):
             "attn.k_norm_x.weight": "attn.norm_k.weight",
             "attn.q_norm_c.weight": "attn.norm_added_q.weight",
             "attn.k_norm_c.weight": "attn.norm_added_k.weight",
+            "attn.q_scale": "attn.added_head_factors",
             "affine_params_c.projection.weight": "norm1_context.linear.weight",
             "affine_params_c.projection.bias": "norm1_context.linear.bias",
             "affine_params_x.projection.weight": "norm1.linear.weight",
@@ -388,8 +386,8 @@ class MotifTransformer(Module):
 
         ### Second, convert diffusers state dict to tt_dit state dict.
 
-        state["time_embed_out"] = state.get("norm_out", {}).pop("linear", {})  # chunks=2 if sharded
-        state["norm_out"] = state.get("norm_out", {}).pop("norm", {})
+        rename_substate(state, "norm_out.linear", "time_embed_out")  # chunks=2 if sharded
+        rename_substate(state, "norm_out.norm", "norm_out")
 
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
