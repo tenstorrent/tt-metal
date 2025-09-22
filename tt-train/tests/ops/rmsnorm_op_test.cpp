@@ -381,8 +381,8 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
 
     // Compare backward results
-    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 3e-2F));
-    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 2e-3F));
+    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 2e-3F));
 
     autograd::ctx().reset_graph();
 }
@@ -399,6 +399,10 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 // - Scale testing: small to very large tensor dimensions
 // - Training scenarios: realistic model shapes (NanoLlama, etc.)
 // ============================================================================
+
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
+    CompareKernelVsComposite({1U, 1U, 2U, 32U});
+}
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
@@ -463,10 +467,15 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
-// Test training-like shapes with realistic model dimensions
+// Test training-like shapes with NanoLlama dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
     // NanoLlama training shape: batch=64, seq_len=256, hidden_dim=384
     CompareKernelVsComposite({64U, 1U, 256U, 384U});
+}
+
+// Test training-like shapes with LLaMA 7B dimensions
+TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
+    CompareKernelVsComposite({1U, 1U, 512U, 4096U});
 }
 
 // Test small batch and sequence dimensions (non-1 values)
