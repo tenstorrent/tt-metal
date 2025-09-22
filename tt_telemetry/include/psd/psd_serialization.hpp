@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::umd {
 class Cluster;
@@ -26,6 +27,7 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PSD& de
 // Deserialize from protobuf binary format to PSD (byte vector)
 PSD deserialize_physical_system_descriptor_from_bytes(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::ARCH arch,
     const std::vector<uint8_t>& data,
     bool using_mock_cluster_desc = false);
