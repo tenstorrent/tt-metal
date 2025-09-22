@@ -418,10 +418,12 @@ class compile_only:
         self.mesh_device = mesh_device
 
     def __enter__(self):
+        ttnn._ttnn.graph.enable_compilation_in_no_dispatch()
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        ttnn.device.wait_for_compile_threadpool(self.mesh_device)
+        ttnn._ttnn.device.wait_for_compile_threadpool(self.mesh_device)
+        ttnn._ttnn.graph.disable_compilation_in_no_dispatch()
         self.captured_graph = ttnn.graph.end_graph_capture()
         return False
