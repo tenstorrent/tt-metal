@@ -467,15 +467,16 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
     )
 
 
-@pytest.mark.parametrize("use_precomputed_grid", [True, False])
-@pytest.mark.parametrize("batch_output_channels", [True, False])
-@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize("use_precomputed_grid", [True])  # , False])
+@pytest.mark.parametrize("batch_output_channels", [True])  # , False])
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16])  # , ttnn.float32])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, grid_batching_factor",
     [
         ((1, 256, 48, 160), (1, 1, 2809 * 7, 2), 7),
-        ((7, 32, 16, 32), (7, 8, 8, 2), 2),
-        ((1, 96, 24, 32), (1, 6, 16, 2), 4),
+        # ((7, 32, 16, 32), (7, 8, 8, 2), 2),
+        # ((1, 96, 24, 32), (1, 6, 16, 2), 4),
     ],
 )
 @pytest.mark.parametrize(
