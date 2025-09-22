@@ -1192,7 +1192,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
                 "T3K_Qwen2.5-Coder-32B": 173,
-                "T3K_Qwen2.5-72B": 240,
+                "T3K_Qwen2.5-72B": 257,
                 "T3K_Qwen3-32B": 166.5,
             }
             ci_target_decode_tok_s_u = {
