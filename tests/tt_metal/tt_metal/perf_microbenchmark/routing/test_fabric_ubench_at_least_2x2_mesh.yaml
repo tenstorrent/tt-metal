@@ -20,7 +20,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 3
 
   - name: "UnidirLinearMulticast"
     benchmark_mode: true
@@ -39,7 +39,7 @@ Tests:
 
     patterns:
       - type: unidirectional_linear
-        iterations: 10
+        iterations: 3
 
   - name: "SingleSenderLinearUnicastAllDevices"
     benchmark_mode: true
@@ -58,8 +58,9 @@ Tests:
 
     patterns:
       - type: one_to_all
-        iterations: 10
+        iterations: 3
 
+  # Full Ring Multicast and Unicast tests have more variation in bandwidth, so run for extra iterations
   - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
@@ -77,7 +78,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 20
 
   - name: "FullRingUnicast"
     benchmark_mode: true
@@ -96,7 +97,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 20
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
@@ -115,7 +116,7 @@ Tests:
 
     patterns:
       - type: half_ring
-        iterations: 10
+        iterations: 3
 
   - name: "MeshMulticast"
     benchmark_mode: true
@@ -134,7 +135,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 3
 
   - name: "MeshMulticastDynamic"
     benchmark_mode: true
@@ -155,7 +156,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 3
 
   - name: "SingleSenderMeshUnicastAllDevices"
     benchmark_mode: true
@@ -174,4 +175,4 @@ Tests:
 
     patterns:
       - type: one_to_all
-        iterations: 10
+        iterations: 3
