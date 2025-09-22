@@ -27,6 +27,7 @@ jobs:
         id: set-tag-name
         run: |
           echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
+          echo "image-tag-name=${GITHUB_REF_NAME//\//-}"
   publish-release-image:
     uses: ./.github/workflows/publish-release-image.yaml
     permissions:
@@ -37,6 +38,6 @@ jobs:
       - create-image-tag-name
     secrets: inherit
     with:
-      version: v0.63.0
+      version: 'v0.63.0'
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
