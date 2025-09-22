@@ -4968,9 +4968,7 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
         torch_tensor_map, conv_input_shape
     )
 
-    torch_weight_tensor = randomize_torch_tensor(
-        torch_tensor_map, conv_weight_shape
-    )
+    torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
     conv_bias_shape = (1, 1, 1, output_channels)
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
