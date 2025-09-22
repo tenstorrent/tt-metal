@@ -94,26 +94,8 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice
 }
 
 std::shared_ptr<ThreadPool> create_kernel_compilation_thread_pool() {
-    // Create a thread pool optimized for kernel compilation parallelization
-    // Use all available CPU cores for maximum compilation throughput
     uint32_t num_threads = std::thread::hardware_concurrency();
-
-    // Allow override via environment variable for debugging/testing
-    if (const char* env_threads = std::getenv("TT_MESH_KERNEL_COMPILATION_THREADS")) {
-        try {
-            num_threads = std::stoul(env_threads);
-        } catch (...) {
-            log_warning(
-                tt::LogMetal,
-                "Invalid TT_MESH_KERNEL_COMPILATION_THREADS value: {}, using default: {}",
-                env_threads,
-                num_threads);
-        }
-    }
-
-    // Ensure at least 1 thread
     num_threads = std::max(1u, num_threads);
-
     log_debug(tt::LogMetal, "Creating kernel compilation thread pool with {} threads", num_threads);
     return create_boost_thread_pool(num_threads);
 }
