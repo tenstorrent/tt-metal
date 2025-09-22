@@ -35,6 +35,12 @@ def is_unsupported_case(
 
     ## Check that we can readback results
     fast_dispatch_page_size_limit = 55 * 1024
+    elem_size_map = {
+        ttnn.uint32: 4,
+        ttnn.bfloat16: 2,
+        ttnn.bfloat8_b: 1,
+    }
+    elem_size = elem_size_map.get(input_dtype, 4)
     elem_size = 2 if input_dtype == ttnn.bfloat16 else 1 if input_dtype == ttnn.bfloat8_b else 4
     if layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
