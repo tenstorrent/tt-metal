@@ -7,6 +7,9 @@ inputs:
   regressed_workflows:
     description: "JSON array from analyze step output 'regressed_workflows'"
     required: true
+  alert_all_message:
+    description: "Optional Slack-ready alert text from analyze step output 'alert_all_message'"
+    required: false
 runs:
   using: "composite"
   steps:
@@ -36,7 +39,12 @@ runs:
             "Malformed regressions payload"
           end' "$tmp_file")
         AGG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-        FULL_TEXT="Aggregate Workflow Data run: <${AGG_URL}|this run> ${TEXT}"
+        ALERT='${{ inputs.alert_all_message }}'
+        ALERT_SECTION=""
+        if [ -n "$ALERT" ]; then
+          ALERT_SECTION="\n\n$ALERT"
+        fi
+        FULL_TEXT="Aggregate Workflow Data run: <${AGG_URL}|this run> ${TEXT}${ALERT_SECTION}"
         PAYLOAD=$(jq -cn --arg text "$FULL_TEXT" '{text:$text}')
         echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
     - name: Report Github Pipeline Status Slack Action
