@@ -8,6 +8,7 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -138,8 +139,9 @@ auto bind_registered_operation(
 
     (
         [&py_operation](auto&& overload) {
-            def_call_operator<registered_operation_t, operation_t>(py_operation, overload);
-        }(overloads),
+            def_call_operator<registered_operation_t, operation_t>(
+                py_operation, std::forward<decltype(overload)>(overload));
+        }(std::forward<overload_t>(overloads)),
         ...);
 
     module.attr(operation.base_name().c_str()) = operation;  // Bind an instance of the operation to the module

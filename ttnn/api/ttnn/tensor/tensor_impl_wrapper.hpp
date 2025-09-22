@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor_impl.hpp"
+#include <utility>
 
 namespace tt::tt_metal::tensor_impl {
 
@@ -12,14 +13,22 @@ namespace tt::tt_metal::tensor_impl {
 template <typename Func, typename... Args>
 auto dispatch(DataType dtype, Func&& func, Args&&... args) {
     switch (dtype) {
-        case DataType::BFLOAT16: return func.template operator()<bfloat16>(static_cast<Args&&>(args)...);
-        case DataType::FLOAT32: return func.template operator()<float>(static_cast<Args&&>(args)...);
-        case DataType::INT32: return func.template operator()<int32_t>(static_cast<Args&&>(args)...);
-        case DataType::UINT32: return func.template operator()<uint32_t>(static_cast<Args&&>(args)...);
-        case DataType::UINT16: return func.template operator()<uint16_t>(static_cast<Args&&>(args)...);
-        case DataType::UINT8: return func.template operator()<uint8_t>(static_cast<Args&&>(args)...);
-        case DataType::BFLOAT8_B: return func.template operator()<bfloat8_b>(static_cast<Args&&>(args)...);
-        case DataType::BFLOAT4_B: return func.template operator()<bfloat4_b>(static_cast<Args&&>(args)...);
+        case DataType::BFLOAT16:
+            return (std::forward<Func>(func)).template operator()<bfloat16>(std::forward<Args>(args)...);
+        case DataType::FLOAT32:
+            return (std::forward<Func>(func)).template operator()<float>(std::forward<Args>(args)...);
+        case DataType::INT32:
+            return (std::forward<Func>(func)).template operator()<int32_t>(std::forward<Args>(args)...);
+        case DataType::UINT32:
+            return (std::forward<Func>(func)).template operator()<uint32_t>(std::forward<Args>(args)...);
+        case DataType::UINT16:
+            return (std::forward<Func>(func)).template operator()<uint16_t>(std::forward<Args>(args)...);
+        case DataType::UINT8:
+            return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
+        case DataType::BFLOAT8_B:
+            return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
+        case DataType::BFLOAT4_B:
+            return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
         default: TT_THROW("Unsupported data type");
     }
 }
