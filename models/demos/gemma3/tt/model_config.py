@@ -1405,8 +1405,6 @@ class ModelArgs:
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
         )
-        # We have to update the attention masks on host and copy to device before we execute the trace - this flag will tell generator.py to update the attention mask before executing trace
-        self.update_attention_masks_pre_trace = True
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
@@ -2314,8 +2312,7 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            # layer = model.model.layers[i].self_attn.q_norm
-            layer = model.model.layers[i].input_layernorm
+            layer = model.model.layers[i].self_attn.q_norm
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
@@ -2577,8 +2574,6 @@ class HfAttentionWrapper:
     def __init__(self, attention, head_dim, rotary_emb):
         from transformers import DynamicCache
 
-        # from transformers import StaticCache
-
         super().__init__()
         self.attention = attention
         self.past_key_value = DynamicCache()
@@ -2587,11 +2582,8 @@ class HfAttentionWrapper:
         self.rotary_emb = rotary_emb
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
-        # position_ids_uncast = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        # print(f"position_ids_uncast: {position_ids_uncast}")
-        # print(f"position_ids: {position_ids}")
-        # assert torch.allclose(position_ids_uncast, position_ids.to(position_ids_uncast.dtype))
+
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
@@ -2604,7 +2596,6 @@ class HfAttentionWrapper:
                 past_key_value=self.past_key_value,
                 use_cache=True,
                 attention_mask=mask,
-                # cache_position=position_ids,
             )
         else:
             output, _, self.past_key_value = self.attention(
@@ -2613,7 +2604,6 @@ class HfAttentionWrapper:
                 use_cache=True,
                 position_ids=position_ids,
                 attention_mask=mask,
-                # cache_position=position_ids,
             )
         return output
 
@@ -2705,9 +2695,9 @@ class HfGemmaDecoderWrapper:
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
-        # position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0]).to(torch.bfloat16)
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         # TODO: Generalize for other HF models
+
         position_embeddings_global = self.rotary_emb(x, position_ids)
         position_embeddings_local = self.rotary_emb_local(x, position_ids)
         if mask is not None:
