@@ -478,10 +478,7 @@ int main(int argc, char** argv) {
         }
 
         if (use_device_profiler) {
-#if !defined(TRACY_ENABLE)
-            log_error(LogTest, "Tracy must be enabled for this test.");
-#endif
-            auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
             TT_FATAL(
                 device_profiler,
                 "Before running the program, do one of the following in a shell: "
