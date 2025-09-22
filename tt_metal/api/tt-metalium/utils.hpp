@@ -11,6 +11,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <future>
+#include <thread>
 
 namespace tt {
 namespace utils {
@@ -21,10 +22,10 @@ const std::string& get_reports_dir();
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
 template <typename FuncBody, typename FuncWait, typename OnTimeout>
-auto loop_and_wait_with_timeout(
-    FuncBody&& func_body,
-    FuncWait&& wait_condition,
-    OnTimeout&& on_timeout,
+void loop_and_wait_with_timeout(
+    const FuncBody& func_body,
+    const FuncWait& wait_condition,
+    const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration) {
     if (timeout_duration.count() > 0.0f) {
         auto start_time = std::chrono::high_resolution_clock::now();
