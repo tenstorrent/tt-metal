@@ -121,7 +121,7 @@ public:
     }
 };
 
-class InterMeshRoutingControlPlaneFixture : public ControlPlaneFixture {
+class InterMeshRoutingControlPlaneFixture : public ::testing::Test {
 public:
     void SetUp() override {
         if (not system_supported()) {
