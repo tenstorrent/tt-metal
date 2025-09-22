@@ -961,17 +961,12 @@ void MetalContext::initialize_firmware(
 dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     chip_id_t device_id, HalProgrammableCoreType programmable_core_type) const {
     const metal_SocDescriptor& soc_d = cluster_->get_soc_desc(device_id);
-    uint64_t pcie_chan_base_addr = cluster_->get_pcie_base_addr_from_device(device_id);
-    uint32_t num_host_channels = cluster_->get_num_host_channels(device_id);
-    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
-    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
-        pcie_chan_end_addr += cluster_->get_host_channel_size(device_id, pcie_chan);
-    }
+    // Use architecture-defined supported PCIe address bounds
     auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
     dev_msgs::core_info_msg_t buffer = factory.create<dev_msgs::core_info_msg_t>();
     auto core_info = buffer.view();
-    core_info.noc_pcie_addr_base() = pcie_chan_base_addr;
-    core_info.noc_pcie_addr_end() = pcie_chan_end_addr;
+    core_info.noc_pcie_addr_base() = hal_->get_pcie_addr_lower_bound();
+    core_info.noc_pcie_addr_end() = hal_->get_pcie_addr_upper_bound();
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
