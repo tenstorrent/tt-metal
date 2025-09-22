@@ -69,8 +69,8 @@ def check_noc_status(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = "tensix"
-    RISC_CORES_TO_CHECK = "brisc"
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
     NOC_ID = 0
     # Dictionary of corresponding variables and registers to check
     VAR_TO_REG_MAP = {
