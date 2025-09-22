@@ -111,12 +111,11 @@ inline void my_calculate_sfpu_binary(const uint dst_index_in0, const uint dst_in
     for (int d = 0; d < 8; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr uint dst_tile_size_sfpi = 32;
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi + i];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi + i];
         sfpi::vFloat result = 0.0f;
         result = in0 + in1;
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi + i] = result;
     }
 }
 
