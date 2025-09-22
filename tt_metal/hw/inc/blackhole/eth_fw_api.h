@@ -262,7 +262,7 @@ FORCE_INLINE bool is_link_up() {
     do {
         invalidate_l1_cache();
         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while (risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK == MEM_SYSENG_ETH_MSG_CALL);
+    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
 
     // This tells link status check to avoid copying results into another location in L1
     *risc1_mailbox_arg0_ptr = 0xFFFFFFFF;
@@ -274,7 +274,7 @@ FORCE_INLINE bool is_link_up() {
     do {
         invalidate_l1_cache();
         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_DONE);
+    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
 
     auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
     return link_status->rx_link_up == 1;
