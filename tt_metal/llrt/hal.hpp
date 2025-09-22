@@ -297,6 +297,7 @@ private:
 
     void initialize_wh(bool is_base_routing_fw_enabled);
     void initialize_bh();
+    void initialize_qa();
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
