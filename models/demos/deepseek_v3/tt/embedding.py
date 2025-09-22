@@ -9,7 +9,7 @@ import ttnn.experimental
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
@@ -33,7 +33,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class Embedding1D(AbstractModule):
+class Embedding(AbstractModule):
     """Embedding module with 1D tensor parallelism from TTT code.
     Uses DRAM-sharded weights split 1D across all wormholes"""
 
@@ -48,7 +48,7 @@ class Embedding1D(AbstractModule):
         # Check that there is only one state dict
         assert (
             len(state_dicts) == 1 and state_dicts[0] is not None
-        ), f"Embedding1D expects exactly one non-padding state dict, got {len(state_dicts)}"
+        ), f"Embedding expects exactly one non-padding state dict, got {len(state_dicts)}"
         (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
@@ -123,7 +123,7 @@ class Embedding1D(AbstractModule):
     def _embedding_config(
         cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, memory_config: ttnn.MemoryConfig
     ) -> dict[str, OpConfigBase]:
-        """Config for the Embedding1D module."""
+        """Config for the Embedding module."""
         assert (
             hf_config.hidden_size % ttnn.TILE_SIZE == 0
         ), "Hidden dimension must be divisible by TILE_SIZE"  # TODO: remove this restriction once all gather async supports subtile gathering
@@ -145,7 +145,7 @@ class Embedding1D(AbstractModule):
         }
 
     @classmethod
-    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> dict[str, ttnn.Tensor]:
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> dict[str, ttnn.Tensor]:
         """Create the state for the embedding module."""
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,

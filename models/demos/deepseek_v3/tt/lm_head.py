@@ -10,7 +10,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.composite_ops import mesh_scatter
 from models.demos.deepseek_v3.utils.config_dataclass import (
@@ -256,7 +256,7 @@ class LMHead(AbstractModule):
         }
 
     @classmethod
-    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> ModelState:
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {

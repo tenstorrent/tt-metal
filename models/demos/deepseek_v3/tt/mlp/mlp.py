@@ -10,7 +10,7 @@ import ttnn.experimental
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
@@ -45,7 +45,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class MLP1D(AbstractModule):
+class MLP(AbstractModule):
     """MLP module with 1D tensor parallelism based on TTT code.
     See the `AbstractModule` docstring for usage info.
     NOTE: This is not the MLP we will use for DeepSeek-R1, but we do use it as a base class for the other MLPs.
@@ -193,7 +193,7 @@ class MLP1D(AbstractModule):
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
-            "linear_pc_gen": MLP1D.ProgramConfigData(
+            "linear_pc_gen": MLP.ProgramConfigData(
                 dim=dim, hidden_dim=hidden_dim, num_devices=mesh_width, core_grid_size=matmul_core_grid_size
             ),
             "w1": linear_op_config,
@@ -358,13 +358,13 @@ class MLP1D(AbstractModule):
         )
 
     @classmethod
-    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> ModelState:
         """Create the model state for this module.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL1D instance for async CCLs
+            ccl: CCL instance for async CCLs
 
         Returns:
             ModelState containing the state information for this module

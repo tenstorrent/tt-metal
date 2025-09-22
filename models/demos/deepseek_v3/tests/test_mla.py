@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
-from models.demos.deepseek_v3.tt.mla_1d import MLA1D
+from models.demos.deepseek_v3.tt.mla import MLA
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -137,13 +137,13 @@ def test_forward_pass(
     logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
     user_id = None if mode == "decode" else torch.randint(0, MAX_BATCH_SIZE, ()).item()
-    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
+    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
     paged_input_cache, torch_page_table = paged_cache_from_torch(input_cache, dp_factor, paged_config, user_id)
 
     # Set up model config
-    weight_config = MLA1D.convert_weights(hf_config_short, [state_dict] * mesh_device.shape[0], tmp_path, mesh_device)
-    model_config = get_model_config(MLA1D, mode, hf_config_short, mesh_device)
-    model_state = MLA1D.create_state(
+    weight_config = MLA.convert_weights(hf_config_short, [state_dict] * mesh_device.shape[0], tmp_path, mesh_device)
+    model_config = get_model_config(MLA, mode, hf_config_short, mesh_device)
+    model_state = MLA.create_state(
         hf_config_short, paged_config, mesh_device, ccl, (paged_input_cache,) * mesh_device.shape[0]
     )
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -173,7 +173,7 @@ def test_forward_pass(
         else None
     )
 
-    tt_page_table = MLA1D.create_page_table(torch_page_table, paged_config, mesh_device)
+    tt_page_table = MLA.create_page_table(torch_page_table, paged_config, mesh_device)
 
     # RoPE setup
     rope_setup = RotarySetup(
@@ -198,9 +198,9 @@ def test_forward_pass(
 
     cur_row_idx = torch.randint(0, mesh_device.shape[0], ()).item()
     if mode == "prefill":
-        tt_output = MLA1D.forward_prefill(tt_input, user_id, cur_row_idx, run_config, rope_tensors, tt_page_table)
+        tt_output = MLA.forward_prefill(tt_input, user_id, cur_row_idx, run_config, rope_tensors, tt_page_table)
     else:
-        tt_output = MLA1D.forward_decode(
+        tt_output = MLA.forward_decode(
             tt_input, position_ids_tensor, cur_row_idx, run_config, rope_tensors, tt_page_table
         )
 

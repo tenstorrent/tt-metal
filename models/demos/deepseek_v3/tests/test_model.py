@@ -11,8 +11,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.tt.mla_1d import MLA1D
-from models.demos.deepseek_v3.tt.model_1d import Model1D
+from models.demos.deepseek_v3.tt.mla import MLA
+from models.demos.deepseek_v3.tt.model import Model
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -132,17 +132,17 @@ def test_forward_pass(
     logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
     user_id = None if mode == "decode" else torch.randint(0, MAX_BATCH_SIZE, ()).item()
-    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
+    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
     paged_input_caches, torch_page_tables = paged_caches_from_torch(input_cache, dp_factor, paged_config, user_id)
 
     # Set up model config
-    weight_config = Model1D.convert_weights(hf_config_short, [state_dict], tmp_path, mesh_device)
+    weight_config = Model.convert_weights(hf_config_short, [state_dict], tmp_path, mesh_device)
     logger.info("Weight conversion done")
-    model_config = get_model_config(Model1D, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(Model, mode, hf_config_short, mesh_device)
     logger.info(f"Model config created for {mode} mode")
-    model_state = Model1D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
+    model_state = Model.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
     logger.info("Model state created")
-    model_shared_state = Model1D.create_shared_state(hf_config_short, mesh_device)
+    model_shared_state = Model.create_shared_state(hf_config_short, mesh_device)
     logger.info("Model shared state created")
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
     logger.info("Run config created")
@@ -174,7 +174,7 @@ def test_forward_pass(
     )
 
     tt_page_tables = tuple(
-        MLA1D.create_page_table(torch_page_table, paged_config, mesh_device) for torch_page_table in torch_page_tables
+        MLA.create_page_table(torch_page_table, paged_config, mesh_device) for torch_page_table in torch_page_tables
     )
 
     # RoPE setup
@@ -195,14 +195,14 @@ def test_forward_pass(
         "trans_matrix": rot_mats[2],
     }
 
-    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, mesh_device.shape[1])
+    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, mesh_device.shape[1])
 
     # Forward pass
     logger.info("Running TTNN forward pass")
     if mode == "prefill":
-        tt_output = Model1D.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
+        tt_output = Model.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
     else:
-        tt_output = Model1D.forward_decode(tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables)
+        tt_output = Model.forward_decode(tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables)
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     if mode == "decode":
@@ -219,7 +219,7 @@ def test_forward_pass(
     logger.info(f"Mode: {mode}, Seq len: {seq_len}, Batch size: {batch_size}")
     logger.info(f"PCC: {pcc_message}")
 
-    assert passing, f"Test failed for Model1D because PCC < {pcc_required} in {mode} mode."
+    assert passing, f"Test failed for Model because PCC < {pcc_required} in {mode} mode."
 
 
 if __name__ == "__main__":
