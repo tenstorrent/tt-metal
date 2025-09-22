@@ -68,11 +68,11 @@ void py_module(py::module& module) {
         "record_event",
         py::overload_cast<
             MeshDevice*,
-            QueueId,
+            const std::optional<QueueId>&,
             const std::vector<SubDeviceId>&,
             const std::optional<MeshCoordinateRange>&>(&record_mesh_event),
         py::arg("mesh_device"),
-        py::arg("cq_id"),
+        py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         py::arg("device_range") = std::nullopt,
         R"doc(
@@ -80,7 +80,7 @@ void py_module(py::module& module) {
 
             Args:
                 mesh_device (ttnn.MeshDevice*): The device on which the event is being recorded.
-                cq_id (int): The Command Queue on which event completion will be recorded.
+                cq_id (int, optional): The Command Queue on which event completion will be recorded. Defaults to the current thread's command queue.
                 sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to sub-devices set by set_sub_device_stall_group.
                 device_range (ttnn.MeshCoordinateRange, optional): The range of devices to record completion for. Defaults to all devices.
 

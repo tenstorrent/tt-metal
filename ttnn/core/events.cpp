@@ -7,6 +7,7 @@
 #include <memory>
 #include <tt-metalium/event.hpp>
 #include "tt-metalium/distributed.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
@@ -50,10 +51,12 @@ void wait_for_event(QueueId cq_id, const MultiDeviceEvent& multi_device_event) {
 
 MeshEvent record_mesh_event(
     MeshDevice* mesh_device,
-    QueueId cq_id,
+    const std::optional<QueueId>& cq_id,
     const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids,
     const std::optional<ttnn::MeshCoordinateRange>& device_range) {
-    return EnqueueRecordEventToHost(mesh_device->mesh_command_queue(*cq_id), sub_device_ids, device_range);
+    // Use provided cq_id or fall back to current thread's command queue ID
+    QueueId actual_cq_id = cq_id.value_or(ttnn::core::get_current_command_queue_id_for_thread());
+    return EnqueueRecordEventToHost(mesh_device->mesh_command_queue(*actual_cq_id), sub_device_ids, device_range);
 }
 
 void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event) {
