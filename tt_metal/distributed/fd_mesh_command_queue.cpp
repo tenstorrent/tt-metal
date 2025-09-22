@@ -946,41 +946,41 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
-#if defined(TRACY_ENABLE)
-    // Host Memory Intensive Path (when profiler is enabled): The launch messages across devices are unique, since
-    // the host_assigned_field in the launch_msg contains the physical device id (required by the performance profiler).
-    // Hence the trace per device must be uniquely captured.
-    for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(coord)->sysmem_manager();
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        // Host Memory Intensive Path (when profiler is enabled): The launch messages across devices are unique, since
+        // the host_assigned_field in the launch_msg contains the physical device id (required by the performance
+        // profiler). Hence the trace per device must be uniquely captured.
+        for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
+            auto& sysmem_manager_for_trace = mesh_device_->get_device(coord)->sysmem_manager();
+            uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
+
+            auto device = mesh_device_->get_device(coord);
+            this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
+            program_dispatch::write_program_command_sequence(
+                program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
+            auto mesh_trace_md = MeshTraceStagingMetadata{
+                MeshCoordinateRange(coord, coord),
+                coord,
+                sysmem_manager_offset,
+                sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
+            ordered_mesh_trace_md_.push_back(mesh_trace_md);
+        });
+    } else {
+        // Optimized Path (generic use-cases): Program dispatch commands across the entire sub-grid are identical.
+        // Capture once.
+        auto local_start_coord = get_local_start_coord(mesh_device_, sub_grid);
+        auto& sysmem_manager_for_trace = mesh_device_->get_device(local_start_coord)->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
-        auto device = mesh_device_->get_device(coord);
-        this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
         auto mesh_trace_md = MeshTraceStagingMetadata{
-            MeshCoordinateRange(coord, coord),
-            coord,
+            sub_grid,
+            sub_grid.start_coord(),
             sysmem_manager_offset,
             sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
         ordered_mesh_trace_md_.push_back(mesh_trace_md);
-    });
-#else
-    // Optimized Path (generic use-cases): Program dispatch commands across the entire sub-grid are identical.
-    // Capture once.
-    auto local_start_coord = get_local_start_coord(mesh_device_, sub_grid);
-    auto& sysmem_manager_for_trace = mesh_device_->get_device(local_start_coord)->sysmem_manager();
-    uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
-
-    program_dispatch::write_program_command_sequence(
-        program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
-    auto mesh_trace_md = MeshTraceStagingMetadata{
-        sub_grid,
-        sub_grid.start_coord(),
-        sysmem_manager_offset,
-        sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
-    ordered_mesh_trace_md_.push_back(mesh_trace_md);
-#endif
+    }
 }
 
 void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
@@ -1112,12 +1112,12 @@ SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
 
 void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
     ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
-#if defined(TRACY_ENABLE)
-    for (auto& [is_multicast, original_launch_msg, launch_msg] : program_cmd_seq.launch_messages) {
-        launch_msg.kernel_config().host_assigned_id() =
-            tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        for (auto& [is_multicast, original_launch_msg, launch_msg] : program_cmd_seq.launch_messages) {
+            launch_msg.kernel_config().host_assigned_id() =
+                tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
+        }
     }
-#endif
 }
 
 std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB) {

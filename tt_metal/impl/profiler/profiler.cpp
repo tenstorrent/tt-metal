@@ -1564,6 +1564,9 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
     device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
+    if (!getDeviceProfilerState()) {
+        return;
+    }
 
     this->output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::create_directories(this->output_dir);
@@ -1590,6 +1593,9 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
 void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+    if (!getDeviceProfilerState()) {
+        return;
+    }
 
     if (!this->thread_pool) {
         const auto& profiler_state_manager = tt::tt_metal::MetalContext::instance().profiler_state_manager();
@@ -1630,6 +1636,9 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
 void DeviceProfiler::freshDeviceLog() {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::filesystem::remove(log_path);
 #endif
@@ -1637,6 +1646,9 @@ void DeviceProfiler::freshDeviceLog() {
 
 void DeviceProfiler::setOutputDir(const std::string& new_output_dir) {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     std::filesystem::create_directories(new_output_dir);
     output_dir = new_output_dir;
 #endif
@@ -1650,6 +1662,9 @@ void DeviceProfiler::readResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+    if (!getDeviceProfilerState()) {
+        return;
+    }
 
     const std::string zone_name = fmt::format(
         "{}-{}-{}-{}", "readResults", device_id, enchantum::to_string(state), enchantum::to_string(data_source));
@@ -1692,6 +1707,9 @@ void DeviceProfiler::processResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+    if (!getDeviceProfilerState()) {
+        return;
+    }
 
     const std::string zone_name = fmt::format(
         "{}-{}-{}-{}", "processResults", device_id, enchantum::to_string(state), enchantum::to_string(data_source));
@@ -1766,6 +1784,9 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
 
     const auto& profiler_state_manager = tt::tt_metal::MetalContext::instance().profiler_state_manager();
     if (!profiler_state_manager) {
@@ -1786,6 +1807,9 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
 void DeviceProfiler::pushTracyDeviceResults(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     // If this device is root, it may have new sync info updated with syncDeviceHost
     for (auto& [core, info] : device_core_sync_info) {
         if (isSyncInfoNewer(device_sync_info, info)) {
@@ -1837,6 +1861,9 @@ void DeviceProfiler::setSyncInfo(const SyncInfo& sync_info) { device_sync_info =
 
 void DeviceProfiler::initializeMissingTracyContexts(bool blocking) {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     TT_ASSERT(this->thread_pool != nullptr);
 
     for (const auto& [device_core, _] : device_tracy_contexts) {
@@ -1855,6 +1882,9 @@ void DeviceProfiler::initializeMissingTracyContexts(bool blocking) {
 void DeviceProfiler::updateTracyContexts(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores_to_update;
     device_cores_to_update.reserve(device_tracy_contexts.size());
 
@@ -1881,6 +1911,9 @@ void DeviceProfiler::updateTracyContexts(
 
 void DeviceProfiler::updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core) {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     const chip_id_t device_id = device_core.first;
     const CoreCoord worker_core = device_core.second;
 
@@ -1949,6 +1982,9 @@ void DeviceProfiler::updateTracyContext(const std::pair<chip_id_t, CoreCoord>& d
 
 void DeviceProfiler::destroyTracyContexts() {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     TT_ASSERT(this->thread_pool != nullptr);
 
     for (const auto& [device_core, _] : device_tracy_contexts) {
