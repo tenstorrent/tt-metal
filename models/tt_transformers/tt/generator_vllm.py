@@ -484,7 +484,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
         # WORKAROUND
         # When using /v1/chat/completions endpoint prompt is already tokenized
         # Processor requires text, so we decode tokens back to text
-        if isinstance(prompt, list) and all(isinstance(x, int) for x in prompt):
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], int):
             # Use the processor's tokenizer to decode tokens back to text
             tokenizer = (
                 getattr(input_processor, "tokenizer") if hasattr(input_processor, "tokenizer") else input_processor
