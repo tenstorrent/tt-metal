@@ -51,10 +51,12 @@ void SGDFused::step() {
         auto gradients = tensor_ptr->get_grad();
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
 
+#ifdef PRINT_SGD_FUSED_DEBUG_INFO
         fmt::print("{}\n", name);
         tensor_ptr->get_value(autograd::PreferredPrecision::FULL).print();
         fmt::print("momentum before\n");
         theta.print();
+#endif
 
         ttml::metal::sgd_fused(
             tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
@@ -62,10 +64,11 @@ void SGDFused::step() {
             m_config.lr,
             m_config.momentum,
             m_config.dampening,
+            m_config.weight_decay,
             output_tensor,
             theta,
             theta);
-
+#ifdef PRINT_SGD_FUSED_DEBUG_INFO
         fmt::print("gradient\n");
         gradients.print();
         fmt::print("output parameters\n");
@@ -74,6 +77,7 @@ void SGDFused::step() {
         theta.print();
         fmt::print("learning rate: {}\n", m_config.lr);
         fmt::print("===================================\n");
+#endif
     }
     m_steps++;
 }
