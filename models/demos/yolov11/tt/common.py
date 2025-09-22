@@ -5,7 +5,6 @@
 import math
 
 import ttnn
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class Yolov11Conv2D:
@@ -25,10 +24,7 @@ class Yolov11Conv2D:
         config_override=None,
         deallocate_activation=False,
         split_weights=False,
-        core_count=64,
     ):
-        self.core_count = core_count
-        print("corec ount is ", self.core_count)
         self.is_detect = is_detect
         self.activation = activation
         self.is_dfl = is_dfl
@@ -60,15 +56,9 @@ class Yolov11Conv2D:
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
             enable_weights_double_buffer=True,
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
-        if self.core_count is not None:
-            print("config overrider")
-            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
-            self.conv_config.core_grid = shard_grid
-            self.conv_config.override_sharding_config = True
         if "bias" in conv_pth:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
@@ -118,7 +108,6 @@ class Yolov11Conv2D:
         hw = output_height * output_width
         if x.shape[2] != hw:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            # x = ttnn.to_layout(x,ttnn.ROW_MAJOR_LAYOUT)
             x = x[:, :, :hw, :]
         return x
 
@@ -219,7 +208,6 @@ class TtnnConv:
         activation=None,
         deallocate_activation=False,
         split_weights=False,
-        core_count=None,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -233,7 +221,6 @@ class TtnnConv:
             activation=activation,
             deallocate_activation=deallocate_activation,
             split_weights=split_weights,
-            core_count=core_count,
         )
 
     def __call__(self, device, x):
