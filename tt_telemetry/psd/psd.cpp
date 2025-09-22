@@ -15,13 +15,13 @@ namespace tt::tt_metal {
 
 namespace {
 
-std::string get_host_name() {
+static std::string get_host_name() {
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
     return std::string(hostname);
 }
 
-std::string get_mobo_name() {
+static std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
     std::string motherboard;
 
@@ -33,13 +33,15 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
-TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
+static bool using_mock_cluster_desc() { return tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(); }
+
+static TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 
-    if (mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
+    if (using_mock_cluster_desc() || mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -50,13 +52,14 @@ TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
     return TrayID{tray_id};
 }
 
-std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
+static std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
-        TT_FATAL(get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
+        TT_FATAL(
+            using_mock_cluster_desc() || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
@@ -255,7 +258,6 @@ void PSD::run_global_discovery() {
         this->validate_graphs();
     }
     this->exchange_metadata(false);
-    distributed_context.barrier();
 }
 
 void PSD::merge(PSD&& other) {
@@ -299,7 +301,9 @@ void PSD::exchange_metadata(bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-
+    if (*distributed_context.size() == 1) {
+        return;
+    }
     auto my_rank = *(distributed_context.rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;
@@ -481,8 +485,7 @@ void PSD::dump_to_yaml(const std::optional<std::string>& path_to_yaml) {
 }
 
 void PSD::emit_to_text_proto(const std::optional<std::string>& file_path) {
-    TT_FATAL(false, "Unimplemented");
-    // emit_physical_system_descriptor_to_text_proto(*this, file_path);
+    emit_physical_system_descriptor_to_text_proto(*this, file_path);
 }
 
 void PSD::validate_graphs() {
@@ -614,6 +617,30 @@ std::vector<AsicID> PSD::get_asics_connected_to_host(const std::string& hostname
         }
     }
     return asics;
+}
+
+bool PSD::is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const {
+    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        if (this->get_host_name_for_asic(asic_id) != host) {
+            continue;
+        }
+        const auto& connections = asic_group.at(asic_id);
+        auto connection_it = std::find_if(connections.begin(), connections.end(), [&](const auto& connection) {
+            // Check if this chan_id is a src_chan in any of the eth_connections
+            return std::find_if(connection.second.begin(), connection.second.end(), [&](const auto& eth_conn) {
+                       return eth_conn.src_chan == chan_id;
+                   }) != connection.second.end();
+        });
+        TT_FATAL(
+            connection_it != connections.end(),
+            "Channel {} not found in asic connectivity graph for asic {}",
+            chan_id,
+            asic_id);
+        auto connected_asic = connection_it->first;
+        return this->get_host_name_for_asic(connected_asic) != host;
+    }
+    TT_THROW("Asic {} not found in any host's asic connectivity graph", asic_id);
+    return false;
 }
 
 std::vector<std::string> PSD::get_host_neighbors(const std::string& hostname) const {
