@@ -72,7 +72,7 @@ static std::pair<TrayID, ASICLocation> get_asic_position(
         if (arch == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
-            auto mmio_device = cluster2.get_associated_mmio_device(chip_id);
+            auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
             auto tunnels = cluster2.get_tunnels_from_mmio_device(mmio_device);
             for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
                 const auto& devices_on_tunnel = tunnels[tunnel];
