@@ -8,8 +8,7 @@
 
 namespace ttnn::operations::experimental::isin::common {
 
-using namespace tt;
-using namespace tt_metal;
+using namespace tt::tt_metal;
 
 constexpr int32_t FIRST_DIMENSION = 0;
 
