@@ -17,10 +17,6 @@ void kernel_main() {
     const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
     const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
 
-#ifdef UNPAD_INPUT_WIDTH
-    const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(21);
-#endif
-
 #ifdef DEBUG
     DPRINT << "dst_addr: " << dst_addr << ENDL();
     DPRINT << "output_stick_size: " << output_stick_size << ENDL();
@@ -31,9 +27,6 @@ void kernel_main() {
     DPRINT << "num_sticks_per_core: " << num_sticks_per_core << ENDL();
     DPRINT << "num_sticks_per_core_read: " << num_sticks_per_core_read << ENDL();
     DPRINT << "num_read_per_barrier: " << num_read_per_barrier << ENDL();
-#ifdef UNPAD_INPUT_WIDTH
-    DPRINT << "padding_width_ntiles: " << padding_width_ntiles << ENDL();
-#endif
 
 #endif
     tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
