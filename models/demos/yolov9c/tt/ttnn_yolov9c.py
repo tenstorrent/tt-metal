@@ -818,7 +818,7 @@ class TtnnProto:
             conv_pth=f"{conv_pt}.cv2",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             is_detect=True,
             deallocate_activation=True,
         )
