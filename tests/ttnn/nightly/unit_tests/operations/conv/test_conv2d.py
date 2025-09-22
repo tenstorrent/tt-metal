@@ -120,7 +120,7 @@ def run_conv(
     in_place=False,
     run_twice=False,
     fast_compare=False,
-    use_dram=False,
+    use_dram_slicing=False,
     slice_config=None,
     enable_kernel_stride_folding=False,
     enable_act_double_buffer=False,
@@ -234,8 +234,8 @@ def run_conv(
             mesh_mapper=weight_mesh_mapper,
         )
     if slice_config is not None:
-        use_dram = True
-    requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None or use_dram
+        use_dram_slicing = True
+    requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None or use_dram_slicing
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -279,7 +279,7 @@ def run_conv(
     if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
-    if requires_device_placement and not use_dram:
+    if requires_device_placement and not use_dram_slicing:
         slice_config = ttnn.Conv2dL1FullSliceConfig
 
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
@@ -837,7 +837,7 @@ def test_conv_dram(
         run_twice=False,
         fast_compare=True,
         throttle_level=throttle,
-        use_dram=True,
+        use_dram_slicing=True,
     )
 
 
@@ -3567,14 +3567,14 @@ def test_conv2d_vae_sdxl(
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = 1
     if auto_slice:
-        use_dram = True
+        use_dram_slicing = True
         slice_config = None
     elif slice_type is None:
         slice_config = None
-        use_dram = False
+        use_dram_slicing = False
     else:
         slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
-        use_dram = True
+        use_dram_slicing = True
 
     run_conv(
         device=device,
@@ -3606,7 +3606,7 @@ def test_conv2d_vae_sdxl(
         input_mesh_mapper=None,
         weight_mesh_mapper=None,
         output_mesh_composer=None,
-        use_dram = use_dram,
+        use_dram_slicing = use_dram_slicing,
         slice_config=slice_config,
         input_layout=ttnn.TILE_LAYOUT,
         enable_act_double_buffer=False, # TODO: this is set to true in SDXL, need to adapt tests
