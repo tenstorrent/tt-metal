@@ -18,7 +18,24 @@
     "[WH-T3K] Gemma3-27B": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
       { "id": "U08BH66EXAL", "name": "Radoica Draskic" }
-    ]
+    ],
+
+    "t3k_mixtral_tests": { "id": "U03PUAKE719", "name": "Harry Zhou" },
+    "t3k llama3_load_checkpoints tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
+    "t3k_falcon40b_tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
+    "t3k_llama3_tests": { "id": "U03PUAKE719", "name": "Miguel Tairum" },
+    "t3k_qwen25_tests": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" },
+    "t3k_llama3_vision_tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
+    "t3k_llama3_90b_vision_tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
+    "t3k_llama3_70b_tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
+    "t3k_falcon7b_tests": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" },
+    "t3k_resnet50_tests": { "id": "U0837MYG788", "name": "Marko Radosavljevic" },
+    "t3k_sentence_bert_tests": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" },
+    "t3k sd35_large tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
+    "t3k_mistral_tests": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" },
+    "t3k_qwen3_tests": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" },
+    "t3k_qwen25_vl_tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
+    "t3k_gemma3_tests": { "id": "U08TJ70UFRT", "name": "Harry Andrews" }
   },
   "contains": [
     { "needle": "vllm-tests / vllm-tests ([WH-T3K] Llama-3.1-8B-Instruct", "owner": [
@@ -39,6 +56,54 @@
     { "needle": "vllm-tests / vllm-tests ([WH-T3K] Gemma3-27B", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
       { "id": "U08BH66EXAL", "name": "Radoica Draskic" }
-    ] }
+    ] },
+
+    { "needle": "t3000-demo-tests / t3k_mixtral_tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
+    { "needle": "t3k_mixtral_tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
+
+    { "needle": "t3000-demo-tests / t3k llama3_load_checkpoints tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "needle": "t3k llama3_load_checkpoints tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+
+    { "needle": "t3000-demo-tests / t3k_falcon40b_tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "t3k_falcon40b_tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "t3000-demo-tests / t3k_llama3_tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "t3k_llama3_tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+
+    { "needle": "t3000-demo-tests / t3k_qwen25_tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+    { "needle": "t3k_qwen25_tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+
+    { "needle": "t3000-demo-tests / t3k_llama3_vision_tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "t3k_llama3_vision_tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
+    { "needle": "t3000-demo-tests / t3k_llama3_90b_vision_tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "needle": "t3k_llama3_90b_vision_tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+
+    { "needle": "t3000-demo-tests / t3k_llama3_70b_tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "t3k_llama3_70b_tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
+    { "needle": "t3000-demo-tests / t3k_falcon7b_tests", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+    { "needle": "t3k_falcon7b_tests", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+
+    { "needle": "t3000-demo-tests / t3k_resnet50_tests", "owner": { "id": "U0837MYG788", "name": "Marko Radosavljevic" } },
+    { "needle": "t3k_resnet50_tests", "owner": { "id": "U0837MYG788", "name": "Marko Radosavljevic" } },
+
+    { "needle": "t3000-demo-tests / t3k_sentence_bert_tests", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+    { "needle": "t3k_sentence_bert_tests", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
+
+    { "needle": "t3000-demo-tests / t3k sd35_large tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "t3k sd35_large tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
+    { "needle": "t3000-demo-tests / t3k_mistral_tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
+    { "needle": "t3k_mistral_tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
+
+    { "needle": "t3000-demo-tests / t3k_qwen3_tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+    { "needle": "t3k_qwen3_tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
+
+    { "needle": "t3000-demo-tests / t3k_qwen25_vl_tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+    { "needle": "t3k_qwen25_vl_tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
+
+    { "needle": "t3000-demo-tests / t3k_gemma3_tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
+    { "needle": "t3k_gemma3_tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } }
   ]
 }
