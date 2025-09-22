@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "dataflow_api.h"
+#include "eth_fw_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     std::uint32_t local_eth_l1_src_addr = get_arg_val<uint32_t>(0);
@@ -11,6 +14,13 @@ void kernel_main() {
 
     constexpr uint32_t num_bytes_per_send = get_compile_time_arg_val(0);
     constexpr uint32_t num_bytes_per_send_word_size = get_compile_time_arg_val(1);
+
+    noc_inline_dw_write(get_noc_addr(0, 10, 0x40), 0xdeadbeef);
+
+    for (int i = 0; i < 50; ++i) {
+        bool yes = is_link_up();
+        DPRINT << "IS LINK UP " << (uint32_t)yes << ENDL();
+    }
 
     eth_send_bytes(
         local_eth_l1_src_addr, remote_eth_l1_dst_addr, num_bytes, num_bytes_per_send, num_bytes_per_send_word_size);
