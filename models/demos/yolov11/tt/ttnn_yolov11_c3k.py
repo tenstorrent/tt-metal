@@ -4,7 +4,8 @@
 
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, reshard_if_possible, sharded_concat
+from models.demos.yolov7.tt.common import TtYOLOv7Matmul
+from models.demos.yolov11.tt.common import deallocate_tensors, reshard_if_possible, sharded_concat
 from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 
 
@@ -17,9 +18,12 @@ def p(x, a="x"):
 
 class TtnnC3K:
     def __init__(self, device, parameter, conv_pt):
-        self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
-        self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3)  # needed as input is RM
+        # self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
+        # self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
+        # self.cv3 = TtnnConv(device, parameter.cv3, conv_pt.cv3)  # needed as input is RM
+        self.cv1 = TtYOLOv7Matmul(device, conv_pt.cv1.conv)
+        self.cv2 = TtYOLOv7Matmul(device, conv_pt.cv2.conv)
+        self.cv3 = TtYOLOv7Matmul(device, conv_pt.cv3.conv)  # needed as input is RM
         self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0])
         self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1])
 
