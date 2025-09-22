@@ -15,6 +15,7 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 namespace tt::tt_metal {
 
@@ -77,7 +78,9 @@ struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    // This should be a std::array<UnpackToDestMode, NUM_CIRCULAR_BUFFERS>
+    std::vector<UnpackToDestMode> unpack_to_dest_mode =
+        std::vector<UnpackToDestMode>(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
     std::vector<uint32_t> compile_args;

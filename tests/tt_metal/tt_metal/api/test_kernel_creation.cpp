@@ -159,9 +159,8 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
     ComputeConfig config_default;
 
     // Create specially configured unpack_to_dest_mode
-    std::vector<UnpackToDestMode> unpack_mode_fp32(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_mode_fp32[0] = UnpackToDestMode::UnpackToDestFp32;  // Change CB 0 to FP32 mode
-    ComputeConfig config_fp32 = {.unpack_to_dest_mode = unpack_mode_fp32};
+    ComputeConfig config_fp32(config_default);
+    config_fp32.unpack_to_dest_mode[0] = UnpackToDestMode::UnpackToDestFp32;  // Change CB 0 to FP32 mode
 
     // Create programs (needed for kernel creation context)
     auto program_default = CreateProgram();
@@ -172,7 +171,8 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
     auto kernel_handle_fp32 = CreateKernel(program_fp32, kernel_file, CoreCoord(0, 0), config_fp32);
 
     // Get the kernels from programs
-    const auto& kernels_default = program_default.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+    const auto& kernels_default =
+        program_default.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
     const auto& kernels_fp32 = program_fp32.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
 
     // Direct hash comparison - this tests the actual Kernel::compute_hash() method
