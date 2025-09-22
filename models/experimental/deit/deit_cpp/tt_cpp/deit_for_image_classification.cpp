@@ -63,7 +63,7 @@ TtDeiTForImageClassification::TtDeiTForImageClassification(
             );
             
             // Update num_labels based on classifier bias size
-            auto bias_shape = classifier_bias_.get_logical_shape();
+            auto bias_shape = classifier_bias_.logical_shape();
             if (bias_shape.rank() >= 1) {
                 num_labels_ = static_cast<int>(bias_shape[-1]);
             }
@@ -137,7 +137,7 @@ ttnn::Tensor TtDeiTForImageClassification::apply_classifier(const ttnn::Tensor& 
         // sequence_output shape: [batch_size, seq_len, hidden_size]
         // We need to extract [:, 0, :] which is the CLS token
         
-        auto output_shape = sequence_output.get_logical_shape();
+        auto output_shape = sequence_output.logical_shape();
         if (output_shape.rank() < 3) {
             throw std::runtime_error("Expected sequence_output to have at least 3 dimensions");
         }
