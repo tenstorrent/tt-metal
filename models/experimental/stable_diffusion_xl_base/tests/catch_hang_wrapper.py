@@ -21,12 +21,12 @@ def kill_all(proc, grace_period=100):
 
 
 def test_main():
-    hang_timeout = 600  # seconds
+    hang_timeout = 1000  # seconds
 
     argv = [
         "pytest",
         "models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py",
-        "--num-prompts=64",
+        "--num-prompts=5000",
         "-k",
         "device_vae and device_encoders and with_trace",
     ]
