@@ -9,7 +9,6 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 namespace UnsupportedMessages {
-constexpr auto BFLOAT16 = "Unsupported type: BFLOAT16";
 constexpr auto BFLOAT8_B = "Unsupported type: BFLOAT8_B";
 constexpr auto BFLOAT4_B = "Unsupported type: BFLOAT4_B";
 constexpr auto UINT8 = "Unsupported type: UINT8";
@@ -26,7 +25,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
     auto const numpy_tensor_from_data = []<typename U>(
                                             const auto& tensor_data,
                                             const auto& tensor_spec,
-                                            const auto& tensor_strides) {
+                                            [[maybe_unused]] const auto& tensor_strides) {
         const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
 
         const auto tensor_shape_rank = tensor_shape.rank();
@@ -68,8 +67,8 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
         }
         const auto cpu_tensor = tensor.cpu(/*blocking=*/true);
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const T>(cpu_tensor);
-        const auto cpu_tensor_spec = tensor.tensor_spec();
-        const auto cpu_tensor_strides = tensor.strides();
+        const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
+        const auto cpu_tensor_strides = cpu_tensor.strides();
 
         if (tt::tt_metal::tensor_impl::logical_matches_physical(cpu_tensor_spec)) {
             return numpy_tensor_from_data.template operator()<U>(cpu_tensor_data, cpu_tensor_spec, cpu_tensor_strides);
@@ -86,9 +85,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
             case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
             case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
             case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(t);
-            case tt::tt_metal::DataType::BFLOAT16:
-                TT_THROW(UnsupportedMessages::BFLOAT16);
-                break;  // return impl.template operator()<bfloat16, float>(t);
+            case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, float>(t);
             case tt::tt_metal::DataType::BFLOAT8_B: TT_THROW(UnsupportedMessages::BFLOAT8_B); break;
             case tt::tt_metal::DataType::BFLOAT4_B: TT_THROW(UnsupportedMessages::BFLOAT4_B); break;
             case tt::tt_metal::DataType::UINT8: TT_THROW(UnsupportedMessages::UINT8); break;
