@@ -57,6 +57,11 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
+// For unary ops with one extra uint parameter AND an additional template param (ITERATIONS)
+#define SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(FN, MODE, APPROXIMATE, EXTRA_PARAM, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                 \
+        ckernel::sfpu::FN<APPROXIMATE, EXTRA_PARAM>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+
 // For ops with exactly two extra uint parameters (and no custom init callback)
 #define SFPU_UNARY_TWO_PARAM_KERNEL(OP, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                              \
@@ -76,11 +81,6 @@
 #define SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(OP, TYPE, MODE, APPROXIMATE, DST_IDX) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                             \
         ckernel::sfpu::calculate_##OP<SfpuType::TYPE, APPROXIMATE>, DST_IDX, (int)VectorMode::MODE)
-
-// For unary ops with one extra uint parameter AND an additional template param (ITERATIONS)
-#define SFPU_UNARY_ONE_PARAM_KERNEL_ITER(FN, MODE, APPROXIMATE, ITER, DST_IDX, PARAM0) \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                 \
-        ckernel::sfpu::FN<APPROXIMATE, ITER>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
 // For ops where compute takes extra args
 #define SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(FN, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \

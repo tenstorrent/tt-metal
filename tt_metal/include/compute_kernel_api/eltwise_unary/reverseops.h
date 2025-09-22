@@ -40,7 +40,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void rsub_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_ITER(calculate_rsub, RC, APPROX, 8, idst, param0));
+    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_rsub, RC, APPROX, 8, idst, param0));
 }
 
 /**
