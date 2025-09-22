@@ -131,7 +131,7 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
  * and writes the result to tile idx_out0 in the Dst registers.
  */
 inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(my_add_tile_internal(idx_dst0, idx_dst1, idx_out0));
+    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0));
 }
 
 namespace NAMESPACE {
@@ -160,8 +160,8 @@ void MAIN {
         // Copy the tiles from the circular buffers into Dst registers
         copy_tile(cb_in0, 0, 0);
         copy_tile(cb_in1, 0, 1);
-        // my_add_tiles(0, 1, 0);  // <-- The custom SFPU addition happens here
-        add_binary_tile(0, 1, 0);
+        my_add_tiles(0, 1, 0);  // <-- The custom SFPU addition happens here
+        // add_binary_tile(0, 1, 0);
         // Finished the computation, transfer register ownership to the unpacker
         tile_regs_commit();
         tile_regs_wait();
