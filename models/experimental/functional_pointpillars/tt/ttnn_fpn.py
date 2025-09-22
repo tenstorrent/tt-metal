@@ -95,19 +95,25 @@ class TtFPN:
                 parameters=parameters["lateral_convs"][i]["ConvModule"],
                 device=device,
                 input_params=[1, 1, 0, out_channels, in_channels[i]],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 reshape_tensor=True,
                 deallocate_activation=True,
             )
+            act_block_h = None
+            shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if i == 0:
+                act_block_h = 32
+                shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
             fpn_conv = TtConv(
                 parameters=parameters["fpn_convs"][i]["ConvModule"],
                 device=device,
                 input_params=[3, 1, 1, out_channels, out_channels],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=True,
-                change_shard=True,
                 reshape_tensor=True,
+                act_block_h=act_block_h,
+                shard_layout=shard_layout,
             )
 
             self.lateral_convs.append(l_conv)
@@ -125,16 +131,21 @@ class TtFPN:
                     parameters=parameters["fpn_convs"][i]["ConvModule"],
                     device=device,
                     input_params=[3, 2, 1, out_channels, in_channels],
-                    activation="relu",
+                    activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                     deallocate_activation=True,
-                    change_shard=True,
                 )
                 self.fpn_convs.append(extra_fpn_conv)
 
     def __call__(self, inputs) -> tuple:
         assert len(inputs) == len(self.in_channels)
         # build laterals
-        laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
+        # laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
+        laterals = []
+        for i, lateral_conv in enumerate(self.lateral_convs):
+            lateral = lateral_conv(inputs[i + self.start_level])
+            laterals.append(lateral)
+        for i in inputs:
+            ttnn.deallocate(i)
 
         # build top-down path
         used_backbone_levels = len(laterals)
@@ -175,7 +186,11 @@ class TtFPN:
 
         # build outputs
         # part 1: from original levels
-        outs = [self.fpn_convs[i](laterals[i]) for i in range(used_backbone_levels)]
+        outs = []
+        for i in range(used_backbone_levels):
+            out = self.fpn_convs[i](laterals[i])
+            outs.append(out)
+        # outs = [self.fpn_convs[i](laterals[i]) for i in range(used_backbone_levels)]
         # part 2: add extra levels
         if self.num_outs > len(outs):
             assert False, "This is not invoked So, not implemented"

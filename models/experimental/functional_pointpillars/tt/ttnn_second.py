@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 from models.experimental.functional_pointpillars.tt.common import TtConv
 from typing import Optional, Sequence
 
@@ -31,7 +32,7 @@ class TtSECOND:
                     parameters=parameters["blocks"][i][0],
                     device=device,
                     input_params=[3, layer_strides[i], 1, out_channels[i], in_filters[i]],
-                    activation="relu",
+                    activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                     deallocate_activation=True if i == 0 else False,
                     halo=True if i == 0 else False,
                 )
@@ -42,7 +43,7 @@ class TtSECOND:
                         parameters=parameters["blocks"][i][(j + 1) * 3],
                         device=device,
                         input_params=[3, 1, 1, out_channels[i], out_channels[i]],
-                        activation="relu",
+                        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                         deallocate_activation=True,
                     )
                 )
@@ -60,10 +61,9 @@ class TtSECOND:
 
     def __call__(self, x):
         outs = []
-        print(self.blocks)
         for i in range(len(self.blocks)):
             for j in range(len(self.blocks[i])):
-                x, h, w = self.blocks[i][j](x)
+                x = self.blocks[i][j](x)
             # x = ttnn.reshape(x, (1, h, w, x.shape[-1]))  # bs=1
             outs.append(x)
         return tuple(outs)
