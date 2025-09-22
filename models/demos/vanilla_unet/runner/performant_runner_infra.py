@@ -35,6 +35,7 @@ class VanillaUNetPerformanceRunnerInfra:
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
         self.num_devices = self.device.get_num_devices()
+        self.batch_size_per_device = batch_size
         self.batch_size = batch_size * self.device.get_num_devices()
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
@@ -44,6 +45,10 @@ class VanillaUNetPerformanceRunnerInfra:
         self.inputs_mesh_mapper = in_mapper
         self.weights_mesh_mapper = wt_mapper
         self.output_mesh_composer = out_composer
+
+        self.torch_input_tensor_per_device = torch.randn(
+            (self.batch_size_per_device, self.channels, resolution[0], resolution[1])
+        )
 
         self.torch_input_tensor = (
             torch.randn((self.batch_size, self.channels, resolution[0], resolution[1]))
@@ -61,7 +66,7 @@ class VanillaUNetPerformanceRunnerInfra:
         )
         self.parameters.conv_args = {}
         self.parameters.conv_args = infer_ttnn_module_args(
-            model=self.torch_model, run_model=lambda model: model(self.torch_input_tensor), device=None
+            model=self.torch_model, run_model=lambda model: model(self.torch_input_tensor_per_device), device=None
         )
 
         self.ttnn_model = TtUnet(
