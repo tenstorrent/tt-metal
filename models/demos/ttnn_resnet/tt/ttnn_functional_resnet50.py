@@ -264,23 +264,7 @@ class resnet50Bottleneck:
         )
 
         act_block_h_override = 0
-        run_downsample_before_conv2 = True
         ds_out = None
-
-        run_downsample_before_conv2 = False
-
-        if run_downsample_before_conv2:
-            ds_out = self.run_downsample_if_req(
-                x,
-                device,
-                batch_size,
-                ds_input_height,
-                ds_input_width,
-                reshard_if_not_optimal,
-                height_sharding,
-                packer_l1_accum_enabled=packer_l1_acc,
-                enable_act_double_buffer=False,
-            )
 
         logger.debug(f"Running conv2")
 
@@ -372,20 +356,17 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        if not run_downsample_before_conv2:
-            ds_out = self.run_downsample_if_req(
-                x,
-                device,
-                batch_size,
-                ds_input_height,
-                ds_input_width,
-                reshard_if_not_optimal,
-                height_sharding,
-                packer_l1_accum_enabled=packer_l1_acc,
-                enable_act_double_buffer=enable_act_double_buffer,
-            )
-
-        assert ds_out is not None, "ds_out is None"
+        ds_out = self.run_downsample_if_req(
+            x,
+            device,
+            batch_size,
+            ds_input_height,
+            ds_input_width,
+            reshard_if_not_optimal,
+            height_sharding,
+            packer_l1_accum_enabled=packer_l1_acc,
+            enable_act_double_buffer=enable_act_double_buffer,
+        )
 
         if ds_out.memory_config() != out.memory_config():
             ds_out = ttnn.to_memory_config(ds_out, out.memory_config())
