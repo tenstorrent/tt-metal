@@ -255,10 +255,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
 
+    // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        this->receiver_txq_id = 1;
-    }
+    // if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    //     this->receiver_txq_id = 1;
+    // }
     this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
