@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/program.hpp>
@@ -17,6 +18,7 @@
 #include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel.hpp>
 
 /** @file */
 
@@ -44,7 +46,7 @@ class Program;
 class IDevice;
 class Trace;
 class CircularBuffer;
-class Event;
+struct Event;
 class Buffer;
 class GlobalSemaphore;
 
@@ -449,9 +451,6 @@ void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program&
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS
 // ==================================================
-// clang-format on
-using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
-// clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
  * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
@@ -484,14 +483,14 @@ void SetRuntimeArgs(
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | runtime_args | The runtime args to be written                                         | initializer_list<const uint32_t>                       |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | initializer_list<uint32_t>                       |                                                                     | Yes      |
  */
 // clang-format on
 void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::initializer_list<const uint32_t> runtime_args);
+    std::initializer_list<uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -513,47 +512,6 @@ void SetRuntimeArgs(
     KernelHandle kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args);
-
-// clang-format off
-/**
- * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
- * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
- * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
- * | kernel       | The kernel that will receive these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
- * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
- * | runtime_args | The runtime args to be written                                         | std::shared_ptr<RuntimeArgs>                           |                                                                            | Yes      |
-*/
-// clang-format on
-void SetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args);
-
-// clang-format off
-/**
- * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
- *
- * Return value: void
- * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
- * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
- * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
- * | kernel       | The kernel that will receive these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
- * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector< CoreCoord > &                       | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<std::shared_ptr<RuntimeArgs>>        | Outer vector size must be equal to size of core_spec vector                | Yes      |
- */
-// clang-format on
-void SetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::vector<CoreCoord>& core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args);
 
 // clang-format off
 /**
@@ -582,11 +540,10 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
- * | runtime_args | The runtime args to be written                                         | std::initializer_list<const uint32_t>                  |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | std::initializer_list<uint32_t>                  |                                                                     | Yes      |
  */
 // clang-format on
-void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args);
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -671,7 +628,8 @@ void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst
     EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking);
 }
 template <typename DType>
-void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::vector<DType>& dst, bool blocking) {
+void EnqueueReadBuffer(
+    CommandQueue& cq, const std::shared_ptr<Buffer>& buffer, std::vector<DType>& dst, bool blocking) {
     EnqueueReadBuffer(cq, *buffer, dst, blocking);
 }
 
@@ -692,7 +650,7 @@ void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::ve
 // clang-format on
 void EnqueueReadSubBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     const BufferRegion& region,
     bool blocking);
@@ -721,7 +679,7 @@ void EnqueueReadSubBuffer(
 template <typename DType>
 void EnqueueReadSubBuffer(
     CommandQueue& cq,
-    std::shared_ptr<Buffer> buffer,
+    const std::shared_ptr<Buffer>& buffer,
     std::vector<DType>& dst,
     const BufferRegion& region,
     bool blocking) {
@@ -954,6 +912,33 @@ bool EventQuery(const std::shared_ptr<Event>& event);
 // clang-format on
 void Synchronize(
     IDevice* device, std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+// clang-format off
+/**
+ * Push the current command queue id to the stack.
+ * Return value: void
+ * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |--------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
+ */
+// clang-format on
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
+
+// clang-format off
+/**
+ * Pop the current command queue id from the stack.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t PopCurrentCommandQueueIdForThread();
+
+// clang-format off
+/**
+ * Get the current command queue id.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t GetCurrentCommandQueueIdForThread();
 
 }  // namespace tt_metal
 

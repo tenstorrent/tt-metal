@@ -57,7 +57,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
@@ -89,7 +89,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
@@ -122,19 +122,16 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
         ccl: CCL1D,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
             "moe": [
                 None if is_padding else MoE.create_state(hf_config, mesh_device, ccl) for is_padding in is_padding_layer
             ],
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
-            "apply_dp": {
-                "semaphore": ccl.get_semaphore(0),
-            },
             "revert_dp": {
-                "multi_device_global_semaphore": ccl.get_semaphore(0),
+                "multi_device_global_semaphore": ccl.get_gather_sem(0),
             },
         }
 
@@ -147,11 +144,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         dim: int,
         memory_config: ttnn.MemoryConfig,
         cluster_axis: int = 0,
-        semaphore=None,
     ) -> ttnn.Tensor:
         """Apply data parallelism by broadcasting from source row and partitioning across mesh."""
         # First broadcast from row_idx to all rows in the mesh
-        x_broadcasted = cls._broadcast_row_to_mesh(x, mesh_shape, row_idx, semaphore)
+        x_broadcasted = cls._broadcast_row_to_mesh(x, mesh_shape, row_idx)
 
         # Then partition the batch across the mesh
         x_partitioned = cls._partition_batch_on_mesh(x_broadcasted, dim, memory_config, cluster_axis)
@@ -160,7 +156,10 @@ class MoEDecoderBlock(DecoderBlockBase):
 
     @classmethod
     def _broadcast_row_to_mesh(
-        cls, tt_input: ttnn.Tensor, mesh_shape: tuple[int, int], src_row: int, semaphore
+        cls,
+        tt_input: ttnn.Tensor,
+        mesh_shape: tuple[int, int],
+        src_row: int,
     ) -> ttnn.Tensor:
         """Broadcast data from a source row to all other rows in the mesh."""
         # Broadcast from src_row to mesh
@@ -179,7 +178,6 @@ class MoEDecoderBlock(DecoderBlockBase):
                     dest_coord,
                     source_coord,
                     ttnn.Topology.Linear,
-                    semaphore,
                     optional_output_tensor=tt_input,
                 )
 
@@ -211,7 +209,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
             "moe": [

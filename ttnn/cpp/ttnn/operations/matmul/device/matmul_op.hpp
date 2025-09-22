@@ -65,7 +65,7 @@ ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tens
  * @return Shape of the resulting tensor after sparse matmul
  */
 ttnn::Shape compute_sparse_matmul_output_shape(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool batched_input_a);
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse);
 
 /*
  * GENERAL MATMUL AND BMM
@@ -158,8 +158,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
-    uint32_t nnz,
-    bool batched_input_a,
+    std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
     Tensor& output_tensor,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -181,49 +181,49 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 // for in1 iff B=1 for in0 (ie. single core)
 struct MatmulMultiCoreReuseProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t out_block_h;
-    std::size_t out_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool transpose_mcast;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool transpose_mcast{};
     std::optional<UnaryWithParam> fused_activation;
     bool fuse_batch = true;
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t out_block_h;
-    std::size_t out_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool fuse_batch;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool fuse_batch{};
     std::optional<UnaryWithParam> fused_activation;
-    bool mcast_in0;
-    bool gather_in0;
+    bool mcast_in0{};
+    bool gather_in0{};
     CoreRangeSet hop_cores;
-    std::size_t num_global_cb_receivers;
-    bool untilize_out;
+    std::size_t num_global_cb_receivers{};
+    bool untilize_out{};
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
-    std::size_t in0_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
+    std::size_t in0_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
     std::optional<UnaryWithParam> fused_activation;
 };
 
@@ -281,8 +281,8 @@ Matmul create_matmul_struct(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
 struct SparseMatmul {
-    uint32_t nnz;
-    bool batched_input_a;
+    const std::optional<uint32_t> nnz;
+    bool is_input_a_sparse;
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     const std::optional<DataType> output_dtype = std::nullopt;
@@ -360,7 +360,6 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 std::vector<Tensor> matmul_batched_weights(
@@ -368,7 +367,6 @@ std::vector<Tensor> matmul_batched_weights(
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor sparse_matmul(
@@ -376,7 +374,6 @@ Tensor sparse_matmul(
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
     const struct SparseMatmul& parameters = SparseMatmul{},
-    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul

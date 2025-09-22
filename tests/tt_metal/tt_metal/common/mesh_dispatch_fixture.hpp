@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
 #include <map>
 #include <tt-metalium/host_api.hpp>
@@ -28,7 +28,7 @@ private:
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(
-        std::shared_ptr<distributed::MeshDevice> mesh_device,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         distributed::MeshWorkload& workload,
         const bool skip_finish = false) {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
@@ -36,18 +36,18 @@ public:
             distributed::Finish(mesh_device->mesh_command_queue());
         }
     }
-    void FinishCommands(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    void FinishCommands(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         distributed::Finish(mesh_device->mesh_command_queue());
     }
     void WriteBuffer(
-        std::shared_ptr<distributed::MeshDevice> mesh_device,
-        std::shared_ptr<distributed::MeshBuffer> in_buffer,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        const std::shared_ptr<distributed::MeshBuffer>& in_buffer,
         std::vector<uint32_t>& src_vec) {
         distributed::WriteShard(
             mesh_device->mesh_command_queue(), in_buffer, src_vec, distributed::MeshCoordinate(0, 0));
     }
     void ReadBuffer(
-        std::shared_ptr<distributed::MeshDevice> mesh_device,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
         std::vector<uint32_t>& dst_vec) {
         distributed::ReadShard(
@@ -57,9 +57,9 @@ public:
     bool IsSlowDispatch() { return this->slow_dispatch_; }
 
 protected:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
-    bool slow_dispatch_;
+    bool slow_dispatch_{};
     const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
     const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
 
@@ -80,7 +80,7 @@ protected:
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         devices_.clear();
-        for (auto [device_id, device] : id_to_device_) {
+        for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
     }
@@ -90,15 +90,17 @@ protected:
         // closed all devices
         if (!id_to_device_.empty()) {
             for (auto [device_id, device] : id_to_device_) {
+                device->close();
                 device.reset();
             }
+
             id_to_device_.clear();
             devices_.clear();
         }
     }
 
     void RunTestOnDevice(
-        const std::function<void()>& run_function, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         auto device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running test on device {}.", device->id());
         run_function();

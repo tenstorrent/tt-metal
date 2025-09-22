@@ -15,6 +15,7 @@
 #include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 using Rank = ttml::core::distributed::Rank;
@@ -25,7 +26,8 @@ void send_aggregated_gradients_from_workers_to_optimizer(
     const std::shared_ptr<ttml::core::distributed::DistributedContext> &workers_and_aggregator_ctx,
     const std::shared_ptr<ttml::core::distributed::DistributedContext> &aggregator_and_optimizer_ctx,
     const SortedParameters &sorted_model_parameters,
-    int workers) {
+    int workers,
+    bool is_ddp = false) {
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
@@ -41,6 +43,9 @@ void send_aggregated_gradients_from_workers_to_optimizer(
             tensor = ttnn::add(tensor, tensor_to_add);
         }
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
+        if (is_ddp) {
+            tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
+        }
         socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
     }
 }
@@ -80,10 +85,6 @@ int main(int argc, char **argv) {
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
-    if (device_config.enable_tp) {
-        throw std::runtime_error("Tensor parallel is not supported in the aggregator worker.");
-    }
-
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
         if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
@@ -102,16 +103,37 @@ int main(int argc, char **argv) {
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     auto should_be_divisible_by = (device_config.enable_tp ? num_devices : 1U) * 32U;
     vocab_size = three_tier_arch::round_up_to_tile(vocab_size, should_be_divisible_by);
-    config.transformer_config.vocab_size = vocab_size;
+    std::visit(
+        [&](auto &&arg) {
+            if constexpr (requires { arg.vocab_size; }) {
+                arg.vocab_size = vocab_size;
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
 
-    auto create_model =
-        [enable_tp = device_config.enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
-        if (enable_tp) {
-            return ttml::models::distributed::gpt2::create(config);
-        }
-        return ttml::models::gpt2::create(config);
-    };
-    auto model = create_model(config.transformer_config);
+    auto model = std::visit(
+        [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
+                if (device_config.enable_tp) {
+                    return ttml::models::distributed::llama::create(arg);
+                } else {
+                    return ttml::models::llama::create(arg);
+                }
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
+                if (device_config.enable_tp) {
+                    return ttml::models::distributed::gpt2::create(arg);
+                } else {
+                    return ttml::models::gpt2::create(arg);
+                }
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
 
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
@@ -139,7 +161,8 @@ int main(int argc, char **argv) {
                 workers_and_aggregator_ctx,
                 aggregator_and_optimizer_ctx,
                 sorted_model_parameters,
-                workers);
+                workers,
+                device_config.enable_ddp);
             send_weights_from_optimizer_to_workers(
                 socket_manager,
                 workers_and_aggregator_ctx,

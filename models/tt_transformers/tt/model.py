@@ -270,11 +270,11 @@ class Transformer(LightweightModule):
         )
         return tt_tokens
 
-    def concat_device_output(self, tt_out):
+    def concat_host_output(self, tt_out):
         """
-        Concatenate the output of the devices into a single tensor.
+        Concatenate the output of the devices into a single host tensor.
         """
-        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out.cpu())]
+        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
         if self.args.is_galaxy:
             row_dim, col_dim = (3, 1)
         else:
@@ -290,14 +290,14 @@ class Transformer(LightweightModule):
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        return self.concat_device_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
+        return self.concat_host_output(tt_out.cpu())[0, 0, last_token_idx, : self.vocab_size]
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
-            return self.concat_device_output(tt_out)[0, 0, :B, 0]
+            return self.concat_host_output(tt_out)[0, 0, :B, 0]
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()

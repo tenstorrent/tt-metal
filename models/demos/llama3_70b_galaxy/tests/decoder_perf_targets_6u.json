@@ -156,7 +156,7 @@
     },
     "ScaledDotProductAttentionDecode_0": {
       "op_name": "SDPA",
-      "kernel_duration": 9183.524305555555,
+      "kernel_duration": 8062.635416666667,
       "op_to_op": 625.3407407407408,
       "first_to_last_start": 2315.9037037037037,
       "non-overlapped-dispatch-time": 8528.468253968254,
@@ -256,7 +256,7 @@
       "kernel_duration": 8355.870833333332,
       "op_to_op": 789.2,
       "non-overlapped-dispatch-time": 4592.0,
-      "kernel_duration_relative_margin": 0.2,
+      "kernel_duration_relative_margin": 0.3,
       "op_to_op_duration_relative_margin": 1.0,
       "dispatch_duration_relative_margin": 0.5
     },
@@ -283,7 +283,7 @@
       "kernel_duration": 10840.89375,
       "op_to_op": 655.7333333333333,
       "non-overlapped-dispatch-time": 6158.0,
-      "kernel_duration_relative_margin": 0.3,
+      "kernel_duration_relative_margin": 0.35,
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
@@ -292,7 +292,7 @@
       "kernel_duration": 12112.06875,
       "op_to_op": 674.6,
       "non-overlapped-dispatch-time": 6675.0,
-      "kernel_duration_relative_margin": 0.2,
+      "kernel_duration_relative_margin": 0.33,
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
@@ -361,12 +361,12 @@
     },
     "PlusOne_0": {
       "op_name": "PlusOne_0",
-      "kernel_duration": 847.2625,
-      "op_to_op": 1857.8,
+      "kernel_duration": 442.40625,
+      "op_to_op": 650.0,
       "non-overlapped-dispatch-time": 1862.2142857142858,
       "kernel_duration_relative_margin": 0.2,
       "op_to_op_duration_relative_margin": 0.4,
-      "dispatch_duration_relative_margin": 0.5
+      "dispatch_duration_relative_margin": 1.64
     },
     "PlusOne_1": {
       "op_name": "PlusOne_1",

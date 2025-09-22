@@ -14,8 +14,10 @@ void MAIN {
     uint32_t start_tile_id = get_arg_val<uint32_t>(1);
 
     // We are going to read from these two circular buffers
+    // These buffers can be accessed using either the index or the name, since
+    // the mapping was defined in the CreateKernel call.
     constexpr auto cb_in0 = get_compile_time_arg_val(0);
-    constexpr auto cb_in1 = get_compile_time_arg_val(1);
+    constexpr auto cb_in1 = get_named_compile_time_arg_val("c_1");
     // and write to the output circular buffer
     constexpr auto cb_out0 = get_compile_time_arg_val(2);
     // The destination register.

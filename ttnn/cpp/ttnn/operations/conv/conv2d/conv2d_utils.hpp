@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn {
 
@@ -80,6 +81,7 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
+    tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
@@ -97,13 +99,16 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
-    const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
+    const MemoryConfig& conv_output_mem_config,
+    uint32_t num_cores_nhw,
+    uint32_t num_cores_c_in,
+    uint32_t num_cores_c_out);
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 
@@ -116,8 +121,10 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_div,
     uint32_t window_h,
     uint32_t window_w,
+    uint32_t output_width,
     bool fp32_accum,
-    bool full_inner_dim);
+    bool full_inner_dim,
+    bool enable_activation_reuse = false);
 
 std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
@@ -144,14 +151,16 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     bool is_mm_conv);
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
-    const Conv2dConfig& conv_config,
+    TensorMemoryLayout shard_layout,
+    ShardOrientation block_shard_orientation,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
     CoreCoord compute_grid_size,
     Layout input_tensor_layout,
-    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt);
+    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
+    std::optional<uint32_t> act_block_h_override = std::nullopt);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
 
@@ -238,12 +247,13 @@ struct ConvDRAMParamters {
     CoreCoord compute_grid;
     ttnn::Shape weights_shape;
     DataType weights_datatype;
+    DataType input_datatype;
     DataType output_datatype;
     bool enable_bias;
     bool mm_conv;
 };
 
-uint32_t estimate_halo_output_bytes(
+uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> halo_input_shard_shape,
     uint32_t batch_size,
     uint32_t input_height,

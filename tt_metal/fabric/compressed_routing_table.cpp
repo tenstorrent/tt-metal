@@ -41,7 +41,6 @@ std::uint8_t compressed_routing_table_t<ArraySize>::compress_value(std::uint8_t 
         case eth_chan_magic_values::INVALID_DIRECTION:
             return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_DIRECTION);
         case eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY:
-            return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY);
         default: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY);
     }
 }
@@ -53,9 +52,9 @@ void compressed_routing_table_t<ArraySize>::set_original_direction(
 }
 
 // Explicit instantiations for tensix_routing_l1_info_t
-template class compressed_routing_table_t<MAX_MESH_SIZE>;
+template struct compressed_routing_table_t<MAX_MESH_SIZE>;
 #if MAX_MESH_SIZE != MAX_NUM_MESHES
-template class compressed_routing_table_t<MAX_NUM_MESHES>;
+template struct compressed_routing_table_t<MAX_NUM_MESHES>;
 #endif
 
 }  // namespace tt::tt_fabric

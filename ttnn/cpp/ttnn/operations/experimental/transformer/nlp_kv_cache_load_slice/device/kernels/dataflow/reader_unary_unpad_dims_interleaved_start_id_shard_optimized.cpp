@@ -15,21 +15,17 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_id = get_arg_val<uint32_t>(1);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t num_unpadded_tiles_head_dim = get_compile_time_arg_val(2);
-    constexpr uint32_t num_unpadded_tiles_seqlen_dim = get_compile_time_arg_val(3);
-    constexpr uint32_t num_padded_tiles_seqlen_dim = get_compile_time_arg_val(4);
-    constexpr uint32_t num_readers = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t num_unpadded_tiles_head_dim = get_compile_time_arg_val(1);
+    constexpr uint32_t num_unpadded_tiles_seqlen_dim = get_compile_time_arg_val(2);
+    constexpr uint32_t num_padded_tiles_seqlen_dim = get_compile_time_arg_val(3);
+    constexpr uint32_t num_readers = get_compile_time_arg_val(4);
+    constexpr auto src_args = TensorAccessorArgs<5>();
 
     constexpr uint32_t cb_id_in0 = 0;
 
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
-
-    // In and out are assumed to be same dataformat
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src_addr, .page_size = tile_size, .data_format = data_format};
+    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
 
     uint32_t src_tile_id = start_id;
     cb_reserve_back(cb_id_in0, num_tiles);

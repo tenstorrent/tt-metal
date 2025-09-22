@@ -14,9 +14,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -176,7 +176,7 @@ private:
         dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
     DispatchCoreConfig dispatch_core_config_;
-    uint8_t num_hw_cqs;
+    uint8_t num_hw_cqs{};
     static dispatch_core_manager* _inst;
 };
 

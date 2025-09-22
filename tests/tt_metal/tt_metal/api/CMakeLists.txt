@@ -6,9 +6,9 @@ add_library(TT::Metalium::Test::API ALIAS unit_tests_api_lib)
 target_sources(
     unit_tests_api_lib
     PRIVATE
-        allocator/test_free_list_allocator.cpp
         allocator/test_free_list_opt_allocator.cpp
         allocator/test_l1_banking_allocator.cpp
+        allocator/test_overlapped_bank_manager.cpp
         circular_buffer/test_CircularBuffer_allocation.cpp
         circular_buffer/test_CircularBuffer_creation.cpp
         circular_buffer/test_CircularBuffer_non_blocking.cpp

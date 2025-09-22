@@ -7,8 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition_pybind.hpp"
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
 #include "ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_pybind.hpp"
@@ -27,8 +25,6 @@ void py_bind_common(pybind11::module& module) {
 
 void py_module(py::module& module) {
     ccl::py_bind_common(module);
-    ccl::py_bind_all_gather(module);
-    ccl::py_bind_reduce_scatter(module);
     ccl::py_bind_mesh_partition(module);
     ccl::py_bind_barrier(module);
     ccl::py_bind_all_to_all_combine(module);

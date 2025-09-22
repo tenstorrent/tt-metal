@@ -74,6 +74,6 @@ TEST_F(InMemoryTokenDatasetTest, GetItemLastSample) {
 // Test out of range error for get_item_impl function
 TEST_F(InMemoryTokenDatasetTest, GetItemOutOfRange) {
     size_t index = dataset.get_size();  // Index out of range
-    auto test_throw_lambda = [&]() { auto _ = dataset.get_item(index); };
+    auto test_throw_lambda = [&]() { [[maybe_unused]] auto _ = dataset.get_item(index); };
     EXPECT_THROW(test_throw_lambda(), std::out_of_range);
 }

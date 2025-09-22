@@ -4,7 +4,6 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -62,8 +61,8 @@ Tensor handle_zero_volume_matmul(
     DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
 
     // Create a tensor filled with zeros
-    auto output_tensor = ttnn::full(
-        output_shape, 0.0f, output_dtype, input_tensor_a.layout(), *input_tensor_a.mesh_device(), memory_config);
+    auto output_tensor =
+        ttnn::full(output_shape, 0.0f, output_dtype, input_tensor_a.layout(), *input_tensor_a.device(), memory_config);
 
     // Apply bias if provided
     if (bias.has_value()) {
@@ -87,7 +86,6 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
@@ -141,7 +139,6 @@ ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
-        DefaultQueueId,
         optional_output_tensor);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
@@ -213,7 +210,6 @@ Tensor MatmulOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        /*queue_id=*/0,
         optional_output_tensor);
 }
 
@@ -259,7 +255,6 @@ Tensor LinearOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        /*queue_id=*/0,
         optional_output_tensor);
 }
 
@@ -308,7 +303,6 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        DefaultQueueId,
         optional_output_tensor);
 }
 
@@ -354,8 +348,7 @@ Tensor AddmmOperation::invoke(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    std::optional<Tensor> optional_output_tensor,
-    QueueId queue_id) {
+    std::optional<Tensor> optional_output_tensor) {
     TT_FATAL(!output_tile.has_value(), "output_tile must not be provided");
 
     std::optional<CoreCoord> user_core_coord;
@@ -384,11 +377,10 @@ Tensor AddmmOperation::invoke(
             output_tile,
             /*global_cb=*/std::nullopt,
             /*sub_device_id=*/std::nullopt},
-        /*queue_id=*/0,
         optional_output_tensor);
 
     if (alpha != 1.0) {
-        multiply_(queue_id, out_tensor, alpha);
+        multiply_(out_tensor, alpha);
     }
 
     if (beta != 0.0) {
@@ -403,15 +395,15 @@ Tensor SparseMatmulOperation::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
-    uint32_t nnz,
-    bool batched_input_a,
+    const std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    std::optional<Tensor> optional_output_tensor,
+    const std::optional<Tensor>& optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord =
@@ -422,7 +414,7 @@ Tensor SparseMatmulOperation::invoke(
         sparsity,
         SparseMatmul{
             nnz,
-            batched_input_a,
+            is_input_a_sparse,
             program_config,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,
@@ -431,7 +423,6 @@ Tensor SparseMatmulOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        DefaultQueueId,
         optional_output_tensor);
 }
 

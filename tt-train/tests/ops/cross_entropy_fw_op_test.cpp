@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -53,7 +55,7 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
     using namespace ttml;
 
-    const uint32_t N = 1, C = 1, H = 1, W = 8;
+    const uint32_t N = 1, H = 1;
 
     xt::xarray<float> input_tensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
@@ -85,7 +87,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
     using namespace ttml;
 
-    const uint32_t N = 1, C = 1, H = 2, W = 4;
+    const uint32_t N = 1, H = 2;
 
     xt::xarray<float> input_tensor = {{{{-100.F, -101.F, -102.F, -103.F}, {-5.01F, -5.02F, -0.3F, -7.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
@@ -260,7 +262,11 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
-TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
+TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;

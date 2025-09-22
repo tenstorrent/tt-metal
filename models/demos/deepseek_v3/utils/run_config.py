@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from types import NoneType
-from typing import Any, Callable, overload
+from typing import Any, overload
 
 from loguru import logger
 
@@ -16,9 +16,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | SavedTensor | None"]
-    | list["WeightConfig | SavedTensor | None"]
-    | tuple["WeightConfig | SavedTensor | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    dict[str, "WeightConfig | SavedWeight | None"]
+    | list["WeightConfig | SavedWeight | None"]
+    | tuple["WeightConfig | SavedWeight | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
@@ -167,12 +167,21 @@ def _merge_config_containers(
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
-        if cfg_a is None or cfg_b is None or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b)):
+        if (
+            cfg_a is None
+            or cfg_b is None
+            or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b))
+            or (len(cfg_a) == 1 or len(cfg_b) == 1 and type(cfg_a) == type(cfg_b))
+        ):
             container = type(cfg_a) if cfg_a is not None else type(cfg_b)
             if cfg_a is None:
                 cfg_a = container([None]) * len(cfg_b)
             if cfg_b is None:
                 cfg_b = container([None]) * len(cfg_a)
+            if len(cfg_a) == 1:
+                cfg_a *= len(cfg_b)
+            if len(cfg_b) == 1:
+                cfg_b *= len(cfg_a)
             return container(
                 _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
                 for a, b in zip(cfg_a, cfg_b, strict=True)
@@ -341,7 +350,6 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
 
     return ttnn.load_tensor(
         saved_weight.path,
-        enable_multihost_format=True,
     ).to(
         device=device,
         mem_config=saved_weight.memory_config,

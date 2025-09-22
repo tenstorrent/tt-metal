@@ -36,8 +36,8 @@ public:
         payload_chunk_size(payload_chunk_size),
         l1_alignment_(l1_alignment),
         payload_region_(payload_region),
-        atomic_region_(atomic_region) {
-        this->next_atomic_addr_ = this->atomic_region_.start;
+        atomic_region_(atomic_region),
+        next_atomic_addr_(this->atomic_region_.start) {
         init_payload_buffer_allocator();
     }
 
@@ -266,8 +266,6 @@ inline CoreCoord TestDeviceResources::reserve_receiver_core(const std::optional<
 
 inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType core_type) {
     if (core_resources_.find(core) == core_resources_.end()) {
-        CoreAllocationConfig policy = core_pools_[static_cast<size_t>(core_type)].policy;
-
         core_resources_.emplace(
             core,
             CoreResources(

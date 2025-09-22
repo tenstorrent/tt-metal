@@ -6,6 +6,7 @@ from itertools import takewhile
 from typing import Any, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
@@ -483,38 +484,15 @@ def base_model_name(hf_config):
 
 def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
     """Dequantize a pytorch tensor using the provided scale."""
-    assert tensor.ndim == inv_scale.ndim and tensor.dtype == torch.float8_e4m3fn and inv_scale.dtype == torch.float32
+    assert tensor.ndim == inv_scale.ndim
     assert len(block_shape) == tensor.ndim and all(
         inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
     )
     for i, block_dim in enumerate(block_shape):
         inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
-    tensor = tensor.bfloat16() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].bfloat16()
+    tensor = tensor.float() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
     del inv_scale
     return tensor
-
-
-def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
-    dequantized_state_dict = {}
-
-    for name, tensor in state_dict.items():
-        if name.endswith("_scale_inv"):
-            continue
-
-        if tensor is not None:
-            # Look for corresponding scale tensor
-            scale_name = name + "_scale_inv"
-            if scale_name in state_dict:
-                scale_tensor = state_dict[scale_name]
-                # Dequantize using the scale
-                dequantized_tensor = dequantize(
-                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
-                )
-                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
-            else:
-                dequantized_state_dict[name] = tensor.to(dtype)
-
-    return dequantized_state_dict
 
 
 def get_state_dicts(
@@ -575,14 +553,33 @@ def sub_state_dicts(
     return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
 
 
+TENSOR_CACHE_EXTENSION = ".tensorbin"
+
+
 def save_and_get_path(path, tensor):
     """Save a tensor to a file and return the path."""
+    # Ensure the path has an appropriate extension
+    if not path.name.endswith(TENSOR_CACHE_EXTENSION):
+        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     memory_config = tensor.memory_config()
-    ttnn.dump_tensor(path, tensor, enable_multihost_format=True)
+    ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return SavedWeight(
         path=path, memory_config=memory_config
     )  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+
+
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
+    """Get mesh coordinates for a given mesh shape and optional row and column indices."""
+    if row:
+        assert 0 <= row < mesh_shape[0], "Row index out of bounds"
+    if col:
+        assert 0 <= col < mesh_shape[1], "Column index out of bounds"
+
+    row_select = range(mesh_shape[0]) if row is None else [row]
+    col_select = range(mesh_shape[1]) if col is None else [col]
+    return [ttnn.MeshCoordinate(r, c) for r in row_select for c in col_select]

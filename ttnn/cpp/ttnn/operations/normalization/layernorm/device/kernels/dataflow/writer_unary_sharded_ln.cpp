@@ -13,14 +13,16 @@ void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
+    constexpr uint32_t block_w = get_compile_time_arg_val(3);
+    constexpr auto gamma_args = TensorAccessorArgs<4>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     // Reshard writer
-    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t block_ht = get_compile_time_arg_val(12);
+    constexpr uint32_t worker_core_stride_w_bytes =
+        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t storage_core_stride_w_bytes =
+        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 4);
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
@@ -56,9 +58,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const DataFormat gamma_data_format = get_dataformat(cb_gamma);
-        const InterleavedAddrGenFast<gamma_is_dram> gamma = {
-            .bank_base_address = gamma_addr, .page_size = gamma_tile_bytes, .data_format = gamma_data_format};
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
 
         uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
         cb_reserve_back(cb_gamma, block_w);
@@ -73,9 +73,7 @@ void kernel_main() {
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-        const DataFormat beta_data_format = get_dataformat(cb_beta);
-        const InterleavedAddrGenFast<beta_is_dram> beta = {
-            .bank_base_address = beta_addr, .page_size = beta_tile_bytes, .data_format = beta_data_format};
+        const auto beta = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
 
         uint32_t l1_write_addr_beta = get_write_ptr(cb_beta);
         cb_reserve_back(cb_beta, block_w);

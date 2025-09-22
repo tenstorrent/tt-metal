@@ -13,26 +13,23 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr bool src_is_dram = (bool)get_compile_time_arg_val(2);
-    constexpr bool src_indices_is_dram = (bool)get_compile_time_arg_val(3);
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt_local = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t Wt_local = get_compile_time_arg_val(3);
+    constexpr uint32_t Wt = get_compile_time_arg_val(4);
+
+    constexpr auto s_input_args = TensorAccessorArgs<5>();
+    constexpr auto s_indices_args = TensorAccessorArgs<s_input_args.next_compile_time_args_offset()>();
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
     constexpr uint32_t tile_bytes_indices = get_tile_size(cb_id_in1);
-    constexpr DataFormat data_format_indices = get_dataformat(cb_id_in1);
 
-    const InterleavedAddrGenFast<src_is_dram> s_input = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s_input = TensorAccessor(s_input_args, src_addr, tile_bytes);
 
-    const InterleavedAddrGenFast<src_indices_is_dram> s_indices = {
-        .bank_base_address = src_indices_addr, .page_size = tile_bytes_indices, .data_format = data_format_indices};
+    const auto s_indices = TensorAccessor(s_indices_args, src_indices_addr, tile_bytes_indices);
 
     // Stream in input tensor and index tensor
     // The input buffer has four tiles as we double-buffer for the two tiles needed for topk_local_sort to start

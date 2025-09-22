@@ -15,7 +15,6 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
@@ -65,6 +64,13 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 // Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
 // to run a CCL over the unit-meshes.
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 class EriscDatamoverBuilder;
 
@@ -168,8 +174,8 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-    uint32_t page_size;
-    tt::tt_metal::ShardSpec const shard_spec;
+       uint32_t page_size{};
+       tt::tt_metal::ShardSpec const shard_spec;
 };
 
 struct CclTensorSlicer {
@@ -299,7 +305,7 @@ struct TensorSlice {
     ords_t tensor_slice_offset;
     ords_t worker_slice_shape;
     ords_t worker_slice_offset;
-    std::size_t dim;
+    std::size_t dim{};
 };
 };
 
@@ -649,13 +655,13 @@ private:
     // Class member variables
     tt_xy_pair flattened_tensor_shape;
     tt_xy_pair tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<tt_xy_pair> worker_slice_shapes;
     std::vector<tt_xy_pair> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 
@@ -690,15 +696,15 @@ private:
     Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_index);
 
     // Class member variables
-    Shape4D<uint32_t> tensor_shape;
-    Shape4D<uint32_t> tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_shape{};
+    Shape4D<uint32_t> tensor_slice_shape{};
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<Shape4D<uint32_t>> worker_slice_shapes;
     std::vector<Shape4D<uint32_t>> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);

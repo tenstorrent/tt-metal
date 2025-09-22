@@ -6,11 +6,11 @@
 
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "base_transformer.hpp"
 #include "common/transformer_common.hpp"
 #include "modules/llama_block.hpp"
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
-
 namespace ttml::models::llama {
 
 using RunnerType = common::transformer::RunnerType;
@@ -36,7 +36,7 @@ struct LlamaConfig {
     uint32_t original_context_length = 0U;
 };
 
-class Llama : public ttml::autograd::ModuleBase {
+class Llama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;

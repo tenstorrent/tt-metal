@@ -37,9 +37,11 @@ import ttnn
         ttnn.add,
         ttnn.sub,
         ttnn.squared_difference,
+        ttnn.rsub,
     ],
 )
-def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, device):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_legacy, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
@@ -68,7 +70,7 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
@@ -104,6 +106,7 @@ def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, devic
         ttnn.sub,
         ttnn.mul,
         ttnn.squared_difference,
+        ttnn.rsub,
     ],
 )
 def test_binary_int32_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, ttnn_op, device):
@@ -177,7 +180,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     ],
 )
 @pytest.mark.parametrize(
-    "ttnn_fn", ("logical_or", "logical_xor", "logical_and", "add", "sub", "mul", "squared_difference")
+    "ttnn_fn", ("logical_or", "logical_xor", "logical_and", "add", "sub", "mul", "squared_difference", "rsub")
 )
 def test_binary_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
     ttnn_op = getattr(ttnn, ttnn_fn)
@@ -533,6 +536,112 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        # scalar bcast
+        pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),
+        pytest.param([(8, 16, 32), (1, 1, 1)], id="broadcast_rhs_1"),
+        # no subtile bcast
+        pytest.param([(1, 16, 32), (8, 16, 32)], id="broadcast_lhs_2"),
+        pytest.param([(8, 16, 32), (1, 16, 32)], id="broadcast_rhs_2"),
+        # row bcast
+        pytest.param([(8, 1, 32), (8, 16, 32)], id="broadcast_lhs_3"),
+        pytest.param([(8, 16, 32), (8, 1, 32)], id="broadcast_rhs_3"),
+        pytest.param([(1, 1, 32), (8, 16, 32)], id="broadcast_lhs_4"),
+        pytest.param([(8, 16, 32), (1, 1, 32)], id="broadcast_rhs_4"),
+        # col bcast
+        pytest.param([(8, 16, 1), (8, 16, 32)], id="broadcast_lhs_5"),
+        pytest.param([(8, 16, 32), (8, 16, 1)], id="broadcast_rhs_5"),
+        pytest.param([(1, 16, 1), (8, 16, 32)], id="broadcast_lhs_6"),
+        pytest.param([(8, 16, 32), (1, 16, 1)], id="broadcast_rhs_6"),
+        # row-col mixed bcast
+        pytest.param([(1, 1, 32), (8, 16, 1)], id="broadcast_both_1"),
+        pytest.param([(8, 16, 1), (1, 1, 32)], id="broadcast_both_2"),
+        pytest.param([(8, 1, 32), (8, 16, 1)], id="broadcast_both_3"),
+        pytest.param([(8, 16, 1), (8, 1, 32)], id="broadcast_both_4"),
+        pytest.param([(1, 16, 1), (8, 1, 32)], id="broadcast_both_5"),
+        pytest.param([(8, 1, 32), (1, 16, 1)], id="broadcast_both_6"),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.lt,
+        ttnn.gt,
+    ],
+)
+def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
+    torch.manual_seed(0)
+
+    min_int = torch.iinfo(torch.int32).min
+    max_int = torch.iinfo(torch.int32).max
+    torch_input_tensor_a = torch.randint(low=min_int, high=max_int, size=shapes[0], dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(low=min_int, high=max_int, size=shapes[1], dtype=torch.int32)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.lt,
+        ttnn.gt,
+    ],
+)
+def test_comp_ops_edge_cases(ttnn_op, device):
+    torch_input_tensor_a = torch.tensor(
+        [0, 1, 0, 0, 1254, 43, 2147483647, -2147483648, 2147483647, 0, -123456789, -56738943, 2147483647, -2147483648]
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(
+        [0, 0, -1, 2, 324, 53342, 2147483647, -2147483648, 0, -2147483648, -3, -5, -2, 2]
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)

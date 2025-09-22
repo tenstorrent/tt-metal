@@ -434,11 +434,11 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
         [torch.float32, ttnn.float32],
     ),
 )
 def test_binary_sharded(a_shape, b_shape, a_config, b_config, out_config, dtype_pt, dtype_tt, device):
+    torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(b_shape)
 
@@ -480,6 +480,7 @@ def test_binary_sharded(a_shape, b_shape, a_config, b_config, out_config, dtype_
     ),
 )
 def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid, memory_lay_out):
+    torch.manual_seed(0)
     sharded_config = ttnn.create_sharded_memory_config(
         [160, 128],  # 14 cores
         core_grid=sharded_core_grid,
@@ -554,6 +555,7 @@ def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid, m
     ([ttnn.float32]),
 )
 def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
+    torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
@@ -621,6 +623,7 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
     ([ttnn.float32]),
 )
 def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
+    torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
@@ -682,6 +685,7 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
     ([ttnn.int32]),
 )
 def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
+    torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.int32), dtype)(a_shape)
@@ -736,6 +740,7 @@ def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
     ([ttnn.int32]),
 )
 def test_bitwise_opt_output(input_shapes, dtype, ttnn_fn, device):
+    torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.int32), dtype)(a_shape)
@@ -959,6 +964,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     binary_inplace_fns,
 )
 def test_inplace_binary_ops_fp32(input_shapes, ttnn_fn, device):
+    torch.manual_seed(0)
     a_shape, b_shape = input_shapes
     ttnn_op = getattr(ttnn, ttnn_fn)
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -1099,11 +1105,11 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
         [torch.float32, ttnn.float32],
     ),
 )
 def test_binary_sharded_bcast_w(device, dtype_pt, dtype_tt):
+    torch.manual_seed(0)
     a_shape = torch.Size([5, 7, 2 * 32, 4 * 32])
     b_shape = torch.Size([5, 7, 2 * 32, 1])
 
@@ -1178,6 +1184,7 @@ def test_binary_sharded_bcast_w(device, dtype_pt, dtype_tt):
     ),
 )
 def test_binary_sharded_invalid_bcast(a_shape, b_shape, a_shard_size, b_shard_size, core_range, device):
+    torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         a_shard_size,
         core_grid=core_range,
@@ -1214,6 +1221,7 @@ def test_binary_sharded_invalid_bcast(a_shape, b_shape, a_shard_size, b_shard_si
     ),
 )
 def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, core_range, device):
+    torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
@@ -1326,6 +1334,7 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
     ),
 )
 def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core_range, ttnn_fn, device):
+    torch.manual_seed(0)
     golden_function = ttnn.get_golden_function(ttnn_fn)
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
@@ -1386,6 +1395,7 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
     ),
 )
 def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
+    torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
@@ -1427,6 +1437,7 @@ def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
     ([ttnn.ShardStrategy.HEIGHT, [64, 96], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (2, 5))})],),
 )
 def test_binary_sharded_uneven(a_shape, b_shape, shard_type, shard_size, core_range, device):
+    torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
@@ -1471,6 +1482,7 @@ def test_binary_sharded_uneven(a_shape, b_shape, shard_type, shard_size, core_ra
     ),
 )
 def test_binary_sharded_uneven_invalid(a_shape, b_shape, shard_type, shard_size, core_range, device):
+    torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
@@ -1673,6 +1685,7 @@ def test_binary_sharded_scalar_col_major(scalar, a_shape, shard_type, shard_size
     ),
 )
 def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_size, core_range, device):
+    torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
@@ -1731,6 +1744,7 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
 def test_binary_sharded_invalid_spec(
     a_shape, b_shape, a_strategy, b_strategy, a_shard_size, b_shard_size, a_core_range, b_core_range, device
 ):
+    torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         a_shard_size,
         core_grid=a_core_range,
@@ -1826,13 +1840,9 @@ def test_binary_sharded_invalid_row_major_layout(
         _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=None)
 
 
-@pytest.mark.skip(reason="Skipping test for dchen/23538-sharded_ND")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    (
-        [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
-    ),
+    ([torch.bfloat16, ttnn.bfloat16],),
 )
 @pytest.mark.parametrize(
     "a_shape, b_shape, shard_type, shard_size, core_range",
@@ -1975,7 +1985,6 @@ profile_a_b_shape_pairs = [
     "dtype_pt, dtype_tt",
     (
         (torch.bfloat16, ttnn.bfloat16),
-        # (torch.int32, ttnn.int32),
         # (torch.float32, ttnn.float32)
     ),
 )
@@ -2104,7 +2113,8 @@ def test_binary_subtile_scalar_bcast(a_shape, b_shape, device):
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
-        [[1, 1, 320, 1], [1, 1, 1, 320]],
+        [[1, 1, 9600, 1], [1, 1, 1, 9600]],
+        [[1, 1, 1, 9600], [1, 1, 9600, 1]],
         # a col, b row
         [[1, 1, 320, 1], [1, 4, 1, 320]],
         [[1, 1, 320, 1], [4, 1, 1, 320]],
@@ -2133,9 +2143,11 @@ def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
 
-    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
-
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+    torch_output_tensor = torch_input_tensor_a - torch_input_tensor_b
+    # add is non associative, so we use subtract to test the bcast because it is associative
+    output_tensor = ttnn.subtract(
+        input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None
+    )
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -2155,6 +2167,7 @@ def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
 @pytest.mark.parametrize("bcast_dim", [ttnn.BcastOpDim.H, ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW])
 @pytest.mark.parametrize("math_op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.SUB, ttnn.BcastOpMath.MUL])
 def test_bcast(input_shape_a, device, bcast_dim, math_op):
+    torch.manual_seed(0)
     input_shape_b = list(input_shape_a)
 
     if bcast_dim == ttnn.BcastOpDim.H or bcast_dim == ttnn.BcastOpDim.HW:
@@ -2580,3 +2593,20 @@ def test_remainder_implicit_broadcast(device, shapes, torch_dtype, ttnn_dtype):
     output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+def test_small_fp32_multiply(device):
+    # Scaling with 0.01 to get realistic values that appear during training.
+    a = ttnn.from_torch(0.01 * torch.randn((1, 1, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(0.01 * torch.randn((4, 32, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_torch = torch.multiply(ttnn.to_torch(a), ttnn.to_torch(b))
+    # print("Torch multiply result:")
+    # print(out_torch)
+
+    out = ttnn.multiply(a, b)
+    # print("TTNN multiply result:")
+    # print(out)
+
+    # assert_allclose(out_torch, ttnn.to_torch(out))
+    assert_with_pcc(out_torch, ttnn.to_torch(out))

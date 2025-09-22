@@ -23,7 +23,6 @@ class SD35TransformerBlock:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        init=False,
         padding_config=None,
     ):
         assert not use_dual_attention, "Expecting not dual attention"
@@ -44,7 +43,6 @@ class SD35TransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
         self.norm1_norm = DistributedLayerNorm(
             dim,
@@ -54,7 +52,6 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         # TODO: Shuffle norm linear weights to match tensor parallelism
@@ -65,7 +62,6 @@ class SD35TransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -75,7 +71,6 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.attn = SD35JointAttention(
@@ -87,7 +82,6 @@ class SD35TransformerBlock:
             context_pre_only=context_pre_only,
             eps=1e-6,
             mesh_device=mesh_device,
-            init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
@@ -101,7 +95,6 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.ff = ParallelFeedForward(
@@ -111,7 +104,6 @@ class SD35TransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.norm2_context = None
@@ -126,7 +118,6 @@ class SD35TransformerBlock:
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
-                init=init,
             )
             self.ff_context = ParallelFeedForward(
                 dim=dim,
@@ -135,11 +126,75 @@ class SD35TransformerBlock:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                init=init,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache linear layers
+        norm1_linear_cache = self.norm1_linear.to_cached_state_dict(path_prefix + "norm1_linear.")
+        norm1_context_linear_cache = self.norm1_context_linear.to_cached_state_dict(
+            path_prefix + "norm1_context_linear."
+        )
+
+        # Add prefixes for linear layers
+        for key, value in norm1_linear_cache.items():
+            cache_dict[f"norm1_linear.{key}"] = value
+        for key, value in norm1_context_linear_cache.items():
+            cache_dict[f"norm1_context_linear.{key}"] = value
+
+        # Cache normalization layers
+        norm1_norm_cache = self.norm1_norm.to_cached_state_dict(path_prefix + "norm1_norm.")
+        norm1_context_norm_cache = self.norm1_context_norm.to_cached_state_dict(path_prefix + "norm1_context_norm.")
+        norm2_cache = self.norm2.to_cached_state_dict(path_prefix + "norm2.")
+
+        # Add prefixes for norm layers
+        for key, value in norm1_norm_cache.items():
+            cache_dict[f"norm1_norm.{key}"] = value
+        for key, value in norm1_context_norm_cache.items():
+            cache_dict[f"norm1_context_norm.{key}"] = value
+        for key, value in norm2_cache.items():
+            cache_dict[f"norm2.{key}"] = value
+
+        # Cache attention layer
+        attn_cache = self.attn.to_cached_state_dict(path_prefix + "attn.")
+        for key, value in attn_cache.items():
+            cache_dict[f"attn.{key}"] = value
+
+        # Cache feedforward layer
+        ff_cache = self.ff.to_cached_state_dict(path_prefix + "ff.")
+        for key, value in ff_cache.items():
+            cache_dict[f"ff.{key}"] = value
+
+        # Cache optional context layers
+        if not self.context_pre_only:
+            norm2_context_cache = self.norm2_context.to_cached_state_dict(path_prefix + "norm2_context.")
+            ff_context_cache = self.ff_context.to_cached_state_dict(path_prefix + "ff_context.")
+
+            for key, value in norm2_context_cache.items():
+                cache_dict[f"norm2_context.{key}"] = value
+            for key, value in ff_context_cache.items():
+                cache_dict[f"ff_context.{key}"] = value
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.norm1_linear.from_cached_state_dict(substate(cache_dict, "norm1_linear"))
+        self.norm1_context_linear.from_cached_state_dict(substate(cache_dict, "norm1_context_linear"))
+
+        self.norm1_norm.from_cached_state_dict(substate(cache_dict, "norm1_norm"))
+        self.norm1_context_norm.from_cached_state_dict(substate(cache_dict, "norm1_context_norm"))
+        self.norm2.from_cached_state_dict(substate(cache_dict, "norm2"))
+
+        self.attn.from_cached_state_dict(substate(cache_dict, "attn"))
+        self.ff.from_cached_state_dict(substate(cache_dict, "ff"))
+
+        if not self.context_pre_only:
+            self.norm2_context.from_cached_state_dict(substate(cache_dict, "norm2_context"))
+            self.ff_context.from_cached_state_dict(substate(cache_dict, "ff_context"))
 
     def load_state_dict(self, state_dict):
         def _shuffle_ada_norm_linear(linear_state):
@@ -237,7 +292,9 @@ class SD35TransformerBlock:
                     spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -249,7 +306,9 @@ class SD35TransformerBlock:
                     prompt_normed_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -273,7 +332,9 @@ class SD35TransformerBlock:
                     spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -300,7 +361,9 @@ class SD35TransformerBlock:
                     prompt_normed_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -338,7 +401,6 @@ class SD35Transformer2DModel:
         mesh_device=None,
         ccl_manager=None,
         parallel_config=None,
-        init=False,
         padding_config=None,
     ):
         self.sample_size = sample_size
@@ -371,14 +433,12 @@ class SD35Transformer2DModel:
             mesh_device=mesh_device,
             tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             sp_mesh_axis=parallel_config.sequence_parallel.mesh_axis,
-            init=init,
         )
 
         self.time_text_embed = SD35CombinedTimestepTextProjEmbeddings(
             embedding_dim=self.inner_dim,
             pooled_projection_dim=pooled_projection_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.context_embedder = ColParallelLinear(
@@ -387,7 +447,6 @@ class SD35Transformer2DModel:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # Transformer blocks
@@ -403,18 +462,15 @@ class SD35Transformer2DModel:
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
-                init=init,
             )
             self.transformer_blocks.append(block)
 
         # Output normalization and projection
-        self.norm_out_linear = Linear(self.inner_dim, 2 * self.inner_dim, mesh_device=mesh_device, init=init)
+        self.norm_out_linear = Linear(self.inner_dim, 2 * self.inner_dim, mesh_device=mesh_device)
         self.norm_out_norm = LayerNorm(
-            self.inner_dim, norm_elementwise_affine=False, norm_eps=1e-6, mesh_device=mesh_device, init=init
+            self.inner_dim, norm_elementwise_affine=False, norm_eps=1e-6, mesh_device=mesh_device
         )
-        self.proj_out = Linear(
-            self.inner_dim, patch_size * patch_size * self.out_channels, mesh_device=mesh_device, init=init
-        )
+        self.proj_out = Linear(self.inner_dim, patch_size * patch_size * self.out_channels, mesh_device=mesh_device)
 
         self.hifi_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -426,6 +482,53 @@ class SD35Transformer2DModel:
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache embeddings
+        pos_embed_cache = self.pos_embed.to_cached_state_dict(path_prefix + "pos_embed.")
+        time_text_embed_cache = self.time_text_embed.to_cached_state_dict(path_prefix + "time_text_embed.")
+        context_embedder_cache = self.context_embedder.to_cached_state_dict(path_prefix + "context_embedder.")
+
+        for key, value in pos_embed_cache.items():
+            cache_dict[f"pos_embed.{key}"] = value
+        for key, value in time_text_embed_cache.items():
+            cache_dict[f"time_text_embed.{key}"] = value
+        for key, value in context_embedder_cache.items():
+            cache_dict[f"context_embedder.{key}"] = value
+
+        # Cache transformer blocks
+        for i, block in enumerate(self.transformer_blocks):
+            block_cache = block.to_cached_state_dict(path_prefix + f"transformer_blocks.{i}.")
+            for key, value in block_cache.items():
+                cache_dict[f"transformer_blocks.{i}.{key}"] = value
+
+        # Cache output layers
+        norm_out_linear_cache = self.norm_out_linear.to_cached_state_dict(path_prefix + "norm_out_linear.")
+        norm_out_norm_cache = self.norm_out_norm.to_cached_state_dict(path_prefix + "norm_out_norm.")
+        proj_out_cache = self.proj_out.to_cached_state_dict(path_prefix + "proj_out.")
+
+        for key, value in norm_out_linear_cache.items():
+            cache_dict[f"norm_out_linear.{key}"] = value
+        for key, value in norm_out_norm_cache.items():
+            cache_dict[f"norm_out_norm.{key}"] = value
+        for key, value in proj_out_cache.items():
+            cache_dict[f"proj_out.{key}"] = value
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.pos_embed.from_cached_state_dict(substate(cache_dict, "pos_embed"))
+        self.time_text_embed.from_cached_state_dict(substate(cache_dict, "time_text_embed"))
+        self.context_embedder.from_cached_state_dict(substate(cache_dict, "context_embedder"))
+
+        for i, block in enumerate(self.transformer_blocks):
+            block.from_cached_state_dict(substate(cache_dict, f"transformer_blocks.{i}"))
+
+        self.norm_out_linear.from_cached_state_dict(substate(cache_dict, "norm_out_linear"))
+        self.norm_out_norm.from_cached_state_dict(substate(cache_dict, "norm_out_norm"))
+        self.proj_out.from_cached_state_dict(substate(cache_dict, "proj_out"))
 
     def load_state_dict(self, state_dict):
         self.pos_embed.load_state_dict(substate(state_dict, "pos_embed"))
@@ -469,7 +572,9 @@ class SD35Transformer2DModel:
                     spatial.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),
                 dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.sequence_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
@@ -484,7 +589,9 @@ class SD35Transformer2DModel:
                     spatial.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,

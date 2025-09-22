@@ -128,10 +128,10 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 
 class ShardShapeGenerator {
     CoreCoord end_core;
-    bool row_major;
-    TensorMemoryLayout memory_layout;
-    std::array<uint32_t, 2> shard_shape;
-    std::array<uint32_t, 2> last_shard_shape;
+    bool row_major{};
+    TensorMemoryLayout memory_layout{TensorMemoryLayout::INTERLEAVED};
+    std::array<uint32_t, 2> shard_shape{};
+    std::array<uint32_t, 2> last_shard_shape{};
 
 public:
     ShardShapeGenerator() = default;
@@ -321,12 +321,14 @@ void set_or_update_runtime_arguments(
 
         const bool is_quant_op = operation_attributes.is_quant_op;
         TT_FATAL(
-            is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
-                            (operation_attributes.post_activations[0].op_type ==
-                             ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+            is_quant_op ==
+                ((operation_attributes.post_activations.size() == 1) &&
+                 (operation_attributes.post_activations[0].type() == ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
             "Quantization op needs to exactly one zero-point value as a post activation");
         const uint32_t quantization_zero_point =
-            is_quant_op ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].params[0]) : 0u;
+            is_quant_op ? std::bit_cast<uint32_t>(
+                              operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
+                        : 0u;
 
         if (b.has_value()) {
             if (has_sharding) {
@@ -465,19 +467,37 @@ void overwrite_compute_kernel_name_and_defines(
     KernelName& kernel_name,
     const SubtileBroadcastType subtile_broadcast_type,
     std::map<std::string, std::string>& compute_defines) {
-    compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
-    compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-    kernel_name = KernelName::ComputeRowBcastNg;
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+        kernel_name = KernelName::ComputeRowBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        kernel_name = KernelName::ComputeRowColBcastNg;
+    }
 }
 
-bool is_llk_bcast(const SubtileBroadcastType subtile_broadcast_type, const DataType a_dtype, const DataType b_dtype) {
-    if (not(subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-            subtile_broadcast_type == SubtileBroadcastType::ROW_B)) {
-        return false;
+bool is_llk_bcast(
+    const SubtileBroadcastType subtile_broadcast_type,
+    const DataType a_dtype,
+    const DataType b_dtype,
+    const DataType c_dtype) {
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+            return true;
+        }
     }
-    if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
-        return true;
+
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+            return true;
+        }
     }
+
     return false;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -536,15 +556,17 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     auto op_type = operation_attributes.binary_op_type;
 
-    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>)
-                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>);
+    // TODO: when handling mixed types, we must identify the appropriate dtype and pass it here to define the respective
+    // LLK APIs
+    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
+                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
     {
-        ttnn::SmallVector<unary::UnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
-        ttnn::SmallVector<unary::UnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
-        ttnn::SmallVector<unary::UnaryWithParam> post_activations = operation_attributes.post_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);
@@ -570,10 +592,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
-            if (post_activations[0].op_type == unary::UnaryOpType::RELU) {
+            if (post_activations[0].type() == unary::UnaryOpType::RELU) {
                 compute_kernel_defines["PACK_RELU"] = "1";
                 unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
-            } else if (post_activations[0].op_type == unary::UnaryOpType::ZERO_POINT) {
+            } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
@@ -630,10 +652,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
     }
 
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A) {
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         create_cb(tt::CBIndex::c_5, program, all_device_cores, a_single_tile_size, 2, a_data_format);
     }
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
         create_cb(tt::CBIndex::c_6, program, all_device_cores, b_single_tile_size, 2, b_data_format);
     }
 
@@ -714,7 +738,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype)) {
+    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
         reader_defines["BCAST_LLK"] = "1";

@@ -10,7 +10,6 @@
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -18,6 +17,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
@@ -269,9 +269,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
      */
 
     // Tensor Info
-    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_buffer_type = output_buffer.buffer()->buffer_type();
 
     const uint32_t N_DRAM_BANKS = device->num_dram_channels();
 
@@ -286,15 +284,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     // Reader
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     reader_kernel_config.compile_args = {
-        ring_index,                                       // my_chip_id
-        ring_size,                                        // num_chips
-        static_cast<uint32_t>(input_tensor_buffer_type),  // buffer0_type
-        tt::CB::c_in0,                                    // cb0_id
-        pages_per_packet,                                 // packet_size_in_pages
-        op_config.get_page_size(),                        // tensor0_page_size
-        num_targets_forward,                              // num_targets_forward_direction
-        num_targets_backward                              // num_targets_backward_direction
+        ring_index,                 // my_chip_id
+        ring_size,                  // num_chips
+        tt::CB::c_in0,              // cb0_id
+        pages_per_packet,           // packet_size_in_pages
+        op_config.get_page_size(),  // tensor0_page_size
+        num_targets_forward,        // num_targets_forward_direction
+        num_targets_backward        // num_targets_backward_direction
     };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_kernel_config.compile_args);
     log_trace(tt::LogOp, "Reader Compile Args:");
     for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -309,21 +307,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
-        ring_index,                                        // my_chip_id
-        ring_size,                                         // num_chips
-        tt::CB::c_in1,                                     // reserved_packet_header_cb_id
-        all_to_all_detail::PACKET_HEADER_BUFFER_SIZE,      // num_packet_headers_storable
-        static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
-        tt::CB::c_in0,                                     // cb0_id
-        pages_per_packet,                                  // packet_size_in_pages
-        op_config.get_page_size(),                         // tensor0_page_size
-        num_targets_forward,                               // num_targets_forward_direction
-        num_targets_backward,                              // num_targets_backward_direction
-        dynamic_alternate,                                 // alternate
-        chunk_granularity,                                 // granularity of signaling to receiver
-        contig_pages_advanced,                             // contig_pages_advanced
-        N_DRAM_BANKS                                       // num_dram_banks
+        ring_index,                                    // my_chip_id
+        ring_size,                                     // num_chips
+        tt::CB::c_in1,                                 // reserved_packet_header_cb_id
+        all_to_all_detail::PACKET_HEADER_BUFFER_SIZE,  // num_packet_headers_storable
+        tt::CB::c_in0,                                 // cb0_id
+        pages_per_packet,                              // packet_size_in_pages
+        op_config.get_page_size(),                     // tensor0_page_size
+        num_targets_forward,                           // num_targets_forward_direction
+        num_targets_backward,                          // num_targets_backward_direction
+        dynamic_alternate,                             // alternate
+        chunk_granularity,                             // granularity of signaling to receiver
+        contig_pages_advanced,                         // contig_pages_advanced
+        N_DRAM_BANKS                                   // num_dram_banks
     };
+    tt::tt_metal::TensorAccessorArgs(intermediate_buffer.buffer()).append_to(writer_kernel_config.compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_buffer.buffer()).append_to(writer_kernel_config.compile_args);
     for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
@@ -345,6 +344,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         num_chunks_per_shard,
         op_config.get_page_size(),
         receiver_cb_index};
+    tt::tt_metal::TensorAccessorArgs(output_buffer.buffer()).append_to(receiver_writer_kernel_config.compile_args);
 
     auto receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -365,6 +365,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_cb_index,
         pages_per_packet,
         N_DRAM_BANKS};
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(receiver_reader_kernel_config.compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_buffer.buffer())
+        .append_to(receiver_reader_kernel_config.compile_args);
     auto receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"

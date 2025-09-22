@@ -65,6 +65,8 @@ struct MeshTraceBuffer {
     // The MeshBuffer this trace will be serialized to, before being run on a
     // MeshDevice
     std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;
+
+    ~MeshTraceBuffer();
 };
 
 // Top level class - Manages MeshTrace

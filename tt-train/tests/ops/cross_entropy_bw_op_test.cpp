@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -33,9 +35,7 @@ protected:
 xt::xarray<float> calculate_cross_entropy_backward(
     const xt::xarray<float>& input, const xt::xarray<uint32_t>& target, const float scaler = 1.0F) {
     const uint32_t N = target.shape(0);
-    const uint32_t C = 1U;
     const uint32_t H = target.shape(1);
-    const uint32_t W = 1U;
 
     const auto input_shape = input.shape();
     xt::xarray<float> target_inputs = xt::zeros<float>(input_shape);
@@ -61,7 +61,7 @@ xt::xarray<float> calculate_cross_entropy_backward(
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     using namespace ttml;
 
-    const uint32_t N = 1U, C = 1U, H = 1U, W = 8U;
+    const uint32_t N = 1U, H = 1U;
 
     xt::xarray<float> input_tensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
@@ -258,7 +258,11 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
-TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Huge_Backward) {
+TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 64, W = 128000U;

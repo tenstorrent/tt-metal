@@ -9,7 +9,6 @@
 #include <variant>
 
 #include <tt-metalium/command_queue.hpp>
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
@@ -27,8 +26,8 @@ namespace ttnn::operations::binary {
 struct BinaryDeviceOperation {
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        const std::optional<unary::FusedActivations> activations;
-        const std::optional<unary::UnaryWithParam> input_tensor_a_activation;
+        const std::optional<unary::EltwiseFusedActivations> activations;
+        const std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation;
         const std::optional<float> scalar;
         const MemoryConfig memory_config;
         const DataType dtype;
@@ -51,16 +50,16 @@ struct BinaryDeviceOperation {
 
     struct ElementWiseMultiCore {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle eltwise_binary_kernel_id;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle cb_src1;
-            tt::tt_metal::CBHandle cb_output;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle eltwise_binary_kernel_id{};
+            tt::tt_metal::CBHandle cb_src0{};
+            tt::tt_metal::CBHandle cb_src1{};
+            tt::tt_metal::CBHandle cb_output{};
             CoreRangeSet all_device_cores;
-            uint32_t src0_single_tile_size;
-            uint32_t src1_single_tile_size;
-            uint32_t dst_single_tile_size;
+            uint32_t src0_single_tile_size{};
+            uint32_t src1_single_tile_size{};
+            uint32_t dst_single_tile_size{};
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -78,16 +77,16 @@ struct BinaryDeviceOperation {
 
     struct ElementWiseMultiCoreSfpu {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle eltwise_binary_kernel_id;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle cb_src1;
-            tt::tt_metal::CBHandle cb_output;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle eltwise_binary_kernel_id{};
+            tt::tt_metal::CBHandle cb_src0{};
+            tt::tt_metal::CBHandle cb_src1{};
+            tt::tt_metal::CBHandle cb_output{};
             CoreRangeSet all_device_cores;
-            uint32_t src0_single_tile_size;
-            uint32_t src1_single_tile_size;
-            uint32_t dst_single_tile_size;
+            uint32_t src0_single_tile_size{};
+            uint32_t src1_single_tile_size{};
+            uint32_t dst_single_tile_size{};
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -104,9 +103,9 @@ struct BinaryDeviceOperation {
     };
     struct BroadcastWidthMultiCore {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle bcast_kernel_id{};
             CoreCoord compute_with_storage_grid_size;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -125,9 +124,9 @@ struct BinaryDeviceOperation {
 
     struct BroadcastHeightMultiCore {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle bcast_kernel_id{};
             CoreCoord compute_with_storage_grid_size;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -146,15 +145,15 @@ struct BinaryDeviceOperation {
 
     struct BroadcastHeightAndWidthMultiCore {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
+            tt::tt_metal::KernelHandle binary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle bcast_kernel_id{};
             CoreCoord compute_with_storage_grid_size;
-            tt::tt_metal::CBHandle cb_src0;
-            uint32_t src0_single_tile_size;
-            uint32_t src1_single_tile_size;
-            uint32_t dst_single_tile_size;
-            tt::tt_metal::CBHandle cb_output;
+            tt::tt_metal::CBHandle cb_src0{};
+            uint32_t src0_single_tile_size{};
+            uint32_t src1_single_tile_size{};
+            uint32_t dst_single_tile_size{};
+            tt::tt_metal::CBHandle cb_output{};
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -250,8 +249,8 @@ struct BinaryDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,
-        std::optional<unary::FusedActivations> activations,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
+        std::optional<unary::EltwiseFusedActivations> activations,
+        std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a_arg,
@@ -260,8 +259,8 @@ struct BinaryDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,
-        std::optional<unary::FusedActivations> activations,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
+        std::optional<unary::EltwiseFusedActivations> activations,
+        std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation);
 };
 
 }  // namespace ttnn::operations::binary

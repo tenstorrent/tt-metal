@@ -131,10 +131,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
     // dram banks
     uint32_t num_dram_banks = all_worker_cores_ordered.size();
-    for (auto core : corerange_to_cores(all_worker_cores)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(all_worker_cores)) {
         log_debug(tt::LogOp, "all_worker_cores_log: {}", core);
     }
-    for (auto core : all_worker_cores_ordered) {
+    for ([[maybe_unused]] auto core : all_worker_cores_ordered) {
         log_debug(tt::LogOp, "all_worker_cores_ordered: {}", core);
     }
 
@@ -214,7 +214,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t out_reshard_CB_size = out_reshard_CB_tiles * output_single_tile_size;
 
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-    uint32_t in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
     uint32_t in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
@@ -261,10 +260,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     CoreRangeSet mcast_senders = CoreRangeSet(input_all_storage_cores_set);
     CoreRangeSet mcast_receivers = CoreRangeSet(all_worker_cores_set);
 
-    for (auto core : corerange_to_cores(mcast_senders)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(mcast_senders)) {
         log_debug(tt::LogOp, "mcast_senders: {}", core);
     }
-    for (auto core : corerange_to_cores(mcast_receivers)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(mcast_receivers)) {
         log_debug(tt::LogOp, "mcast_receivers: {}", core);
     }
 
@@ -274,7 +273,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     all_cores_set.insert(mcast_receivers.ranges().begin(), mcast_receivers.ranges().end());
     CoreRangeSet all_cores = CoreRangeSet(all_cores_set);
 
-    for (auto core : corerange_to_cores(all_cores)) {
+    for ([[maybe_unused]] auto core : corerange_to_cores(all_cores)) {
         log_debug(tt::LogOp, "all_cores: {}", core);
     }
 
@@ -290,10 +289,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, INVALID);
     auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, INVALID);
     auto in0_mcast_sender_valid_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, VALID);
-
-    bool in0_is_dram = false;
-    bool in1_is_dram = true;
-    bool in3_is_dram = true;
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -434,7 +429,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
     };
 
     // Create compute kernel
@@ -458,7 +454,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src0_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -472,7 +468,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src1_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -519,7 +515,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, interm0_cb_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -538,7 +534,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                                .set_tile_dims(output_cb_index, output_tile)
                                .set_tile_dims(interm0_cb_index, output_tile);
     }
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_cb_config);
     log_debug(
         tt::LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -565,7 +561,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
                 .set_page_size(src3_cb_index, bias_single_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
-        auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, cb_src3_config);
+        tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -952,7 +948,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Error");
+        TT_FATAL(
+            c.storage_type() == StorageType::DEVICE,
+            "Bias tensor must be on device, got storage type: {}",
+            c.storage_type());
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
@@ -961,9 +960,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device = a.mesh_device()->get_device(mesh_coord);
+    tt::tt_metal::IDevice* device = a.device()->get_device(mesh_coord);
 
-    TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
+    TT_FATAL(
+        a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
     CoreRangeSet input_all_cores_storage = a.shard_spec().value().grid;
     CoreRangeSet output_all_cores_storage = output.shard_spec().value().grid;
 
@@ -971,16 +971,42 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
-    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
+    TT_FATAL(
+        in0_buffer->size() % in0_single_tile_size == 0,
+        "Input A buffer size ({}) must be divisible by single tile size ({})",
+        in0_buffer->size(),
+        in0_single_tile_size);
+    TT_FATAL(
+        in1_buffer->size() % in1_single_tile_size == 0,
+        "Input B buffer size ({}) must be divisible by single tile size ({})",
+        in1_buffer->size(),
+        in1_single_tile_size);
 
     TT_FATAL(
         ashape[-1] == bshape[-2],
-        "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "Error");
-    TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "Error");
-    TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
-    TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
+        "Dimension K (A.shape[-1] = {}, B.shape[-2] = {}) must match for matmul",
+        ashape[-1],
+        bshape[-2]);
+    TT_FATAL(
+        ashape[-2] % in0_tile_shape[0] == 0,
+        "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        ashape[-2],
+        in0_tile_shape[0]);
+    TT_FATAL(
+        ashape[-1] % in0_tile_shape[1] == 0,
+        "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        ashape[-1],
+        in0_tile_shape[1]);
+    TT_FATAL(
+        bshape[-2] % in1_tile_shape[0] == 0,
+        "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        bshape[-2],
+        in1_tile_shape[0]);
+    TT_FATAL(
+        bshape[-1] % in1_tile_shape[1] == 0,
+        "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        bshape[-1],
+        in1_tile_shape[1]);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -996,7 +1022,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
     uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile_shape[1];
 
-    TT_FATAL(Kt % in0_block_w == 0, "Error");
+    TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup

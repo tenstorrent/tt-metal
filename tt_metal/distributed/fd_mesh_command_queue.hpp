@@ -29,7 +29,7 @@ using MeshCompletionReaderVariant =
 struct DeviceMemoryAddress {
     MeshCoordinate device_coord;
     CoreCoord virtual_core_coord;
-    DeviceAddr address;
+    DeviceAddr address{};
 };
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
@@ -113,11 +113,11 @@ private:
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
 
-    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
 
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
@@ -167,6 +167,27 @@ private:
     std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
     // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
     std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
+
+    // Used to define when the exception should be handled.
+    // The goal is to not throw exceptions in loop and do it just once
+    // Once this is set to true, whoever gets to the point to handle the exception,
+    // it will and set this back to false, so no other thread tries to handle it themselves
+    std::atomic<bool> should_handle_exception_{false};
+
+    // Used to store the exception pointer.
+    // Since the exception is captured inside a different thread that the main one,
+    // we need to store it and let the main thread handle it
+    // So python can catch it
+    std::exception_ptr thread_exception_ptr_;
+    // Exceptions are not compatible with std::atomic, so we need a muted to store it.
+    // Since a reader thread will be setting this while the main thread will be handling it,
+    // it must be thread safe
+    std::mutex exception_mutex_;
+
+    // We are in an unrecoverable state, we need to close as many processes as possible.
+    // When this is true, we are generally breaking locks and doing a bit of cleaning
+    // so the main thread can handle the exception
+    std::atomic<bool> thread_exception_state_ = false;
 
 protected:
     void write_shard_to_device(

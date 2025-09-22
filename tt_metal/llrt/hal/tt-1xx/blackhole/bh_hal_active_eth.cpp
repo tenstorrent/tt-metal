@@ -2,29 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt_common/mailbox.hpp"
+#define HAL_BUILD tt::tt_metal::blackhole::active_eth
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
-#include <cstddef>
+using namespace tt::tt_metal::blackhole::active_eth;
+
 #include <cstdint>
-#include <vector>
 
 #include "blackhole/bh_hal.hpp"
 #include "blackhole/bh_hal_eth_asserts.hpp"
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "noc/noc_parameters.h"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_AERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::blackhole {
+
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace active_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
 
 HalCoreInfoType create_active_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
@@ -55,14 +59,12 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK_REMOTE_INFO)] = MEM_ETH_LINK_REMOTE_INFO_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG)] =
-        MEM_INTERMESH_ETH_LINK_CONFIG_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS)] =
-        MEM_INTERMESH_ETH_LINK_STATUS_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
+                                                                         offsetof(boot_results_t, eth_live_status) +
+                                                                         offsetof(eth_live_status_t, rx_link_up);
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -89,6 +91,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =
@@ -99,6 +102,13 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
+    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
+    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::RETRAIN_COUNT)] =
+        (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->retrain_count;
+    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::RX_LINK_UP)] =
+        (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->rx_link_up;
+    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
+        (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->port_status;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
@@ -114,7 +124,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_AERISC_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
@@ -123,7 +133,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        active_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

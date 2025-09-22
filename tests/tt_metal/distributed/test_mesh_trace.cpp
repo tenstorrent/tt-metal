@@ -229,7 +229,7 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
                         MeshCoordinate(logical_y, logical_x));
                     auto expected_value = expected_values[logical_x + logical_y * mesh_device_->num_cols()];
                     for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(dst_vec[i].to_float(), expected_value);
+                        EXPECT_EQ(static_cast<float>(dst_vec[i]), expected_value);
                     }
                 }
             }
@@ -461,7 +461,8 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
 
     for (auto device : mesh_device_->get_devices()) {
-        tt::llrt::write_hex_vec_to_core(device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
     }
 
     // Capture Trace
@@ -483,7 +484,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
-            tt::llrt::write_hex_vec_to_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();

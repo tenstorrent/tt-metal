@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -47,7 +48,7 @@ def unsqueeze_all_params_to_4d(params):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], ids=["device_params=l1_small_size_24576"], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",

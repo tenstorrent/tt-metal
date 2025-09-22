@@ -3,34 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include <cstdint>
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr BufferType input_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(1));
-constexpr BufferType output_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);  // 2
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(8));
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(9);  // 2
-constexpr uint32_t num_inputs = get_compile_time_arg_val(10);
-constexpr bool direction = get_compile_time_arg_val(11);  // 1 is forward, 0 is backward
-constexpr bool fuse_op = get_compile_time_arg_val(12);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);  // 2
+constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6));
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);  // 2
+constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
+constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
+constexpr bool fuse_op = get_compile_time_arg_val(10);
 
 void kernel_main() {
+    constexpr uint32_t page_size_base_idx = 11;
+    constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<
+        num_inputs,
+        std::get<num_inputs - 1>(inputs_args).next_compile_time_args_offset()>();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -46,14 +48,13 @@ void kernel_main() {
     uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    address_t input_tensor_addresses[num_inputs];
-    address_t output_tensor_addresses[num_inputs];
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-        address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-        input_tensor_addresses[input_idx] = input_tensor_address;
-        output_tensor_addresses[input_idx] = output_tensor_address;
-    }
+
+    auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx, page_size_base_idx);
+    arg_idx += num_inputs;
+    auto input_tensor_addrgens = make_abstract_tensor_accessor_wrappers(inputs_tuple);
+    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx, page_size_base_idx);
+    arg_idx += num_inputs;
+    auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
@@ -62,15 +63,6 @@ void kernel_main() {
 
     const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     // Push out our local slice
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addrgens[num_inputs];
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
-            .bank_base_address = input_tensor_addresses[input_idx],
-            .page_size = input_tensor_page_size,
-            .data_format = get_dataformat(cb_output_id)};
-        input_tensor_addrgens[input_idx] = input_tensor_addrgen;
-    }
 
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
@@ -83,8 +75,8 @@ void kernel_main() {
                 const uint32_t l1_write_addr_base = get_write_ptr(cb_output_id);
                 uint32_t l1_write_addr = l1_write_addr_base;
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    noc_async_read_tile(
-                        output_tile_id_start + tiles_read, input_tensor_addrgens[input_idx], l1_write_addr);
+                    auto read_addr = input_tensor_addrgens[input_idx].get_noc_addr(output_tile_id_start + tiles_read);
+                    noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
                     l1_write_addr += payload_size_bytes;
                     tiles_read += contig_pages_advanced;
                 }
@@ -96,16 +88,6 @@ void kernel_main() {
             output_tile_id_start += input_tensor_Wt * input_tensor_Ht;
         }
         output_tile_id_start = 0;
-    }
-
-    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
-    InterleavedAddrGenFast<output_tensor_is_dram> output_tensor_addrgens[num_inputs];
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        auto output_tensor_addrgen = InterleavedAddrGenFast<output_tensor_is_dram>{
-            .bank_base_address = output_tensor_addresses[input_idx],
-            .page_size = input_tensor_page_size,
-            .data_format = get_dataformat(cb_output_id)};
-        output_tensor_addrgens[input_idx] = output_tensor_addrgen;
     }
 
     uint32_t slices_received = 0;
@@ -185,10 +167,9 @@ void kernel_main() {
                         cb_reserve_back(cb_output_id, packet_size_in_pages);
                         size_t l1_write_addr = get_write_ptr(cb_output_id);
                         for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                            noc_async_read_tile(
-                                output_tile_id_start + row_offset + pages_read_in_row,
-                                output_tensor_addrgens[input_idx],
-                                l1_write_addr);
+                            auto read_addr = output_tensor_addrgens[input_idx].get_noc_addr(
+                                output_tile_id_start + row_offset + pages_read_in_row);
+                            noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
                             l1_write_addr += payload_size_bytes;
                             tiles_read += contig_pages_advanced;
 

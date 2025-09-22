@@ -14,7 +14,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -345,7 +344,7 @@ private:
 };
 
 struct TensorSyncBundle {
-    const Tensor* tensor;
+    const Tensor* tensor{};
     std::optional<TensorSyncSpec> sync_spec;
 };
 

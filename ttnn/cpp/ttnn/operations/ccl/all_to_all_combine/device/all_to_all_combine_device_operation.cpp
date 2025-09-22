@@ -53,7 +53,7 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
 
-    const auto mesh_view = input_tensor.mesh_device()->get_view();
+    const auto mesh_view = input_tensor.device()->get_view();
     const auto mesh_rows = mesh_view.num_rows();
     const auto mesh_cols = mesh_view.num_cols();
     const auto batch = metadata_shape[1];
@@ -98,10 +98,6 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.num_links > 0,
         "Number of links must be greater than 0, got {}",
         operation_attributes.num_links);
-    TT_FATAL(
-        operation_attributes.cross_device_semaphore.has_value(),
-        "Cross device semaphore must be specified at the moment");
-    TT_FATAL(operation_attributes.init_semaphore.has_value(), "Init semaphore must be specified at the moment");
 }
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
@@ -115,7 +111,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     const auto& input_shape = input_tensor.tensor_spec().logical_shape();
     const auto& metadata_shape = tensor_args.metadata_tensor.tensor_spec().logical_shape();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();
@@ -155,22 +151,19 @@ AllToAllCombineDeviceOperation::invoke(
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const std::optional<GlobalSemaphore>& global_semaphore,
     const std::optional<uint32_t>& axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const bool locally_reduced,
-    const std::optional<GlobalSemaphore>& init_semaphore) {
+    const CoreRangeSet& worker_core_range_set) {
     return {
         operation_attributes_t{
             .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .cross_device_semaphore = global_semaphore,
             .locally_reduced = locally_reduced,
-            .subdevice_id = std::move(subdevice_id),
-            .init_semaphore = init_semaphore},
+            .worker_core_range_set = worker_core_range_set,
+        },
         tensor_args_t{
             .input_tensor = input_tensor,
             .mapping_tensor = expert_mapping_tensor,

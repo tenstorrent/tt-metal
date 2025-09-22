@@ -68,7 +68,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_nightly(
-    p150_mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -86,11 +86,11 @@ def test_all_gather_nightly(
 ):
     if (2 == num_devices) and (all_gather_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires more than 2 devices")
-    if (p150_mesh_device.shape[0] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
+    if (bh_2d_mesh_device.shape[0] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
-    if p150_mesh_device.shape[0] < num_devices:
+    if bh_2d_mesh_device.shape[0] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
-    submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_all_gather_impl(
         submesh_device,

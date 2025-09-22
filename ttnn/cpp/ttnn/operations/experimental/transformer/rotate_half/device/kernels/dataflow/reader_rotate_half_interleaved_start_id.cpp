@@ -16,16 +16,13 @@ void kernel_main() {
     constexpr uint32_t cb_id_in_no_mul = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in_mul = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in_scalar = get_compile_time_arg_val(2);
-    constexpr bool src_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint16_t scalar_value = get_compile_time_arg_val(4);
+    constexpr uint16_t scalar_value = get_compile_time_arg_val(3);
+    constexpr auto src_args = TensorAccessorArgs<4>();
 
     // in_no_mul, in_mul are from same tensor, so same sizes
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in_no_mul);
-    const DataFormat data_format = get_dataformat(cb_id_in_no_mul);
-
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in_scalar, onetile);

@@ -24,6 +24,7 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
     }
 }
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define AS_LAMBDA(func) []<typename T>(auto&&... args) { return func<T>(std::forward<decltype(args)>(args)...); }
 
 #define WRAP_FUNCTION(func)                                                                                     \
@@ -32,6 +33,7 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
         return dispatch(                                                                                        \
             std::get<0>(std::forward_as_tuple(args...)).dtype(), AS_LAMBDA(func), std::forward<Args>(args)...); \
     }
+// NOLINTEND(bugprone-macro-parentheses)
 
 WRAP_FUNCTION(to_device)
 WRAP_FUNCTION(to_host)

@@ -15,12 +15,10 @@ namespace operations::point_to_point {
 
 struct ExecutePointToPoint {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const MeshCoordinate& receiver_coord,
         const MeshCoordinate& sender_coord,
         ccl::Topology topology,
-        const GlobalSemaphore& semaphore,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 };
 }  // namespace operations::point_to_point

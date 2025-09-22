@@ -12,6 +12,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   t3000-unit-tests:
@@ -25,7 +29,7 @@ jobs:
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -50,6 +54,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

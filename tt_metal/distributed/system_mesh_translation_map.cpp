@@ -4,7 +4,6 @@
 
 #include "tt_metal/distributed/system_mesh_translation_map.hpp"
 
-#include <boost/move/utility_core.hpp>
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -16,7 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::distributed {
 

@@ -25,14 +25,10 @@ target_sources(
             send_recv_async/recv_async/device/kernels/receiver_reader.cpp
     PRIVATE
         llama_common.cpp
+        common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
-        all_gather_matmul/all_gather_matmul.cpp
-        all_gather_matmul/device/all_gather_matmul_op.cpp
-        all_gather_matmul/device/multi_core/all_gather_matmul_op_multi_core.cpp
-        all_reduce/all_reduce.cpp
-        all_reduce/device/all_reduce_op.cpp
         all_reduce_async/device/all_reduce_async_op.cpp
         all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
         reduce_scatter_async/device/reduce_scatter_async_op.cpp
@@ -49,8 +45,14 @@ target_sources(
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_program_factory.cpp
         all_gather_async/all_gather_async.cpp
         all_gather_async/device/all_gather_async_op.cpp
-        all_gather_async/device/all_gather_async_program.cpp
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
+        all_gather_command_processor_async/all_gather_command_processor_async.cpp
+        all_gather_command_processor_async/device/all_gather_command_processor_async_op.cpp
+        all_gather_command_processor_async/device/all_gather_command_processor_async_program.cpp
+        llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
+        llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.cpp
+        llama_all_gather_matmul_async/device/llama_all_gather_mm_async_program_factory.cpp
+        llama_all_gather_matmul_async/device/llama_1d_mm_fusion_program_factory.cpp
         all_to_all_async/all_to_all_async.cpp
         all_to_all_async/device/all_to_all_program_factory.cpp
         all_to_all_async/device/all_to_all_async_op.cpp

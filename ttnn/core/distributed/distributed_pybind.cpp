@@ -27,6 +27,8 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
+#include "distribution_mode.hpp"
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -66,6 +68,7 @@ public:
 
 namespace py = pybind11;
 
+// NOLINTBEGIN(bugprone-unused-raii)
 void py_module_types(py::module& module) {
     py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
@@ -84,7 +87,9 @@ void py_module_types(py::module& module) {
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
     py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
     py::class_<DistributedHostBuffer>(module, "DistributedHostBuffer");
+    py::class_<TensorTopology>(module, "TensorTopology");
 }
+// NOLINTEND(bugprone-unused-raii)
 
 void py_module(py::module& module) {
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
@@ -152,7 +157,9 @@ void py_module(py::module& module) {
             py::keep_alive<0, 1>())
         .def(
             "__getitem__", [](const MeshCoordinate& mc, int index) { return mc[index]; }, py::arg("index"))
-        .def("dims", &MeshCoordinate::dims);
+        .def("dims", &MeshCoordinate::dims)
+        .def("__hash__", [](const MeshCoordinate& mc) { return std::hash<MeshCoordinate>{}(mc); })
+        .def("__eq__", [](const MeshCoordinate& a, const MeshCoordinate& b) { return a == b; });
 
     static_cast<py::class_<MeshCoordinateRange>>(module.attr("MeshCoordinateRange"))
         .def(
@@ -448,11 +455,14 @@ void py_module(py::module& module) {
 
     auto py_placement_shard = static_cast<py::class_<MeshMapperConfig::Shard>>(module.attr("PlacementShard"));
     py_placement_shard.def(py::init([](int dim) { return MeshMapperConfig::Shard{dim}; }))
-        .def("__repr__", [](const MeshMapperConfig::Shard& shard) {
-            std::ostringstream str;
-            str << shard;
-            return str.str();
-        });
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig::Shard& shard) {
+                std::ostringstream str;
+                str << shard;
+                return str.str();
+            })
+        .def_readonly("dim", &MeshMapperConfig::Shard::dim);
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
     py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
@@ -559,6 +569,12 @@ void py_module(py::module& module) {
     py_distributed_host_buffer.def("is_local", &DistributedHostBuffer::is_local, py::arg("coord"))
         .def("shape", &DistributedHostBuffer::shape, py::return_value_policy::reference_internal);
 
+    auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
+    py_tensor_topology
+        .def("distribution_shape", &TensorTopology::distribution_shape, py::return_value_policy::reference_internal)
+        .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
+        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
+
     module.def(
         "get_device_tensors",
         &get_device_tensors,
@@ -622,6 +638,29 @@ void py_module(py::module& module) {
 
        Returns:
            TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    module.def(
+        "compute_distribution_to_mesh_mapping",
+        [](const tt::tt_metal::distributed::MeshShape& distribution_shape,
+           const tt::tt_metal::distributed::MeshShape& mesh_shape)
+            -> std::vector<tt::tt_metal::distributed::MeshCoordinate> {
+            return ttnn::distributed::compute_distribution_to_mesh_mapping(distribution_shape, mesh_shape);
+        },
+        py::arg("distribution_shape"),
+        py::arg("mesh_shape"),
+        R"doc(
+       Compute ordered mesh coordinates for distribution coordinate mapping.
+
+       This function computes how distribution coordinates should map to mesh coordinates
+       based on the distribution mode. For ROW_MAJOR mode, it returns mesh coordinates
+       in row-major order. For SUBMESH mode, coordinates map directly.
+
+       Args:
+           distribution_shape (MeshShape): The distribution (override) mesh shape.
+           mesh_shape (MeshShape): The physical device mesh shape.
+
+       Returns:
+           list[MeshCoordinate]: Vector of mesh coordinates in the order they should be mapped to distribution coordinates.
    )doc");
     module.def(
         "concat_mesh_to_tensor_composer",

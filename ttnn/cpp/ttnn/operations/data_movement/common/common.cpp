@@ -108,8 +108,8 @@ uint32_t get_effective_l1_cores(
     uint32_t transaction_size,
     int index,
     bool is_write,
-    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
     uint32_t num_nocs,
     uint32_t num_cores) {
     float max_bw = index == WormholeIndex ? 32.0f : 50.0f;
@@ -125,7 +125,7 @@ uint32_t get_effective_l1_cores(
 uint32_t get_effective_dram_cores(
     uint32_t transaction_size,
     int index,
-    std::map<uint32_t, std::array<float, 2>> dram_bw,
+    const std::map<uint32_t, std::array<float, 2>>& dram_bw,
     bool single_noc,
     uint32_t num_cores) {
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
@@ -145,10 +145,10 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
     uint32_t num_cores,
     int index,
     bool is_read,
-    std::map<uint32_t, std::array<float, 2>> l1_local_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
-    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
-    std::map<uint32_t, std::array<float, 2>> dram_bw) {
+    const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
+    const std::map<uint32_t, std::array<float, 2>>& dram_bw) {
     auto transaction_type = is_local ? l1_local_bw : (is_read ? l1_read_bw : l1_write_bw);
     if (is_dram) {
         transaction_type = dram_bw;
@@ -496,7 +496,6 @@ bool is_enough_space(
 }
 
 ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,
@@ -510,12 +509,12 @@ ttnn::Tensor pad_to_tile_vol(
         auto padded_height = tt::round_up(padded_shape[-2], tt::constants::TILE_HEIGHT);
         auto padded_width = tt::round_up(padded_shape[-1], tt::constants::TILE_WIDTH);
         uint32_t num_non_hw_dims = rank - 2u;
-        auto padding_vec = ttnn::SmallVector<std::pair<uint32_t, uint32_t>>(num_non_hw_dims, {0, 0});
+        auto padding_vec = ttnn::SmallVector<std::array<uint32_t, 2>>(num_non_hw_dims, {0, 0});
         padding_vec.reserve(rank);
         padding_vec.emplace_back(0, padded_height - padded_shape[-2]);
         padding_vec.emplace_back(0, padded_width - padded_shape[-1]);
 
-        auto padded_output = ttnn::pad(queue_id, tensor, padding_vec, value, use_multicore, memory_config);
+        auto padded_output = ttnn::pad(tensor, padding_vec, value, use_multicore, memory_config);
         TT_FATAL(
             padded_output.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0 &&
                 padded_output.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
@@ -604,7 +603,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
 
     auto height = logical_shape[-2];
     auto width = logical_shape[-1];
-    std::array<uint32_t, 2> computed_shard_shape;
+    std::array<uint32_t, 2> computed_shard_shape{};
 
     if (shard_shape.has_value()) {
         computed_shard_shape = shard_shape.value();

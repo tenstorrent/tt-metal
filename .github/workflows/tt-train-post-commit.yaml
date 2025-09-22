@@ -18,7 +18,16 @@ on:
       timeout:
         required: false
         type: number
-        default: 35
+        default: 45
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+      gtest_filter:
+        required: false
+        default: "*"
+        type: string
+        description: "Filter for gtest"
 
 jobs:
   models:
@@ -28,16 +37,16 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        github.event.pull_request.head.repo.fork == true && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150, N300', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -57,6 +66,7 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}

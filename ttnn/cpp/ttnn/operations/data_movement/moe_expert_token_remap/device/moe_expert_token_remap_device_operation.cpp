@@ -31,7 +31,7 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(mapping_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Mapping tensor must be uint16");
     TT_FATAL(mapping_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Mapping tensor must be in row major layout");
 
-    auto mesh_device = tensor_args.topk_tensor.mesh_device();
+    auto mesh_device = tensor_args.topk_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();
@@ -66,7 +66,7 @@ MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDevic
     const auto& mapping_shape = tensor_args.mapping_tensor.logical_shape();
     const auto& metadata_shape = tensor_args.metadata_tensor.logical_shape();
 
-    auto mesh_device = tensor_args.topk_tensor.mesh_device();
+    auto mesh_device = tensor_args.topk_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();

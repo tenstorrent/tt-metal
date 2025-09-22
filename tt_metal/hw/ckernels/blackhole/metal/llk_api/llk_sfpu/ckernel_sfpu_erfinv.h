@@ -36,7 +36,7 @@ sfpi_inline vFloat calculate_erfinv_body(vFloat in) {
     vFloat log_value = in * in;
     log_value = 1 - log_value;
     dst_reg[0] = log_value;
-    calculate_log_body<false>(0);
+    calculate_log_body<true, false>(0);
     log_value = dst_reg[0];
     vFloat temp = dst_reg[0] * 0.5;
     temp = 4.5469 + temp;

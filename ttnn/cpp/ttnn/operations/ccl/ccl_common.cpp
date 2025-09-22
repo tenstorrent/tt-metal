@@ -8,11 +8,10 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 
@@ -140,7 +139,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 }
 
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto mesh_device = tensor.mesh_device();
+    auto mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
     devices.reserve(tensor.device_storage().coords.size());
     for (const auto& coord : tensor.device_storage().coords) {
@@ -154,11 +153,57 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     devices.reserve(tensor_shards.size());
     for (const auto& tensor : tensor_shards) {
         TT_FATAL(
-            tensor.mesh_device()->shape().mesh_size() == 1,
+            tensor.device()->shape().mesh_size() == 1,
             "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
-        devices.push_back(tensor.mesh_device()->get_device(MeshCoordinate(0, 0)));
+        devices.push_back(tensor.device()->get_device(MeshCoordinate(0, 0)));
     }
     return devices;
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset) {
+    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
+    CoreRangeSet sender_worker_core_range;
+    const size_t num_workers_preferred = num_workers_per_link * num_links;
+    const auto available_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (available_cores.num_cores() < num_workers_preferred) {
+        log_warning(
+            tt::LogOp,
+            "CCL operation is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+            "performance loss.",
+            num_workers_preferred,
+            num_workers_per_link,
+            num_links,
+            available_cores.num_cores());
+    }
+    for (const auto& cr : available_cores.ranges()) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
+            }
+            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                break;
+            }
+        }
+        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+            break;
+        }
+    }
+    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(

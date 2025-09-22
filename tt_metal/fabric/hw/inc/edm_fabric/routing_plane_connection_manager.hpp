@@ -35,9 +35,20 @@ public:
         BUILD_AND_OPEN_CONNECTION_START_ONLY,
     };
 
+    // These field for FABRIC_2D are used by fabric_set_unicast_route
+#if defined(FABRIC_2D)
+    uint32_t ew_dim;
+    uint16_t my_mesh_id;
+    uint16_t my_chip_id;
+#endif
+
     struct ConnectionSlot {
         Sender sender;
         uint8_t tag;
+#ifdef FABRIC_2D
+        uint16_t dst_dev_id;
+        uint16_t dst_mesh_id;
+#endif
     };
 
     RoutingPlaneConnectionManager() : num_active_(0) {}
@@ -52,11 +63,12 @@ public:
         ASSERT(num_connections_to_build <= MaxConnections);
 
         for (uint32_t i = 0; i < num_connections_to_build; ++i) {
-            mgr.slots_[i].tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            mgr.slots_[i].sender =
+            auto& conn = mgr.slots_[i];
+            conn.tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+            conn.sender =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
-                mgr.slots_[i].sender.open_start();
+                conn.sender.open_start();
             }
         }
 
@@ -67,6 +79,18 @@ public:
                 mgr.slots_[i].sender.open_finish();
             }
         }
+
+#if defined(FABRIC_2D)
+        mgr.ew_dim = get_arg_val<uint32_t>(arg_idx++);
+        mgr.my_chip_id = get_arg_val<uint32_t>(arg_idx++);
+        mgr.my_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t i = 0; i < num_connections_to_build; i++) {
+            auto& conn = mgr.slots_[i];
+            conn.dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+            conn.dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+        }
+#endif
+
         return mgr;
     }
 
@@ -75,13 +99,13 @@ public:
         return slots_[index].tag;
     }
 
-    inline Sender& get(uint32_t index) {
+    inline ConnectionSlot& get(uint32_t index) {
         ASSERT(index < num_active_);
-        return slots_[index].sender;
+        return slots_[index];
     }
-    inline const Sender& get(uint32_t index) const {
+    inline const ConnectionSlot& get(uint32_t index) const {
         ASSERT(index < num_active_);
-        return slots_[index].sender;
+        return slots_[index];
     }
 
     template <typename Fn>

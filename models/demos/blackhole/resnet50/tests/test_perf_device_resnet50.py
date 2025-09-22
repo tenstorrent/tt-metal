@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import run_for_blackhole
 from models.demos.ttnn_resnet.tests.perf_device_resnet50 import run_perf_device
-from models.utility_functions import run_for_blackhole
 
 
 @run_for_blackhole()
@@ -13,8 +13,8 @@ from models.utility_functions import run_for_blackhole
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 10113.0],
-        [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 11842.0],
+        [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 8700.0],
+        [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 10200.0],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):

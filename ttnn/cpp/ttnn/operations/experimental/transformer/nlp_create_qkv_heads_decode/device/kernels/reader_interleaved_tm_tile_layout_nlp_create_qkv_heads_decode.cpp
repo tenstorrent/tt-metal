@@ -20,15 +20,12 @@ void kernel_main() {
     constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t PHASES_TO_READ =
         get_compile_time_arg_val(9);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
-    constexpr bool is_dram = get_compile_time_arg_val(10) == 1;
+    constexpr auto qkv_args = TensorAccessorArgs<10>();
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
 
     // Q
     constexpr uint32_t qkv_tile_bytes = get_tile_size(cb_id_q_out);
-    constexpr DataFormat qkv_data_format = get_dataformat(cb_id_q_out);
-
-    const InterleavedAddrGenFast<is_dram> qkv_reader = {
-        .bank_base_address = q_start_addr, .page_size = qkv_tile_bytes, .data_format = qkv_data_format};
+    const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr, qkv_tile_bytes);
 
     uint32_t q_write_addr = 0;
     uint32_t qkv_tile_id = 0;

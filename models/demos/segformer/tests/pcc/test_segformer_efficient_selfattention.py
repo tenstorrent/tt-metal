@@ -7,16 +7,16 @@ import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_efficient_selfattention import SegformerEfficientSelfAttention
 from models.demos.segformer.tt.common import (
-    get_mesh_mappers,
     preprocess_layernorm_parameter,
     preprocess_linear_bias,
     preprocess_linear_weight,
 )
 from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import TtSegformerEfficientSelfAttention
-from models.utility_functions import skip_for_grayskull
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

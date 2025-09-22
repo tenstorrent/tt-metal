@@ -79,6 +79,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
       skip-tt-train: true
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -88,6 +89,7 @@ jobs:
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
@@ -151,6 +153,7 @@ jobs:
       publish-artifact: false
       skip-tt-train: true
       distributed: false
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
   metalium-examples:
     needs: [ build, find-changed-files ]
@@ -172,6 +175,23 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
 
+  ttsim-integration-tests:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        (github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true') &&
+        github.event.pull_request.head.repo.fork == false
+      }}
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      product: tt-metalium
+
   docker-image:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     uses: ./.github/workflows/build-docker-artifact.yaml
@@ -180,6 +200,25 @@ jobs:
       distro: ubuntu
       version: 22.04
       architecture: amd64
+
+  # A quick check that parses the models charts in README.md and models/README.md
+  # and ensures that models attributes are in sync.
+  model-charts-sync:
+    needs: [find-changed-files]
+    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Run model charts sync Python script
+      run: |
+        # Run script that compares the models chart in README.md with the models chart in models/README.md
+        python .github/scripts/utils/model-charts-sync.py
+
 
   # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
   # enough to run during PRs without bringing infra to a grinding halt.
@@ -197,7 +236,7 @@ jobs:
       run: sudo chown -R $(whoami) /github/home # Thanks GH...
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
         fetch-depth: 0
         submodules: "recursive"
     - name: Set safe directory for Git
@@ -273,13 +312,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, clang-tidy-light]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

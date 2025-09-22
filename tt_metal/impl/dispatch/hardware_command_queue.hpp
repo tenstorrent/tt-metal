@@ -27,7 +27,7 @@
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
@@ -138,7 +138,7 @@ private:
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
     //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
     //  call
-    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<uint32_t> expected_num_workers_completed_{};
 
     std::atomic<bool> exit_condition_;
     std::atomic<uint32_t> num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued
@@ -152,7 +152,7 @@ private:
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
     // post trace capture.
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
     IDevice* device_;
 

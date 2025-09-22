@@ -21,11 +21,11 @@
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_simulation_device.h>
-#include <umd/device/types/arch.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/simulation/simulation_device.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "utils.hpp"
 
 namespace tt {
@@ -40,12 +40,7 @@ inline YAML::Node string_to_yaml_node(const std::string& input) {
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string core_desc_dir;
-    if (getenv("TT_METAL_HOME")) {
-        core_desc_dir = getenv("TT_METAL_HOME");
-    } else {
-        core_desc_dir = "./";
-    }
+    std::string core_desc_dir = tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     if (core_desc_dir.back() != '/') {
         core_desc_dir += "/";
     }
@@ -53,8 +48,10 @@ inline std::string get_core_descriptor_file(
 
     bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
     if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
-        if (init.get_soc_descriptor().grid_size.y <= 2) { // these SOC descriptors declare a 2x2 grid
+        auto soc_desc = tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(
+            tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+        tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
+        if (grid_size.y <= 2) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
         }
     }
@@ -65,7 +62,7 @@ inline std::string get_core_descriptor_file(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     } else {
         // Check if fabric tensix is enabled based on fabric tensix config
@@ -93,7 +90,7 @@ inline std::string get_core_descriptor_file(
                 } else {
                     return core_desc_dir + "blackhole_140_arch.yaml";
                 }
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     }
     return "";
@@ -309,10 +306,10 @@ const core_descriptor_t& get_core_descriptor_config(
     auto [it, _] = config_by_num_cqs.emplace(std::make_pair(
         num_hw_cqs,
         core_descriptor_t{
-            .compute_grid_size = std::move(compute_grid_size),
+            .compute_grid_size = compute_grid_size,
             .relative_compute_cores = std::move(compute_cores),
             .relative_storage_cores = std::move(storage_cores),
-            .storage_core_bank_size = std::move(storage_core_bank_size),
+            .storage_core_bank_size = storage_core_bank_size,
             .relative_dispatch_cores = std::move(dispatch_cores),
             .relative_fabric_mux_cores = std::move(fabric_mux_cores),
             .logical_compute_cores = std::move(logical_compute_cores),

@@ -18,19 +18,16 @@ void kernel_main() {
     uint32_t start_block_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(2);
-    constexpr bool dst_page_size_is_pow2 = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t scale_h = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_w = get_compile_time_arg_val(6);
-    constexpr uint32_t height = get_compile_time_arg_val(7);
-    constexpr uint32_t width = get_compile_time_arg_val(8);
-    constexpr uint32_t block_height = get_compile_time_arg_val(9);
-    constexpr uint32_t num_tiles_per_block_row = get_compile_time_arg_val(10);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(1);
+    constexpr uint32_t scale_h = get_compile_time_arg_val(2);
+    constexpr uint32_t scale_w = get_compile_time_arg_val(3);
+    constexpr uint32_t height = get_compile_time_arg_val(4);
+    constexpr uint32_t width = get_compile_time_arg_val(5);
+    constexpr uint32_t block_height = get_compile_time_arg_val(6);
+    constexpr uint32_t num_tiles_per_block_row = get_compile_time_arg_val(7);
 
-    const auto s0 = get_interleaved_addr_gen<dst0_is_dram, dst_page_size_is_pow2>(
-        dst_addr, output_page_size, dst_log_base_2_of_page_size);
+    constexpr auto dst_args = TensorAccessorArgs<8>();
+    const auto s0 = TensorAccessor(dst_args, dst_addr, output_page_size);
 
     constexpr uint32_t in_width = width / scale_w;
     constexpr uint32_t in_height = height / scale_h;
@@ -62,7 +59,7 @@ void kernel_main() {
                 for (uint32_t k = 0; k < scale_w; k++) {
                     uint64_t offset = j * width + k;
 
-                    uint64_t dst_noc_addr_1 = get_noc_addr((start_index + offset), s0);
+                    uint64_t dst_noc_addr_1 = s0.get_noc_addr(start_index + offset);
                     noc_async_write(read_addr, dst_noc_addr_1, output_page_size);
                 }
             }

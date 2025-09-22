@@ -11,7 +11,7 @@ from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
 class Generator:
-    def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
+    def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a Qwen2_5_Vision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -19,7 +19,7 @@ class Generator:
 
         """
         # favor composition over inheritance: __ is convention for private variables
-        self._ttt_generator = TTTGenerator([model], [model_args], mesh_device, tokenizer, formatter)
+        self._ttt_generator = TTTGenerator([model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
 
     @property
     def model(self):
@@ -40,8 +40,8 @@ class Generator:
         return self._ttt_generator.tokenizer
 
     @property
-    def formatter(self):
-        return self._ttt_generator.formatter
+    def processor(self):
+        return self._ttt_generator.processor
 
     def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape[:2]
@@ -200,8 +200,12 @@ class Generator:
             return logits
 
     # [INFO] this is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
-        return self._ttt_generator.read_decode_output(tt_out, unpadded_batch, is_tokens)
+    def read_decode_output(self, tt_out, async_read=False):
+        return self._ttt_generator.read_decode_output(tt_out, async_read=async_read)
+
+    # [INFO] this is called by vLLM
+    def process_decode_output_host(self, tt_out, is_tokens=False):
+        return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
 
     ## Destructor (used to delete ttnn trace if exists)
 

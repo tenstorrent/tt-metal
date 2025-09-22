@@ -10,6 +10,8 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
 
@@ -30,7 +32,7 @@ std::map<std::string, std::string> get_defines(
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
     if (reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_op == tt::tt_metal::ReduceOpMath::SUM) {
-        defines["REDUCE_ROW_SUM_VIA_MM"] = 1;
+        defines["REDUCE_ROW_SUM_VIA_MM"] = "1";
     }
     return defines;
 }
@@ -41,7 +43,10 @@ namespace tt_metal {
 
 void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to reduce need to be on device!");
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "Operands to reduce need to be on device! Got storage type: {}",
+        input_tensor.storage_type());
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
 }

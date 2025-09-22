@@ -3,9 +3,26 @@ add_library(TTNN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_tran
 
 target_precompile_headers(ttnn_op_experimental_transformer REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
+set_target_properties(
+    ttnn_op_experimental_transformer
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE nlp_kv_cache_load_slice/device/kernels/*)
 target_sources(
     ttnn_op_experimental_transformer
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_op.cpp
@@ -68,6 +85,18 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_transformer
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/transformer
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_transformer LIBRARY COMPONENT tar)

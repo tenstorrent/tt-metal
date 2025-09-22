@@ -64,7 +64,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     Program program{};
 
     // todo maybe, subdevice
-    auto mesh_device = topk_tensor.mesh_device();
+    auto mesh_device = topk_tensor.device();
     const auto grid = mesh_device->compute_with_storage_grid_size();
     // CoreCoord grid = {1,1};
 
@@ -131,13 +131,10 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
-    const bool topk_is_dram = topk_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == BufferType::DRAM;
 
     // slightly abusing this functionality since here we also have a single page if any experts are activated
     constexpr bool local_reduce = true;
-    const std::vector<uint32_t> reader_ct_args = {
+    std::vector<uint32_t> reader_ct_args = {
         mapping_tensor_cb_id,
         local_experts_cb_id,
         metadata_cb_id,
@@ -151,10 +148,10 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         selected_experts_k,
         mapping_page_size_bytes,
         metadata_page_size_bytes,
-        topk_is_dram,
-        mapping_is_dram,
-        metadata_is_dram,
         local_reduce};
+    tt::tt_metal::TensorAccessorArgs(topk_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

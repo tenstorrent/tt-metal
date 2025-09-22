@@ -10,9 +10,9 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

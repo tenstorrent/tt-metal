@@ -7,7 +7,6 @@
 #include "topk.hpp"
 #include "device/topk_op.hpp"
 #include "device/topk_constants.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -102,7 +101,6 @@ std::vector<Tensor> post_topk_transform_tensor(
 }  // namespace
 
 std::vector<Tensor> ExecuteTopK::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const uint32_t k,
     const int8_t dim,
@@ -138,7 +136,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         0);
     const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
+        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
     }
 
@@ -151,8 +149,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         {indices_tensor},
         optional_output_tensors.has_value()
             ? reduction_common::tuple_to_vector_optional(optional_output_tensors.value())
-            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt},
-        queue_id);
+            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt});
 
     return CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
         transposed_tensor,

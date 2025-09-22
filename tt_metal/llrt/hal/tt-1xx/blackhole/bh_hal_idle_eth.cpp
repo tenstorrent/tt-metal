@@ -2,32 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt_common/mailbox.hpp"
+#define HAL_BUILD tt::tt_metal::blackhole::idle_eth
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
-#include <algorithm>
-#include <cstddef>
+using namespace tt::tt_metal::blackhole::idle_eth;
+
 #include <cstdint>
-#include <vector>
 
 #include "assert.hpp"
 #include "blackhole/bh_hal.hpp"
 #include "blackhole/bh_hal_eth_asserts.hpp"
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::blackhole {
 
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace idle_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_idle_eth_mem_map() {
-    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+    constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
@@ -104,7 +107,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_IERISC_MAILBOX_SIZE);
+    static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,
@@ -113,7 +116,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        idle_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

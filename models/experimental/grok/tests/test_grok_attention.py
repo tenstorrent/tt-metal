@@ -18,10 +18,11 @@ from models.experimental.grok.tt.grok_attention import TtGrokAttention
 from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
 from models.experimental.grok.reference.model import MultiHeadAttention
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)

@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "device/sdpa_decode_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -33,7 +32,6 @@ inline uint32_t get_chunk_size(uint32_t s) {
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -83,42 +81,11 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
                    .paged_attention = false},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 
-ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const bool is_causal,
-    const std::optional<const Tensor>& attn_mask,
-    const std::vector<uint32_t>& cur_pos,
-    const std::optional<const Tensor>& cur_pos_tensor,
-    const std::optional<const Tensor>& attention_sink,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        is_causal,
-        attn_mask,
-        cur_pos,
-        cur_pos_tensor,
-        attention_sink,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
-}
-
 ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -165,42 +132,11 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
                    .paged_attention = true},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 
-ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& page_table_tensor,
-    const bool is_causal,
-    const std::optional<const Tensor>& attn_mask,
-    const std::optional<const Tensor>& cur_pos_tensor,
-    const std::optional<const Tensor>& attention_sink,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        page_table_tensor,
-        is_causal,
-        attn_mask,
-        cur_pos_tensor,
-        attention_sink,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
-}
-
 ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -252,42 +188,11 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 
-ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const uint32_t head_dim_v,
-    const bool is_causal,
-    const std::optional<const Tensor>& attn_mask,
-    const std::vector<uint32_t>& cur_pos,
-    const std::optional<const Tensor>& cur_pos_tensor,
-    const std::optional<const Tensor>& attention_sink,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        head_dim_v,
-        is_causal,
-        attn_mask,
-        cur_pos,
-        cur_pos_tensor,
-        attention_sink,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
-}
-
 ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -336,38 +241,8 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
-               {},
-               queue_id)
+               {})
         .at(0);
-}
-
-ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const uint32_t head_dim_v,
-    const ttnn::Tensor& page_table_tensor,
-    const bool is_causal,
-    const std::optional<const Tensor>& attn_mask,
-    const std::optional<const Tensor>& cur_pos_tensor,
-    const std::optional<const Tensor>& attention_sink,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        head_dim_v,
-        page_table_tensor,
-        is_causal,
-        attn_mask,
-        cur_pos_tensor,
-        attention_sink,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::transformer

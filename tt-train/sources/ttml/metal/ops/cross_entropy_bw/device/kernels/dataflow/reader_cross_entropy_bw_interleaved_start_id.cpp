@@ -13,9 +13,10 @@
 #include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
+template <typename AddrGen>
 void read_block_tiles(
     const uint32_t cb_input_idx,
-    const InterleavedAddrGenFast<true>& input_address_generator,
+    const AddrGen& input_address_generator,
     const uint32_t Wt,
     const uint32_t block_size,
     const uint32_t tile_bytes,
@@ -77,13 +78,10 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_format = get_dataformat(cb_input_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGen</* is_dram */ true> target_indexes_address_generator = {
-        .bank_base_address = target_address, .page_size = target_indexes_page_size};
+    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto target_indexes_address_generator = TensorAccessor(target_args, target_address, target_indexes_page_size);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row

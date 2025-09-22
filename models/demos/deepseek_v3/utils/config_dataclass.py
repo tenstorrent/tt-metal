@@ -122,7 +122,7 @@ class AllGatherAsyncConfig(OpConfigBase):
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
-    barrier_semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass
@@ -138,6 +138,16 @@ class ReduceScatterAsyncConfig(OpConfigBase):
     num_links: int | None = None
     memory_config: ttnn.MemoryConfig | None = None
     topology: ttnn.Topology | None = None
+
+
+@dataclass
+class PointToPointConfig(OpConfigBase):
+    """Common parameters for a ttnn.point_to_point op"""
+
+    receiver_coord: ttnn.MeshCoordinate | None = None
+    sender_coord: ttnn.MeshCoordinate | None = None
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    optional_output_tensor: ttnn.Tensor | None = None
 
 
 @dataclass
@@ -253,8 +263,6 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
-    init_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -266,8 +274,6 @@ class AllToAllCombineConfig(OpConfigBase):
     axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
-    init_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 

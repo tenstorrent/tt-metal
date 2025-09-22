@@ -217,3 +217,51 @@ def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device
     if dim == 0 or dim == 1:
         pytest.skip()
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
+
+
+@pytest.mark.parametrize(
+    "torch_input_tenosr_dtype, ttnn_input_tenosr_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.uint32, ttnn.uint32),
+        (torch.int32, ttnn.int32),
+    ],
+)
+def test_topk_input_dtypes_raise(torch_input_tenosr_dtype, ttnn_input_tenosr_dtype, device):
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 64]
+
+    if torch_input_tenosr_dtype == torch.float32:
+        input_torch = torch.randn(shape, dtype=torch_input_tenosr_dtype)
+    else:
+        input_torch = torch.randint(0, 100, shape, dtype=torch_input_tenosr_dtype)
+
+    ttnn_input = ttnn.from_torch(input_torch, ttnn_input_tenosr_dtype, layout=ttnn.Layout.TILE, device=device)
+
+    with pytest.raises(Exception):
+        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True)
+
+
+@pytest.mark.parametrize(
+    "value_dtype, index_dtype",
+    [
+        (ttnn.float32, ttnn.uint16),
+        (ttnn.uint32, ttnn.uint16),
+        (ttnn.int32, ttnn.uint16),
+        (ttnn.bfloat16, ttnn.int32),
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat16),
+    ],
+)
+def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 64]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    value_tensor = ttnn.empty_like(ttnn_input, dtype=value_dtype)
+    index_tensor = ttnn.empty_like(ttnn_input, dtype=index_dtype)
+
+    with pytest.raises(Exception):
+        ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, out=(value_tensor, index_tensor))

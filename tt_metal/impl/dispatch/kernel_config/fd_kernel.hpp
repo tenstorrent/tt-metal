@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <stdint.h>
 #include <map>
 #include <string>
@@ -13,9 +14,8 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -183,7 +183,7 @@ protected:
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
-    FDKernelType kernel_type_;
+    FDKernelType kernel_type_ = FDKernelType::UNSET;
     chip_id_t device_id_;
     chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;

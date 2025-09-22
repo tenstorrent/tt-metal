@@ -4,6 +4,14 @@
 >
 > Please refer to the front-page [README](../../README.md) for the latest verified release for each model.
 
+## September 8, 2025
+
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Gemma 3-4B on N150/N300 and Gemma 3-27B on Wormhole QuietBox to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+### [Phi-3-Mini-128k](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Phi-3-Mini-128k-Instruct on N150/N300 to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
 ## August 18, 2025
 
 ### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)

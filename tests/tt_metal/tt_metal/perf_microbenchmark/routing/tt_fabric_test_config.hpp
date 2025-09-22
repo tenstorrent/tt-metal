@@ -25,7 +25,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
@@ -100,6 +100,17 @@ static const StringEnumMapper<RoutingType> routing_type_mapper({
     {"Dynamic", RoutingType::Dynamic},
 });
 
+static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
+    {"Default", FabricTensixConfig::DISABLED},
+    {"Mux", FabricTensixConfig::MUX},
+});
+
+static const StringEnumMapper<FabricReliabilityMode> fabric_reliability_mode_mapper({
+    {"STRICT_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE},
+    {"RELAXED_SYSTEM_HEALTH_SETUP_MODE", FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE},
+    {"DYNAMIC_RECONFIGURATION_SETUP_MODE", FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE},
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
@@ -108,6 +119,8 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
     {"all_to_all", HighLevelTrafficPattern::AllToAll},
     {"one_to_all", HighLevelTrafficPattern::OneToAll},
+    {"all_to_one", HighLevelTrafficPattern::AllToOne},
+    {"all_to_one_random", HighLevelTrafficPattern::AllToOneRandom},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
@@ -267,9 +280,10 @@ private:
 
 class CmdlineParser {
 public:
-    CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
+    CmdlineParser(const std::vector<std::string>& input_args);
 
     std::optional<std::string> get_yaml_config_path();
+    bool check_filter(ParsedTestConfig& test_config, bool fine_grained);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
@@ -280,512 +294,11 @@ public:
 
 private:
     const std::vector<std::string>& input_args_;
+    std::optional<std::string> filter_type;
+    std::optional<std::string> filter_value;
 };
 
 const std::string no_default_test_yaml_config = "";
-
-// Helper function to get supported pattern names from the mapper
-inline std::vector<std::string> get_supported_high_level_patterns() {
-    std::vector<std::string> patterns;
-    patterns.reserve(detail::high_level_traffic_pattern_mapper.to_enum.size());
-    for (const auto& [pattern_name, _] : detail::high_level_traffic_pattern_mapper.to_enum) {
-        patterns.push_back(pattern_name);
-    }
-    return patterns;
-}
-
-inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
-    std::ifstream yaml_config(yaml_config_path);
-    TT_FATAL(not yaml_config.fail(), "Failed to open file: {}", yaml_config_path);
-
-    YAML::Node yaml = YAML::LoadFile(yaml_config_path);
-
-    ParsedYamlConfig result;
-
-    if (yaml["physical_mesh"]) {
-        result.physical_mesh_config = parse_physical_mesh_config(yaml["physical_mesh"]);
-    }
-
-    if (yaml["allocation_policies"]) {
-        result.allocation_policies = parse_allocator_policies(yaml["allocation_policies"]);
-    }
-
-    const auto& tests_yaml = yaml["Tests"];
-    TT_FATAL(tests_yaml.IsSequence(), "Expected 'Tests' to be a sequence at the root of the YAML file.");
-    result.test_configs.reserve(tests_yaml.size());
-    for (const auto& test_yaml : tests_yaml) {
-        TT_FATAL(test_yaml.IsMap(), "Expected each test in Tests to be a map");
-
-        result.test_configs.emplace_back(parse_test_config(test_yaml));
-    }
-    return result;
-}
-
-inline DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
-    if (node.IsScalar()) {
-        chip_id_t chip_id = parse_scalar<chip_id_t>(node);
-        return chip_id;
-    } else if (node.IsSequence() && node.size() == 2) {
-        MeshId mesh_id = parse_mesh_id(node[0]);
-        if (node[1].IsScalar()) {
-            // Format: [mesh_id, chip_id]
-            chip_id_t chip_id = parse_scalar<chip_id_t>(node[1]);
-            return std::make_pair(mesh_id, chip_id);
-        } else if (node[1].IsSequence()) {
-            // Format: [mesh_id, [row, col]]
-            MeshCoordinate mesh_coord = parse_mesh_coord(node[1]);
-            return std::make_pair(mesh_id, mesh_coord);
-        }
-    }
-    TT_THROW(
-        "Unsupported device identifier format. Expected scalar chip_id, sequence [mesh_id, chip_id], or sequence "
-        "[mesh_id, [row, col]].");
-}
-
-inline ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::Node& dest_yaml) {
-    ParsedDestinationConfig config;
-    if (dest_yaml["device"]) {
-        config.device = parse_device_identifier(dest_yaml["device"]);
-    }
-    if (dest_yaml["core"]) {
-        config.core = parse_core_coord(dest_yaml["core"]);
-    }
-    if (dest_yaml["hops"]) {
-        TT_FATAL(dest_yaml["hops"].IsMap(), "Expected 'hops' to be a map.");
-        std::unordered_map<RoutingDirection, uint32_t> hops_map;
-        for (const auto& it : dest_yaml["hops"]) {
-            std::string dir_str = parse_scalar<std::string>(it.first);
-            RoutingDirection dir = detail::routing_direction_mapper.from_string(dir_str, "RoutingDirection");
-            uint32_t num_hops = parse_scalar<uint32_t>(it.second);
-            hops_map[dir] = num_hops;
-        }
-        config.hops = hops_map;
-    }
-    if (dest_yaml["target_address"]) {
-        config.target_address = parse_scalar<uint32_t>(dest_yaml["target_address"]);
-    }
-    if (dest_yaml["atomic_inc_address"]) {
-        config.atomic_inc_address = parse_scalar<uint32_t>(dest_yaml["atomic_inc_address"]);
-    }
-    return config;
-}
-
-inline ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const YAML::Node& pattern_yaml) {
-    TT_FATAL(pattern_yaml.IsMap(), "Expected pattern to be a map");
-
-    ParsedTrafficPatternConfig config;
-    if (pattern_yaml["ftype"]) {
-        config.ftype =
-            detail::chip_send_type_mapper.from_string(parse_scalar<std::string>(pattern_yaml["ftype"]), "ftype");
-    }
-    if (pattern_yaml["ntype"]) {
-        config.ntype =
-            detail::noc_send_type_mapper.from_string(parse_scalar<std::string>(pattern_yaml["ntype"]), "ntype");
-    }
-    if (pattern_yaml["size"]) {
-        config.size = parse_scalar<uint32_t>(pattern_yaml["size"]);
-    }
-    if (pattern_yaml["num_packets"]) {
-        config.num_packets = parse_scalar<uint32_t>(pattern_yaml["num_packets"]);
-    }
-    if (pattern_yaml["destination"]) {
-        config.destination = parse_destination_config(pattern_yaml["destination"]);
-    }
-    if (pattern_yaml["atomic_inc_val"]) {
-        config.atomic_inc_val = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_val"]);
-    }
-    if (pattern_yaml["atomic_inc_wrap"]) {
-        config.atomic_inc_wrap = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_wrap"]);
-    }
-    if (pattern_yaml["mcast_start_hops"]) {
-        config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
-    }
-    return config;
-}
-
-inline ParsedSenderConfig YamlConfigParser::parse_sender_config(
-    const YAML::Node& sender_yaml, const ParsedTrafficPatternConfig& defaults) {
-    TT_FATAL(sender_yaml.IsMap(), "Expected sender to be a map");
-    TT_FATAL(sender_yaml["device"] && sender_yaml["patterns"], "Sender config missing required keys");
-
-    ParsedSenderConfig config;
-    config.device = parse_device_identifier(sender_yaml["device"]);
-    if (sender_yaml["core"]) {
-        config.core = parse_core_coord(sender_yaml["core"]);
-    }
-
-    const auto& patterns_yaml = sender_yaml["patterns"];
-    TT_FATAL(patterns_yaml.IsSequence(), "Expected patterns to be a sequence");
-    config.patterns.reserve(patterns_yaml.size());
-    for (const auto& pattern_node : patterns_yaml) {
-        ParsedTrafficPatternConfig specific_pattern = parse_traffic_pattern_config(pattern_node);
-        config.patterns.push_back(merge_patterns(defaults, specific_pattern));
-    }
-    return config;
-}
-
-inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
-    ParsedTestConfig test_config;
-
-    test_config.name = parse_scalar<std::string>(test_yaml["name"]);
-    log_info(tt::LogTest, "name: {}", test_config.name);
-
-    TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
-    test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
-
-    if (test_yaml["parametrization_params"]) {
-        test_config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
-    }
-
-    if (test_yaml["on_missing_param_policy"]) {
-        test_config.on_missing_param_policy = parse_scalar<std::string>(test_yaml["on_missing_param_policy"]);
-    }
-
-    if (test_yaml["defaults"]) {
-        test_config.defaults = parse_traffic_pattern_config(test_yaml["defaults"]);
-    }
-
-    if (test_yaml["patterns"]) {
-        const auto& patterns_yaml = test_yaml["patterns"];
-        TT_FATAL(patterns_yaml.IsSequence(), "Expected 'patterns' to be a sequence.");
-        std::vector<HighLevelPatternConfig> high_level_patterns;
-        high_level_patterns.reserve(patterns_yaml.size());
-        for (const auto& pattern_node : patterns_yaml) {
-            high_level_patterns.push_back(parse_high_level_pattern_config(pattern_node));
-        }
-        test_config.patterns = high_level_patterns;
-    }
-
-    if (test_yaml["senders"]) {
-        const auto& senders_yaml = test_yaml["senders"];
-        TT_FATAL(senders_yaml.IsSequence(), "Expected senders to be a sequence");
-        test_config.senders.reserve(senders_yaml.size());
-        for (const auto& sender_node : senders_yaml) {
-            test_config.senders.push_back(
-                parse_sender_config(sender_node, test_config.defaults.value_or(ParsedTrafficPatternConfig{})));
-        }
-    }
-
-    if (test_yaml["bw_calc_func"]) {
-        test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
-    }
-
-    if (test_yaml["benchmark_mode"]) {
-        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
-    }
-
-    if (test_yaml["sync"]) {
-        test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
-    }
-
-    return test_config;
-}
-
-inline AllocatorPolicies YamlConfigParser::parse_allocator_policies(const YAML::Node& policies_yaml) {
-    TT_FATAL(policies_yaml.IsMap(), "Expected 'allocation_policies' to be a map.");
-
-    std::optional<CoreAllocationConfig> sender_config;
-    if (policies_yaml["sender"]) {
-        sender_config = parse_core_allocation_config(
-            policies_yaml["sender"], CoreAllocationConfig::get_default_sender_allocation_config());
-    }
-
-    std::optional<CoreAllocationConfig> receiver_config;
-    if (policies_yaml["receiver"]) {
-        receiver_config = parse_core_allocation_config(
-            policies_yaml["receiver"], CoreAllocationConfig::get_default_receiver_allocation_config());
-    }
-
-    std::optional<uint32_t> default_payload_chunk_size;
-    if (policies_yaml["default_payload_chunk_size"]) {
-        default_payload_chunk_size = parse_scalar<uint32_t>(policies_yaml["default_payload_chunk_size"]);
-    }
-
-    return AllocatorPolicies(sender_config, receiver_config, default_payload_chunk_size);
-}
-
-inline CoreAllocationConfig YamlConfigParser::parse_core_allocation_config(
-    const YAML::Node& config_yaml, CoreAllocationConfig base_config) {
-    CoreAllocationConfig config = base_config;
-    if (config_yaml["policy"]) {
-        config.policy = detail::core_allocation_policy_mapper.from_string(
-            parse_scalar<std::string>(config_yaml["policy"]), "CoreAllocationPolicy");
-    }
-    if (config_yaml["max_configs_per_core"]) {
-        config.max_configs_per_core = parse_scalar<uint32_t>(config_yaml["max_configs_per_core"]);
-    }
-    if (config_yaml["initial_pool_size"]) {
-        config.initial_pool_size = parse_scalar<uint32_t>(config_yaml["initial_pool_size"]);
-    }
-    if (config_yaml["pool_refill_size"]) {
-        config.pool_refill_size = parse_scalar<uint32_t>(config_yaml["pool_refill_size"]);
-    }
-    return config;
-}
-
-inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_setup_yaml) {
-    TT_FATAL(fabric_setup_yaml.IsMap(), "Expected fabric setup to be a map");
-    TT_FATAL(fabric_setup_yaml["topology"], "Fabric setup missing Topolgy key");
-    TestFabricSetup fabric_setup;
-    auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
-    fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
-
-    if (fabric_setup_yaml["routing_type"]) {
-        auto routing_type_str = parse_scalar<std::string>(fabric_setup_yaml["routing_type"]);
-        fabric_setup.routing_type = detail::routing_type_mapper.from_string(routing_type_str, "RoutingType");
-    } else {
-        log_info(tt::LogTest, "No routing type specified, defaulting to LowLatency");
-        fabric_setup.routing_type = RoutingType::LowLatency;
-    }
-
-    if (fabric_setup_yaml["num_links"]) {
-        fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
-    } else {
-        fabric_setup.num_links = 1;
-    }
-
-    // Handle torus_config for Torus topology
-    if (fabric_setup.topology == Topology::Torus) {
-        if (fabric_setup_yaml["torus_config"]) {
-            fabric_setup.torus_config = parse_scalar<std::string>(fabric_setup_yaml["torus_config"]);
-        } else {
-            // Default to "XY" when topology is Torus but no torus_config is specified
-            fabric_setup.torus_config = "XY";
-        }
-
-        // Validate torus_config value
-        const auto& config = fabric_setup.torus_config.value();
-        TT_FATAL(
-            config == "X" || config == "Y" || config == "XY",
-            "Invalid torus_config '{}'. Supported values are: 'X', 'Y', 'XY'",
-            config);
-    }
-
-    return fabric_setup;
-}
-
-inline PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml) {
-    TT_FATAL(physical_mesh_yaml.IsMap(), "Expected physical mesh config to be a map");
-    TT_FATAL(
-        physical_mesh_yaml["mesh_descriptor_path"].IsDefined() && physical_mesh_yaml["eth_coord_mapping"].IsDefined(),
-        "physical_mesh config must contain both 'mesh_descriptor_path' and 'eth_coord_mapping'");
-
-    PhysicalMeshConfig physical_mesh_config;
-    physical_mesh_config.mesh_descriptor_path = parse_scalar<std::string>(physical_mesh_yaml["mesh_descriptor_path"]);
-    physical_mesh_config.eth_coord_mapping = parse_2d_array<eth_coord_t>(physical_mesh_yaml["eth_coord_mapping"]);
-
-    return physical_mesh_config;
-}
-
-// CmdlineParser methods
-inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
-    std::string yaml_config = test_args::get_command_option(input_args_, "--test_config", "");
-
-    if (!yaml_config.empty()) {
-        std::filesystem::path fpath(yaml_config);
-        if (!fpath.is_absolute()) {
-            const auto& fname = fpath.filename();
-            fpath = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-                    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/" / fname;
-            log_warning(tt::LogTest, "Relative fpath for config provided, using absolute path: {}", fpath);
-        }
-        return fpath.string();
-    }
-
-    return std::nullopt;
-}
-
-inline void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs) {
-    bool is_default_test = (test_configs.size() == 1 && test_configs[0].name == "DefaultCommandLineTest");
-
-    if (!is_default_test) {
-        if (test_args::has_command_option(input_args_, "--pattern") ||
-            test_args::has_command_option(input_args_, "--chip-ids") ||
-            test_args::has_command_option(input_args_, "--iterations") ||
-            test_args::has_command_option(input_args_, "--src-device") ||
-            test_args::has_command_option(input_args_, "--dst-device") ||
-            test_args::has_command_option(input_args_, "--topology")) {
-            log_warning(
-                LogTest,
-                "Ignoring structural command-line arguments (--pattern, --chip-ids, --topology, etc.) as a YAML "
-                "configuration is being used. Only value overrides (--num-packets, --payload-size, etc.) are applied.");
-        }
-    }
-
-    if (test_args::has_command_option(input_args_, "--num-packets")) {
-        uint32_t num_packets_override = test_args::get_command_option_uint32(input_args_, "--num-packets", 1);
-        log_info(LogTest, "Overriding num_packets for all patterns with: {}", num_packets_override);
-        for (auto& config : test_configs) {
-            if (!config.defaults.has_value()) {
-                config.defaults = ParsedTrafficPatternConfig{};
-            }
-            config.defaults->num_packets = num_packets_override;
-        }
-    }
-
-    if (test_args::has_command_option(input_args_, "--payload-size")) {
-        uint32_t payload_size_override = test_args::get_command_option_uint32(input_args_, "--payload-size", 64);
-        log_info(LogTest, "Overriding payload_size for all patterns with: {}", payload_size_override);
-        for (auto& config : test_configs) {
-            if (!config.defaults.has_value()) {
-                config.defaults = ParsedTrafficPatternConfig{};
-            }
-            config.defaults->size = payload_size_override;
-        }
-    }
-}
-
-inline std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
-    log_info(LogTest, "No YAML config provided. Generating a default test configuration from command-line args.");
-
-    TestFabricSetup fabric_setup;
-    if (test_args::has_command_option(input_args_, "--topology")) {
-        std::string topology_str = test_args::get_command_option(input_args_, "--topology", "Linear");
-        fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
-    } else {
-        fabric_setup.topology = Topology::Linear;
-        log_info(LogTest, "No topology specified via --topology, defaulting to Linear.");
-    }
-
-    ParsedTestConfig default_test;
-
-    if (test_args::has_command_option(input_args_, "--pattern")) {
-        log_info(LogTest, "Generating a high-level pattern test from command line.");
-        std::string pattern_type = test_args::get_command_option(input_args_, "--pattern", "");
-        TT_FATAL(
-            detail::high_level_traffic_pattern_mapper.to_enum.find(pattern_type) !=
-                detail::high_level_traffic_pattern_mapper.to_enum.end(),
-            "Unsupported pattern type from command line: '{}'. Supported types are: {}",
-            pattern_type,
-            get_supported_high_level_patterns());
-
-        HighLevelPatternConfig hlp_config;
-        hlp_config.type = pattern_type;
-        hlp_config.iterations = test_args::get_command_option_uint32(input_args_, "--iterations", 1);
-
-        default_test.patterns = std::vector<HighLevelPatternConfig>{hlp_config};
-    } else {
-        log_info(LogTest, "Generating a simple unicast test from command line.");
-        std::string src_device_str = test_args::get_command_option(input_args_, "--src-device", "0");
-        std::string dst_device_str = test_args::get_command_option(input_args_, "--dst-device", "1");
-
-        chip_id_t src_device_id = std::stoul(src_device_str);
-        chip_id_t dst_device_id = std::stoul(dst_device_str);
-
-        ParsedTrafficPatternConfig pattern = {.destination = ParsedDestinationConfig{.device = dst_device_id}};
-        ParsedSenderConfig sender = {.device = src_device_id, .patterns = {pattern}};
-        default_test.senders = {sender};
-    }
-
-    default_test.name = "DefaultCommandLineTest";
-    default_test.fabric_setup = fabric_setup;
-    default_test.defaults = ParsedTrafficPatternConfig{};
-    default_test.defaults->ftype = ChipSendType::CHIP_UNICAST;
-    default_test.defaults->ntype = NocSendType::NOC_UNICAST_WRITE;
-
-    return {default_test};
-}
-
-inline std::optional<uint32_t> CmdlineParser::get_master_seed() {
-    if (test_args::has_command_option(input_args_, "--master-seed")) {
-        uint32_t master_seed = test_args::get_command_option_uint32(input_args_, "--master-seed", 0);
-        log_info(tt::LogTest, "Using master seed from command line: {}", master_seed);
-        return std::make_optional(master_seed);
-    }
-
-    log_info(LogTest, "No master seed provided. Use --master-seed to reproduce.");
-    return std::nullopt;
-}
-
-inline bool CmdlineParser::dump_built_tests() {
-    return test_args::has_command_option(input_args_, "--dump-built-tests");
-}
-
-inline std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& default_file_name) {
-    auto dump_file = test_args::get_command_option(input_args_, "--built-tests-dump-file", default_file_name);
-    return dump_file;
-}
-
-inline bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
-
-inline void CmdlineParser::print_help() {
-    log_info(LogTest, "Usage: test_tt_fabric [options]");
-    log_info(LogTest, "This test can be run in two modes:");
-    log_info(
-        LogTest,
-        "1. With a YAML configuration file (--test_config), which provides detailed control over traffic patterns.");
-    log_info(LogTest, "2. With command-line arguments for simpler, predefined test cases.");
-    log_info(LogTest, "");
-    log_info(LogTest, "General Options:");
-    log_info(LogTest, "  --help                                       Print this help message.");
-    log_info(
-        LogTest,
-        "  --test_config <path>                         Path to the YAML test configuration file. See "
-        "test_features.yaml for examples.");
-    log_info(
-        LogTest,
-        "  --master-seed <seed>                         Master seed for all random operations to ensure "
-        "reproducibility.");
-    log_info(LogTest, "");
-    log_info(LogTest, "Options for command-line mode (when --test_config is NOT used):");
-    log_info(LogTest, "  --topology <Linear|Ring|Mesh|Torus>          Specify the fabric topology. Default: Linear.");
-    log_info(
-        LogTest,
-        "  --pattern <type>                             Specify a high-level traffic pattern. If not provided, a "
-        "simple unicast test is run.");
-    log_info(
-        LogTest,
-        "                                               Supported types: {}",
-        get_supported_high_level_patterns());
-    log_info(
-        LogTest,
-        "  --src-device <id>                            Source device for simple unicast test. "
-        "Default: 0.");
-    log_info(
-        LogTest,
-        "  --dst-device <id>                            Destination device for simple unicast test. "
-        "Default: 1.");
-    log_info(
-        LogTest,
-        "  --iterations <N>                             Number of iterations for high-level patterns (e.g., for "
-        "different random pairings). Default: 1.");
-    log_info(LogTest, "");
-    log_info(LogTest, "Value Overrides (can be used with either mode):");
-    log_info(
-        LogTest,
-        "  --num-packets <N>                            Override the number of packets for all traffic "
-        "patterns.");
-    log_info(
-        LogTest,
-        "  --payload-size <bytes>                       Override the payload size in bytes for all "
-        "traffic patterns.");
-    log_info(LogTest, "");
-    log_info(LogTest, "Debugging and Output Options:");
-    log_info(
-        LogTest,
-        "  --dump-built-tests                           Dump the fully-expanded test configurations to a YAML file.");
-    log_info(
-        LogTest,
-        "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
-        "built_tests.yaml.");
-}
-
-// YamlConfigParser private helpers
-inline CoreCoord YamlConfigParser::parse_core_coord(const YAML::Node& node) {
-    TT_FATAL(node.IsSequence() && node.size() == 2, "Expected core coordinates to be a sequence of [x, y]");
-    return CoreCoord(parse_scalar<size_t>(node[0]), parse_scalar<size_t>(node[1]));
-}
-
-inline MeshCoordinate YamlConfigParser::parse_mesh_coord(const YAML::Node& node) {
-    TT_FATAL(node.IsSequence() && node.size() == 2, "Expected mesh coordinates to be a sequence of [row, col]");
-    std::vector<uint32_t> coords = {parse_scalar<uint32_t>(node[0]), parse_scalar<uint32_t>(node[1])};
-    return MeshCoordinate(coords);
-}
-
-inline MeshId YamlConfigParser::parse_mesh_id(const YAML::Node& yaml_node) {
-    uint32_t mesh_id = yaml_node.as<uint32_t>();
-    return MeshId{mesh_id};
-}
 
 template <typename T>
 inline T YamlConfigParser::parse_scalar(const YAML::Node& yaml_node) {
@@ -862,50 +375,14 @@ inline std::vector<T> YamlConfigParser::get_elements_in_range(T start, T end) {
     return range;
 }
 
-inline ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const YAML::Node& params_yaml) {
-    ParametrizationOptionsMap options;
-    TT_FATAL(params_yaml.IsMap(), "Expected 'parametrization_params' to be a map.");
-
-    for (const auto& it : params_yaml) {
-        std::string key = parse_scalar<std::string>(it.first);
-        const auto& node = it.second;
-        TT_FATAL(node.IsSequence(), "Parametrization option '{}' must be a sequence of values.", key);
-
-        if (key == "ftype" || key == "ntype") {
-            options[key] = parse_scalar_sequence<std::string>(node);
-        } else if (key == "size" || key == "num_packets" || key == "num_links") {
-            options[key] = parse_scalar_sequence<uint32_t>(node);
-        } else {
-            TT_THROW("Unsupported parametrization parameter: {}", key);
-        }
-    }
-    return options;
-}
-
-inline HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const YAML::Node& pattern_yaml) {
-    HighLevelPatternConfig config;
-    TT_FATAL(pattern_yaml["type"], "High-level pattern must have a 'type' key.");
-    config.type = parse_scalar<std::string>(pattern_yaml["type"]);
-
-    TT_FATAL(
-        detail::high_level_traffic_pattern_mapper.to_enum.find(config.type) !=
-            detail::high_level_traffic_pattern_mapper.to_enum.end(),
-        "Unsupported pattern type: '{}'. Supported types are: {}",
-        config.type,
-        get_supported_high_level_patterns());
-
-    if (pattern_yaml["iterations"]) {
-        config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);
-    }
-    return config;
-}
 
 class TestConfigBuilder {
 public:
     TestConfigBuilder(IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager, std::mt19937& gen) :
         device_info_provider_(device_info_provider), route_manager_(route_manager), gen_(gen) {}
 
-    std::vector<TestConfig> build_tests(const std::vector<ParsedTestConfig>& raw_configs) {
+    std::vector<TestConfig> build_tests(
+        const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser) {
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
@@ -913,6 +390,10 @@ public:
 
             // For each newly generated parametrized config, expand its high-level patterns
             for (auto& p_config : parametrized_configs) {
+                if (!cmdline_parser.check_filter(p_config, false)) {
+                    log_info(LogTest, "Skipping part of test '{}' due to filter criteria.", p_config.name);
+                    continue;
+                }
                 auto expanded_tests = this->expand_high_level_patterns(p_config);
                 built_tests.insert(
                     built_tests.end(),
@@ -1006,7 +487,18 @@ private:
         uint32_t max_iterations = 1;
         if (p_config.patterns) {
             for (const auto& p : p_config.patterns.value()) {
-                max_iterations = std::max(max_iterations, p.iterations.value_or(1));
+                if (p.iterations.has_value()) {
+                    max_iterations = std::max(max_iterations, p.iterations.value());
+                } else if (p.type == "all_to_one") {
+                    // Dynamically calculate iterations for all_to_one patterns based on number of devices
+                    uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
+                    max_iterations = std::max(max_iterations, num_devices);
+                    log_info(
+                        LogTest,
+                        "Auto-detected {} iterations for all_to_one pattern in test '{}'",
+                        num_devices,
+                        p_config.name);
+                }
             }
         }
 
@@ -1310,6 +802,10 @@ private:
                 } else {
                     expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
+            } else if (pattern.type == "all_to_one") {
+                expand_all_to_one_unicast(test, defaults, iteration_idx);
+            } else if (pattern.type == "all_to_one_random") {
+                expand_all_to_one_random_unicast(test, defaults);
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
@@ -1350,6 +846,22 @@ private:
         } else {
             add_senders_from_pairs(test, all_pairs, base_pattern);
         }
+    }
+
+    void expand_all_to_one_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {} (iteration {})", test.name, iteration_idx);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(iteration_idx);
+        if (!filtered_pairs.empty()) {
+            add_senders_from_pairs(test, filtered_pairs, base_pattern);
+        }
+    }
+
+    void expand_all_to_one_random_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
+        uint32_t index = get_random_in_range(0, device_info_provider_.get_global_node_ids().size() - 1);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(index);
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
@@ -1516,7 +1028,7 @@ private:
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
 
             // Create sender config with all split sync patterns
-            SenderConfig sync_sender = {.device = src_device, .patterns = std::move(sync_patterns)};
+            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns};
 
             test.global_sync_configs.push_back(std::move(sync_sender));
 
@@ -1729,7 +1241,6 @@ private:
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
     std::mt19937& gen_;
-
     // Randomization helpers
     template <typename T>
     T get_random_choice(const std::vector<T>& choices) {
@@ -1857,6 +1368,13 @@ private:
 
     static std::string to_string(RoutingType rtype) {
         return detail::routing_type_mapper.to_string(rtype, "RoutingType");
+    }
+
+    static std::string to_string(FabricTensixConfig ftype) {
+        return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
+    }
+    static std::string to_string(FabricReliabilityMode mode) {
+        return detail::fabric_reliability_mode_mapper.to_string(mode, "FabricReliabilityMode");
     }
 
     static std::string to_string(tt::tt_fabric::Topology topology) {
@@ -2027,6 +1545,14 @@ private:
         if (config.routing_type.has_value()) {
             out << YAML::Key << "routing_type";
             out << YAML::Value << to_string(config.routing_type.value());
+        }
+        if (config.fabric_tensix_config.has_value()) {
+            out << YAML::Key << "fabric_tensix_config";
+            out << YAML::Value << to_string(config.fabric_tensix_config.value());
+        }
+        if (config.fabric_reliability_mode.has_value()) {
+            out << YAML::Key << "fabric_reliability_mode";
+            out << YAML::Value << to_string(config.fabric_reliability_mode.value());
         }
         if (config.topology == Topology::Torus && config.torus_config.has_value()) {
             out << YAML::Key << "torus_config";

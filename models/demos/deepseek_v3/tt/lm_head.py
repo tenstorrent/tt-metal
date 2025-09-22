@@ -13,7 +13,13 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.composite_ops import mesh_scatter
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, OpConfigBase
+from models.demos.deepseek_v3.utils.config_dataclass import (
+    AllGatherAsyncConfig,
+    FromWeightConfig,
+    LinearConfig,
+    MeshDeviceStub,
+    OpConfigBase,
+)
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     MAX_BATCH_SIZE,
@@ -74,7 +80,7 @@ class LMHead(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = state_dict["lm_head.weight"].permute(
+        weight_tensor = state_dict["weight"].permute(
             1, 0
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
@@ -185,6 +191,13 @@ class LMHead(AbstractModule):
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=mesh_device,
+                cluster_axis=1,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            ),
             "input_memory_config": input_memory_config,
             "output_memory_config": output_memory_config,
         }
@@ -231,6 +244,13 @@ class LMHead(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
+            "all_gather": AllGatherAsyncConfig(
+                mesh_device=mesh_device,
+                cluster_axis=1,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
@@ -239,8 +259,9 @@ class LMHead(AbstractModule):
     def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "mesh_scatter": {
-                "semaphores": (ccl.get_semaphore(0), ccl.get_semaphore(1)),
+            "all_gather": {
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
+                "num_links": ccl.get_max_links(1),
             },
         }
 

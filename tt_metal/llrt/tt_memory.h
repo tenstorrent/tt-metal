@@ -31,11 +31,11 @@ private:
     std::vector<struct span> link_spans_;
     uint32_t text_size_ = 0;
     uint32_t text_addr_ = 0;
-    Loading loading_;
+    Loading loading_{Loading::DISCRETE};
 
 public:
     memory();
-    memory(std::string_view path, Loading loading);
+    memory(const std::string& path, Loading loading);
 
     // These can be large objects, so ban copying ...
     memory(const memory&) = delete;

@@ -4,7 +4,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mesh_trace.hpp"
 
-#include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <stdint.h>
@@ -197,6 +196,13 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
         mesh_cq.enqueue_write_shard_to_sub_grid(
             *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
+    }
+}
+
+MeshTraceBuffer::~MeshTraceBuffer() {
+    if (this->mesh_buffer && this->mesh_buffer->is_allocated() && this->mesh_buffer->device()) {
+        auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
+        this->mesh_buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->mesh_buffer->size());
     }
 }
 

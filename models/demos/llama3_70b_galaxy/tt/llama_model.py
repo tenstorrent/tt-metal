@@ -45,6 +45,7 @@ class TtTransformer(LightweightModule):
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
+        self.paged_attention_config = paged_attention_config
 
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
@@ -173,7 +174,7 @@ class TtTransformer(LightweightModule):
             self.tt_ccl = self.tt_ccl_decode
 
     def prepare_prefill_inputs_host(
-        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None
+        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -204,10 +205,28 @@ class TtTransformer(LightweightModule):
             tt_rot_mats_prefill = self.tt_rot_mats_prefill
 
         if page_table is not None:
-            # we only want to update the kv cache on the 8 devices (every fourth device starting at user_id//8 ) for a given user_id
-            # we are setting the page table to -1 for all other devices to skip the update
-            page_table_padded = torch.ones((128, page_table.shape[1]), dtype=torch.int32) * -1
-            page_table_padded[user_id // 8 * 32 : (user_id // 8 + 1) * 32, :] = page_table
+            if batch_size > 1:
+                assert batch_size == 32, "batch_size must be 32 for batched prefill"
+                # we only want to update the kv cache for 8 users per 4 devices
+                # pad with -1 for the seqlen of all other users
+                devices = 4
+                batch_size_per_device = batch_size // devices
+                page_table_padded = torch.ones((devices, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
+                for i in range(devices):
+                    page_table_padded[
+                        i,
+                        (i * batch_size_per_device)
+                        * page_table.shape[1] : (i + 1)
+                        * batch_size_per_device
+                        * page_table.shape[1],
+                    ] = page_table[i * batch_size_per_device : (i + 1) * batch_size_per_device, :].reshape(1, -1)
+
+            else:
+                # we only want to update the kv cache on the 8 devices (every fourth device starting at user_id//8 ) for a given user_id
+                # we are setting the page table to -1 for all other devices to skip the update
+                page_table_padded = torch.ones((128, page_table.shape[1]), dtype=torch.int32) * -1
+                page_table_padded[user_id // 8 * 32 : (user_id // 8 + 1) * 32, :] = page_table
+
             tt_page_table = ttnn.from_torch(
                 page_table_padded,
                 device=None,
@@ -254,7 +273,7 @@ class TtTransformer(LightweightModule):
         return tt_tokens, user_id, page_table, chunk_page_table
 
     def prepare_inputs_prefill(
-        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None
+        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -263,27 +282,65 @@ class TtTransformer(LightweightModule):
         model must implement.
         """
         host_inputs = self.prepare_prefill_inputs_host(
-            tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill
+            tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill, batch_size
         )
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
         return transformed_device_inputs
 
-    def prepare_inputs_decode(self, *inputs):
+    def prepare_inputs_decode(self, tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         Its implementation can take advantage of a few other functions which the
         model must implement.
         """
-        host_inputs = self.prepare_decode_inputs_host(*inputs)
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
+        host_tensors = self.prepare_decode_inputs_host(
+            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+        )
+        shard_specs = self.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
+        device_inputs = copy_host_to_device(
+            host_tensors, mesh_device=self.mesh_device, shard_specs=shard_specs
+        )  # Helper function
         return device_inputs
 
-    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+    def prepare_decode_shard_configs(self, is_cur_pos_sharded=False, is_page_table_sharded=False):
+        """
+        Prepares the sharding configuration for cur_pos and page_table tensors
+        """
+        cur_pos_memory_config = None
+        page_table_memory_config = None
+        if is_cur_pos_sharded:
+            cur_pos_shard_spec = ttnn.ShardSpec(
+                self.args.sub_core_grids,
+                (1, self.args.max_batch_size // self.mesh_device.shape[1]),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            cur_pos_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+            )
+        if is_page_table_sharded:
+            page_table_shard_spec = ttnn.ShardSpec(
+                self.args.sub_core_grids,
+                (
+                    self.args.batch_size_per_device_group,
+                    self.paged_attention_config.max_num_blocks // self.args.max_batch_size,
+                ),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            page_table_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
+            )
+        return [None, cur_pos_memory_config, None, page_table_memory_config]
+
+    def prepare_decode_inputs_host(
+        self, tokens, current_pos, page_table=None, is_cur_pos_sharded=False, is_page_table_sharded=False
+    ):
         """
         Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
         NOTE: Tokens and current_pos are padded to batch
+        NOTE: if is_cur_pos_sharded is True, current_pos_tt is returned as a device tensor
+        NOTE: if is_page_table_sharded is True, page_table is returned as a device tensor
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
@@ -302,22 +359,32 @@ class TtTransformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        cur_pos_shard_dim = 0
+        if is_cur_pos_sharded:
+            cur_pos_shard_dim = 1
+            current_pos = current_pos.repeat(self.args.sub_core_grids.num_cores(), 1)
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(None, 0) if (self.args.is_galaxy and B > 1) else (None, None),
+                dims=(None, cur_pos_shard_dim) if (self.args.is_galaxy and B > 1) else (None, None),
                 mesh_shape=self.args.cluster_shape,
             ),
         )
-
         if page_table is not None:
+            if is_page_table_sharded:
+                page_table_chunks = page_table.split(B // self.args.cluster_shape[1], dim=0)
+                repeated_page_table_chunks = [
+                    chunk.repeat(self.args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
+                ]
+                page_table = torch.cat(repeated_page_table_chunks, dim=0)
+
             page_table = ttnn.from_torch(
                 page_table,
                 device=None,
-                dtype=ttnn.int32,
+                dtype=ttnn.uint16 if is_page_table_sharded else ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
                     dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
@@ -347,39 +414,51 @@ class TtTransformer(LightweightModule):
         NOTE: In this model, prefill always uses get_last_token
         """
         x, _ = self.norm(tt_out, res=None, mode="prefill")
+        if isinstance(last_token_idx, list):
+            # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
+            batch_size = len(last_token_idx)
+            x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
+        else:
+            x_split = [x]
+        toks_list = []
+        for i, x in enumerate(x_split):
+            if isinstance(last_token_idx, list):
+                last_token_idx_i = last_token_idx[i]
+            else:
+                last_token_idx_i = last_token_idx
+            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
 
-        x = x[:, :, last_token_idx : last_token_idx + 1, :]
+            tt_logits = self.lm_head(x, None, mode="prefill")
 
-        tt_logits = self.lm_head(x, None, mode="prefill")
+            # Gather the output across all devices and untilize the tensor (for argmax)
+            tt_logits = self.tt_ccl.line_all_gather(
+                tt_logits[0],
+                dim=3,
+                num_links=3,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
+            )
 
-        # Gather the output across all devices and untilize the tensor (for argmax)
-        tt_logits = self.tt_ccl.line_all_gather(
-            tt_logits[0],
-            dim=3,
-            num_links=3,
-            cluster_axis=0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="SAMPLING",
-        )
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+            tt_logits = ttnn.reshape(
+                tt_logits,
+                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+            )
+            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+            if isinstance(tt_out, list):
+                tt_out = tt_out[0]
 
-        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
-        tt_logits = ttnn.reshape(
-            tt_logits,
-            ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
-            ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
-        )
-        tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
-        if isinstance(tt_out, list):
-            tt_out = tt_out[0]
-
-        toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
+            toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
+            toks_list.append(toks)
 
         if tt_out_logits_saved is not None:
             # make sure tt_out_logits_saved is mutable
             logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, :, :]
             tt_out_logits_saved.copy_(logits_saved)
 
-        return toks
+        return toks_list if isinstance(last_token_idx, list) else toks
 
     def process_output_decode(self, tt_out):
         """
@@ -401,6 +480,7 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         rot_mats=None,
+        batch_size=1,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -417,6 +497,7 @@ class TtTransformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
         return tt_logits
 
@@ -428,6 +509,7 @@ class TtTransformer(LightweightModule):
         page_table=None,
         kv_cache=None,
         tt_out_logits_saved=None,
+        is_cur_pos_sharded=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -458,9 +540,13 @@ class TtTransformer(LightweightModule):
             tt_out_logits = tt_out_logits[0, 0, 0, :128256]
             tt_out_logits_saved.copy_(tt_out_logits)
 
+        # Increment current position and rot_mat_idxs
+        # NOTE: if cur pos sharded, each L1 needs to update their own local copy of cur pos
         ttnn.plus_one(
             current_pos,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=self.args.sub_core_grids
+            if is_cur_pos_sharded
+            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -513,6 +599,7 @@ class TtTransformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
     ):
         if mode == "decode":
             self.prefetcher_setup.create_global_cb()
@@ -541,6 +628,7 @@ class TtTransformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                batch_size=batch_size,
             )
         # ttnn.deallocate(h)
         if mode == "decode":

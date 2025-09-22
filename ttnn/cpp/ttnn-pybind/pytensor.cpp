@@ -84,7 +84,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     const TensorLayout& tensor_layout,
     MeshDevice* device,
     const tt::tt_metal::MemoryPin& pydata_pin,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     TT_FATAL(
@@ -132,7 +132,7 @@ Tensor create_tt_tensor_from_py_data(
     const TensorLayout& tensor_layout,
     MeshDevice* device,
     const tt::tt_metal::MemoryPin& pydata_pin,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     auto create_concrete = [&]<typename T>() {
@@ -178,9 +178,7 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             data_type = optional_data_type.value();
         } else if (py_dtype.equal(torch.attr("float32"))) {
             data_type = DataType::FLOAT32;
-        } else if (py_dtype.equal(torch.attr("float16"))) {
-            data_type = DataType::BFLOAT16;
-        } else if (py_dtype.equal(torch.attr("bfloat16"))) {
+        } else if (py_dtype.equal(torch.attr("float16")) || py_dtype.equal(torch.attr("bfloat16"))) {
             data_type = DataType::BFLOAT16;
         } else if (py_dtype.equal(torch.attr("int64"))) {
             data_type = DataType::UINT32;
@@ -310,7 +308,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
     MeshDevice* device,
-    ttnn::QueueId cq_id,
+    std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     GraphTracker::instance().track_function_start(
@@ -510,7 +508,7 @@ py::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return torch.attr("uint8");
             case DataType::UINT16: return torch.attr("int16");
-            case DataType::INT32: return torch.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return torch.attr("int32");
             case DataType::BFLOAT16: return torch.attr("bfloat16");
             case DataType::BFLOAT8_B:
@@ -547,7 +545,7 @@ py::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return np.attr("ubyte");
             case DataType::UINT16: return np.attr("int16");
-            case DataType::INT32: return np.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return np.attr("int32");
             case DataType::BFLOAT16: TT_THROW("Bfloat16 is not supported for numpy!");
             case DataType::BFLOAT8_B:
@@ -707,7 +705,7 @@ void pytensor_module(py::module& m_tensor) {
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     /*device=*/nullptr,
-                    ttnn::DefaultQueueId,
+                    std::nullopt,
                     pad_value);
             }),
             py::arg("data"),
@@ -758,7 +756,7 @@ void pytensor_module(py::module& m_tensor) {
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     device.value_or(nullptr),
-                    ttnn::DefaultQueueId,
+                    std::nullopt,
                     pad_value);
             }),
             py::keep_alive<1, 6>(),
@@ -821,7 +819,7 @@ void pytensor_module(py::module& m_tensor) {
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
                     device.value_or(nullptr),
-                    ttnn::DefaultQueueId,
+                    std::nullopt,
                     pad_value);
             }),
             py::keep_alive<1, 7>(),
@@ -883,7 +881,7 @@ void pytensor_module(py::module& m_tensor) {
                           std::optional<Layout> layout,
                           const std::optional<MemoryConfig>& mem_config,
                           const std::optional<Tile>& tile,
-                          ttnn::QueueId cq_id,
+                          std::optional<ttnn::QueueId> cq_id,
                           std::optional<float> pad_value,
                           const distributed::TensorToMesh* mesh_mapper) {
                 return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
@@ -903,7 +901,7 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("layout").noconvert() = std::nullopt,
             py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("tile").noconvert() = std::nullopt,
-            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("cq_id") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
             py::arg("mesh_mapper") = nullptr,
             py::return_value_policy::move,
@@ -953,17 +951,20 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
+            [](const Tensor& self,
+               MeshDevice* device,
+               std::optional<const MemoryConfig>& mem_config,
+               std::optional<ttnn::QueueId> cq_id) { return self.to_device(device, mem_config, cq_id); },
             py::arg("device").noconvert(),
-            py::arg("mem_config").noconvert() = MemoryConfig{},
-            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("mem_config").noconvert() = std::nullopt,
+            py::arg("cq_id") = std::nullopt,
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
-            If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+            If ``arg1`` is not supplied, memory config from the source tensor will be used.
 
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | Argument  | Description                                     | Data type                  | Valid range           | Required |
@@ -1027,9 +1028,11 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "cpu",
-            [](const Tensor& self, bool blocking, QueueId cq_id) { return self.cpu(blocking, cq_id); },
+            [](const Tensor& self, bool blocking, std::optional<ttnn::QueueId> cq_id) {
+                return self.cpu(blocking, cq_id);
+            },
             py::arg("blocking") = true,
-            py::arg("cq_id") = ttnn::DefaultQueueId,
+            py::arg("cq_id") = std::nullopt,
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
@@ -1042,7 +1045,7 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self) -> py::object {
                 switch (self.dtype()) {
                     case DataType::FLOAT32: return py::cast(self.item<float>());
-                    case DataType::BFLOAT16: return py::cast(self.item<bfloat16>().to_float());
+                    case DataType::BFLOAT16: return py::cast(static_cast<float>(self.item<bfloat16>()));
                     case DataType::BFLOAT8_B:
                     case DataType::BFLOAT4_B: return py::cast(self.item<float>());
                     case DataType::INT32: return py::cast(self.item<int32_t>());
@@ -1638,6 +1641,16 @@ void pytensor_module(py::module& m_tensor) {
                 .. code-block:: python
 
                     py_list = tt_tensor.to_list()
+            )doc")
+        .def(
+            "tensor_topology",
+            [](const Tensor& self) { return self.tensor_topology(); },
+            R"doc(
+                Get the topology of the tensor.
+
+                .. code-block:: python
+
+                    topology = tt_tensor.tensor_topology()
             )doc")
         .def_property(
             "tensor_id",
