@@ -639,3 +639,23 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
     for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
         tt_output_tensor = ttnn.to_torch(tensor_shard)
         assert tt_output_tensor.shape == torch.Size(output_shape)
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_reshape_replicated_tensor_with_mesh_mapper(mesh_device):
+    from loguru import logger
+
+    torch_input_tensor = torch.zeros((1, 1, 8192, 1280))
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    logger.info(f"mesh shape: {mesh_device.shape}")
+    tt_output_buffer = ttnn.as_tensor(
+        torch_input_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        # cache_file_name="/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/TG/tensor_cache_instruct_bfp8/pb_rs_01_QKV_0_8192",
+    )
+    logger.info(f"tt_output_buffer shape: {tt_output_buffer.shape}")
+    logger.info(f"tt_output_buffer distribution shape: {tt_output_buffer.tensor_topology().distribution_shape()}")

@@ -314,7 +314,7 @@ def test_reduce_scatter_async(
     num_iters,
     rs_topology,
 ):
-    mesh_mapper = (
+    mesh_mapper_config = (
         ttnn.MeshMapperConfig(
             [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, t3k_mesh_device.get_num_devices())
         ),
@@ -332,5 +332,5 @@ def test_reduce_scatter_async(
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper_config=mesh_mapper_config,
     )

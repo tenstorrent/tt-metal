@@ -76,7 +76,7 @@ def test_reduce_scatter_async(
     num_buffers_per_channel,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    mesh_mapper = ttnn.MeshMapperConfig(
+    mesh_mapper_config = ttnn.MeshMapperConfig(
         [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()], ttnn.MeshShape(num_devices, 1)
     )
     cluster_axis = 0
@@ -97,6 +97,6 @@ def test_reduce_scatter_async(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper_config=mesh_mapper_config,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

@@ -93,7 +93,7 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
-    mesh_mapper = ttnn.MeshMapperConfig(
+    mesh_mapper_config = ttnn.MeshMapperConfig(
         [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, mesh_device.get_num_devices())
     )
     run_reduce_scatter_impl(
@@ -112,5 +112,5 @@ def test_reduce_scatter_async_training_shapes(
         ones_tensor=ones_tensor,
         use_barrier=True,
         use_persistent_buffers=False,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper_config=mesh_mapper_config,
     )
