@@ -70,7 +70,6 @@ jobs:
                     { name: "efficientnet_b0", runner-label: "N150", performance: false, cmd: run_efficientnet_b0_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "vovnet", runner-label: "N150", performance: false, cmd: run_vovnet_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "swin_v2", runner-label: "N150", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
-                    { name: "whisper", runner-label: "N150", performance: true, cmd: run_whisper_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
                     { name: "swin_s", runner-label: "N300", performance: false, cmd: run_swin_s_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga (HariniMohan0102)
                     { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
                     { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum

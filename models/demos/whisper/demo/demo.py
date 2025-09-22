@@ -449,7 +449,7 @@ def run_demo_whisper_for_conditional_generation_inference(
             total_decode_throughput += avg_decode_throughput
         batch_start = i + 1
         batch_end = i + current_batch_size
-        logger.debug(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
+        logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
     avg_ttft = total_ttft / (num_inputs - num_warmup_runs)
     avg_decode_throughput = total_decode_throughput / (num_inputs - num_warmup_runs)
     return avg_ttft, avg_decode_throughput
