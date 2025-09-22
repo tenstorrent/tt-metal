@@ -383,29 +383,24 @@ The following diagram shows how traffic gets rerouted when Eth A link becomes in
 
 ## 2.3 TT-transport (Layer 4) <a id="layer_4"></a>
 
-TT-Transport implements virtual channels that are used to carry packets in the routing netowrk. A virtual channel is composed of multiple slots where each slot can hold one packet at a time. Virtual channel size and number of slots depend on amount of available SRAM space on fabric router. Traffic from multiple sources on a virtual channel serialized. All traffic on the same virtual channel is guaranteed to be ordered. TT-Fabric currently supports 1 user visible virtual channel per router.
+TT-Transport implements virtual channels that are used to carry packets in the routing netowrk. A virtual channel is composed of multiple buffers where each buffer holds packets packets from a dedicated source. Virtual channel buffer size depends upon amount of available SRAM space on fabric router. Traffic from multiple sources on a virtual channel serialized. All traffic on the same virtual channel is guaranteed to be ordered. TT-Fabric currently supports 1 user visible virtual channel per router.
 
-### 2.3.1 Fabric Virtual Channel <a id="fvc"></a>
+### 2.3.1 Dateline Virtual Channel <a id="fvc"></a>
 
-TT-Fabric provides virtual channels called Fabric Virtual Channels (FVCs) by creating multiple RBs in a route direction. All Fabric routers provide the same number of FVCs in all supported directions to allow fabric packets to travel in any direction on any FVC. By providing a dedicated RB per FVC, we guarantee that all FVCs make independent progress.
+To avoid cyclic dependency deadlocks on Ring/Torus topologies, TT-Fabric has an internal dateline virtual channel. TT-Session APIs can only inject traffic into the data virtual channels. When packets cross the dateline, tt-fabric routers automatically switch the packet flow to the dateline virtual channel to avoid deadlock.
 
-TT-fabric clients can use non overlapping FVCs to avoid deadlocks when some downstream destinations for an FVC are expected to block or stall thus back pressuring traffic on FVC.
+### 2.3.2 Control Virtual Channel <a id="fvcc"></a>
 
-### 2.3.2 Fabric Control Virtual Channel <a id="fvcc"></a>
-
-TT-Fabric uses a dedicated fabric virtual channel to route all control messages in the system. This prevents control traffic from interfering and competing with data traffic.
+TT-Fabric uses a dedicated virtual channel to route all control messages in the system. This prevents control traffic from interfering and competing with data traffic.
 
 Control messages are small, fixed size packets and can be routed more efficiently by using a dedicated control virtual channel that is smaller than data virtual channel.
 
 ## 2.4 TT-session (Layer 5) <a id="layer_5"></a>
 
-TT-Session layer provides the APIs for higher level user programs/kernels to connect and send data over TT-Fabric. Any data sent over fabric is encapsulated in independent, asynchronous packets. A packet specifies the complete destination memory address where the data must be written. Session layer does not natively support synchronous transfer of data where data sender and data receiver need some kind of flow control.
-Synchronous data transfer however is supported via sockets over fabric. We have implemented send/receive operations that use fabric send apis to exchange data as well as flow control messages.
+TT-Session layer provides the APIs for higher level user programs/kernels to connect and send data over TT-Fabric. Any data sent over fabric is encapsulated in independent, asynchronous packets. A packet specifies the complete destination memory address where the data must be written.
 
-
-### 2.4.1 Sockets over TT-Fabric <a id="sockets"></a>
-
-Describe Socket send/receive op operation.
+TT-session does not natively support synchronous transfer of data where data sender and data receiver need some kind of flow control.
+Synchronous data transfer however is possible via sockets over fabric. We have implemented send/receive operations that use tt-fabric to exchange data as well as flow control messages. Sockets over tt-fabric are described later in this document.
 
 # 3 Fabric Router <a id="router"></a>
 
@@ -415,7 +410,7 @@ The core function of a fabric router is to receive packets from ethernet and loc
 
 Fabric routers can be built for different kinds of TT-Fabric topologies. A topology specifies how the TT-Fabric logical routing network should be created on a set of physically connected devices. TT-Fabric topology is specific to application requirements. For example the devcies may be physically connected in a 2D ethernet grid however the user application is such that the devices only communicate with other devices in the same row or column. In this case, Fabric routers only need to route traffic on one axis and packet flow does not switch from row to column or vice versa. We call this a 1D Fabric. TT-Fabric can also be launched in a 2D routing mode where turns between rows and columns are supported. In addition to these simple line and mesh topologies, TT-Fabric supports rings and 2D toruses. A ring is where the two endpoints of every line (in a 1D Fabric) are also connected. A 2D torus connects every row and column endpoints of a 2D mesh.
 
-As stated earlier, TT-Fabric topology can match the physical connection topology exactly, or it can be a functionally downshifted topology where all available ethernet links are not utilized.
+TT-Fabric topology can be an exact match of the physical connection topology, or it can be a functionally downshifted topology where all available ethernet links are not utilized.
 
 The following diagrams show the supported 1D and 2D TT-Fabric topologies.
 
@@ -475,6 +470,68 @@ The following diagrams show the supported 1D and 2D TT-Fabric topologies.
                 └──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
 ```
 
+**8x4 Galaxy with TT-Fabric in 1D Ring Topology**
+```
+                █  : Fabric Router
+                ┄┄ : 1-D Row Ring Fabric. There are 8 independent ring instances.
+                ┇  : 1-D Column Ring Fabric. There are 4 independent ring instances.
+ 
+             ┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐
+             ┊         ┌●            ┌○            ┌◎            ┌┅┅┅┅┅┅┅┅┅┅┅┅┐
+             ┊         ┇             ┇             ┇             ┇         ┊  ┇
+             ┊  ┌──────┼──────┬──────┼──────┬──────┼──────┬──────┼──────┐  ┊  ┇
+             ┊  │      █      │      █      │      █      │      █      │  ┊  ┇
+             ┊  │      ┇      │      ┇      │      ┇      │      ┇      │  ┊  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+             ★  │      ┇      │      ┇      │      ┇      │      ┇      │  ★  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+             ☆  │      ┇      │      ┇      │      ┇      │      ┇      │  ☆  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+             ✦  │      ┇      │      ┇      │      ┇      │      ┇      │  ✦  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+             ✧  │      ┇      │      ┇      │      ┇      │      ┇      │  ✧  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+             ✩  │      ┇      │      ┇      │      ┇      │      ┇      │  ✩  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+             ✪  │      ┇      │      ┇      │      ┇      │      ┇      │  ✪  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                ├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+             ✬  │      ┇      │      ┇      │      ┇      │      ┇      │  ✬  ┇
+             └┄┄┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼█┄┄┄┄┄┇┄┄┄┄┄█┼┄┄┘  ┇
+                │      ┇      │      ┇      │      ┇      │      ┇      │     ┇
+                │      █      │      █      │      █      │      █      │     ┇
+                └──────┼──────┴──────┼──────┴──────┼──────┴──────┼──────┘     ┇
+                       ┇             ┇             ┇             ┇            ┇
+                       └●            └○            └◎            └┅┅┅┅┅┅┅┅┅┅┅┅┘
+```
+
 **8x4 Galaxy with TT-Fabric in 2D Mesh Topology**
 ```
                 █  : Fabric Router
@@ -532,9 +589,9 @@ The following diagrams show the supported 1D and 2D TT-Fabric topologies.
 
 **8x4 Galaxy with TT-Fabric in 2D Torus Topology**
 ```
-              █  : Fabric Router
-              ══ : 2-D Torus Fabric. One fabric network connects all 32 devices.
-                   All rows and columns are rings.
+                █  : Fabric Router
+                ══ : 2-D Torus Fabric. One fabric network connects all 32 devices.
+                     All rows and columns are rings.
 
              ╔═════════════════════════════════════════════════════════════╗
              ║         ╔═●           ╔═○           ╔═◎           ╔════════════╗
@@ -593,21 +650,14 @@ The following diagrams show the supported 1D and 2D TT-Fabric topologies.
 
 ```
 
-Fabric router uses circular buffers to send and receive packets from different routing directions.
-
-In a 2-D Mesh, a router has 5 possible directions. East, West, North, South to one of its four possible neighbors. The fifth direction is the center or the device itself. This is the case on the last hop, where the packet has reached its destination device, and the packet needs to be consumed at the router's device.
-
-On Wormhole and Blackhole, Fabric Routers are Ethernet and Tensix cores within each device. There are no fabric workers other than the RiscV processors within these cores. Future architectures that provide dedicated communication chiplets will have fabric workers running on communication chiplets in addition to AI accelerator chiplets.
-
-Fabric routers can be mapped on to a single RiscV core or multiple cores depending on how the router functions are grouped. Since all fabric routers are bidirectional, there is independent incoming and outgoing traffic that can be mapped to different cores. This increases the worker core resource requirement for fabric routing node. On the other hand, mapping all fabric functions onto a single core affects performance as one core may not be able to sustain full ethernet bandwidth.
-
 ## 3.1 Buffers and Virtual Channels <a id="rb_per_vc"></a>
 
 A virtual channel is compirsed of several buffers used to transport incoming and outgoing fabric packets. Virtual channels buffers are classified as Sender Channels and Receiver Channels. Sender channels buffer all packets exiting a device through the router's ethernet link. Receiver Channels buffer all packets entering a device through the router's ethernet link.
 
-TT-Fabric supports one user visible bidirectional virtual channel per fabric router. 
+TT-Fabric supports one user visible bidirectional virtual channel per fabric router. The number of virtual channels as well as the number of sender and receiver channels in a virtual channel depens on fabric topology. The number of slots in sender/receiver channel depend on amount of memory available for buffering.
 
-Basic architecture of a virtual channel is shown in the following diagram.
+Basic architecture of a 2D mesh virtual channel is shown in the following diagram. In a 2D mesh, the outgoing traffic on a router is either passthrough packets from three of the fabric node's neighbors or the traffic originating from node's worker. Hence the router requires 4 Sender Channels. Fabric router round-robbins through the 4 sender channels and forwards packets over ethernet. A virtual channel only requires 1 Receiver channel. Fabric router examines the headers of packets arriving in the Receiver Channel to make processing decisions. A packet in the receiver channel might be passing through the router's node, or destined for the router's node or both (in the case of a multi-cast packet)
+
 
 ```
                                         VIRTUAL CHANNEL
@@ -648,8 +698,6 @@ Basic architecture of a virtual channel is shown in the following diagram.
                                         └─────────────────────────────────────┘
 ```
 
-The number of sender and receiver channels in a single virtual channel depend on fabric topology. The number of slots in sender/receiver channel depend on amount of memory available for buffering.
-
 The following table lists the sender/receiver channel counts for different fabric topologies.
 
 TODO: Add a table here.
@@ -663,178 +711,33 @@ The following sections describe supported APIs and their operation.
 
 ## 4.1 Asynchronous Write <a id="async_wr"></a>
 ```
-fabric_async_write(
-  routing_plane, // the network plane to use for this transaction
-  src_addr, // source address in sender’s memory
-  dst_addr, // destination write address
-  size, // number of bytes to write to remote destination
-  fvc, // fabric virtual channel. Set to –1 for automatic selection
-  transaction_id, // transaction id used to track commpletion
-  return_status_addr // TT-Fabric returns api call status at this address
-)
+Point to API Header
 ```
-Asynchronous write is used to write data to a remote receiver. Sender does not need to wait for all the data to be written to receiver. If all the writes are sent on the same FVC, data is guaranteed to be ordered. FVC selection can be automatic, where TT-Fabric will select an available FVC, or it can be specified in the API call. To avoid conflicts, it's better to allow TT-Fabric to assign FVC for async writes. After the first successful async write call, user can make subsequent calls with the TT-Fabric assigned FCV to ensure all data is written over the same FVC for guaranteed ordering.
+Asynchronous write is used to write data to a remote receiver. Sender does not need to wait for all the data to be written to receiver. Data is guaranteed to be written ordered. 
 
-**return\_status\_addr** is a data structure that contains different success, error and status identifiers to notify the caller of the write status.
+## 4.2 Asynchronous Atomic Increment <a id="async_atomic_inc"></a>
 ```
-struct tt_fabric_status {
-  status, // success and error codes
-  fvc, // tt-fabric assigned automatic fvc
-}
+Point to API Header
 ```
-transaction\_id to keeps track of requests sent over fabric and acknowledgements received from remote receiver. TT-Fabric maintains upto 16 unique transaction counters which are indexed using transaction\_id values of 0 - 15. For every outgoing request, the specified transaction\_id counter is incremented by 1. For every acknowledgement received, transaction\_id counter is decremented by 1. Whenever transaction\_id counter is non-zero, there are inflight transactions in TT-Fabric. To impose a barrier, the sender must wait until transaction\_id counter becomes 0.
+Asynchronous atomic increment is used to atomically increment an address in a remote device.
 
-fabric\_async\_write calls to different remote devices can be made with unique transaction\_id fields if the sender needs selective write barriers for devices.
-
-## 4.2 Asynchronous Multicast Write <a id="async_mcast_wr"></a>
+## 4.3 Asynchronous Write Atomic Increment <a id="async_wr"></a>
 ```
-fabric_async_write_multicast(
-  routing_plane
-  origin_device, // multicast origin device
-  e_depth, w_depth, n_depth, s_depth, // ethernet hops around origin. All devices in this range get written
-  src_addr,
-  dst_addr,
-  size,
-  fvc,
-  transaction_id
-  mcast_flags,
-  return_status_addr
-)
+Point to API Header
 ```
-Multicast write is used to write to more than one remote receiver with the same data. Multicast starts at the origin device of the multicast grid. The extent of multicast is specified by the number of hops in the four directions around the origin device. All devices within the specified depth are written with single async multicast write command.
+Asynchronous write atomic increment is a fusion of the two individual APIs. It is more efficient as both operations are achieved with a single fabric packet.
+This command writes data to remote device and atomically increments the specified address in remote device.
 
-In addition to device multicast, write data can be unicast or multicast within a device. If the multicast is also a device multicast, then all the Tensix worker cores specified in the NOC mcast group receive the write data. In NOC mcast mode, dst\_addr field specifies the NOC mcast group in addition to the memory offset.
-
-The following table summarizes asynchronous multicast write modes.
-
-| **Origin** | **Depth (e,w,n,s)** | **Mcast Flags** | **Description** |
-| --- | --- | --- | --- |
-| D1 | 2, 0, 0, 2 | Default | Write to specified NOC dst\_addr in all devices of mcast group |
-| D1 | 2, 0, 0, 2 | NOC Mcast | Write to specified NOC offset in all Tensix workers in all devices of mcast group |
-| D1 | 0, 0, 0, 0 | Default | Unicast to specified NOC offset. Same effect as Async Write |
-| D1 | 0, 0, 0, 0 | NOC Mcast | Mcast group is a single device. Write to specified NOC offset in all Tensix workers of D1 |
-
-![](images/image016.png)
-
-## 4.3 Asynchronous Write Barrier <a id="async_wr_barrier"></a>
+## 4.4 Asynchronous Multicast Write <a id="async_mcast_wr"></a>
 ```
-fabric_async_write_barrier(transaction_id)
+Point to API Header
 ```
-Asynchronous write barrier guarantees that all prior writes issued by a sender with the specified transaction\_id have been committed to all the receivers.
+Multicast write is used to write to more than one remote receiver with the same data. Multicast starts at the origin device of the multicast grid. The extent of multicast is specified by the number of hops around the origin device. All devices within the specified depth are written with single async multicast write command.
 
-## 4.4 Asynchronous Read <a id="async_rd"></a>
-```
-fabric_async_read(
-  routing_plane, // the network plane to use for this transaction
-  src_addr, // read address in remote device
-  return_addr, // address in local memory where read data is copied
-  size, // number of bytes to read from remote deivce (src\_addr)
-  fvc,
-  transaction_id
-  return_status_addr // status of async read
-)
-```
-Asynchronous read is used to read data from a remote receiver. Asynchronous reads are implemented as fabric writes originating from remote device and directed towards reading device’s return address.
+# 5 Sockets over TT-Fabric <a id="socket_api"></a>
 
-## 4.5 Asynchronous Read Barrier <a id="async_rd_barrier"></a>
-```
-fabric_async_read_barrier(transaction_id)
-```
-Asynchronous read barrier guarantees that all prior reads issued by a reader have been completed.
-
-When reading from multiple remote devices, or multiple non contiguous address from a single remote device, a reader can implement selective barriers by issuing fabric\_async\_read with unique transaction\_id parameter.
-
-## 4.6 Asynchronous Atomic Increment <a id="async_atomic_inc"></a>
-```
-fabric_async_atomic_inc(
-  routing_plane, // the network plane to use for this transaction
-  dst_addr, // address to increment in remote device
-  inc_value, // amount to increment
-  wrap_boundary, // value at which the remote counter wraps to 0
-  fvc,
-  transaction_id,
-  return_status_addr // status of async atomic increment
-)
-```
-Asynchronous atomic increment is used to atomically increment an address in a remote device. return\_status\_addr is used to track status of asynchronous command.
-
-wrap\_boundary is used to specify the maximum value of remote counter after which it will wrap to 0. The maximum value is 2 ^ (wrap_boundary + 1) - 1. To atomically count from 0 – 31, wrap\_boundary is set to 4.
-
-## 4.7 Asynchronous Atomic Read and Increment <a id="async_atomic_rd_inc"></a>
-```
-fabric_async_atomic_read_inc(
-  routing_plane, // the network plane to use for this transaction
-  return_addr, // address where 32-bits from remote device are returned
-  dst_addr, // 32-bit address to increment in remote device
-  inc_value, // amount to increment
-  wrap_boundary, // value at which the remote counter wraps to 0
-  fvc,
-  transaction_id,
-  return_status_addr // status of async atomic read increment
-)
-```
-Asynchronous atomic read and increment is a two-part command. It is used to atomically read a 32-bit address in a remote device. After the value has been sampled to be returned to reader, the 32-bit address is also atomically incremented in the remote device. return\_status\_addr is used to track the status of asynchronous command.
-
-# 5 Socket API Specification <a id="socket_api"></a>
-
-Sockets are used to create sender/receiver pairs over TT-Fabric.
-
-Streaming sockets create a dedicated path from a sender to a receiver or multiple receivers in case of a multicast socket. SSockets are implemented on top of FVCs. When a SSocket is opened, a FVC is attached to that socket. Only the socket owner is allowed to push data into SSocket FVC. Any other fabric traffic that needs to be routed over a SSocket bound FVC has to wait until the socket owner closes the socket.
-
-Datagram sockets do not bind to a specific FVC and share the bandwidth with other fabric traffic over the FVC.
-
-## 5.1 Socket Open <a id="socket_open"></a>
-```
-socket_handle fabric_socket_open(
-  routing_plane, // the network plane to use for this socket
-  epoch_id, // Temporal epoch for which the socket is being opened
-  socket_id, // Socket Id to open
-  socket_type, // Unicast, Multicast, SSocket, DSocket
-  direction, // Send or Receive
-  remote_addr, // Remote device that is the socket data sender/receiver.
-  fvc, // fabric virtual channel.
-)
-```
-Socket Open is used to open a socket for sending data to a specific receiver on a remote device.
-
-Both sender and receiver need to make a fabric\_socket\_open call with the matching parameters. Before sending data, socket owners must check the status of socket connection by calling fabric\_socket\_connect.
-
-socket\_handle returned by the open call holds socket specific parameters and is used in subsequent calls when sending or receiving data from socket.
-
-For datagram sockets, data is sent over the fabric virtual channel specified by fvc.
-
-## 5.2 Socket Close <a id="socket_close"></a>
-```
-fabric_socket_close(
-  socket_handle, // handle to socket parameters
-  return_status_addr // status of socket close
-)
-```
-Socket close is used to close an open socket.
-
-If the socket is a SSocket, this frees the fabric FVCs bound to specified socket at all fabric routers from sending device to receiving device. FVC then becomes available to route general fabric traffic. return\_status\_addr provides status of socket close command.
-
-## 5.3 Socket Connect <a id="socket_connect"></a>
-```
-fabric_socket_connect(
-  socket_handle, // handle to socket parameters
-)
-```
-Socket connect ensures that all receivers for the send socket are ready and in the case of a streaming socket a connection has been established between sender and receivers. TT-Fabric automatically starts connection establishment because of fabric\_socket\_open when all the receiver sockets have also been opened.
-
-Ideally, fabric\_socket\_connect should be very quick as the process has been in progress in the background. For SSocket, connection establishment can suffer delays if the FVC being used for the SSocket is temporarily busy with other fabric traffic. In this case, the respective fabric nodes wait for the FVC to become available before it gets reserved for the socket. Before sending data, socket owner must check the status of connection by checking the status returned via return\_status\_addr.
-
-## 5.4 Socket Send <a id="socket_send"></a>
-```
-fabric_socket_send(
-  socket_handle, // handle to socket parameters
-  src_addr, // address of data to send, in sender’s local memory
-  size // size of data to send
-)
-```
-Socket send is used to push data into an open socket. Sender can keep pushing data into local FVC buffer as long as there is space in the virtual channel buffer. fabric\_socket\_send blocks until it has pushed the specified number of bytes into the socket.
-
-On the receiver device, when a fabric router receives data on a socket, it notifies the local receiver core that owns a receive socket with the matching socket id. Local receiver then pulls the data from socket buffer.
+We have implemented sockets as send and receive operatoins that use tt-fabric asynchronous write APIs to implement flowcontroled data transfer between a sender and receiver.
+TODO: Add more information on send/receive operations.
 
 # 6 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
 
