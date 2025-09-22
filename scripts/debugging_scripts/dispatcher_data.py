@@ -46,6 +46,7 @@ class DispatcherCoreData:
     subdevice: int = triage_field("Subdevice")
     go_message: str = triage_field("Go Message")
     preload: bool = triage_field("Preload")
+    waypoint: str = triage_field("Waypoint")
 
 
 class DispatcherData:
@@ -175,6 +176,7 @@ class DispatcherData:
         go_message_index = -1
         go_data = -1
         preload = False
+        waypoint = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
@@ -238,6 +240,11 @@ class DispatcherData:
             )
         except:
             pass
+        try:
+            waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
+            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
+        except:
+            pass
 
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
             firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
@@ -279,6 +286,7 @@ class DispatcherData:
             subdevice=go_message_index,
             go_message=go_data_state,
             preload=preload,
+            waypoint=waypoint,
         )
 
     @staticmethod
