@@ -2573,7 +2573,7 @@ MeshCoordinateRange get_range_from_mesh_coords(const ttnn::MeshCoordinateRangeSe
 
 operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_workload(
     tt::tt_metal::operation::ProgramWithCallbacks& matmul_program, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::MeshWorkload();
+    tt::tt_metal::distributed::MeshWorkload matmul_workload;
     std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
 
     auto workload_device_range = get_range_from_mesh_coords(tensor_coords);

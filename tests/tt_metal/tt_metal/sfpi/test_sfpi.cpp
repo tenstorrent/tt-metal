@@ -38,7 +38,7 @@ bool runTest(
     std::vector<uint32_t> compile_args{args_addr};
 
     auto program(tt::tt_metal::CreateProgram());
-    distributed::MeshWorkload workload = distributed::MeshWorkload();
+    distributed::MeshWorkload workload;
     CreateKernel(
         program,
         path,

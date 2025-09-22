@@ -469,8 +469,8 @@ void run_test(
 
     log_info(tt::LogAlways, "Launching programs");
 
-    tt_metal::distributed::MeshWorkload local_workload = tt_metal::distributed::MeshWorkload();
-    tt_metal::distributed::MeshWorkload remote_workload = tt_metal::distributed::MeshWorkload();
+    tt_metal::distributed::MeshWorkload local_workload;
+    tt_metal::distributed::MeshWorkload remote_workload;
     tt_metal::distributed::AddProgramToMeshWorkload(
         local_workload,
         std::move(test_resources.local_device.program),

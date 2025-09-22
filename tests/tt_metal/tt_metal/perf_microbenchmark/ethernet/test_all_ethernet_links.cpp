@@ -606,7 +606,7 @@ void run(
             for (size_t i = 0; i < device_helper.devices.size(); i++) {
                 auto& device = device_helper.devices[i];
                 auto& program = programs[i];
-                tt_metal::distributed::MeshWorkload mesh_workload = tt_metal::distributed::MeshWorkload();
+                tt_metal::distributed::MeshWorkload mesh_workload;
                 tt_metal::distributed::AddProgramToMeshWorkload(
                     mesh_workload,
                     std::move(program),
@@ -625,7 +625,7 @@ void run(
                 auto& device = device_helper.devices[i];
                 auto& program = programs[i];
                 program.set_runtime_id(0);
-                tt_metal::distributed::MeshWorkload mesh_workload = tt_metal::distributed::MeshWorkload();
+                tt_metal::distributed::MeshWorkload mesh_workload;
                 tt_metal::distributed::AddProgramToMeshWorkload(
                     mesh_workload,
                     std::move(program),
