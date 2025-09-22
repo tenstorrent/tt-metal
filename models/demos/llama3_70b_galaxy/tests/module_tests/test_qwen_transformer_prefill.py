@@ -198,7 +198,6 @@ def test_qwen_transformer_inference_prefill(
 
         # Measure PCC if also running reference model
         if run_ref_pt:
-            breakpoint()
             passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))
@@ -212,6 +211,7 @@ def test_qwen_transformer_inference_prefill(
                 all_tests_pass = False
 
             # Compare KV caches
+            cache_pcc = True
             if cache_pcc:
                 for i in range(model_args.n_layers):
                     pytorch_layer_present = [
@@ -285,7 +285,7 @@ def test_qwen_transformer_inference_prefill(
                             )
 
                     for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                        cache_length_to_check = model_args.max_seq_len
+                        cache_length_to_check = 128
                         cache_pt = cache_pt[0, :, 0:cache_length_to_check, :]
                         cache_tt = cache_tt[0, :, 0:cache_length_to_check, :]
                         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt)

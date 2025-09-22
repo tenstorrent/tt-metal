@@ -653,7 +653,7 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.model_config["WO_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
-                    seq_len, 1024, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
+                    seq_len, 1024, 1280, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
                 )
                 if seq_len == 128
                 else (

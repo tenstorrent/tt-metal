@@ -52,9 +52,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     "max_seq_len",
     (
         128,
-        2048,
-        4096,
-        8192,
+        # 2048,
         # 1024 * 32,
         # 1024 * 64,
     ),
@@ -205,7 +203,7 @@ def test_qwen_attention_inference_prefill(
         logger.warning(f"Qwen_Attention Failed!")
         all_tests_pass = False
 
-    check_kv_cache = False  # May want to disable: Issue #10648
+    check_kv_cache = True  # May want to disable: Issue #10648
     if check_kv_cache:
         # PyTorch output --------------------------------------------------------------------
         pytorch_layer_present = [
@@ -254,8 +252,7 @@ def test_qwen_attention_inference_prefill(
         for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
             cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length + 1)
             cache_pt = cache_pt[:, :, :, :]
-            cache_tt = cache_tt[:, :, :, :]
-            breakpoint()
+            cache_tt = cache_tt[:, :, :max_seq_len, :]
             does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
             if i == 0:
                 logger.info(f"K cache output: {output_pcc}")

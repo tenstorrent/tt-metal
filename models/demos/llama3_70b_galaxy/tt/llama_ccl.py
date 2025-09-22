@@ -1205,7 +1205,8 @@ def tt_distributed_rmsnorm(
     program_config=None,
     memory_config=None,
 ):
-    use_2d_grid = inp.shape[-2] == 128
+    # use_2d_grid = inp.shape[-2] == 128
+    use_2d_grid = False
     # Run distributed rmsnorm part 1
     # if program_config is not None and inp.dtype == ttnn.bfloat8_b:
     #     core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(1, 0)

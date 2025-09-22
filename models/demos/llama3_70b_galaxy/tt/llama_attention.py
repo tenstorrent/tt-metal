@@ -202,7 +202,7 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=cache_name("wo_width_sharded_2d_dram"),
+            cache_file_name=cache_name("wo_width_sharded_2d_dram_new"),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
