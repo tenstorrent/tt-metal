@@ -398,8 +398,10 @@ def run_llama3_demo(
     profiler.start(f"capture_trace")
 
     tt_model.tt_ccl.reset_gather_and_buffer_idx()
+    logger.info("Reset gather and buffer idx")
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    logger.info(f"Trace id: {trace_id}")
 
     # Get cos/sin matrices for the current position of each user
     rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
@@ -411,6 +413,7 @@ def run_llama3_demo(
         mode="decode",
         page_table=page_table_tt,
     )
+    logger.info(f"tt_decode_input done")
 
     # Sampling
     _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
@@ -424,9 +427,11 @@ def run_llama3_demo(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
+    logger.info(f"One iteration of trace done")
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
+    logger.info(f"Trace capture done")
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
@@ -438,6 +443,7 @@ def run_llama3_demo(
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    logger.info("Current pos reset done")
 
     tt_out_tok_reset = ttnn.from_torch(
         encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, 1, batch_size),
@@ -445,12 +451,14 @@ def run_llama3_demo(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
     )
+    logger.info("tt_out_tok reset done")
 
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
     rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
+    logger.info("Reset tensors done")
 
     profiler.end(f"capture_trace")
 
