@@ -18,6 +18,9 @@ namespace ttml::optimizers {
 
 SGDFused::SGDFused(ttml::serialization::NamedParameters parameters, const SGDFusedConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    assert(!(m_config.nesterov && m_config.dampening != 0.0) && "Nesterov momentum requires zero dampening");
+    assert(!(m_config.nesterov && m_config.momentum <= 0.0) && "Nesterov momentum requires a positive momentum");
+
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_theta.emplace(
@@ -65,6 +68,7 @@ void SGDFused::step() {
             m_config.momentum,
             m_config.dampening,
             m_config.weight_decay,
+            m_config.nesterov,
             output_tensor,
             theta,
             theta);

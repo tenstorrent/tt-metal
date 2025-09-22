@@ -33,6 +33,7 @@ constexpr uint32_t Wt = get_compile_time_arg_val(2);
 constexpr uint32_t momentum = get_compile_time_arg_val(3);
 constexpr uint32_t one_minus_dampening = get_compile_time_arg_val(4);
 constexpr uint32_t weight_decay = get_compile_time_arg_val(5);
+constexpr bool nesterov = get_compile_time_arg_val(6) != 0;
 
 inline void pack_and_push_two_cbs(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
     cb_reserve_back(cb_output_1, block_size);
@@ -92,7 +93,7 @@ void MAIN {
                 binop_with_scalar_tile_init();
                 mul_unary_tile(momentum_register, momentum);
 
-                // g_t <- g_t * (1 - dampening) + m_{t-1} * momentum
+                // m_t <- g_t * (1 - dampening) + m_{t-1} * momentum
                 add_binary_tile_init();
                 add_binary_tile(grad_register, momentum_register, grad_register);
             }
@@ -101,9 +102,9 @@ void MAIN {
             // The other is multiplied by learning rate and used to update parameters
             pack_and_push_two_cbs(cb_momentum_out_idx, cb_momentum_to_dram_idx, block_size);
 
-            cb_pop_front(cb_grad_idx, block_size);
             cb_pop_front(cb_momentum_in_idx, block_size);
 
+            // m_t in cb_momentum_out_idx
             // apply learning rate
             cb_wait_front(cb_momentum_out_idx, block_size);
             tile_regs_acquire();
@@ -111,10 +112,27 @@ void MAIN {
                 copy_tile_init(cb_momentum_out_idx);
                 const uint32_t update_register = block_idx;
                 copy_tile(cb_momentum_out_idx, /* tile_idx */ block_idx, /* register_idx */ update_register);
+                // Nesterov
+                if constexpr (nesterov == true) {
+                    // m_t * momentum
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(update_register, momentum);
+
+                    copy_tile_init(cb_grad_idx);
+                    const uint32_t grad_register = block_size + block_idx;
+                    copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
+                    // g_t + m_t{t} * momentum
+                    add_binary_tile_init();
+                    add_binary_tile(grad_register, update_register, update_register);
+                }
+
+                // u_t <- learning_rate * (g_t + m_t * momentum) with nesterov OR
+                // u_t <- learning_rate * m_t otherwise
                 binop_with_scalar_tile_init();
                 mul_unary_tile(update_register, lr);
             }
             tile_regs_commit();
+            cb_pop_front(cb_grad_idx, block_size);
             cb_pop_front(cb_momentum_out_idx, block_size);
             pack_and_push_block(cb_update_idx, block_size);
 
