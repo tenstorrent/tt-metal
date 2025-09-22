@@ -225,7 +225,7 @@ class MotifTransformer(Module):
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
-        spatial = self.pos_embed(spatial)
+        spatial = ttnn.squeeze(self.pos_embed(spatial), 0)
         prompt = self.context_embedder(prompt)
 
         # TODO
