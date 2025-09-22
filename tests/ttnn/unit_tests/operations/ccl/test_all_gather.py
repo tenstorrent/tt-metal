@@ -48,7 +48,7 @@ def is_unsupported_case(
     L1_util = 0
     if mem_config.buffer_type == ttnn.BufferType.L1:
         L1_util = L1_util + tensor_size_bytes
-    if mem_config_input != None:
+    if mem_config_input is not None:
         if mem_config_input.buffer_type == ttnn.BufferType.L1:
             L1_util = L1_util + tensor_size_bytes / num_devices
 
