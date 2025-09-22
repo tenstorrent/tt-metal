@@ -37,6 +37,6 @@ jobs:
       - create-image-tag-name
     secrets: inherit
     with:
-      version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
+      version: v0.63.0
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
