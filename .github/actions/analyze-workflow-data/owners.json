@@ -1,0 +1,20 @@
+{
+  "exact": {
+    "[WH-T3K] Llama-3.1-8B-Instruct": ["U08E1JCDVNX", "U08CEGF78ET"],
+    "[WH-T3K] Qwen2.5-VL-72B-Instruct": "U07RY6B5FLJ",
+    "[BH-DB] Llama-3.1-8B-Instruct": "U08GELBB1AP",
+    "[BH-QB] Llama-3.1-8B-Instruct": "U08CEGF78ET",
+    "[WH-GLX] Llama-3.3-70B-Instruct": ["U08E1JCDVNX", "U08CEGF78ET"],
+    "[WH-GLX] Llama-8B DP=16": ["U08E1JCDVNX", "U08BH66EXAL"],
+    "[WH-T3K] Gemma3-27B": ["U08E1JCDVNX", "U08BH66EXAL"]
+  },
+  "contains": [
+    { "needle": "([WH-T3K] Llama-3.1-8B-Instruct", "owner": ["U08E1JCDVNX", "U08CEGF78ET"] },
+    { "needle": "([WH-T3K] Qwen2.5-VL-72B-Instruct", "owner": "U07RY6B5FLJ" },
+    { "needle": "([BH-DB] Llama-3.1-8B-Instruct", "owner": "U08GELBB1AP" },
+    { "needle": "([BH-QB] Llama-3.1-8B-Instruct", "owner": "U08CEGF78ET" },
+    { "needle": "([WH-GLX] Llama-3.3-70B-Instruct", "owner": ["U08E1JCDVNX", "U08CEGF78ET"] },
+    { "needle": "([WH-GLX] Llama-8B DP=16", "owner": ["U08E1JCDVNX", "U08BH66EXAL"] },
+    { "needle": "([WH-T3K] Gemma3-27B", "owner": ["U08E1JCDVNX", "U08BH66EXAL"] }
+  ]
+}
