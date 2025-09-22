@@ -167,7 +167,26 @@
     { "needle": "galaxy-model-perf-tests / Galaxy DiT SD3.5 model perf tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
     { "needle": "Galaxy DiT SD3.5 model perf tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
 
+    { "needle": "galaxy-model-perf-tests / Galaxy DiT SD3", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "Galaxy DiT SD3", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
     { "needle": "galaxy-model-perf-tests / Galaxy Sentence Bert tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
-    { "needle": "Galaxy Sentence Bert tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } }
+    { "needle": "Galaxy Sentence Bert tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
+
+    { "needle": "galaxy-nightly-tests / Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
+    { "needle": "1_galaxy-nightly-tests _ Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
+    { "needle": "Galaxy CCL tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
+
+    { "needle": "galaxy-nightly-tests / Galaxy Fabric unit tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
+    { "needle": "Galaxy Fabric unit tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
+
+    { "needle": "galaxy-nightly-tests / Galaxy Fabric 2D Torus Nightly Tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
+    { "needle": "Galaxy Fabric 2D Torus Nightly Tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
+
+    { "needle": "galaxy-nightly-tests / Llama Galaxy Accuracy Test", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "Llama Galaxy Accuracy Test", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "galaxy-nightly-tests / Llama Galaxy Long Stress Test", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "Llama Galaxy Long Stress Test", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } }
   ]
 }
