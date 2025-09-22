@@ -238,11 +238,6 @@ void MAIN {
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
                     copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
                 }
-                reconfig_data_format(cb_bcast_scaler, cb_bcast_scaler);
-                copy_tile_init(cb_bcast_scaler);
-                copy_tile(cb_bcast_scaler, 0, 1);
-                DPRINT << "DEST1A" << ENDL();
-                dprint_tensix_dest_reg(1);
 
                 cb_pop_front(cb_in0, ndst);
 
@@ -261,41 +256,12 @@ void MAIN {
 #endif
 
         ACQ();
-        reconfig_data_format(cb_bcast_scaler, cb_bcast_scaler);
-        copy_tile_init(cb_bcast_scaler);
-        copy_tile(cb_bcast_scaler, 0, 1);
-        DPRINT << "DEST1B " << Wt << ENDL();
-        dprint_tensix_dest_reg(1);
         cb_reserve_back(cb_recipsumexps, onetile);
         reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
-        // Executing following two lines leads to subsequent dprint_tensix_dest to print something other than 0s. Hang
-        // on WH is still there.
-        UNPACK((tensix_sync()));
-        UNPACK((llk_unpack_clear_dbg_feature_disable()));
-        reconfig_data_format(cb_bcast_scaler, cb_bcast_scaler);
-        copy_tile_init(cb_bcast_scaler);
-        copy_tile(cb_bcast_scaler, 0, 1);
-        DPRINT << "DEST1C " << Wt << ENDL();
-        dprint_tensix_dest_reg(1);
 
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            // reconfig_data_format(cb_bcast_scaler, cb_bcast_scaler);
-            // copy_tile_init(cb_bcast_scaler);
-            // copy_tile(cb_bcast_scaler, 0, 1);
-            // DPRINT << "DEST1D " << Wt << ENDL();
-            // dprint_tensix_dest_reg(1);
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
-            // reconfig_data_format(cb_bcast_scaler, cb_bcast_scaler);
-            // copy_tile_init(cb_bcast_scaler);
-            // copy_tile(cb_bcast_scaler, 0, 1);
-            // DPRINT << "DEST1E " << Wt << ENDL();
-            // dprint_tensix_dest_reg(1);
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reconfig_data_format(cb_bcast_scaler, cb_bcast_scaler);
-            copy_tile_init(cb_bcast_scaler);
-            copy_tile(cb_bcast_scaler, 0, 1);
-            DPRINT << "DEST1F " << wt << " " << Wt << ENDL();
-            dprint_tensix_dest_reg(1);
             reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
                 /*iCB=*/cb_exps,
                 /*icb_scaler=*/cb_bcast_scaler,
@@ -309,6 +275,17 @@ void MAIN {
         pack_tile(dst0, cb_recipsumexps);
         cb_push_back(cb_recipsumexps, 1);
 
+        REL();
+        ACQ();
+        // Executing following two lines leads to subsequent dprint_tensix_dest to print something other than 0s. Hang
+        // on WH is still there.
+        // UNPACK((tensix_sync()));
+        // UNPACK((llk_unpack_clear_dbg_feature_disable()));
+        reconfig_data_format(cb_bcast_scaler, cb_bcast_scaler);
+        copy_tile_init(cb_bcast_scaler);
+        copy_tile(cb_bcast_scaler, 0, 1);
+        DPRINT << "DEST1C " << Wt << ENDL();
+        dprint_tensix_dest_reg(1);
         REL();
 
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
