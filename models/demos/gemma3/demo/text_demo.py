@@ -309,9 +309,9 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            2048 * 4,  # max_seq_len
+            1024 * 32,  # max_seq_len
             1,  # batch_size
-            250,  # max_generated_tokens
+            4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -364,7 +364,7 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -930,7 +930,6 @@ def test_demo_text(
 
         # Currently only supporting greedy decoding (temperature=0) on device
         argmax_on_device = sampling_params["temperature"] == 0
-        argmax_on_device = False
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
