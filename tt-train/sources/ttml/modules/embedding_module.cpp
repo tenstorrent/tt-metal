@@ -14,6 +14,8 @@
 
 namespace ttml::modules {
 
+using namespace tt::constants;
+
 void Embedding::initialize_tensors(uint32_t num_embeddings, uint32_t embedding_dim) {
     m_weight = autograd::create_tensor();
     init::normal_init(m_weight, ttnn::Shape({1, 1, num_embeddings, embedding_dim}), /* normal params */ {0.F, 1.F});
