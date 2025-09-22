@@ -73,6 +73,22 @@ With the N300 form-factor, it houses two wormhole chips. The host is connected t
 
 *Figure 3: T3000 Chip Layout dumped from tt-topology*
 
+#### 2.1.1 SystemMesh Visualization
+
+```py
+ttnn.visualize_system_mesh()
+>
+SystemMesh Global Shape: MeshShape([1, 2])
+
+SystemMesh Local Shape: MeshShape([1, 2])
+
+   SystemMesh Global Shape: (1, 2) | Local Shape: (1, 2)
+┌──────────────────────────────┬──────────────────────────────┐
+│          Dev. ID: 0          │          Dev. ID: 1          │
+│            (0, 0)            │            (0, 1)            │
+└──────────────────────────────┴──────────────────────────────┘
+```
+
 
 ### 2.2 MeshDevice Management
 
@@ -162,6 +178,14 @@ ttnn.Tensor([[[[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
 
 ```
 
+We can visualize this tensor to see how it's stored in host-memory.
+
+```py
+ttnn.visualize_tensor(mesh_tensor)
+```
+
+<img src="images/image6_host_tensor_vis.png" style="width:500px;"/>
+
 Let's now transfer to device:
 
 ```py
@@ -188,19 +212,13 @@ We now see that the following:
 - 32x32 chunk with elements of 1.0 is residing in Device 0 DRAM
 - 32x32 chunk with elements of 2.0 is residing in Device 1 DRAM
 
-We can also visualize this tensor distributed across our MeshDevice. The visualization will color devices that have shards resident to the device.
+We can also visualize this tensor distributed across our MeshDevice. The visualization will color devices that have shards resident to the device. For a strategy that uses replication to distribute a tensor across our MeshDevice, replicated shards will have the same color mapped to them.
 
 ```py
-ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
-
->
-                  MeshDevice(rows=1, cols=2):
-┌──────────────────────────────┬──────────────────────────────┐
-│         Dev. ID: 0           │         Dev. ID: 1           │
-│            (0, 0)            │            (0, 1)            │
-│  ttnn.Shape([1, 1, 32, 32])  │  ttnn.Shape([1, 1, 32, 32])  │
-└──────────────────────────────┴──────────────────────────────┘
+ttnn.visualize_tensor(mesh_tensor)
 ```
+
+<img src="images/image7_device_tensor_vis.png" style="width:500px;"/>
 
 ## 4. Single-Program Multiple Device
 

@@ -117,6 +117,11 @@ struct __attribute__((packed)) compressed_route_2d_t {
 
 static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
 
+static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
+static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
+static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
+static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
+
 template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) routing_path_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
@@ -136,11 +141,6 @@ struct __attribute__((packed)) routing_path_t {
     static const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
     static const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
     static const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
-
-    static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
-    static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
-    static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
-    static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
     // Compressed routing uses much smaller encoding
     // 1D: 0 byte (num_hops passed from caller is the compressed info)
