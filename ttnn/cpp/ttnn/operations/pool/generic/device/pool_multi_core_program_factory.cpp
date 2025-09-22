@@ -250,8 +250,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // distributing out_hw across the grid
     const auto all_cores = input.shard_spec().value().grid;
     const uint32_t ncores = all_cores.num_cores();
-    const uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
+    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
     const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
+    printf("num_cores_x: %d\n", num_cores_x);
+    printf("rectangular_x: %d\n", rectangular_x);
     const uint32_t out_nhw_per_core = outputs[0].shard_spec()->shape[0];
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
@@ -260,6 +262,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         num_shards_c, input.dtype(), outputs[0].dtype(), kernel_h, kernel_w, in_c, pool_type, return_indices, output_layout);
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
+    const uint32_t in_h_padded = in_h + pad_h + ceil_pad_h;
+    const uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
@@ -379,12 +383,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t right_inc = 0;
     uint32_t down_left_wrap_inc = 0;
     if (return_indices) {
-        const uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
-        const uint32_t in_idx_cb_npages = params.multi_buffering_factor;
-
-        sync_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(sync_cb_id, program, all_cores, 2, 1, params.index_format);
-
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         idx_tmp_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(idx_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.index_format);
@@ -398,6 +396,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             down_left_wrap_inc_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(
             tt::LogOp, "CB {} :: PS = {}, NP = {}", down_left_wrap_inc_tmp_cb_id, params.index_nbytes * tile_elems, 1);
+
+        sync_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(sync_cb_id, program, all_cores, 2, 1, params.index_format);
 
         // compute increments for index tile population
         right_inc = stride_w;
