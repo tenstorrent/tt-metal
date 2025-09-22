@@ -38,6 +38,29 @@ function loadOwnersMapping() {
   return __ownersMapping;
 }
 
+function normalizeOwners(value) {
+  if (!value) return undefined;
+  // Single string -> id-only
+  if (typeof value === 'string') return [{ id: value }];
+  // Object with id/name
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const id = value.id || undefined;
+    const name = value.name || undefined;
+    if (!id && !name) return undefined;
+    return [{ id, name }];
+  }
+  // Array -> map each entry
+  if (Array.isArray(value)) {
+    const arr = [];
+    for (const entry of value) {
+      if (typeof entry === 'string') arr.push({ id: entry });
+      else if (entry && typeof entry === 'object') arr.push({ id: entry.id, name: entry.name });
+    }
+    return arr.length ? arr : undefined;
+  }
+  return undefined;
+}
+
 function findOwnerForLabel(label) {
   try {
     const mapping = loadOwnersMapping();
@@ -46,14 +69,14 @@ function findOwnerForLabel(label) {
     // Prefer exact keys (label may contain the key as a substring)
     if (mapping.exact && typeof mapping.exact === 'object') {
       for (const key of Object.keys(mapping.exact)) {
-        if (lbl.includes(key)) return mapping.exact[key];
+        if (lbl.includes(key)) return normalizeOwners(mapping.exact[key]);
       }
     }
     // Fallback to contains list
     if (Array.isArray(mapping.contains)) {
       for (const entry of mapping.contains) {
         if (entry && typeof entry.needle === 'string' && lbl.includes(entry.needle)) {
-          return entry.owner;
+          return normalizeOwners(entry.owner);
         }
       }
     }
@@ -79,7 +102,13 @@ function renderErrorsTable(errorSnippets) {
   const rows = errorSnippets.map(obj => {
     const label = escapeHtml(obj.label || '');
     const snippet = escapeHtml(obj.snippet || '');
-    const owner = escapeHtml((obj.owner && (Array.isArray(obj.owner) ? obj.owner.join(', ') : obj.owner)) || 'no owner found');
+    // Render owner display name(s) if present; fallback to id(s); else 'no owner found'
+    let ownerDisplay = 'no owner found';
+    if (obj.owner && Array.isArray(obj.owner) && obj.owner.length) {
+      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
+      if (names.length) ownerDisplay = names.join(', ');
+    }
+    const owner = escapeHtml(ownerDisplay);
     return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td>${owner}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
   }).join('\n');
   return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Owner</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -216,7 +245,8 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
 
     // If we did not find FAILED lines but the run has a failing job, emit synthetic entry
     if ((!snippets || snippets.length === 0) && hasFailingJob) {
-      snippets = [{ label: failingLabel, snippet: 'could not find failure in logs' }];
+      const owner = findOwnerForLabel(failingLabel) || 'no owner found';
+      snippets = [{ label: failingLabel, owner, snippet: 'could not find failure in logs' }];
     }
 
     return snippets;
