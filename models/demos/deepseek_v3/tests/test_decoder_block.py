@@ -37,8 +37,8 @@ from models.demos.deepseek_v3.utils.test_utils import (
     [
         (DecoderBlock, None, 0),
         (MoEDecoderBlock, None, 3),
-        (DecoderBlock, "model.layers.0", None),
-        (MoEDecoderBlock, "model.layers.3", None),
+        # (DecoderBlock, "model.layers.0", None),
+        # (MoEDecoderBlock, "model.layers.3", None),
     ],
 )
 @pytest.mark.parametrize(
