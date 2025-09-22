@@ -280,6 +280,13 @@
     { "needle": "single-card-demo-tests / qwen25_vl", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
     { "needle": "single-card-demo-tests / gemma3", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },
     { "needle": "single-card-demo-tests / whisper", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
-    { "needle": "single-card-demo-tests / mamba", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } }
+    { "needle": "single-card-demo-tests / mamba", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
+    { "needle": "metal-run-microbenchmarks / N300 Moreh ubench", "owner": { "id": "U06MJ6CVCGZ", "name": "Yu Gao" } },
+    { "needle": "metal-run-microbenchmarks / T3K ubench - Fabric BW", "owner": { "id": "ULMEPM2MA", "name": "Sean Nijjar" } },
+    { "needle": "metal-run-microbenchmarks / T3K ubench - Fabric Latency", "owner": { "id": "ULMEPM2MA", "name": "Sean Nijjar" } },
+    { "needle": "metal-run-microbenchmarks / T3K ubench - Fabric Mux BW", "owner": { "id": "U08FXFFH7L0", "name": "Abhishek Agarwal" } },
+    { "needle": "metal-run-microbenchmarks / WH Data Movement Regressions", "owner": { "id": "U084B109TED", "name": "Ata Tuzuner" } },
+    { "needle": "metal-run-microbenchmarks / BH Data Movement Regressions", "owner": { "id": "U084B109TED", "name": "Ata Tuzuner" } },
+    { "needle": "metal-run-microbenchmarks / BH P150 PCIe Performance", "owner": { "id": "U08276D910S", "name": "Nigel Huang" } }
   ]
 }
