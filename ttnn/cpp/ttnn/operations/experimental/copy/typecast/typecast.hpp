@@ -13,7 +13,6 @@ namespace operations::experimental::copy {
 
 struct TypecastOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const DataType& dtype,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
