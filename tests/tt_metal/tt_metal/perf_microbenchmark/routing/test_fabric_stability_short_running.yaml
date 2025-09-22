@@ -1,3 +1,6 @@
+# This is a short-running version of the fabric stability test. We can go to the longer
+# running versions once we have more systems available for nightly tests.
+
 # For bigger systems we may need to increase the number of configs per core
 allocation_policies:
     receiver:
@@ -21,7 +24,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 100
+        iterations: 15
 
   - name: "MeshLowLatencyLooped"
     fabric_setup:
@@ -40,7 +43,7 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 100
+        iterations: 15
 
   - name: "MeshDynamicLooped"
     fabric_setup:
@@ -60,4 +63,4 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 100
+        iterations: 15
