@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
 import ttnn
+
 from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
@@ -75,7 +77,9 @@ class Linear:
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation_fn == "gelu":
+        if self.activation_fn == "silu":
+            output = ttnn.silu(output)
+        elif self.activation_fn == "gelu":
             output = ttnn.gelu(output)
         elif self.activation_fn == "decomposed_gelu":
             output = gelu_decomposed(output)
@@ -220,7 +224,9 @@ class ColParallelLinear:
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation_fn == "gelu":
+        if self.activation_fn == "silu":
+            output = ttnn.silu(output)
+        elif self.activation_fn == "gelu":
             output = ttnn.gelu(output)
         elif self.activation_fn == "decomposed_gelu":
             output = gelu_decomposed(output)
