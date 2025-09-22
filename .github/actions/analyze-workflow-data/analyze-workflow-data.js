@@ -20,6 +20,49 @@ const SUCCESS_EMOJI = '✅';
 const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
 
+// Owners mapping cache
+let __ownersMapping = undefined;
+function loadOwnersMapping() {
+  if (__ownersMapping !== undefined) return __ownersMapping;
+  try {
+    const ownersPath = path.join(__dirname, 'owners.json');
+    if (fs.existsSync(ownersPath)) {
+      const raw = fs.readFileSync(ownersPath, 'utf8');
+      __ownersMapping = JSON.parse(raw);
+    } else {
+      __ownersMapping = null;
+    }
+  } catch (_) {
+    __ownersMapping = null;
+  }
+  return __ownersMapping;
+}
+
+function findOwnerForLabel(label) {
+  try {
+    const mapping = loadOwnersMapping();
+    if (!mapping) return undefined;
+    const lbl = typeof label === 'string' ? label : '';
+    // Prefer exact keys (label may contain the key as a substring)
+    if (mapping.exact && typeof mapping.exact === 'object') {
+      for (const key of Object.keys(mapping.exact)) {
+        if (lbl.includes(key)) return mapping.exact[key];
+      }
+    }
+    // Fallback to contains list
+    if (Array.isArray(mapping.contains)) {
+      for (const entry of mapping.contains) {
+        if (entry && typeof entry.needle === 'string' && lbl.includes(entry.needle)) {
+          return entry.owner;
+        }
+      }
+    }
+  } catch (_) {
+    // ignore
+  }
+  return undefined;
+}
+
 // Simple HTML escaping for rendering snippets safely in summary HTML
 function escapeHtml(text) {
   if (typeof text !== 'string') return text;
@@ -36,9 +79,10 @@ function renderErrorsTable(errorSnippets) {
   const rows = errorSnippets.map(obj => {
     const label = escapeHtml(obj.label || '');
     const snippet = escapeHtml(obj.snippet || '');
-    return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
+    const owner = escapeHtml((obj.owner && (Array.isArray(obj.owner) ? obj.owner.join(', ') : obj.owner)) || 'no owner found');
+    return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td>${owner}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
   }).join('\n');
-  return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Owner</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderRepeatedErrorsTable(repeatedErrors) {
@@ -309,6 +353,16 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
       }
     }
   }
+
+  // Attach owners based on mapping
+  try {
+    for (const it of collected) {
+      if (it && !it.owner) {
+        const owner = findOwnerForLabel(it.label || '');
+        if (owner) it.owner = owner;
+      }
+    }
+  } catch (_) { /* ignore */ }
 
   return collected;
 }
