@@ -53,7 +53,6 @@ void kernel_main() {
 
     // TEMP (2D API): manual packet header. Post-uplift this becomes implicit.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
-    zero_l1_buf((uint32_t*)header, sizeof(PACKET_HEADER_TYPE));
 
     // Fabric route setup (temporary 2D API):
     // Program a fixed unicast route to (dst_mesh_id, dst_dev_id). Dynamic routing is not
