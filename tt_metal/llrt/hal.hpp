@@ -150,13 +150,22 @@ public:
     HalCoreInfoType(
         HalProgrammableCoreType programmable_core_type,
         CoreType core_type,
-        const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
-        const std::vector<DeviceAddr>& mem_map_bases,
-        const std::vector<uint32_t>& mem_map_sizes,
-        const std::vector<uint32_t>& eth_fw_mailbox_msgs,
+        std::vector<std::vector<HalJitBuildConfig>> processor_classes,
+        std::vector<DeviceAddr> mem_map_bases,
+        std::vector<uint32_t> mem_map_sizes,
+        std::vector<uint32_t> eth_fw_mailbox_msgs,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds,
-        dev_msgs::Factory dev_msgs_factory);
+        dev_msgs::Factory dev_msgs_factory) :
+        programmable_core_type_(programmable_core_type),
+        core_type_(core_type),
+        processor_classes_(std::move(processor_classes)),
+        mem_map_bases_(std::move(mem_map_bases)),
+        mem_map_sizes_(std::move(mem_map_sizes)),
+        eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
+        supports_cbs_(supports_cbs),
+        supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
+        dev_msgs_factory_(dev_msgs_factory) {}
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
