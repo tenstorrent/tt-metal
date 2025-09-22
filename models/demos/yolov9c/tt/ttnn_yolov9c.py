@@ -666,6 +666,7 @@ class TtnnDetect:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv3.2.0",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             is_detect=True,
             deallocate_activation=True,
         )
