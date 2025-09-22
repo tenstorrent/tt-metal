@@ -75,7 +75,7 @@ def test_max_pool2d_with_indices(device):
         buffer_type=ttnn.BufferType.L1,
         shard_spec=ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
-            [1280, 64],
+            [1280, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.ShardMode.PHYSICAL,
         ),
