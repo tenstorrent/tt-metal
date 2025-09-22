@@ -14,6 +14,16 @@
 namespace tt::tt_fabric::bench {
 
 using HelpersFixture = ::tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
+
+// ---- Reusable defaults -------
+inline constexpr uint32_t kDefaultMeshId = 0;
+inline constexpr chip_id_t kDefaultSrcChip = 0;
+inline constexpr chip_id_t kDefaultDstChip = 1;
+inline constexpr bool kDefaultUseDramDst = false;
+inline constexpr uint32_t kDefaultTensorBytes = 1u << 20;  // 1 MiB
+inline constexpr uint32_t kDefaultPageSize = 4096;         // 4 KiB
+inline constexpr tt::tt_metal::CoreCoord kDefaultCore = {0, 0};
+
 // ---- Shared data types ----
 struct PerfPoint {
     uint64_t bytes{};
@@ -23,14 +33,14 @@ struct PerfPoint {
 };
 
 struct PerfParams {
-    uint32_t mesh_id = 0;
-    chip_id_t src_chip = 0;
-    chip_id_t dst_chip = 1;
-    bool use_dram_dst = false;
-    uint32_t tensor_bytes = 1024 * 1024;
-    uint32_t page_size = 4096;
-    tt::tt_metal::CoreCoord sender_core{0, 0};
-    tt::tt_metal::CoreCoord receiver_core{0, 0};
+    uint32_t mesh_id = kDefaultMeshId;
+    chip_id_t src_chip = kDefaultSrcChip;
+    chip_id_t dst_chip = kDefaultDstChip;
+    bool use_dram_dst = kDefaultUseDramDst;
+    uint32_t tensor_bytes = kDefaultTensorBytes;
+    uint32_t page_size = kDefaultPageSize;
+    tt::tt_metal::CoreCoord sender_core = kDefaultCore;
+    tt::tt_metal::CoreCoord receiver_core = kDefaultCore;
 };
 
 struct PerfStats {
