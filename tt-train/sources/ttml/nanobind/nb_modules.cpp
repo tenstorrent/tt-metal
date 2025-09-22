@@ -36,6 +36,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<ModuleBase>(m, "ModuleBase");
     nb::class_<models::BaseTransformer, ModuleBase>(m, "BaseTransformer");
 
+    nb::class_<models::gpt2::TransformerConfig::Experimental>(m, "GPT2TransformerConfigExperimental");
     nb::class_<models::gpt2::TransformerConfig>(m, "GPT2TransformerConfig");
     nb::class_<models::gpt2::Transformer, models::BaseTransformer>(m, "GPT2Transformer");
 
@@ -69,13 +70,13 @@ void py_module(nb::module_& m) {
     }
 
     {
-        /*auto py_gpt2_transformer_config_experimental =
+        auto py_gpt2_transformer_config_experimental =
             static_cast<nb::class_<models::gpt2::TransformerConfig::Experimental>>(
                 m.attr("GPT2TransformerConfigExperimental"));
         py_gpt2_transformer_config_experimental.def(nb::init<>());
         py_gpt2_transformer_config_experimental.def_rw(
             "use_composite_layernorm", &models::gpt2::TransformerConfig::Experimental::use_composite_layernorm);
-        */
+
         auto py_gpt2_transformer_config =
             static_cast<nb::class_<models::gpt2::TransformerConfig>>(m.attr("GPT2TransformerConfig"));
         py_gpt2_transformer_config.def(nb::init<>());
