@@ -9,6 +9,10 @@
 #include <optional>
 #include <vector>
 
+namespace tt::umd {
+class Cluster;
+}
+
 namespace tt::tt_metal {
 
 class PSD;
@@ -19,6 +23,8 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PSD& de
 
 // Deserialize from protobuf binary format to PSD (byte vector)
 PSD deserialize_physical_system_descriptor_from_bytes(
-    const std::vector<uint8_t>& data, bool using_mock_cluster_desc = false);
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::vector<uint8_t>& data,
+    bool using_mock_cluster_desc = false);
 
 }  // namespace tt::tt_metal
