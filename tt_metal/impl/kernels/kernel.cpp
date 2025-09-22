@@ -321,11 +321,12 @@ std::string EthernetKernel::config_hash() const {
 
 std::string ComputeKernel::config_hash() const {
     return fmt::format(
-        "{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}",
         enchantum::to_string(this->config_.math_fidelity),
         this->config_.fp32_dest_acc_en,
         this->config_.math_approx_mode,
-        this->config_.dst_full_sync_en);
+        this->config_.dst_full_sync_en,
+        fmt::join(this->config_.unpack_to_dest_mode, "."));
 }
 
 std::string Kernel::compute_hash() const {
