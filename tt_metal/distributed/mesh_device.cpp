@@ -233,8 +233,7 @@ MeshDevice::MeshDevice(
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    kernel_compilation_thread_pool_(create_kernel_compilation_thread_pool()) {
+    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -309,10 +308,17 @@ void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { dispatch_th
 void MeshDevice::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
 
 void MeshDevice::enqueue_to_kernel_compilation_thread_pool(std::function<void()>&& f) {
+    if (!kernel_compilation_thread_pool_) {
+        kernel_compilation_thread_pool_ = create_kernel_compilation_thread_pool();
+    }
     kernel_compilation_thread_pool_->enqueue(std::move(f));
 }
 
-void MeshDevice::wait_for_kernel_compilation_thread_pool() { kernel_compilation_thread_pool_->wait(); }
+void MeshDevice::wait_for_kernel_compilation_thread_pool() {
+    if (kernel_compilation_thread_pool_) {
+        kernel_compilation_thread_pool_->wait();
+    }
+}
 
 std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const std::vector<int>& device_ids,
