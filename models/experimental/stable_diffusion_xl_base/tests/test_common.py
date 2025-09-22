@@ -15,7 +15,7 @@ from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
     TtCLIPTextTransformer,
     TtCLIPTextTransformerParameters,
 )
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 from tqdm import tqdm
 import ttnn
@@ -552,7 +552,7 @@ def run_tt_image_gen(
             tt_latents = ttnn.div(tt_latents, scaling_factor)
 
             logger.info("Running TT VAE")
-            output_tensor, [C, H, W] = vae.forward(tt_latents, input_shape)
+            output_tensor, [C, H, W] = vae.decode(tt_latents, input_shape)
             ttnn.deallocate(tt_latents)
 
             if capture_trace:

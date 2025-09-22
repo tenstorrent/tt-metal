@@ -198,7 +198,7 @@ void RingbufferCacheManager::reset() {
     this->valid_.swap(temp_valid);
 }
 
-void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) {
+void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) noexcept {
     TT_ASSERT(
         a.cache_block_sizeB_ == b.cache_block_sizeB_,
         "Ringbuffer cache block size mismatch: {} != {}",

@@ -97,7 +97,7 @@ public:
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     TrayID get_tray_id(AsicID asic_id) const;
     ASICLocation get_asic_location(AsicID asic_id) const;
-    std::vector<AsicID> get_asics_connected_to_host(std::string hostname) const;
+    std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
 
     // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;

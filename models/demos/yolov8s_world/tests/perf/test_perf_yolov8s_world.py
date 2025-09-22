@@ -9,12 +9,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s_world.common import YOLOV8SWORLD_L1_SMALL_SIZE
 from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 
 
 def get_expected_times(name):
@@ -97,7 +97,6 @@ def run_yolov8s_world_inference(
         (640, 640),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 def test_perf_yolov8s_world(
     device,
     batch_size_per_device,
@@ -133,6 +132,7 @@ def test_perf_yolov8s_world(
     ],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_perf_yolov8s_world_dp(
     mesh_device,
     batch_size_per_device,

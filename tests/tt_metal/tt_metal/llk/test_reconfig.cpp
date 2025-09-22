@@ -79,7 +79,8 @@ using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_reconfig(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReconfigConfig& test_config) {
+bool single_core_reconfig(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReconfigConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////

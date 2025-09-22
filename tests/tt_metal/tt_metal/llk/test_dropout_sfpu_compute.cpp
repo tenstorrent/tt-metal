@@ -96,7 +96,7 @@ bool check_dropout(
 }
 
 bool test_dropout_standalone(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     float probability,
     uint32_t seed,
     float const_bias,
@@ -242,7 +242,7 @@ bool test_dropout_standalone(
     return pass;
 }
 
-void test_dropout(std::shared_ptr<distributed::MeshDevice> mesh_device, const DropoutConfig& test_config) {
+void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const DropoutConfig& test_config) {
     bool pass = true;
     float probability = test_config.probability;
     float fill_constant = test_config.fill_constant;

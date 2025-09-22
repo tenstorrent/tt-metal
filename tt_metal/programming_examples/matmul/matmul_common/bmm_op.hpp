@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <optional>
 #include <array>
 
 #include <algorithm>
@@ -16,10 +15,7 @@
 
 #include <tt-metalium/work_split.hpp>
 
-using std::pair;
 using CoreCoord = tt_xy_pair;
-
-using namespace tt::constants;
 
 std::vector<uint32_t> get_prime_factors(uint32_t n) {
     uint32_t i = 2;
@@ -40,18 +36,18 @@ std::vector<uint32_t> get_prime_factors(uint32_t n) {
     return prime_factors;
 }
 
-std::vector<uint32_t> get_possible_products(std::vector<uint32_t> factors) {
+std::vector<uint32_t> get_possible_products(const std::vector<uint32_t>& factors) {
     if (factors.size() == 0) {
         return {1};
     }
 
     std::vector<uint32_t> products;
-    for (uint32_t& fac : factors) {
+    for (const uint32_t& fac : factors) {
         std::vector<uint32_t> new_products;
         if (not std::count(products.begin(), products.end(), fac)) {
             new_products.push_back(fac);
         }
-        for (uint32_t& prod : products) {
+        for (const uint32_t& prod : products) {
             if (not std::count(products.begin(), products.end(), fac * prod)) {
                 new_products.push_back(fac * prod);
             }

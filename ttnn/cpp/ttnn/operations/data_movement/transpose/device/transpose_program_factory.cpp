@@ -558,8 +558,18 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
             }
         }
     }
-    std::vector<uint32_t> reader_compile_time_args = {
-        num_writes, padding_val_packed, (uint32_t)needs_padding, (uint32_t)0, 1, 1, 1, 1, 1};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"num_writes", num_writes},
+        {"padding_val_packed", padding_val_packed},
+        {"needs_padding", needs_padding},
+        {"swap_hw", (uint32_t)0},
+        {"H", 1},
+        {"W", 1},
+        {"accumulated_outer_dims", 1},
+        {"tile_height", 1},
+        {"tile_width", 1},
+    };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -567,7 +577,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     // create writer kernel with compile time and runtime args
 

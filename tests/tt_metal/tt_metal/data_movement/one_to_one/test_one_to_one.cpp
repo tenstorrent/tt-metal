@@ -38,7 +38,7 @@ struct OneToOneConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToOneConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToOneConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
 
@@ -162,7 +162,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToOneConfi
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
@@ -196,7 +196,7 @@ void directed_ideal_test(
 }
 
 void virtual_channels_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
@@ -240,7 +240,7 @@ void virtual_channels_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
@@ -280,7 +280,7 @@ void packet_sizes_test(
 }
 
 void custom_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1},

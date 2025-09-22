@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t qk_out_subblock_h =
         (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
 
-    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0) {
+    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0 && Sq_chunk_t % 2 == 0) {
         // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
         qk_out_subblock_w = qk_out_subblock_w / 2;
         qk_out_subblock_h = 2;
@@ -578,6 +578,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t mask_addr = attn_mask.has_value() ? mask_buffer->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
+    uint32_t num_phases = 1;
+    uint32_t read_offset = 0;
+    uint32_t write_offset = 0;
+
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -612,19 +616,23 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             program,
             reader_kernels_id,
             core,
-            {q_addr,
-             k_addr,
-             v_addr,
-             mask_addr,
-             is_chunked ? page_table.value().buffer()->address() : 0,
-             i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             chunked_q_chunk_offset});
+            {
+                q_addr,
+                k_addr,
+                v_addr,
+                mask_addr,
+                is_chunked ? page_table.value().buffer()->address() : 0,
+                i,
+                local_batch_start,
+                local_batch_end,
+                local_nh_start,
+                local_nh_end,
+                local_q_start,
+                local_q_end,
+                num_phases,
+                chunked_q_chunk_offset,
+                read_offset  // read_offset
+            });
         SetRuntimeArgs(
             program,
             writer_kernels_id,
@@ -637,7 +645,9 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset});
+             num_phases,
+             chunked_q_chunk_offset,
+             write_offset});  // write_offset
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -649,6 +659,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
+             num_phases,
              chunked_q_chunk_offset});
     }
 
@@ -702,12 +713,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                 reader_args[2] = v_addr;
                 reader_args[3] = mask_addr;
                 reader_args[4] = page_table_addr;
-                reader_args[12] = chunked_q_chunk_offset;
+                reader_args[13] = chunked_q_chunk_offset;
 
                 writer_args[0] = out_addr;
-                writer_args[8] = chunked_q_chunk_offset;
+                writer_args[9] = chunked_q_chunk_offset;
 
-                compute_args[7] = chunked_q_chunk_offset;
+                compute_args[8] = chunked_q_chunk_offset;
             }
         };
 

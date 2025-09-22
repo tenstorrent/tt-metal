@@ -10,7 +10,7 @@ import evaluate
 from loguru import logger
 from datasets import load_dataset
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     Profiler,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
