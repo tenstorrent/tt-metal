@@ -53,7 +53,8 @@ int main() {
             .page_size = tile_size_bytes, .buffer_type = tt::tt_metal::BufferType::L1};  // This time we allocate on L1
 
         distributed::ReplicatedBufferConfig dram_buffer_config{
-            .size = dram_buffer_size};  // Size per device (replicated across mesh)
+            .size = dram_buffer_size};  // Size per device (replicated across mesh). Since we are operating on a unit
+                                        // mesh this is the total size.
         distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
 
         // Allocate the buffers (replicated across mesh; on unit mesh ⇒ single device allocation)
@@ -64,11 +65,14 @@ int main() {
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
-        distributed::MeshWorkload workload;
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
         Program program = CreateProgram();
 
-        // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
+        // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
+        // local to a single device. Here we create a workload for our single-device mesh.
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+        // This example program will only use 1 Tensix core. So we set the core to {0, 0} (the most top-left core).
         constexpr CoreCoord core = {0, 0};
 
         // Create the data movement kernel. This kernel will be used to copy data from DRAM to DRAM (see the
@@ -107,8 +111,9 @@ int main() {
 
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
-        // Enqueue the program as a mesh workload (non-blocking) and wait for completion before reading back.
+        // Add the program to the workload for the mesh.
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion before reading back.
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
         distributed::Finish(cq);
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
