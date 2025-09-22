@@ -1229,17 +1229,30 @@ tt::tt_metal::Tile get_output_tile(
         const uint32_t in1_tile_w = in1_tile_shape[1];
 
         TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
-        TT_FATAL(out_tile_shape[1] % in1_tile_w == 0, "the override output tile width be multiple of in1 tile width");
+        TT_FATAL(
+            out_tile_shape[1] % in1_tile_w == 0,
+            "the override output tile width ({}) be multiple of in1 tile width ({})",
+            out_tile_shape[1],
+            in1_tile_w);
         TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
-        TT_FATAL(out_tile_shape[0] == in0_tile_h, "the override output tile height must equal to the in0 tile height");
+        TT_FATAL(
+            out_tile_shape[0] == in0_tile_h,
+            "the override output tile height ({}) must equal to the in0 tile height ({})",
+            out_tile_shape[0],
+            in0_tile_h);
         if (out_tile_shape[1] != in1_tile_w) {
             TT_FATAL(
                 out_tile_shape[0] <= constants::FACE_HEIGHT,
-                "the override output tile height must equal or less to face height");
+                "the override output tile height ({}) must equal or less to face height ({})",
+                out_tile_shape[0],
+                constants::FACE_HEIGHT);
         }
         if (!output_mem_config.is_sharded()) {
             TT_FATAL(
-                out_tile_shape[1] == in1_tile_w, "the override output tile width must equal to the in0 tile width");
+                out_tile_shape[1] == in1_tile_w,
+                "the override output tile width ({}) must equal to the in0 tile width ({})",
+                out_tile_shape[1],
+                in1_tile_w);
         }
 
         return override_output_tile;
