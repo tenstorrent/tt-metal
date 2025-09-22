@@ -1761,3 +1761,23 @@ def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 
     else:
         assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
+    in_data = torch.tensor([float("-inf"), float("inf"), float("nan"), 5], dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_op(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_tensor = golden_function(in_data)
+
+    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
