@@ -177,7 +177,7 @@ target_include_directories(
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 
-target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)
+target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
 
 # Generate Inspector RPC stub file
 set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/scripts/debugging_scripts/inspector_capnp.pyi)
