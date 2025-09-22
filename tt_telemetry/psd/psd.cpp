@@ -189,13 +189,12 @@ void PSD::clear() {
 
 void PSD::run_local_discovery() {
     this->clear();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster_desc = cluster_->get_cluster_description();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
-    const auto& chip_unique_ids = cluster.get_unique_chip_ids();
-    const auto& eth_connections = cluster.get_ethernet_connections();
-    auto cross_host_eth_connections = cluster.get_ethernet_connections_to_remote_devices();
-    auto cluster_desc = cluster.get_cluster_desc();
+    const auto& chip_unique_ids = cluster_desc->get_chip_unique_ids();
+    const auto& eth_connections = cluster_desc->get_ethernet_connections();
+    auto cross_host_eth_connections = cluster_desc->get_ethernet_connections_to_remote_devices();
 
     auto my_rank = *(distributed_context.rank());
     auto hostname = this->my_host_name();
