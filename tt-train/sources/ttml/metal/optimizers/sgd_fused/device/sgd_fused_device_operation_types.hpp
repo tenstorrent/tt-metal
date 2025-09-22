@@ -14,6 +14,7 @@ namespace ttml::metal::optimizers::sgd_fused::device {
 struct operation_attributes_t {
     float lr{};
     float momentum{0.0F};
+    float dampening{0.0F};
 };
 
 struct tensor_args_t {

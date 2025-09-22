@@ -113,6 +113,7 @@ std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invok
     const ttnn::Tensor& grad,
     float lr,
     float momentum,
+    float dampening,
     const std::optional<ttnn::Tensor>& param_out,
     const std::optional<ttnn::Tensor>& momentum_in,
     const std::optional<ttnn::Tensor>& momentum_out) {
@@ -120,6 +121,7 @@ std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invok
         operation_attributes_t{
             .lr = lr,
             .momentum = momentum,
+            .dampening = dampening,
         },
         tensor_args_t{
             .param_in = param_in,
