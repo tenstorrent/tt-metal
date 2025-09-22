@@ -108,16 +108,16 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
 inline void my_calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
 
-    constexpr uint dst_tile_size_sfpi = 32;
-    const uint32_t in0_base_idx = dst_index_in0 * dst_tile_size_sfpi;
-    const uint32_t in1_base_idx = dst_index_in1 * dst_tile_size_sfpi;
-    const uint32_t out_base_idx = dst_index_out * dst_tile_size_sfpi;
+    constexpr uint32_t n_vector_in_tile = 32;
+    const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_tile;
+    const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_tile;
+    const uint32_t out_base_idx = dst_index_out * n_vector_in_tile;
     // SFPU microcode
     for (int d = 0; d < 8; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-        vFloat in0 = dst_reg[in0_base_idx];
-        vFloat in1 = dst_reg[in1_base_idx];
-        dst_reg[out_base_idx] = in0 + in1;
+        vFloat a = dst_reg[n_vector_in_tile];
+        vFloat b = dst_reg[n_vector_in_tile];
+        dst_reg[out_base_idx] = a + b;
         dst_reg++;
     }
 }
