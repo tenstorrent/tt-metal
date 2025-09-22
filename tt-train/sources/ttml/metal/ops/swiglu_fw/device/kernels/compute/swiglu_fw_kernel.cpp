@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 #include <compute_kernel_api/eltwise_binary_sfpu.h>
 #include <compute_kernel_api/reconfig_data_format.h>
@@ -127,7 +128,7 @@ inline void compute_M_for_k() {
 
 // ============================================================================
 // Phase B: Complete Y computation and store
-//   Y[r,c] += sum_k( M[r,k] * W2[k,c] )
+//   Y[r, c] += sum_k( M[r, k] * W2[k, c] )
 //   Stores result to output_cb_idx (either Y_partial or Y_final CB)
 // ============================================================================
 inline void mul_MxW2_accumulate_Y(uint32_t k_block_size, uint32_t c_block_size, bool first_k_block, bool last_k_block) {
@@ -142,7 +143,7 @@ inline void mul_MxW2_accumulate_Y(uint32_t k_block_size, uint32_t c_block_size, 
         }
         cb_pop_front(cb_y_partial_idx, block_size);
     }
-    cb_wait_front(cb_m_idx, block_size);  // M[r,k] values ready
+    cb_wait_front(cb_m_idx, block_size);  // M[r, k] values ready
     reconfig_data_format(cb_m_idx, cb_w2_idx);
     // NOTE(maciek): Using mm_init_short since we do not want to zero reguisters. mm_init does zero them.
     mm_init_short(cb_m_idx, cb_w2_idx, false);
@@ -151,14 +152,14 @@ inline void mul_MxW2_accumulate_Y(uint32_t k_block_size, uint32_t c_block_size, 
         // Wait for W2 data: block_size tiles per column
         cb_wait_front(cb_w2_idx, block_size);
 
-        // Compute Y[r, c] = sum_k( M[r,k] * W2[k, c] )
+        // Compute Y[r, c] = sum_k( M[r, k] * W2[k, c] )
         for (uint32_t k = 0; k < k_block_size; ++k) {
             matmul_tiles(cb_m_idx, cb_w2_idx, k, k, c, false);
         }
         cb_pop_front(cb_w2_idx, block_size);  // Done with all W2 data
     }
-    // Pop all and M[r,k] values at once
-    cb_pop_front(cb_m_idx, block_size);  // Done with M[r,k] values
+    // Pop all and M[r, k] values at once
+    cb_pop_front(cb_m_idx, block_size);  // Done with M[r, k] values
 
     tile_regs_commit();
     // Store result to appropriate CB
@@ -171,11 +172,11 @@ inline void mul_MxW2_accumulate_Y(uint32_t k_block_size, uint32_t c_block_size, 
 //   for c_block in c_blocks:
 //     for k_block in k_blocks:
 //       for k in k_block:
-//         XW1 = sum_p( X[r,p] * W1[p,k] )
-//         XW3 = sum_p( X[r,p] * W3[p,k] )
-//         M[r,k] = SiLU(XW1) * XW3
+//         XW1 = sum_p( X[r, p] * W1[p, k] )
+//         XW3 = sum_p( X[r, p] * W3[p, k] )
+//         M[r, k] = SiLU(XW1) * XW3
 //       for c in c_block:
-//         Y_partial[r,c] += sum_k( M[r,k] * W2[k,c] )
+//         Y_partial[r, c] += sum_k( M[r, k] * W2[k, c] )
 //     store final Y_partial to Y
 // ============================================================================
 inline void MAIN {
@@ -201,17 +202,16 @@ inline void MAIN {
                 const bool first_k_block = (k_block_start == 0);
                 const bool last_k_block = (k_block_start + block_size >= hidden_Wt);
 
-                // ---- Phase A: compute M[r,k] for all k in this k_block ----
-                // M[r,k] = sum_p( X[r,p] * W1[p,k] )
-                for (uint32_t k = 0; k < block_size; ++k) {
-                    if (k < k_block_size) {
-                        compute_M_for_k();
-                    } else {
-                        // Push empty/invalid M for k >= k_block_size
-                        tile_regs_acquire();
-                        tile_regs_commit();
-                        pack_and_push(3U, cb_m_idx);  // push empty/invalid M
-                    }
+                // ---- Phase A: compute M[r, k] for all k in this k_block ----
+                // M[r, k] = sum_p( X[r, p] * W1[p, k] )
+                for (uint32_t k = 0; k < k_block_size; ++k) {
+                    compute_M_for_k();
+                }
+                if (k_block_size != block_size) {
+                    // Push empty/invalid Ms for k >= k_block_size
+                    tile_regs_acquire();
+                    tile_regs_commit();
+                    pack_and_push_block(cb_m_idx, block_size - k_block_size);
                 }
                 // ---- Phase B: accumulate into Y[r, c_block] and store ----
                 mul_MxW2_accumulate_Y(k_block_size, c_block_size, first_k_block, last_k_block);
