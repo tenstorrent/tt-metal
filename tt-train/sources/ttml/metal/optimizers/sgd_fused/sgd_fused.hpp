@@ -14,6 +14,7 @@ struct SGDFusedOptimizer {
         const ttnn::Tensor& grad,
         float lr,
         float momentum,
+        float dampening,
         const std::optional<ttnn::Tensor>& param_out,
         const std::optional<ttnn::Tensor>& momentum_in,
         const std::optional<ttnn::Tensor>& momentum_out);

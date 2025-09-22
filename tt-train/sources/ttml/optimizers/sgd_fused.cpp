@@ -10,6 +10,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "fmt/base.h"
 #include "metal/operations.hpp"
 #include "serialization/serializable.hpp"
 
@@ -50,14 +51,29 @@ void SGDFused::step() {
         auto gradients = tensor_ptr->get_grad();
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
 
+        fmt::print("{}\n", name);
+        tensor_ptr->get_value(autograd::PreferredPrecision::FULL).print();
+        fmt::print("momentum before\n");
+        theta.print();
+
         ttml::metal::sgd_fused(
             tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
             gradients,
             m_config.lr,
             m_config.momentum,
+            m_config.dampening,
             output_tensor,
             theta,
             theta);
+
+        fmt::print("gradient\n");
+        gradients.print();
+        fmt::print("output parameters\n");
+        output_tensor.print();
+        fmt::print("momentum after\n");
+        theta.print();
+        fmt::print("learning rate: {}\n", m_config.lr);
+        fmt::print("===================================\n");
     }
     m_steps++;
 }

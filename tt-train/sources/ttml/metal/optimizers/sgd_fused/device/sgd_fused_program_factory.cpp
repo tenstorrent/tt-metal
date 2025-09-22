@@ -137,6 +137,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     const auto& momentum_out = tensor_args.momentum_out;
     const auto& lr = operation_attributes.lr;
     const auto& momentum = operation_attributes.momentum;
+    const auto& dampening = operation_attributes.dampening;
 
     auto* device = param_in.device();
 
@@ -262,7 +263,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
         Wt,                         // num_inner / TILE_W
-        std::bit_cast<uint32_t>(momentum)};
+        std::bit_cast<uint32_t>(momentum),
+        std::bit_cast<uint32_t>(1.0f - dampening)};
 
     kernels.compute_group_1 = create_compute_kernel(
         program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
@@ -272,7 +274,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
             Wt,                         // num_inner / TILE_W
-            std::bit_cast<uint32_t>(momentum)};
+            std::bit_cast<uint32_t>(momentum),
+            std::bit_cast<uint32_t>(1.0f - dampening)};
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
