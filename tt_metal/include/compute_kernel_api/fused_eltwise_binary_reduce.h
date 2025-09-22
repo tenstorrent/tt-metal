@@ -102,9 +102,9 @@ ALWI void fused_reduce_init() {
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
 ALWI void fused_reduce_compute(uint32_t idst) {
     // 8. reduce operation (using srcA from dest reuse, cb_scaler used as dummy first param)
-    // reduce_tile<reduce_type, reduce_dim>(cb_scaler, cb_scaler, iscaler, iscaler, idst); - under comment bcs of
-    // UNPACKER
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(idst)));
+    // **FIXED: Use llk_math_reduce_fused which doesn't clear data valid flags**
+    MATH((llk_math_reduce_fused<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(idst)));
+    UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
 }
 
 // =============================================================================

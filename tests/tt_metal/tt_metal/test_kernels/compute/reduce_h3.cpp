@@ -72,18 +72,16 @@ void MAIN {
         fused_eltwise_binary_compute<ELTWISE_OP_TYPE, 0>(
             cb_inp0, cb_inp1, 0, 0);  // template argument for idst, since it has to be 0 for fused op to work
 
-        // dprint_tensix_dest_reg(0);
-
-        tile_regs_commit();
-        tile_regs_wait();
+        // dprint_tensix_dest_reg(0); // prints the correct results!
 
         // *** FUSED DESTINATION REUSE ***
         // This prepares the destination registers for the reduce operation
         fused_eltwise_binary_reuse_dest();
 
-        // DPRINT_MATH({ DPRINT << "Destination register 0 contents:" << ENDL(); });
-        // DPRINT_PACK({ DPRINT << "Destination register 0 contents:" << ENDL(); });
-        // DPRINT_UNPACK({ DPRINT << "Destination register 0 contents:" << ENDL(); });
+        // debug prints:
+        // DPRINT_MATH({ DPRINT << "debug print math, works after reuse_dest" << ENDL(); }); // -will be printed out
+        // DPRINT_PACK({ DPRINT << "debug print pack, works after reuse_dest" << ENDL(); }); // -will be printed out
+        // DPRINT_UNPACK({ DPRINT << "debug print unpack, works after reuse_dest" << ENDL(); }); // -will be printed out
 
         // DON'T release tile_regs here - we need them for the reduce operation!
 
@@ -97,9 +95,10 @@ void MAIN {
         // STEP 5: FUSED REDUCE INITIALIZATION
         // =========================================================================
         fused_reduce_init<REDUCE_OP, REDUCE_DIM>();
-        DPRINT_MATH({ DPRINT << "After reduce_init" << ENDL(); });
-        DPRINT_PACK({ DPRINT << "After reduce_init" << ENDL(); });
-        DPRINT_UNPACK({ DPRINT << "After reduce_init" << ENDL(); });
+        // DPRINT_MATH({ DPRINT << "After reduce_init" << ENDL(); }); // -will be printed out
+        // DPRINT_PACK({ DPRINT << "After reduce_init" << ENDL(); }); // this too
+        // DPRINT_UNPACK({ DPRINT << "After reduce_init" << ENDL(); }); // this too
+
         // =========================================================================
         // STEP 6: FUSED REDUCE OPERATION
         // =========================================================================
@@ -109,38 +108,57 @@ void MAIN {
         // NOTE: We already have destination registers acquired from the eltwise operation
         // The fused_eltwise_binary_reuse_dest() has prepared the data for reduction
 
+        // dprint_tensix_dest_reg(0); // prints out ones, just as expected!!
+
         // *** FUSED REDUCE OPERATION ***
         fused_reduce_compute<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 
-        dprint_tensix_dest_reg(0);
-        DPRINT_MATH({ DPRINT << "After reduce_compute" << ENDL(); });
-        DPRINT_PACK({ DPRINT << "After reduce_compute" << ENDL(); });
-        DPRINT_UNPACK({ DPRINT << "After reduce_compute" << ENDL(); });
+        // DPRINT_MATH({ DPRINT << "After reduce_compute" << ENDL(); }); // is being printed out
+        // DPRINT_PACK({ DPRINT << "After reduce_compute" << ENDL(); }); // is being printed out
+        //  DPRINT_UNPACK({ DPRINT << "After reduce_compute" << ENDL(); }); // is being printed out
+
+        // since math is doing something here, let's see if we have correct results in dest:
+        // dprint_tensix_dest_reg(0); // prints out the correct results since math does not hang anymore
+
+        // while(true){} // loop if you want to check the srcA - tt-exalens - dr 0,0 srca
+
+        tile_regs_commit();  // MATH((llk_math_dest_section_done<DST_ACCUM_MODE>())); - releases lock on DST register
+
+        // DPRINT_MATH({ DPRINT << "After reduce_compute" << ENDL(); });
+        // DPRINT_PACK({ DPRINT << "After reduce_compute" << ENDL(); });
+        // DPRINT_UNPACK({ DPRINT << "After reduce_compute" << ENDL(); });
 
         // Pack and output the reduced result
         cb_reserve_back(cb_out0, onetile);
 
+        tile_regs_wait();  // TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK),
+                           // p_stall::STALL_ON_ZERO);
+
+        DPRINT_MATH({ DPRINT << "After tile wait" << ENDL(); });    // does not hang
+        DPRINT_PACK({ DPRINT << "After tile wait" << ENDL(); });    // does not hang
+        DPRINT_UNPACK({ DPRINT << "After tile wait" << ENDL(); });  // does not hang
+
         pack_tile(reduce_dst_idx, cb_out0);
 
-        DPRINT_PACK({
-            DPRINT << "Output tile in cb_out0:" << ENDL();
-            for (uint16_t r = 0; r < 32; ++r) {
-                DPRINT << (uint)r << " : "
-                       << TileSlice(
-                              cb_out0,
-                              0,
-                              SliceRange{
-                                  .h0 = (uint8_t)r,
-                                  .h1 = (uint8_t)(r + 1),
-                                  .hs = (uint8_t)1,
-                                  .w0 = (uint8_t)0,
-                                  .w1 = (uint8_t)32,
-                                  .ws = (uint8_t)1},
-                              true,
-                              false)
-                       << ENDL();
-            }
-        });
+        // DPRINT_PACK({ // - does not hang, prints out garbage data
+        //     DPRINT << "Output tile in cb_out0:" << ENDL();
+        //     for (uint16_t r = 0; r < 32; ++r) {
+        //         DPRINT << (uint)r << " : "
+        //                << TileSlice(
+        //                       cb_out0,
+        //                       0,
+        //                       SliceRange{
+        //                           .h0 = (uint8_t)r,
+        //                           .h1 = (uint8_t)(r + 1),
+        //                           .hs = (uint8_t)1,
+        //                           .w0 = (uint8_t)0,
+        //                           .w1 = (uint8_t)32,
+        //                           .ws = (uint8_t)1},
+        //                       true,
+        //                       false)
+        //                << ENDL();
+        //     }
+        // });
 
         tile_regs_release();  // Finally release the tile registers
         cb_push_back(cb_out0, onetile);
