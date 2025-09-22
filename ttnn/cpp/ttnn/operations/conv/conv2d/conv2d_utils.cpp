@@ -1546,5 +1546,15 @@ std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     return os;
 }
 
+void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate) {
+    if (input_tensor_on_device.layout() != Layout::TILE) {
+        Tensor input_tensor_tilized = ttnn::to_layout(input_tensor_on_device, Layout::TILE);
+        if (deallocate) {
+            input_tensor_on_device.deallocate(/*force*/ true);
+        }
+        input_tensor_on_device = std::move(input_tensor_tilized);
+    }
+}
+
 }  // namespace operations::conv
 }  // namespace ttnn

@@ -243,14 +243,9 @@ Result conv2d_DRAM(
             is_device_tensor(input_tensor)
                 ? input_tensor
                 : ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+
         // Matmul expects inputs to be in Tile Layout
-        if (input_tensor_on_device.layout() != Layout::TILE) {
-            Tensor input_tensor_tilized = ttnn::to_layout(input_tensor_on_device, Layout::TILE);
-            if (conv_config.deallocate_activation) {
-                input_tensor_on_device.deallocate(/*force*/ true);
-            }
-            input_tensor_on_device = std::move(input_tensor_tilized);
-        }
+        tilize_with_optional_deallocation(input_tensor_on_device, conv_config.deallocate_activation);
         Tensor matmul_output = ttnn::linear(
             input_tensor_on_device,
             weight_tensor_on_device,
@@ -896,14 +891,8 @@ Result conv2d_L1(
         }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
-        if (input_tensor_post_tm.layout() != Layout::TILE) {
-            Tensor input_tensor_post_tm_tilized = ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
-            if (conv_config.deallocate_activation) {
-                input_tensor_post_tm.deallocate(/*force*/ true);
-                input_tensor_post_tm_tilized = ttnn::move(input_tensor_post_tm_tilized);
-            }
-            input_tensor_post_tm = input_tensor_post_tm_tilized;
-        }
+        // Matmul expects inputs to be in Tile Layout
+        tilize_with_optional_deallocation(input_tensor_post_tm, conv_config.deallocate_activation);
 
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
