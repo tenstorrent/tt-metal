@@ -1250,7 +1250,7 @@ tt::tt_metal::Tile get_output_tile(
         if (!output_mem_config.is_sharded()) {
             TT_FATAL(
                 out_tile_shape[1] == in1_tile_w,
-                "the override output tile width ({}) must equal to the in0 tile width ({})",
+                "the override output tile width ({}) must equal the in0 tile width ({})",
                 out_tile_shape[1],
                 in1_tile_w);
         }
