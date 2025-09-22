@@ -132,7 +132,7 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
  */
 inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
     MATH(_llk_math_eltwise_binary_sfpu_params_<false>(
-        ckernel::sfpu::calculate_sfpu_binary<false, ckernel::BinaryOp::ADD, 8, false>, idx_dst0, idx_dst1, idx_out0));
+        ckernel::sfpu::_calculate_sfpu_binary_<false, ckernel::BinaryOp::ADD, 8>, idx_dst0, idx_dst1, idx_out0));
 }
 
 namespace NAMESPACE {
