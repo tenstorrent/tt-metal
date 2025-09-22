@@ -79,9 +79,9 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    # from models.tt_transformers.tt.model import Transformer
-    from models.demos.gemma3.tt.model import Transformer
+    # from models.demos.gemma3.tt.model import Transformer
     from models.demos.gemma3.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
         mesh_device,
