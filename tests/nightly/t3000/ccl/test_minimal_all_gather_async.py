@@ -85,7 +85,6 @@ def run_all_gather_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    logger.info("mesh_device.shape: {}", mesh_device.shape)
     persistent_output_buffers = [
         ttnn.from_torch(
             torch.zeros(ag_output_shape),
@@ -97,10 +96,6 @@ def run_all_gather_impl(
         )
         for _ in range(num_iters)
     ]
-    logger.info(
-        "persistent_output_buffers[0].tensor_topology().distribution_shape(): {}",
-        persistent_output_buffers[0].tensor_topology().distribution_shape(),
-    )
 
     logger.info("Done creating persistent buffers")
 

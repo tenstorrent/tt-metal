@@ -707,12 +707,10 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
     std::vector<distributed::MeshCoordinate> coords;
-    log_info(tt::LogAlways, "Creating tensor with  device shape: {}", device->shape());
     coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
         coords.push_back(coord);
     }
-    log_info(tt::LogAlways, "Creating tensor with coords: {}", coords);
     DeviceStorage device_storage(std::move(mesh_buffer), coords);
     // TODO (#25340): Implement correct logic and add test for this
     ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
@@ -721,14 +719,7 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
     }
 
     auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    log_info(tt::LogAlways, "Creating tensor with distribution_shape: {}", tensor_topology.distribution_shape());
-    log_info(tt::LogAlways, "Creating tensor with placements: {}", placements);
-    log_info(tt::LogAlways, "Creating tensor with coords: {}", coords);
-    auto tensor = Tensor(std::move(device_storage), tensor_spec, tensor_topology);
-    log_info(
-        tt::LogAlways, "Created tensor with distribution_shape: {}", tensor.tensor_topology().distribution_shape());
-    log_info(tt::LogAlways, "\n");
-    return tensor;
+    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {

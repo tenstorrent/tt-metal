@@ -166,10 +166,6 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
-    log_info(
-        tt::LogOp,
-        "DEBUG: initial composite_all_gather input_tensor distribution_shape: {}",
-        input_tensor.tensor_topology().distribution_shape());
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -194,22 +190,9 @@ ttnn::Tensor composite_all_gather(
         // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
         if (convert_to_bfloat16_for_composite) {
             input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
-            log_info(
-                tt::LogOp,
-                "DEBUG: typecast input_tensor distribution_shape: {}",
-                input_tensor.tensor_topology().distribution_shape());
         }
         input_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
-        log_info(
-            tt::LogOp,
-            "DEBUG: to_layout input_tensor distribution_shape: {}",
-            input_tensor.tensor_topology().distribution_shape());
     }
-
-    log_info(
-        tt::LogOp,
-        "DEBUG: just before all_broadcast_async input_tensor distribution_shape: {}",
-        input_tensor.tensor_topology().distribution_shape());
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
         input_tensor, num_links, input_memory_config, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);

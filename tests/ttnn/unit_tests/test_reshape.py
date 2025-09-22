@@ -641,21 +641,39 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
         assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_reshape_replicated_tensor_with_mesh_mapper(mesh_device):
-    from loguru import logger
+def test_reshape_oob(device):
+    """
+    Test proves that this reshape op writes data out of bounds, corrupting
+    tensors at other memory locations.
+    """
 
-    torch_input_tensor = torch.zeros((1, 1, 8192, 1280))
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    logger.info(f"mesh shape: {mesh_device.shape}")
-    tt_output_buffer = ttnn.as_tensor(
-        torch_input_tensor,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        # cache_file_name="/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/TG/tensor_cache_instruct_bfp8/pb_rs_01_QKV_0_8192",
-    )
-    logger.info(f"tt_output_buffer shape: {tt_output_buffer.shape}")
-    logger.info(f"tt_output_buffer distribution shape: {tt_output_buffer.tensor_topology().distribution_shape()}")
+    def bf16_tensor(tensor):
+        return ttnn.from_torch(tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    B, T, H, W, U = 1, 1, 90, 20, 768
+    SENTINEL_TENSOR_SIZE = 2**15
+    for i in range(10):
+        print(f"running test {i}")
+        torch_input_tensor = torch.randn(B, T, H, W, U, dtype=torch.bfloat16)
+        torch_output = torch_input_tensor.reshape(B, T, H, W, 2, U // 2)
+        # Known data below input and output tensors
+        pre_tensor = bf16_tensor(torch.full((SENTINEL_TENSOR_SIZE, SENTINEL_TENSOR_SIZE), 2.0, dtype=torch.bfloat16))
+        tt_input_tensor = bf16_tensor(torch_input_tensor)
+        # Allocate space for output tensor
+        dummy_tensor = bf16_tensor(torch.zeros(B, T, H, W, U))
+        # Known data above output tensor
+        post_tensor = bf16_tensor(torch.full((SENTINEL_TENSOR_SIZE, SENTINEL_TENSOR_SIZE), 2.0, dtype=torch.bfloat16))
+        ttnn.deallocate(dummy_tensor)
+        tt_output_tensor = ttnn.reshape(tt_input_tensor, (B, T, H, W, 2, U // 2))
+        tt_output_tensor_host = ttnn.to_torch(tt_output_tensor)
+        tt_input_tensor_host = ttnn.to_torch(tt_input_tensor)
+        pre_tensor_host = ttnn.to_torch(pre_tensor)
+        post_tensor_host = ttnn.to_torch(post_tensor)
+        assert torch.allclose(torch_output, tt_output_tensor_host), "Output tensors do not match"
+        assert torch.allclose(torch_input_tensor, tt_input_tensor_host), "Input tensors do not match"
+        assert torch.all(pre_tensor_host == 2.0), "Pre tensors do not match"
+        assert torch.all(post_tensor_host == 2.0), "Post tensors do not match"
+        ttnn.deallocate(tt_input_tensor)
+        ttnn.deallocate(tt_output_tensor)
+        ttnn.deallocate(pre_tensor)
+        ttnn.deallocate(post_tensor)

@@ -231,24 +231,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         ::ttnn::ccl::get_topological_dimension(input_tensors[0].tensor_topology(), this->cluster_axis);
 
     auto tensor_topology = input_tensors[0].tensor_topology();
-    log_info(tt::LogOp, "DEBUG: getting forward coord");
     std::optional<MeshCoordinate> forward_coord =
         ccl::get_physical_neighbor(tensor_topology, coord, 1, this->topology, this->cluster_axis);
 
-    log_info(tt::LogOp, "DEBUG: getting backward coord");
     std::optional<MeshCoordinate> backward_coord =
         ccl::get_physical_neighbor(tensor_topology, coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     uint32_t device_index = ccl::get_physical_linearized_index(tensor_topology, coord, this->cluster_axis);
-
-    if (forward_coord.has_value()) {
-        log_info(tt::LogOp, "DEBUG: forward_coord: {}", forward_coord.value());
-    }
-    if (backward_coord.has_value()) {
-        log_info(tt::LogOp, "DEBUG: backward_coord: {}", backward_coord.value());
-    }
-    log_info(tt::LogOp, "DEBUG: device_index: {}", device_index);
 
     return reduce_scatter_minimal_async(
         input_tensors[0],
@@ -333,7 +323,6 @@ Tensor reduce_scatter_minimal_async_impl(
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     // create this semaphore for all cores since we don't know which core will be used for teardown draining
