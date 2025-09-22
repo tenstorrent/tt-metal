@@ -20,15 +20,100 @@
 #include "fabric_edm_types.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include "hostdevcommon/fabric_common.h"
 
 namespace tt::tt_fabric {
+/* Ethernet channel structure is as follows (for both sender and receiver):
+              &header->  |----------------|\  <-  channel_base_address
+                         |    header      | \
+             &payload->  |----------------|  \
+                         |                |   |- repeated n times
+                         |    payload     |  /
+                         |                | /
+                         |----------------|/
+*/
 
 template <typename T>
 FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
+
+// A base sender channel interface class that will be specialized for different
+// channel architectures (e.g. static vs elastic sizing)
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS, typename DERIVED_T>
+class SenderEthChannelInterface {
+public:
+    explicit SenderEthChannelInterface() = default;
+
+    FORCE_INLINE void init(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        static_cast<DERIVED_T*>(this)->init_impl(
+            channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
+    }
+
+    FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const {
+        return static_cast<const DERIVED_T*>(this)->get_cached_next_buffer_slot_addr_impl();
+    }
+
+    FORCE_INLINE void advance_to_next_cached_buffer_slot_addr() {
+        static_cast<DERIVED_T*>(this)->advance_to_next_cached_buffer_slot_addr_impl();
+    }
+};
+
+// This class implements the interface for static sized sender channels.
+// Static sized sender channels have a fixed number of buffer slots, defined
+// at router initialization, and persistent for the lifetime of the router.
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+class StaticSizedSenderEthChannel : public SenderEthChannelInterface<
+                                        HEADER_TYPE,
+                                        NUM_BUFFERS,
+                                        StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>> {
+public:
+    explicit StaticSizedSenderEthChannel() = default;
+
+    FORCE_INLINE void init_impl(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        this->next_packet_buffer_index = BufferIndex{0};
+        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+            this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
+            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+            }
+        }
+        if constexpr (NUM_BUFFERS) {
+            cached_next_buffer_slot_addr = this->buffer_addresses[0];
+        }
+    }
+
+    StaticSizedSenderEthChannel(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) :
+        SenderEthChannelInterface<HEADER_TYPE, NUM_BUFFERS, StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>>() {
+        this->init(channel_base_address, buffer_size_bytes, header_size_bytes);
+    }
+
+    // For sender channel, only need a get_next_packet style
+    [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl() const {
+        return this->buffer_addresses[next_packet_buffer_index.get()];
+    }
+
+    FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
+
+    FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
+        next_packet_buffer_index = BufferIndex{wrap_increment<NUM_BUFFERS>(next_packet_buffer_index.get())};
+        this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index.get()];
+    }
+
+private:
+    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    std::size_t cached_next_buffer_slot_addr;
+    BufferIndex next_packet_buffer_index;
+};
+
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
 
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 class EthChannelBuffer final {
@@ -44,11 +129,9 @@ public:
 
     explicit EthChannelBuffer() = default;
 
-    FORCE_INLINE void init(
-        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id_val) {
+    FORCE_INLINE void init(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
-        channel_id = channel_id_val;
 
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
@@ -63,9 +146,8 @@ public:
         }
     }
 
-    EthChannelBuffer(
-        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id_val) {
-        init(channel_base_address, buffer_size_bytes, header_size_bytes, channel_id_val);
+    EthChannelBuffer(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
+        init(channel_base_address, buffer_size_bytes, header_size_bytes);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address(const BufferIndex& buffer_index) const {
@@ -88,8 +170,6 @@ public:
     // Doesn't return the message size, only the maximum eth payload size
     [[nodiscard]] FORCE_INLINE size_t get_max_eth_payload_size() const { return this->max_eth_payload_size_in_bytes; }
 
-    [[nodiscard]] FORCE_INLINE size_t get_id() const { return this->channel_id; }
-
 #if defined(COMPILE_FOR_ERISC)
     [[nodiscard]] FORCE_INLINE bool eth_is_acked_or_completed(const BufferIndex& buffer_index) const {
         return eth_is_receiver_channel_send_acked(buffer_index) || eth_is_receiver_channel_send_done(buffer_index);
@@ -110,15 +190,13 @@ private:
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
     std::size_t cached_next_buffer_slot_addr;
-    uint8_t channel_id;
 };
 
-// A tuple of EthChannelBuffer
-template <typename HEADER_TYPE, size_t... BufferSizes>
-struct EthChannelBufferTuple {
-    std::tuple<tt::tt_fabric::EthChannelBuffer<HEADER_TYPE, BufferSizes>...> channel_buffers;
+template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE, size_t... BufferSizes>
+struct ChannelTuple {
+    std::tuple<ChannelBase<HEADER_TYPE, BufferSizes>...> channel_buffers;
 
-    explicit EthChannelBufferTuple() = default;
+    explicit ChannelTuple() = default;
 
     void init(
         const size_t channel_base_address[],
@@ -129,13 +207,7 @@ struct EthChannelBufferTuple {
 
         std::apply(
             [&](auto&... chans) {
-                ((chans.init(
-                      channel_base_address[idx],
-                      buffer_size_bytes,
-                      header_size_bytes,
-                      static_cast<uint8_t>(channel_base_id + idx)),
-                  ++idx),
-                 ...);
+                ((chans.init(channel_base_address[idx], buffer_size_bytes, header_size_bytes), ++idx), ...);
             },
             channel_buffers);
     }
@@ -146,13 +218,28 @@ struct EthChannelBufferTuple {
     }
 };
 
-template <typename HEADER_TYPE, auto& ChannelBuffers>
-struct EthChannelBuffers {
+// Specific aliases
+template <typename HEADER_TYPE, size_t... BufferSizes>
+using EthChannelBufferTuple = ChannelTuple<tt::tt_fabric::EthChannelBuffer, HEADER_TYPE, BufferSizes...>;
+
+template <typename HEADER_TYPE, size_t... BufferSizes>
+using SenderEthChannelTuple = ChannelTuple<tt::tt_fabric::SenderEthChannel, HEADER_TYPE, BufferSizes...>;
+
+// Generic template for channel buffers helpers
+template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE, auto& ChannelBuffers>
+struct ChannelBuffersHelper {
     template <size_t... Is>
     static auto make(std::index_sequence<Is...>) {
-        return EthChannelBufferTuple<HEADER_TYPE, ChannelBuffers[Is]...>{};
+        return ChannelTuple<ChannelBase, HEADER_TYPE, ChannelBuffers[Is]...>{};
     }
 };
+
+// Specific aliases for helpers
+template <typename HEADER_TYPE, auto& ChannelBuffers>
+using EthChannelBuffers = ChannelBuffersHelper<tt::tt_fabric::EthChannelBuffer, HEADER_TYPE, ChannelBuffers>;
+
+template <typename HEADER_TYPE, auto& ChannelBuffers>
+using SenderEthChannelBuffers = ChannelBuffersHelper<tt::tt_fabric::SenderEthChannel, HEADER_TYPE, ChannelBuffers>;
 
 // Note that this class implements a mix of interfaces and will need to be separated to just be different
 // interface types altogether.
@@ -203,11 +290,9 @@ struct EdmChannelWorkerInterface {
     // Only used for persistent connections (i.e. upstream is EDM)
     template <bool enable_deadlock_avoidance>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-            this->cached_worker_semaphore_address,
-            inc_val << REMOTE_DEST_BUF_WORDS_FREE_INC,
-            0xf,
-            WORKER_HANDSHAKE_NOC);
+            this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {

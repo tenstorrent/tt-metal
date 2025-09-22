@@ -24,16 +24,14 @@
 #include <vector>
 
 #include "tt_memory.h"
-#include "hal/generated/dev_msgs.hpp"
+#include "hal/generated/dev_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-enum class CoreType;
 enum class AddressableCoreType : uint8_t;
 
 namespace tt {
-
-enum class ARCH;
 
 namespace tt_metal {
 
@@ -47,6 +45,34 @@ struct HalProcessorIdentifier {
 std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+// A set of processors distinguishing programmable core type and index within that core type.
+// See get_processor_index and get_processor_class_and_type_from_index.
+class HalProcessorSet {
+private:
+    std::array<uint32_t, NumHalProgrammableCoreTypes> masks_{};
+
+public:
+    void add(HalProgrammableCoreType core_type, uint32_t processor_index) {
+        masks_[static_cast<size_t>(core_type)] |= (1u << processor_index);
+    }
+    bool contains(HalProgrammableCoreType core_type, uint32_t processor_index) const {
+        return (masks_[static_cast<size_t>(core_type)] & (1u << processor_index)) != 0;
+    }
+    bool empty() const {
+        for (const auto& mask : masks_) {
+            if (mask != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Returns the bitmask of processors for the given core type.
+    // Bit i set <=> processor index i is in the set.
+    uint32_t get_processor_mask(HalProgrammableCoreType core_type) const {
+        return masks_[static_cast<size_t>(core_type)];
+    }
+};
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
 static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
@@ -80,6 +106,12 @@ enum class FWMailboxMsg : uint8_t {
     ETH_MSG_RELEASE_CORE,
     // Heartbeat counter
     HEARTBEAT,
+    // Retrain Count
+    RETRAIN_COUNT,
+    // Rx Link Up
+    RX_LINK_UP,
+    // Port Status
+    PORT_STATUS,
     // Number of mailbox message types
     COUNT,
 };
@@ -212,6 +244,8 @@ public:
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
     using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
+    using SetIRAMTextSizeFunc = std::function<void(
+        dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -222,6 +256,7 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
+    uint32_t max_processors_per_core_{};
     uint32_t num_nocs_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
@@ -241,7 +276,7 @@ private:
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
-    std::unordered_set<AddressableCoreType> virtualized_core_types_;
+    std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
     float eps_ = 0.0f;
@@ -267,6 +302,7 @@ private:
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
     DispatchFeatureQueryFunc device_features_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
+    SetIRAMTextSizeFunc set_iram_text_size_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -322,7 +358,7 @@ public:
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
     bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
-    const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
+    const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
 
@@ -380,8 +416,11 @@ public:
     // Inverse function of get_processor_index.
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
+    // Parses a string representation of a set of processor names (used by env vars).
+    HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
+    uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
@@ -406,6 +445,24 @@ public:
         auto index = get_programmable_core_type_index(programmable_core_type);
         TT_ASSERT(index < this->core_info_.size());
         return this->core_info_[index].get_dev_msgs_factory();
+    }
+
+    // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
+    // Code that assumes that should use this interface to create go_msg_t values,
+    // as it is otherwise not guaranteed by the HAL interface.
+    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+
+    // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
+    void set_iram_text_size(
+        dev_msgs::launch_msg_t::View launch_msg,
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx,
+        uint32_t iram_text_size) const {
+        if (this->set_iram_text_size_func_) {
+            this->set_iram_text_size_func_(
+                launch_msg, programmable_core_type, processor_class, processor_type_idx, iram_text_size);
+        }
     }
 };
 
@@ -532,6 +589,7 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
         num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
                          .get_processor_types_count(processor_class_idx);
     }
+    TT_ASSERT(num_riscs <= max_processors_per_core_);
     return num_riscs;
 }
 inline uint32_t Hal::get_processor_index(

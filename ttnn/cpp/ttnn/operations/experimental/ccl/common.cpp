@@ -42,11 +42,7 @@ bool use_composite_reduce_scatter(
     // Use composite if tiled and scattering on padded dim 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    if (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) {
-        return true;
-    }
-
-    return false;
+    return scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0;
 }
 
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config) {
@@ -217,6 +213,23 @@ ttnn::Tensor composite_all_gather(
     }
 
     return all_gather_output_tensor;
+}
+
+// same as above but for vector of mesh
+std::vector<ttnn::Tensor> composite_all_gather(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<uint32_t> cluster_axis) {
+    std::vector<ttnn::Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); i++) {
+        output_tensors.push_back(
+            composite_all_gather(input_tensors[i], dim, num_links, memory_config, subdevice_id, cluster_axis));
+    }
+    return output_tensors;
 }
 
 }  // namespace composite_common

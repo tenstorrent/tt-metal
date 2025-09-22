@@ -6,10 +6,10 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t N = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(2);
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    constexpr uint32_t N = get_named_compile_time_arg_val("N");
+    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+    constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_row = get_arg_val<uint32_t>(1);

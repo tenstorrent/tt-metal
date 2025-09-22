@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, RobertaForQuestionAnswering
 import pytest
 
 from models.experimental.roberta.tt.roberta_for_question_answering import TtRobertaForQuestionAnswering
-from models.utility_functions import comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 

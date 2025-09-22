@@ -305,6 +305,7 @@ def run_all_gather_impl(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
@@ -330,7 +331,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     output_shape,
@@ -343,7 +344,7 @@ def test_all_gather(
     function_level_defaults,
 ):
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -360,6 +361,7 @@ def test_all_gather(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
@@ -442,7 +444,7 @@ def test_all_gather(
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_sharded(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -458,10 +460,10 @@ def test_all_gather_sharded(
     tensor_mem_layout,
 ):
     if num_links > 1:
-        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the mesh_device (and hence only has 1 link available for use)"
 
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -482,11 +484,11 @@ def test_all_gather_sharded(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    "output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
-            8,
             [1, 4, 32, 1280],
             3,
             ttnn.TILE_LAYOUT,
@@ -509,8 +511,7 @@ def test_all_gather_sharded(
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_all_gather_sharded_ring(
-    t3k_mesh_device,
-    num_devices,
+    mesh_device,
     output_shape,
     dim,
     num_links,
@@ -525,11 +526,11 @@ def test_all_gather_sharded_ring(
     tensor_mem_layout,
 ):
     if num_links > 1:
-        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the mesh_device (and hence only has 1 link available for use)"
 
     run_all_gather_impl(
-        t3k_mesh_device,
-        num_devices,
+        mesh_device,
+        mesh_device.get_num_devices(),
         output_shape,
         dim,
         num_links,

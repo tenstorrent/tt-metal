@@ -13,7 +13,7 @@ namespace operations::experimental {
 
 struct PlusOneOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id, const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace operations::experimental

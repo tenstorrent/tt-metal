@@ -81,8 +81,6 @@ class Down1:
         output_tensor = self.conv1(input_tensor)[0]
         output_tensor = ttnn.mish(output_tensor)
 
-        if self.parameters.resolution[0] != 320:
-            output_tensor = ttnn.sharded_to_interleaved(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor_split = self.conv2(output_tensor)[0]
         ttnn.deallocate(output_tensor)
         output_tensor_split = ttnn.mish(output_tensor_split)
@@ -100,8 +98,6 @@ class Down1:
         output_tensor = output_tensor_split_2 + output_tensor
 
         ttnn.deallocate(output_tensor_split_2)
-        if self.parameters.resolution[0] != 320:
-            output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = self.conv7(output_tensor)[0]
         output_tensor = ttnn.mish(output_tensor)
 

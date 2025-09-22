@@ -14,28 +14,17 @@
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 #include <protobuf/mesh_graph_descriptor.pb.h>
 
-namespace tt {
-enum class ARCH;
-}  // namespace tt
-
-namespace tt::tt_fabric {
-FabricType operator|(FabricType lhs, FabricType rhs) {
-    return static_cast<FabricType>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
-}
-
-FabricType operator&(FabricType lhs, FabricType rhs) {
-    return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
-}
-
 namespace {
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
+
+using namespace tt::tt_fabric;
 
 RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
     switch (routing_direction) {
@@ -67,11 +56,10 @@ FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
     TT_THROW("Invalid torus topology");
     return FabricType::MESH;
 }
-}  // namespace
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-    MeshGraph::cluster_type_to_mesh_graph_descriptor =
-        *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+    cluster_type_to_mesh_graph_descriptor =
+        tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
             std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
                 {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
@@ -92,25 +80,35 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
             });
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-MeshGraph::cluster_type_to_mesh_graph_descriptor_mgd2 =
-    *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
-        std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
-            {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
-            {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
-        });
+    cluster_type_to_mesh_graph_descriptor_mgd2 =
+        tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+            std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
+                {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+            });
+}  // namespace
+
+namespace tt::tt_fabric {
+FabricType operator|(FabricType lhs, FabricType rhs) {
+    return static_cast<FabricType>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
+}
+
+FabricType operator&(FabricType lhs, FabricType rhs) {
+    return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
+}
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
@@ -332,7 +330,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
 
     // Populate with empty containers
     this->mesh_host_ranks_.clear();
-    for (const auto& mesh : all_meshes) {
+    for ([[maybe_unused]] const auto& mesh : all_meshes) {
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "risc_attribs.h"
 #include "noc_parameters.h"
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
@@ -151,7 +152,15 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     // needs to respect 4B alignment.
     ASSERT((dst_noc_addr & 0x3) == 0);
     uint32_t offset = dst_noc_addr & 0xF;
+
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t src_addr = MEM_IERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#elif defined(COMPILE_FOR_ERISC)
+    uint32_t src_addr = MEM_AERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#else
     uint32_t src_addr = MEM_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#endif
+
 #ifdef COMPILE_FOR_TRISC
     ASSERT(0);  // we do not have L1 space for inline values for TRISCs.
 #endif
@@ -685,11 +694,22 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     ASSERT((dest_addr & 0x3) == 0);
     uint32_t src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
 
-    // Flush to make sure write left L1 before updating it
+    // Flush to make sure write left L1 before updating it. Both posted and non-posted counters
+    // need to be checked because we don't know, in the moment, the history of spoofed writes and
+    // if they were posted or non-posted.
+    //
+    // An alternative to this is to force the spoofed write to be posted. However this breaks some
+    // niche user code cases. For example, when a user wants to send some data via an inline write
+    // (say if they need to send data where src/dest are not aligned), and they need to signal to
+    // a consumer when the write has completed (when the data and consumer are on different cores -
+    // a completion ack is needed to avoid race). Forcing posted removes this as a supported use
+    // case; it was not chosen as an approach.
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_sent(noc));
+        while (!ncrisc_noc_posted_writes_sent(noc));
     }
 
     volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
@@ -704,6 +724,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
 #endif
 
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     ncrisc_noc_fast_write<noc_mode>(
         noc,
         write_cmd_buf,

@@ -83,12 +83,12 @@ private:
 class MeshGraphDescriptor {
 public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
-    explicit MeshGraphDescriptor(const std::string& text_proto,  const bool backwards_compatible = false);
-    explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path,  const bool backwards_compatible = false);
+    explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
+    explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
     ~MeshGraphDescriptor();
 
     // Debugging/inspection
-    void print_node(const GlobalNodeId id, int indent_level = 0);
+    void print_node(GlobalNodeId id, int indent_level = 0);
     void print_all_nodes();
 
     // Instance access API
@@ -176,7 +176,8 @@ private:
 
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> static_validate(const proto::MeshGraphDescriptor& proto, const bool backwards_compatible = false);
+    static std::vector<std::string> static_validate(
+        const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
 
     // Helper methods for validation that return their own error lists
     static void validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
@@ -197,25 +198,26 @@ private:
     void populate_descriptors();
 
     // Populate Instances
-    void populate_instances_from_top_level();
-    const GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
-    const GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
-    const GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);
-    const GlobalNodeId populate_device_instance(const LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy);
+    void populate_top_level_instance();
+    GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
+    GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
+    GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);
+    GlobalNodeId populate_device_instance(LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy);
 
     // Populate Connections
-    void pre_populate_connections_lookups();
     void populate_connections();
+
+    void pre_populate_connections_lookups();
 
     void populate_intra_mesh_connections(GlobalNodeId mesh_id);
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
-    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in seperate PR
     void populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id);
     void populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id);
 
-    const GlobalNodeId find_instance_by_ref(const GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref);
+    GlobalNodeId find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref);
 
     void add_to_fast_lookups(const InstanceData& instance);
     void add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type);

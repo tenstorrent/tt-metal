@@ -11,13 +11,11 @@
 #include <filesystem>
 #include <memory>
 #include <algorithm>
-#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <optional>
 #include <set>
 #include <sstream>
-#include <enchantum/enchantum.hpp>
 
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_common.hpp"
@@ -25,6 +23,10 @@
 #include "tt_fabric_test_traffic.hpp"
 #include "tt_fabric_test_allocator.hpp"
 #include "tt_fabric_test_memory_map.hpp"
+#include "tt_fabric_telemetry.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 // Constants
 const std::string output_dir = "generated/fabric";
@@ -70,15 +72,18 @@ struct BandwidthResult {
     uint32_t num_packets;
     uint32_t packet_size;
     uint64_t cycles;
-    double bandwidth_gb_s;
+    double bandwidth_GB_s;
     double packets_per_second;
+    std::optional<double> telemetry_bw_GB_s_min;
+    std::optional<double> telemetry_bw_GB_s_avg;
+    std::optional<double> telemetry_bw_GB_s_max;
 };
 
 struct BandwidthResultSummary {
     std::vector<uint32_t> num_devices;
     uint32_t packet_size;
     uint64_t cycles;
-    double bandwidth_gb_s;
+    double bandwidth_GB_s;
     double packets_per_second;
 };
 
@@ -92,7 +97,7 @@ struct GoldenCsvEntry {
     uint32_t num_links{};
     uint32_t packet_size{};
     uint64_t cycles{};
-    double bandwidth_gb_s{};
+    double bandwidth_GB_s{};
     double packets_per_second{};
     double tolerance_percent{};  // Per-test tolerance percentage
 };
@@ -105,8 +110,8 @@ struct ComparisonResult {
     std::string num_devices;
     uint32_t num_links{};
     uint32_t packet_size{};
-    double current_bandwidth_gb_s{};
-    double golden_bandwidth_gb_s{};
+    double current_bandwidth_GB_s{};
+    double golden_bandwidth_GB_s{};
     double difference_percent{};
     bool within_tolerance{};
     std::string status;
@@ -188,7 +193,7 @@ public:
                             .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                             .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                             .mesh_shape = this->fixture_->get_mesh_shape(),
-                        };
+                            .topology = this->fixture_->get_topology()};
 
                         // For sync patterns, we use a dummy destination core and fixed sync address
                         // The actual sync will be handled by atomic operations
@@ -272,7 +277,7 @@ public:
                     .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                     .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
-                };
+                    .topology = this->fixture_->get_topology()};
 
                 TestTrafficConfig traffic_config = {
                     .parameters = traffic_parameters,
@@ -362,6 +367,14 @@ public:
 
     void wait_for_programs() { fixture_->wait_for_programs(); }
 
+    void process_telemetry_data(TestConfig& built_test_config) {
+        if (this->get_telemetry_enabled()) {
+            this->read_telemetry();
+            this->process_telemetry_for_golden();
+            this->dump_raw_telemetry_csv(built_test_config);
+        }
+    }
+
     void validate_results() {
         for (const auto& [_, test_device] : test_devices_) {
             test_device.validate_results();
@@ -416,7 +429,11 @@ public:
         csv_stream
             << "test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,"
                "packet_size,cycles,"
-               "bandwidth_gb_s,packets_per_second\n";
+               "bandwidth_GB_s,packets_per_second";
+        if (this->telemetry_enabled_) {
+            csv_stream << ",telemetry_bw_GB_s_min,telemetry_bw_GB_s_avg,telemetry_bw_GB_s_max";
+        }
+        csv_stream << "\n";
         csv_stream.close();
 
         log_info(tt::LogTest, "Initialized CSV file: {}", csv_file_path_.string());
@@ -434,7 +451,7 @@ public:
         }
 
         // Write summary header
-        summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,cycles,bandwidth_gb_s,"
+        summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,cycles,bandwidth_GB_s,"
                               "packets_per_second,tolerance_percent\n";
         summary_csv_stream.close();
 
@@ -454,7 +471,7 @@ public:
 
         // Write diff header
         diff_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,"
-                           "current_bandwidth_gb_s,golden_bandwidth_gb_s,difference_percent,status\n";
+                           "current_bandwidth_GB_s,golden_bandwidth_GB_s,difference_percent,status\n";
         diff_csv_stream.close();
 
         log_info(tt::LogTest, "Initialized diff CSV file: {}", diff_csv_file_path_.string());
@@ -467,7 +484,11 @@ public:
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
 
+    void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
+
     bool get_benchmark_mode() { return benchmark_mode_; }
+
+    bool get_telemetry_enabled() { return telemetry_enabled_; }
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
@@ -510,6 +531,14 @@ public:
             packet_size);
         return 0.0;
     }
+
+    void read_telemetry();
+
+    void clear_telemetry();
+
+    void process_telemetry_for_golden();
+
+    void dump_raw_telemetry_csv(const TestConfig& config);
 
 private:
     void reset_local_variables() {
@@ -842,6 +871,19 @@ private:
         }
     }
 
+    unsigned int get_device_frequency_mhz(const FabricNodeId& device_id) {
+        if (!device_freq_mhz_map_.contains(device_id)) {
+            auto physical_chip_id =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
+                    device_id);
+            device_freq_mhz_map_[device_id] =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
+        }
+        auto freq_mhz = device_freq_mhz_map_.at(device_id);
+        TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
+        return freq_mhz;
+    }
+
     void calculate_bandwidth(const TestConfig& config) {
         log_info(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
 
@@ -861,8 +903,48 @@ private:
         uint32_t device_freq = std::numeric_limits<uint32_t>::max();
         std::set<uint32_t> num_devices_set;
 
+        // Pre-compute topology information (moved outside inner loop)
+        const auto mesh_shape = fixture_->get_mesh_shape();
+        const auto topology = fixture_->get_topology();
+        // Pre-compute sender config lookup cache to avoid O(n³) search in inner loop
+        std::unordered_map<std::string, std::tuple<uint32_t, uint32_t, uint32_t>> config_cache;
+        for (const auto& [device_coord, test_device] : test_devices_) {
+            const auto& device_id = test_device.get_node_id();
+            for (const auto& [core, sender] : test_device.get_senders()) {
+                for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
+                    RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
+                    uint32_t config_link_id = config.link_id.value_or(0);
+
+                    // Create cache key: device_id + direction + link_id
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                                            std::to_string(static_cast<int>(config_direction)) + "_" +
+                                            std::to_string(config_link_id);
+
+                    config_cache[cache_key] = std::make_tuple(
+                        config.parameters.payload_size_bytes,
+                        config.parameters.num_packets,
+                        config.parameters.payload_size_bytes  // packet_size
+                    );
+                }
+            }
+        }
+
         for (const auto& [device_id, direction_map] : device_direction_cycles_) {
             for (const auto& [direction, link_map] : direction_map) {
+                // Calculate num_devices once per direction (moved outside link loop)
+                uint32_t num_devices = 0;
+                if (topology == Topology::Linear) {
+                    if (direction == RoutingDirection::N or direction == RoutingDirection::S) {
+                        num_devices = mesh_shape[0];
+                    } else {
+                        num_devices = mesh_shape[1];
+                    }
+                } else if (topology == Topology::Ring) {
+                    num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
+                } else if (topology == Topology::Mesh) {
+                    num_devices = mesh_shape[0] * mesh_shape[1];
+                }
+
                 for (const auto& [link_id, cycles] : link_map) {
                     if (cycles == 0) {
                         continue;  // Skip to avoid division by zero
@@ -877,41 +959,24 @@ private:
                     max_cycles = std::max(max_cycles, cycles);
                     max_traffic_count = std::max(max_traffic_count, total_traffic_count);
 
-                    // Find sender configs that send in this direction and link to get payload size and packet count
-                    for (const auto& [device_coord, test_device] : test_devices_) {
-                        if (test_device.get_node_id() != device_id) {
-                            continue;
-                        }
+                    // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                                            std::to_string(static_cast<int>(direction)) + "_" + std::to_string(link_id);
 
-                        bool found_connected_core = false;
-                        for (const auto& [core, sender] : test_device.get_senders()) {
-                            for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                                RoutingDirection config_direction =
-                                    fixture_->get_forwarding_direction(config.hops.value());
-                                uint32_t config_link_id = config.link_id.value_or(0);
-                                if (config_direction == direction && config_link_id == link_id) {
-                                    uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
-                                    num_packets = config.parameters.num_packets;
-                                    total_bytes =
-                                        static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
-                                    total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
-                                    packet_size = payload_size_bytes;
-                                    found_connected_core = true;
-                                    break;
-                                }
-                            }
-                            if (found_connected_core) {
-                                break;
-                            }
-                        }
-                    }
+                    TT_FATAL(
+                        config_cache.contains(cache_key),
+                        "Config not found in cache for device {} direction {} link {}",
+                        device_id.chip_id,
+                        static_cast<int>(direction),
+                        link_id);
+                    auto [payload_size_bytes, num_packets_val, packet_size_val] = config_cache.at(cache_key);
+                    num_packets = num_packets_val;
+                    packet_size = packet_size_val;
+                    total_bytes = static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
+                    total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
 
                     // Calculate bandwidth in Bytes/cycle and convert to GB/s
-                    const auto physical_chip_id = tt::tt_metal::MetalContext::instance()
-                                                      .get_control_plane()
-                                                      .get_physical_chip_id_from_fabric_node_id(device_id);
-                    const auto device_frequency_mhz =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
+                    const auto device_frequency_mhz = get_device_frequency_mhz(device_id);
                     uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
                     // use min frequency (in real senario we will have the same freq)
                     device_freq = std::min(device_freq, device_frequency_hz);
@@ -919,27 +984,9 @@ private:
                         static_cast<double>(cycles) / static_cast<double>(device_frequency_hz);
 
                     double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
-                    double bandwidth_gb_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
+                    double bandwidth_GB_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
                     double packets_per_second = static_cast<double>(total_packets) / duration_seconds;
 
-                    // TODO: need to figure out a better way to show the number of devices in a test.
-                    // Ex, we compute number of devices for linear topology test as NS and EW separated.
-                    // But in a mesh topology setup, how do we run linear topology and still show separate
-                    // number of devices? There will be even more choices for arbitrary unicast setups.
-                    uint32_t num_devices = 0;
-                    const auto mesh_shape = fixture_->get_mesh_shape();
-                    const auto topology = fixture_->get_topology();
-                    if (topology == Topology::Linear) {
-                        if (direction == RoutingDirection::N or direction == RoutingDirection::S) {
-                            num_devices = mesh_shape[0];
-                        } else {
-                            num_devices = mesh_shape[1];
-                        }
-                    } else if (topology == Topology::Ring) {
-                        num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
-                    } else if (topology == Topology::Mesh) {
-                        num_devices = mesh_shape[0] * mesh_shape[1];
-                    }
                     // save all possible num devices
                     num_devices_set.insert(num_devices);
 
@@ -952,14 +999,13 @@ private:
                         device_id.chip_id,
                         direction,
                         link_id,
-                        bandwidth_gb_s,
+                        bandwidth_GB_s,
                         total_packets,
                         packet_size,
                         total_bytes,
                         cycles);
 
-                    // Store result for CSV generation (using GB/s)
-                    bandwidth_results_.emplace_back(BandwidthResult{
+                    auto bw_result = BandwidthResult{
                         .num_devices = num_devices,
                         .device_id = device_id.chip_id,
                         .direction = direction,
@@ -967,26 +1013,36 @@ private:
                         .num_packets = num_packets,
                         .packet_size = packet_size,
                         .cycles = cycles,
-                        .bandwidth_gb_s = bandwidth_gb_s,
-                        .packets_per_second = packets_per_second});
+                        .bandwidth_GB_s = bandwidth_GB_s,
+                        .packets_per_second = packets_per_second};
+
+                    if (telemetry_enabled_) {
+                        bw_result.telemetry_bw_GB_s_min = measured_bw_min_;
+                        bw_result.telemetry_bw_GB_s_avg = measured_bw_avg_;
+                        bw_result.telemetry_bw_GB_s_max = measured_bw_max_;
+                    }
+
+                    // Store result for CSV generation (using GB/s)
+                    bandwidth_results_.emplace_back(bw_result);
                 }
             }
         }
 
         total_bytes = static_cast<uint64_t>(packet_size) * num_packets * max_traffic_count;
         double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(max_cycles);
-        double bandwidth_gb_s = (bandwidth_bytes_per_cycle * device_freq) / 1e9;
+        double bandwidth_GB_s = (bandwidth_bytes_per_cycle * device_freq) / 1e9;
 
         // Calculate packets per second
         double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
         double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
 
-        bandwidth_results_summary_.push_back(BandwidthResultSummary{
-            .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
-            .packet_size = packet_size,
-            .cycles = max_cycles,
-            .bandwidth_gb_s = bandwidth_gb_s,
-            .packets_per_second = packets_per_second});
+        bandwidth_results_summary_.push_back(
+            BandwidthResultSummary{
+                .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
+                .packet_size = packet_size,
+                .cycles = max_cycles,
+                .bandwidth_GB_s = bandwidth_GB_s,
+                .packets_per_second = packets_per_second});
     }
 
     void generate_bandwidth_csv(const TestConfig& config) {
@@ -1017,8 +1073,15 @@ private:
                        << result.device_id << "," << config.fabric_setup.num_links << ","
                        << enchantum::to_string(result.direction) << "," << result.total_traffic_count << ","
                        << result.num_packets << "," << result.packet_size << "," << result.cycles << "," << std::fixed
-                       << std::setprecision(6) << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
-                       << result.packets_per_second << "\n";
+                       << std::setprecision(6) << result.bandwidth_GB_s << "," << std::fixed << std::setprecision(3)
+                       << result.packets_per_second;
+
+            if (this->telemetry_enabled_) {
+                csv_stream << "," << std::fixed << std::setprecision(3) << result.telemetry_bw_GB_s_min.value() << ","
+                           << std::fixed << std::setprecision(3) << result.telemetry_bw_GB_s_avg.value() << ","
+                           << std::fixed << std::setprecision(3) << result.telemetry_bw_GB_s_max.value();
+            }
+            csv_stream << "\n";
         }
 
         csv_stream.close();
@@ -1046,6 +1109,16 @@ private:
 
             // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
+            log_info(
+                tt::LogTest,
+                "Getting tolerance for {} {} {} {} {} {}",
+                config.name,
+                ftype_str,
+                ntype_str,
+                topology_str,
+                num_devices_str,
+                config.fabric_setup.num_links,
+                result.packet_size);
             double tolerance = get_tolerance_percent(
                 config.name,
                 ftype_str,
@@ -1058,7 +1131,7 @@ private:
             summary_csv_stream << config.name << "," << ftype_str << "," << ntype_str << "," << topology_str << ",\""
                                << num_devices_str << "\"," << config.fabric_setup.num_links << "," << result.packet_size
                                << "," << result.cycles << "," << std::fixed << std::setprecision(6)
-                               << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
+                               << result.bandwidth_GB_s << "," << std::fixed << std::setprecision(3)
                                << result.packets_per_second << "," << std::fixed << std::setprecision(1) << tolerance
                                << "\n";
         }
@@ -1146,7 +1219,7 @@ private:
             entry.num_links = std::stoul(tokens[5]);
             entry.packet_size = std::stoul(tokens[6]);
             entry.cycles = std::stoull(tokens[7]);
-            entry.bandwidth_gb_s = std::stod(tokens[8]);
+            entry.bandwidth_GB_s = std::stod(tokens[8]);
             entry.packets_per_second = std::stod(tokens[9]);
             entry.tolerance_percent = std::stod(tokens[10]);
 
@@ -1156,6 +1229,34 @@ private:
         golden_file.close();
         log_info(tt::LogTest, "Loaded {} golden entries from: {}", golden_csv_entries_.size(), golden_path.string());
         return true;
+    }
+
+    void populate_comparison_result_bandwidth(
+        double result_bandwidth_GB_s, ComparisonResult& comp_result, auto& golden_it) {
+        comp_result.current_bandwidth_GB_s = result_bandwidth_GB_s;
+
+        double test_tolerance = 1.0;  // Default tolerance for no golden case
+        if (golden_it != golden_csv_entries_.end()) {
+            comp_result.golden_bandwidth_GB_s = golden_it->bandwidth_GB_s;
+            comp_result.difference_percent = ((comp_result.current_bandwidth_GB_s - comp_result.golden_bandwidth_GB_s) /
+                                              comp_result.golden_bandwidth_GB_s) *
+                                             100.0;
+
+            // Use per-test tolerance from golden CSV instead of global tolerance
+            test_tolerance = golden_it->tolerance_percent;
+            comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
+
+            if (comp_result.within_tolerance) {
+                comp_result.status = "PASS";
+            } else {
+                comp_result.status = "FAIL";
+            }
+        } else {
+            comp_result.golden_bandwidth_GB_s = 0.0;
+            comp_result.difference_percent = 0.0;
+            comp_result.within_tolerance = false;
+            comp_result.status = "NO_GOLDEN";
+        }
     }
 
     void generate_comparison_csv(const TestConfig& config) {
@@ -1214,32 +1315,27 @@ private:
             comp_result.num_devices = num_devices_str;
             comp_result.num_links = config.fabric_setup.num_links;
             comp_result.packet_size = summary_result.packet_size;
-            comp_result.current_bandwidth_gb_s = summary_result.bandwidth_gb_s;
+            comp_result.current_bandwidth_GB_s = summary_result.bandwidth_GB_s;
+            populate_comparison_result_bandwidth(summary_result.bandwidth_GB_s, comp_result, golden_it);
+
+            auto comp_result_from_telemetry = comp_result;
+            if (telemetry_enabled_) {
+                populate_comparison_result_bandwidth(measured_bw_max_, comp_result_from_telemetry, golden_it);
+                if (!comp_result_from_telemetry.within_tolerance) {
+                    log_warning(
+                        tt::LogTest,
+                        "Telemetry-based bandwidth result for {} is out of tolerance from analytical. Golden "
+                        "(analytical): {:} GB/s, Telemetry Measurement (max): {:} GB/s",
+                        config.name,
+                        comp_result.golden_bandwidth_GB_s,
+                        measured_bw_max_);
+                }
+            }
 
             double test_tolerance = 1.0;  // Default tolerance for no golden case
             if (golden_it != golden_csv_entries_.end()) {
-                comp_result.golden_bandwidth_gb_s = golden_it->bandwidth_gb_s;
-                comp_result.difference_percent =
-                    ((comp_result.current_bandwidth_gb_s - comp_result.golden_bandwidth_gb_s) /
-                     comp_result.golden_bandwidth_gb_s) *
-                    100.0;
-
-                // Use per-test tolerance from golden CSV instead of global tolerance
                 test_tolerance = golden_it->tolerance_percent;
-                comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
-
-                if (comp_result.within_tolerance) {
-                    comp_result.status = "PASS";
-                } else {
-                    comp_result.status = "FAIL";
-                }
-            } else {
-                comp_result.golden_bandwidth_gb_s = 0.0;
-                comp_result.difference_percent = 0.0;
-                comp_result.within_tolerance = false;
-                comp_result.status = "NO_GOLDEN";
             }
-
             // Create common CSV format string for any failure case
             if (!comp_result.within_tolerance) {
                 std::ostringstream tolerance_stream;
@@ -1248,7 +1344,7 @@ private:
                     config.name + "," + ftype_str + "," + ntype_str + "," + topology_str + ",\"" + num_devices_str +
                     "\"," + std::to_string(config.fabric_setup.num_links) + "," +
                     std::to_string(summary_result.packet_size) + "," + std::to_string(summary_result.cycles) + "," +
-                    std::to_string(comp_result.current_bandwidth_gb_s) + "," +
+                    std::to_string(comp_result.current_bandwidth_GB_s) + "," +
                     std::to_string(summary_result.packets_per_second) + "," + tolerance_stream.str();
                 failed_tests_.push_back(csv_format_string);
             }
@@ -1267,8 +1363,8 @@ private:
         for (const auto& result : comparison_results_) {
             diff_csv << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
                      << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size << ","
-                     << std::fixed << std::setprecision(6) << result.current_bandwidth_gb_s << ","
-                     << result.golden_bandwidth_gb_s << "," << std::setprecision(2) << result.difference_percent << ","
+                     << std::fixed << std::setprecision(6) << result.current_bandwidth_GB_s << ","
+                     << result.golden_bandwidth_GB_s << "," << std::setprecision(2) << result.difference_percent << ","
                      << result.status << "\n";
         }
 
@@ -1306,8 +1402,9 @@ private:
     tt::tt_fabric::fabric_tests::SenderMemoryMap sender_memory_map_;
     tt::tt_fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies_;
-    bool benchmark_mode_ = false;  // Benchmark mode for current test
-    bool global_sync_ = false;     // Line sync for current test
+    bool benchmark_mode_ = false;     // Benchmark mode for current test
+    bool telemetry_enabled_ = false;  // Telemetry enabled for current test
+    bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 
     // Performance profiling data
@@ -1317,6 +1414,14 @@ private:
     std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
+    std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
+
+    // Device frequency cache to avoid repeated calculations
+    std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
+    double measured_bw_min_ = 0.0;
+    double measured_bw_avg_ = 0.0;
+    double measured_bw_max_ = 0.0;
+    std::filesystem::path raw_telemetry_csv_path_;
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;
 

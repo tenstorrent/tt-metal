@@ -11,7 +11,6 @@
 namespace ttnn::operations::data_movement {
 struct ExecuteTosaGather {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const Tensor& input_index_tensor,
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config);

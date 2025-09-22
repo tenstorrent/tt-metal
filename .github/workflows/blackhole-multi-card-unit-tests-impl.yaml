@@ -28,19 +28,20 @@ jobs:
       matrix:
         test-group:
           - name: fabric 1D unit tests
-            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
-            timeout: 15
-          - name: fabric 1D performance microbenchmarks
-            cmd: pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
+            cmd: |
+              TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+              TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DMuxFixture.*"
             timeout: 15
           - name: fabric 2D fixture unit tests
-            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+            cmd: TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
             timeout: 15
           - name: cpp unit tests eth
-            cmd: ./build/test/tt_metal/unit_tests_eth
+            cmd: |
+              ./build/test/tt_metal/unit_tests_eth
+              ./build/test/tt_metal/unit_tests_tunneling
             timeout: 15
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly

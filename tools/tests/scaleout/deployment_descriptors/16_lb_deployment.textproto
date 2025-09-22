@@ -1,0 +1,128 @@
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 32
+  node_type: "N300_LB"
+  host: "metal-wh-18"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 28
+  node_type: "N300_LB"
+  host: "metal-wh-08"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 22
+  node_type: "N300_LB"
+  host: "metal-wh-01"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 18
+  node_type: "N300_LB"
+  host: "metal-wh-02"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 12
+  node_type: "N300_LB"
+  host: "metal-wh-03"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 8
+  node_type: "N300_LB"
+  host: "metal-wh-04"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 4
+  node_type: "N300_LB"
+  host: "metal-wh-05"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 0
+  node_type: "N300_LB"
+  host: "metal-wh-06"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 32
+  node_type: "N300_LB"
+  host: "metal-wh-09"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 28
+  node_type: "N300_LB"
+  host: "metal-wh-10"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 22
+  node_type: "N300_LB"
+  host: "metal-wh-11"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 18
+  node_type: "N300_LB"
+  host: "metal-wh-12"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 12
+  node_type: "N300_LB"
+  host: "metal-wh-13"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 8
+  node_type: "N300_LB"
+  host: "metal-wh-14"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 4
+  node_type: "N300_LB"
+  host: "metal-wh-15"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 2
+  shelf_u: 0
+  node_type: "N300_LB"
+  host: "metal-wh-16"
+}

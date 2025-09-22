@@ -47,7 +47,6 @@ TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
         tt::tt_metal::distributed::MeshShape(2, 2));
 }
 
-// Test for MGD2
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInitMGD2) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /

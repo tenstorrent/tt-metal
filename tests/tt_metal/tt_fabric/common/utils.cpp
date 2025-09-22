@@ -28,7 +28,7 @@ bool find_device_with_neighbor_in_multi_direction(
     auto devices = fixture->get_devices();
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
-    for (auto device : devices) {
+    for (const auto& device : devices) {
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
         if (incoming_direction.has_value()) {
             if (!control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).size()) {
@@ -80,7 +80,7 @@ bool find_device_with_neighbor_in_direction(
     RoutingDirection direction) {
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto devices = fixture->get_devices();
-    for (auto device : devices) {
+    for (const auto& device : devices) {
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
 
         // Get neighbours within a mesh in the given direction

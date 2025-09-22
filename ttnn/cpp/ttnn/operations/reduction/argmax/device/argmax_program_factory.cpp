@@ -293,7 +293,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned
     // accesses.
     const auto alignment = src_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
-    const auto min_red_dim_units_per_core = alignment / bfloat16::SIZEOF;
+    const auto min_red_dim_units_per_core = alignment / sizeof(bfloat16);
 
     // Distribute work to cores
     auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =

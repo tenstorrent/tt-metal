@@ -64,7 +64,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = tt::round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
+    while ((padded_num - num) >= (int)(padded_num / divisor) && divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = tt::round_up(num, big_divisor);
@@ -364,8 +364,10 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_div,
     uint32_t window_h,
     uint32_t window_w,
+    uint32_t output_width,
     bool fp32_accum,
-    bool full_inner_dim) {
+    bool full_inner_dim,
+    bool enable_activation_reuse) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -396,11 +398,23 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
         }
     }
 
+    if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED && enable_activation_reuse) {
+        const uint32_t output_image_width_ntiles = tt::div_up(output_width, tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            act_block_h_ntiles > output_image_width_ntiles,
+            "Activation reuse needs act block h ({}) to be bigger than output image width in tiles ({}) for the "
+            "optimization to give boost",
+            act_block_h_ntiles,
+            output_image_width_ntiles);
+    }
+
     uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = 0;
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        act_block_w = tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        act_block_w = enable_activation_reuse
+                          ? tt::round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
+                          : tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         act_block_w = tt::round_up(
             padded_in_channels / act_c_num_blocks * window_w * (full_inner_dim ? window_h : 1),
@@ -700,10 +714,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, compute_grid_size, out_channels, shard_orientation, is_mm_conv);
+        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
@@ -772,7 +784,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c) {
     if (height_sharded) {
@@ -787,8 +799,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
             .fuse_batch = true,
             .mcast_in0 = false};
-        if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
+        if (activation.has_value()) {
+            matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
     } else {
@@ -802,8 +814,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
             .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
             .transpose_mcast = transpose_mcast};
-        if (activation != "") {
-            matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);
+        if (activation.has_value()) {
+            matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
     }
@@ -860,16 +872,11 @@ Conv2dConfig determine_conv_config_for_auto_shard(
                                          const Conv2dConfig& conv_config_in) -> core_count_and_size {
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
-        if (conv_config.act_block_h_override == 0) {
-            // Set act_block_h_override to min value to
-            // be conservative with L1 memory usage.
+        // Set act_block_h_override to min value to be conservative with L1 memory usage;
+        // When activation reuse is enabled, the activation CB usage is constant regardless of the act_block_h_override
+        // and the bigger the act block height the better the reuse since we apply optimization within single act block
+        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
             conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-            // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
-            if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-                !conv_is_1d_deptwise) {
-                // Split reader needs at least 2 tiles in height to work.
-                conv_config.act_block_h_override *= 2;
-            }
         }
 
         const uint32_t input_channels_alignment =
@@ -925,18 +932,22 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             // act_block_w_div == 1 is currently the default value.
             conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * tt::constants::TILE_WIDTH);
         }
-
+        SlidingWindowConfig sliding_window_config{
+            .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
         conv_op_l1_usage l1_usage = calculate_L1_usage(
             compute_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
             weights_shape,
-            kernel_size,
+            sliding_window_config,
+            dilation,
             conv_config,
             input_datatype,
             output_datatype,
+            output_width,
             enable_bias,
-            conv_is_1d_deptwise);
+            conv_is_1d_deptwise,
+            in_channels_padded);
 
         auto halo_input_memory_config = std::get<1>(determine_input_memory_config(
             conv_config.shard_layout.value(),
@@ -1038,8 +1049,10 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
-        conv_config.full_inner_dim);
+        conv_config.full_inner_dim,
+        conv_config.enable_activation_reuse);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
@@ -1082,8 +1095,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
 
-    const uint32_t input_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? params.input_height : params.input_width;
     const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
                                            ? params.output_height
                                            : params.output_width;
@@ -1186,17 +1197,28 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             params.kernel_size,
             params.compute_grid);
 
+        SlidingWindowConfig sliding_window_config{
+            .input_hw = {params.input_height, params.input_width},
+            .window_hw = {params.kernel_size[0], params.kernel_size[1]}};
+        const uint32_t input_channels_alignment = get_input_channels_alignment(
+            conv_config.shard_layout.value(), conv_config.output_layout, params.mm_conv, std::nullopt);
+        const uint32_t in_channels_padded = tt::round_up(
+            params.in_channels,
+            get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
         conv_op_l1_usage l1_usage = calculate_L1_usage(
             params.compute_kernel_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
             folded_weights_shape,
-            params.kernel_size,
+            sliding_window_config,
+            params.dilation,
             conv_config,
             params.input_datatype,
             params.output_datatype,
+            output_slice_width,
             params.enable_bias,
-            false);
+            false,
+            in_channels_padded);
 
         auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
 
@@ -1237,7 +1259,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         const uint32_t output_slice_size =
             slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
-        const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
@@ -1350,12 +1371,15 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
-    std::array<uint32_t, 2> kernel_size,
+    const SlidingWindowConfig& sliding_window_config,
+    std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
     const DataType output_datatype,
+    const uint32_t output_image_width,
     const bool enable_bias,
     bool is_1d_depthwise_conv,
+    uint32_t input_channels_padded,
     bool skip_act_cb_create) {
     // Input shard doesn't affect L1 usage calculation.
     std::array<uint32_t, 2> dummy_input_shard_shape = {0, 0};
@@ -1364,14 +1388,18 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         block_config,
         pconfig,
         weights_shape,
-        kernel_size,
+        {sliding_window_config.window_hw.first, sliding_window_config.window_hw.second},
+        {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
+        dilation,
         conv_config,
         input_datatype,
         output_datatype,
         dummy_input_shard_shape,
+        output_image_width,
         enable_bias,
         is_1d_depthwise_conv,
-        skip_act_cb_create);
+        skip_act_cb_create,
+        input_channels_padded);
     uint32_t total_CB_size = 0;
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {

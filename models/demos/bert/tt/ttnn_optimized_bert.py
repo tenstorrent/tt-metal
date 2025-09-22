@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.utility_functions import is_grayskull
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
-from models.utility_functions import is_grayskull
 
 
 def bert_attention(

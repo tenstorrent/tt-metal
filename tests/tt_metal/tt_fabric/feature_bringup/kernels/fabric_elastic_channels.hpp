@@ -182,7 +182,7 @@ struct ChannelBuffersPool {
         size_t idx = 0;
         for (const auto& chunk_base_address : buffer_regions) {
             ASSERT(idx < N_CHUNKS);
-            new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes, idx);
+            new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes);
             free_chunks.push(&all_buffers[idx]);
             idx++;
         }

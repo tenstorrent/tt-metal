@@ -183,7 +183,7 @@ TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientatio
         div_up(physical_shape().height(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.y : grid_size.x);
     auto shard_width =
         div_up(physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
-    NdShardSpec shard_spec(Shape({shard_height, shard_width}), std::move(grid), orientation);
+    NdShardSpec shard_spec(Shape({shard_height, shard_width}), grid, orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::RECOMMENDED);
 }
 

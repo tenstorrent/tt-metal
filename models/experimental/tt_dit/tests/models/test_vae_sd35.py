@@ -302,7 +302,8 @@ class ResnetBlock2D(torch.nn.Module):
 # Custom pytest mark for shared VAE device configuration
 def vae_device_config(func):
     """Decorator to apply standard VAE device configuration to tests"""
-    func = pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)(func)
+    func = pytest.mark.parametrize("mesh_device", [(2, 4), (4, 8)], ids=["t3k", "tg"], indirect=True)(func)
+    func = pytest.mark.parametrize("submesh_shape", [(1, 4)])(func)
     func = pytest.mark.parametrize(
         "device_params",
         [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
@@ -326,6 +327,7 @@ def vae_device_config(func):
 def test_sd35_vae_resnet_block(
     *,
     mesh_device: ttnn.Device,
+    submesh_shape: tuple[int, int],
     batch: int,
     height: int,
     width: int,
@@ -333,14 +335,15 @@ def test_sd35_vae_resnet_block(
     out_channels: int,
     groups: int,
 ) -> None:
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = ResnetBlock2D(in_channels=in_channels, out_channels=out_channels, groups=groups)
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.ResnetBlock.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -348,8 +351,8 @@ def test_sd35_vae_resnet_block(
     tt_input_tensor = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        device=submesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh_device, dim=-1),
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -375,6 +378,7 @@ def test_sd35_vae_resnet_block(
 def test_sd35_vae_up_decoder_block(
     *,
     mesh_device: ttnn.Device,
+    submesh_shape: tuple[int, int],
     batch: int,
     in_channels: int,
     out_channels: int,
@@ -384,6 +388,7 @@ def test_sd35_vae_up_decoder_block(
     num_groups: int,
     add_upsample: bool,
 ) -> None:
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = UpDecoderBlock2D(
         in_channels=in_channels,
         out_channels=out_channels,
@@ -393,11 +398,11 @@ def test_sd35_vae_up_decoder_block(
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.UpDecoderBlock2D.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -405,8 +410,8 @@ def test_sd35_vae_up_decoder_block(
     tt_input_tensor = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        device=submesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh_device, dim=-1),
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -427,12 +432,12 @@ def test_sd35_vae_up_decoder_block(
     ("batch", "in_channels", "height", "width", "num_groups", "num_heads"),
     [
         (1, 512, 128, 128, 32, 4),  # slice 128, output blocks 32. Need to parametize
-        # (1, 512, 128, 128, 32, 4, False),  # slice 128, output blocks 32. Need to parametize
     ],
 )
 def test_sd35_vae_attention(
     *,
     mesh_device: ttnn.Device,
+    submesh_shape: tuple[int, int],
     batch: int,
     in_channels: int,
     height: int,
@@ -440,16 +445,17 @@ def test_sd35_vae_attention(
     num_groups: int,
     num_heads: int,
 ):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = Attention(
         query_dim=in_channels, heads=num_heads, dim_head=in_channels // num_heads, norm_num_groups=num_groups
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.Attention.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -457,8 +463,8 @@ def test_sd35_vae_attention(
     tt_input_tensor = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        device=submesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh_device, dim=-1),
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -483,6 +489,7 @@ def test_sd35_vae_attention(
 def test_sd35_vae_unet_mid_block2d(
     *,
     mesh_device: ttnn.Device,
+    submesh_shape: tuple[int, int],
     batch: int,
     in_channels: int,
     height: int,
@@ -490,16 +497,17 @@ def test_sd35_vae_unet_mid_block2d(
     num_groups: int,
     num_heads: int,
 ):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = UNetMidBlock2D(
         in_channels=in_channels, resnet_groups=num_groups, attention_head_dim=in_channels // num_heads
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.UnetMidBlock2D.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -507,8 +515,8 @@ def test_sd35_vae_unet_mid_block2d(
     tt_input_tensor = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        device=submesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh_device, dim=-1),
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -542,6 +550,7 @@ def test_sd35_vae_unet_mid_block2d(
 def test_sd35_vae_vae_decoder(
     *,
     mesh_device: ttnn.Device,
+    submesh_shape: tuple[int, int],
     batch: int,
     in_channels: int,
     out_channels: int,
@@ -551,6 +560,7 @@ def test_sd35_vae_vae_decoder(
     norm_num_groups: int,
     block_out_channels: list[int] | tuple[int, ...],
 ):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = VaeDecoder(
         block_out_channels=block_out_channels,
         in_channels=in_channels,
@@ -560,11 +570,11 @@ def test_sd35_vae_vae_decoder(
     )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.VAEDecoder.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
+        torch_ref=torch_model, mesh_device=submesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -572,8 +582,8 @@ def test_sd35_vae_vae_decoder(
     tt_input_tensor = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh_device),
     )
 
     with torch.no_grad():
@@ -586,5 +596,5 @@ def test_sd35_vae_vae_decoder(
 
     start = time()
     tt_out = tt_model(tt_input_tensor)
-    ttnn.synchronize_device(mesh_device)
+    ttnn.synchronize_device(submesh_device)
     logger.info(f"VAE Time taken: {time() - start}")

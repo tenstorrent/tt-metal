@@ -852,61 +852,6 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevel) {
     }
 }
 
-TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
-    log_info(tt::LogTest, "NOTE: This test is skipped because topology connections are not yet implemented");
-    GTEST_SKIP();
-    // Topology shorthand case: two POD graphs, each containing two meshes.
-    // The CLUSTER graph uses graph_topology: ALL_TO_ALL with channels.
-    std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 1, 2 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-
-        graph_descriptors: {
-          name: "G_POD"
-          type: "POD"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
-        }
-
-        graph_descriptors: {
-          name: "G_CLUSTER"
-          type: "CLUSTER"
-          instances: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
-          instances: { graph: { graph_descriptor: "G_POD" graph_id: 1 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 2 } }
-        }
-
-        top_level_instance: { graph: { graph_descriptor: "G_CLUSTER" graph_id: 0 } }
-    )proto";
-
-    // Parsing and defaults should succeed
-    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
-
-    MeshGraphDescriptor desc(text_proto);
-
-    {
-        auto cluster_id = desc.instances_by_type("CLUSTER")[0];
-        auto connections = desc.connections_by_instance_id(cluster_id);
-        ASSERT_EQ(connections.size(), 2);
-        check_connections(desc, connections, {0, 1}, 2u, cluster_id, {"D0", "D1"});
-    }
-    {
-        auto pod_ids = desc.instances_by_type("POD");
-
-        for (auto pod_id : pod_ids) {
-            auto connections = desc.connections_by_instance_id(pod_id);
-            ASSERT_EQ(connections.size(), 2);
-            check_connections(desc, connections, {0, 1}, 1u, pod_id, {"M0"});
-        }
-    }
-}
-
 TEST(MeshGraphDescriptorTests, DuplicateGraphDescriptorTypeInHierarchyError) {
     // Parent and child graphs share the same type (POD) which should be rejected
     std::string text_proto = R"proto(
@@ -1135,6 +1080,67 @@ TEST(MeshGraphDescriptorTests, DirectionalConnections) {
 
     ASSERT_EQ(connections_from_mesh_0.size(), 1);
     ASSERT_EQ(connections_from_mesh_1.size(), 0);
+}
+
+TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
+    log_info(tt::LogTest, "NOTE: This test is skipped because topology connections are not yet implemented");
+    GTEST_SKIP();
+    // Topology shorthand case: two POD graphs, each containing two meshes.
+    // The CLUSTER graph uses graph_topology: ALL_TO_ALL with channels.
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G_POD"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
+        }
+
+        graph_descriptors: {
+          name: "G_CLUSTER"
+          type: "CLUSTER"
+          instances: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
+          instances: { graph: { graph_descriptor: "G_POD" graph_id: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 2 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G_CLUSTER" graph_id: 0 } }
+    )proto";
+
+    // Parsing and defaults should succeed
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    {
+        auto cluster_id = desc.instances_by_type("CLUSTER")[0];
+        auto connections = desc.connections_by_instance_id(cluster_id);
+        ASSERT_EQ(connections.size(), 2);
+        check_connections(desc, connections, {0, 1}, 2u, cluster_id, {"D0", "D1"});
+    }
+    {
+        auto pod_ids = desc.instances_by_type("POD");
+
+        for (auto pod_id : pod_ids) {
+            auto connections = desc.connections_by_instance_id(pod_id);
+            ASSERT_EQ(connections.size(), 2);
+            check_connections(desc, connections, {0, 1}, 1u, pod_id, {"M0"});
+        }
+    }
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -23,13 +23,15 @@ void validate_pool2d(
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config,
     const std::optional<const int32_t> divisor_override,
-    const bool return_indices) {
+    const bool return_indices,
+    const Layout& output_layout) {
     // check the input tensor
     const Tensor& input = input_tensors[0];
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
+
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
 
     if (return_indices) {
@@ -99,7 +101,8 @@ void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_att
         op_attr.sliding_window_config_,
         op_attr.memory_config_,
         op_attr.divisor_override_,
-        op_attr.return_indices_);
+        op_attr.return_indices_,
+        op_attr.output_layout_);
 }
 
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
@@ -109,12 +112,12 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
         op_attr.sliding_window_config_,
         op_attr.memory_config_,
         op_attr.divisor_override_,
-        op_attr.return_indices_);
+        op_attr.return_indices_,
+        op_attr.output_layout_);
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    auto& input = tensors.input_tensors_[0];
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
     auto& output_dtype = op_attr.output_dtype_;
@@ -125,7 +128,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     uint32_t batch_size = sliding_window_config.batch_size;
     uint32_t out_nhw = batch_size * out_h * out_w;
 
-    bool is_out_tiled = output_dtype == DataType::BFLOAT8_B;
+    bool is_out_tiled = op_attr.output_layout_ == Layout::TILE;
     uint32_t tile_rows = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
 
     uint32_t num_cores_nhw = sliding_window_config.num_cores_nhw;
@@ -144,17 +147,18 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
         }
     }
 
+    if (is_out_tiled) {
+        out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH * sliding_window_config.num_cores_c);
+        out_nhw_padded = tt::round_up(out_nhw_padded, tt::constants::TILE_HEIGHT * sliding_window_config.num_cores_nhw);
+    }
+
     ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
     ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
-            output_dtype,
-            tt::tt_metal::PageConfig(input.layout()),  // Preserve layout from input
-            mem_config,
-            output_shape,
-            padded_output_shape));
+            output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
@@ -179,7 +183,8 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
 tt::stl::hash::hash_t Pool2D::compute_program_hash(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensors_[0].memory_config();
-    auto dtype = tensors.input_tensors_[0].dtype();
+    auto in_dtype = tensors.input_tensors_[0].dtype();
+    auto out_dtype = op_attr.output_dtype_;
     return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(),
         op_attr.pool_type_,
@@ -188,7 +193,8 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
         op_attr.count_include_pad_,
         op_attr.return_indices_,
         input_mem_config,
-        dtype);
+        in_dtype,
+        out_dtype);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t> Pool2D::create_op_performance_model(
@@ -233,6 +239,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     Pool2DType pool_type,
     DataType output_dtype,
+    Layout output_layout,
     MemoryConfig memory_config,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
@@ -243,6 +250,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .sliding_window_config_ = sliding_window_config,
             .pool_type_ = pool_type,
             .output_dtype_ = output_dtype,
+            .output_layout_ = output_layout,
             .memory_config_ = std::move(memory_config),
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,

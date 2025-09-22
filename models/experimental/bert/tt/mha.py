@@ -13,7 +13,7 @@ import ttnn
 from tt_lib.utils import pad_activation, pad_weight
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

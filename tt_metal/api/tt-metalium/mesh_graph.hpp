@@ -9,8 +9,8 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <umd/device/types/arch.h>                      // tt::ARCH
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/arch.hpp>                      // tt::ARCH
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -23,7 +23,6 @@
 #include <vector>
 
 namespace tt {
-enum class ARCH;
 namespace tt_metal {
 enum class ClusterType : std::uint8_t;
 }  // namespace tt_metal
@@ -118,7 +117,7 @@ public:
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
-        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, const bool version_2 = true);
+        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, bool version_2 = true);
 
 private:
     void validate_mesh_id(MeshId mesh_id) const;
@@ -142,12 +141,6 @@ private:
     // For distributed context, bookkeeping of host ranks and their shapes
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
     std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
-
-    static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-        cluster_type_to_mesh_graph_descriptor;
-
-    static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-        cluster_type_to_mesh_graph_descriptor_mgd2;
 };
 
 }  // namespace tt::tt_fabric

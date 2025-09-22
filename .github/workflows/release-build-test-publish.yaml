@@ -1,0 +1,263 @@
+name: "[internal] Release, build, test, and publish"
+on:
+  workflow_call:
+    inputs:
+      dry-run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
+      version:
+        description: "Ubuntu version for building and testing"
+        required: false
+        default: 22.04
+        type: number
+      distro:
+        description: "Ubuntu distribution for building and testing"
+        required: false
+        default: ubuntu
+        type: string
+      tag-version:
+        description: "Tag version to create, e.g. 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
+        required: true
+        default: ""
+        type: string
+      is-release-candidate:
+        description: "If true, this is a release candidate, and some steps will be skipped"
+        required: false
+        default: "false"
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  build-artifact:
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        version: ${{ inputs.version || 22.04 }}
+        distro: ${{ inputs.distro || 'ubuntu' }}
+        build-wheel: true
+        fetch-depth: 0
+        skip-tt-train: false
+  build-artifact-profiler:
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        version: ${{ inputs.version || 22.04 }}
+        tracy: true
+        build-wheel: true
+        fetch-depth: 0
+        skip-tt-train: false
+
+  single-card-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      arch: wormhole_b0
+  t3000-demos:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  t3000-model-perf:
+    needs: [build-artifact, build-artifact-profiler]
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+  galaxy-demos:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: topology-6u
+  blackhole-single-card-demos:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [ "P100", "P150" ]
+    with:
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  blackhole-multi-card-demos:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox Demo tests
+            runner-label: BH-LLMBox
+            extra-tag: pipeline-perf
+            num_devices: 4
+          - name: DeskBox Demo tests
+            runner-label: BH-DeskBox
+            extra-tag: pipeline-functional
+            num_devices: 2
+          # - name: RackBox Demo tests
+          #   runner-label: BH-RackBox
+          #   extra-tag: pipeline-functional
+          #   num_devices: 8
+    with:
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ matrix.test-group.extra-tag }}
+      num_devices: ${{ matrix.test-group.num_devices }}
+
+
+  create-docker-release-image:
+    needs:
+      - build-artifact
+    uses: ./.github/workflows/publish-release-image.yaml
+    secrets: inherit
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || inputs.dry-run }}
+    with:
+      os: ${{ inputs.distro || 'ubuntu' }}-${{ inputs.version || '22.04' }}
+      version: ${{ inputs.tag-version }}
+      tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      dry-run: ${{ inputs.dry-run }}
+
+  release-docs:
+    needs: build-artifact
+    if: ${{ inputs.is-release-candidate !='true' }}
+    uses: ./.github/workflows/docs-latest-public.yaml
+    with:
+      version: ${{ inputs.tag-version }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      dry-run: ${{ inputs.dry-run }}
+    secrets: inherit
+
+  publish-debs:
+    name: Publish Debian packages
+    runs-on: ubuntu-latest
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
+    steps:
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
+          path: pkgs/
+      - name: Install CLI tool and deps
+        run: |
+          pip install --upgrade cloudsmith-cli
+          sudo apt update && sudo apt install -y distro-info
+      - name: Push packages
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          codename=$(ubuntu-distro-info -f --all \
+            | awk -v v="$VERSION" '$2==v' \
+            | cut -d'"' -f2 \
+            | awk '{print tolower($1)}')
+          echo "Publishing to $codename"
+          for deb in pkgs/*.deb; do
+            cloudsmith push deb tenstorrent/metalium/ubuntu/${codename} $deb -k ${{ secrets.CLOUDSMITH_API_KEY }} --component unstable
+          done
+
+  publish-wheels:
+    name: "Publish wheels to internal PyPI"
+    needs: build-artifact
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PYPI_ROLE }}
+          aws-region: ${{ secrets.PYPI_REGION }}
+
+      - name: Install s3pypi
+        run: |
+          pip install s3pypi
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: ./wheels
+
+      - name: Publish wheels to internal PyPI
+        if: ${{ !inputs.dry-run }}
+        run: |
+          found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
+          for wheel in $found_wheel_files; do
+            echo "Publishing wheel: $wheel"
+            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
+          done
+
+  publish-to-pypi:
+    name: >-
+      Publish Python 🐍 distribution 📦 to PyPI
+    needs:
+      - build-artifact
+      - single-card-demos
+      - t3000-demos
+      - t3000-model-perf
+      - galaxy-demos
+      - blackhole-single-card-demos
+      - blackhole-multi-card-demos
+
+    runs-on: ubuntu-latest
+    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ttnn/
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        path: dist/
+    - name: Publish distribution 📦 to PyPI (skipped for dry run)
+      if: ${{ !inputs.dry-run }}
+      uses: pypa/gh-action-pypi-publish@release/v1

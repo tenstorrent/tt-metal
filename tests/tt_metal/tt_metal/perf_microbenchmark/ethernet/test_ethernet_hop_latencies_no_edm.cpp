@@ -34,9 +34,12 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/control_plane.hpp>
 
 using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshCoordinate;
@@ -57,8 +60,17 @@ public:
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
+            // Get all chip IDs
+            std::vector<chip_id_t> chip_ids;
+            chip_ids.reserve(num_devices_);
+for (chip_id_t id = 0; id < num_devices_; id++) {
+                chip_ids.push_back(id);
+            }
             mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
-
+            // Create mapping from mesh coordinates to mesh devices
+            for (tt::tt_fabric::MeshCoordinate coord : tt::tt_fabric::MeshCoordinateRange(mesh_device_->shape())) {
+                coord_to_mesh_device_[coord] = mesh_device_->create_submesh(tt::tt_fabric::MeshShape{1, 1}, coord);
+            }
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");
         }
@@ -72,15 +84,28 @@ public:
 
     void TearDown() {
         device_open = false;
-        mesh_device_->close();
+        for (auto& [coord, mesh_device] : coord_to_mesh_device_) {
+            mesh_device->close();
+        }
+    }
+
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device(
+        const tt::tt_metal::distributed::MeshCoordinate& coord) {
+        auto it = coord_to_mesh_device_.find(coord);
+        if (it != coord_to_mesh_device_.end()) {
+            return it->second;
+        }
+        return nullptr;
     }
 
     tt::ARCH arch_;
     size_t num_devices_;
-    std::shared_ptr<MeshDevice> mesh_device_;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>
+        coord_to_mesh_device_;
 
 private:
     bool device_open;
+    std::shared_ptr<MeshDevice> mesh_device_;
 };
 
 namespace tt {
@@ -88,12 +113,12 @@ namespace tt {
 namespace tt_metal {
 
 std::vector<uint32_t> get_eth_receiver_rt_args(
-    IDevice* device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
     uint32_t sample_page_size,
-    CoreCoord const& eth_sender_core,
+    const CoreCoord& eth_sender_core,
     uint32_t start_semaphore,
     uint32_t init_handshake_core_x,
     uint32_t init_handshake_core_y,
@@ -116,8 +141,8 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
         num_samples,
         max_concurrent_samples,
         sample_page_size,
-        static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
-        static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).y),
+        static_cast<uint32_t>(mesh_device->ethernet_core_from_logical_core(eth_sender_core).x),
+        static_cast<uint32_t>(mesh_device->ethernet_core_from_logical_core(eth_sender_core).y),
         start_semaphore,
         init_handshake_core_x,
         init_handshake_core_y,
@@ -131,7 +156,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
 }
 
 std::vector<uint32_t> get_eth_sender_rt_args(
-    IDevice* device,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     bool is_starting_core,
     uint32_t num_samples,
     uint32_t max_concurrent_samples,
@@ -169,14 +194,14 @@ std::vector<uint32_t> get_eth_sender_rt_args(
 }
 
 struct hop_eth_sockets {
-    chip_id_t receiver_device_id;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> receiver_mesh_device;
     CoreCoord receiver_core;
-    chip_id_t sender_device_id;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> sender_mesh_device;
     CoreCoord sender_core;
 };
 
 void build_and_run_roundtrip_latency_test(
-    std::vector<IDevice*> devices,
+    std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> mesh_devices,
     std::vector<hop_eth_sockets> hop_eth_sockets,
     std::size_t num_samples,
     std::size_t sample_page_size,
@@ -186,8 +211,8 @@ void build_and_run_roundtrip_latency_test(
     std::vector<Program>& programs,
     std::vector<KernelHandle>& receiver_kernel_ids,
     std::vector<KernelHandle>& sender_kernel_ids) {
-    TT_ASSERT(hop_eth_sockets.size() == devices.size());
-    TT_ASSERT(n_hops == devices.size());
+    TT_ASSERT(hop_eth_sockets.size() == mesh_devices.size());
+    TT_ASSERT(n_hops == mesh_devices.size());
     TT_ASSERT(programs.size() == 0);
     TT_ASSERT(receiver_kernel_ids.size() == 0);
     TT_ASSERT(sender_kernel_ids.size() == 0);
@@ -195,22 +220,22 @@ void build_and_run_roundtrip_latency_test(
     receiver_kernel_ids.reserve(n_hops);
     sender_kernel_ids.reserve(n_hops);
 
-    std::unordered_map<IDevice*, Program*> device_program_map;
+    std::unordered_map<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>, Program*> device_program_map;
     for (std::size_t i = 0; i < n_hops; i++) {
-        if (device_program_map.find(devices.at(i)) == device_program_map.end()) {
+        if (device_program_map.find(mesh_devices.at(i)) == device_program_map.end()) {
             programs.emplace_back();
-            device_program_map[devices.at(i)] = &programs.back();
+            device_program_map[mesh_devices.at(i)] = &programs.back();
         }
     }
 
     uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
-    std::unordered_map<IDevice*, uint32_t> device_visits;
+    std::unordered_map<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>, uint32_t> device_visits;
 
     for (std::size_t i = 0; i < n_hops; i++) {
         auto previous_hop = i == 0 ? n_hops - 1 : i - 1;
-        IDevice* device = devices.at(i);
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device = mesh_devices.at(i);
         auto& program = *device_program_map.at(device);
         auto const& eth_sender_core = hop_eth_sockets.at(i).sender_core;
         auto const& eth_receiver_core = hop_eth_sockets.at(previous_hop).receiver_core;
@@ -285,7 +310,7 @@ void build_and_run_roundtrip_latency_test(
         log_trace(
             tt::LogOp,
             "Receiver Kernel Info: Receives from {} on core[logical]: (x={},y={}), [noc]: (x={},y={}):",
-            devices.at(previous_hop)->id(),
+            mesh_devices.at(previous_hop)->get_devices()[0]->id(),
             eth_receiver_core.x,
             eth_receiver_core.y,
             device->ethernet_core_from_logical_core(eth_receiver_core).x,
@@ -331,20 +356,28 @@ void build_and_run_roundtrip_latency_test(
             worker_kernel,
             init_worker_core.x,
             init_worker_core.y);
-
-        tt::tt_metal::detail::CompileProgram(device, program);
     }
 
-    for (auto [device_ptr, program_ptr] : device_program_map) {
-        tt_metal::EnqueueProgram(device_ptr->command_queue(), *program_ptr, false);
+    // Create and enqueue mesh workloads
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
+        tt::tt_metal::distributed::MeshCoordinate zero_coord =
+            tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device_ptr->shape().dims());
+        tt::tt_metal::distributed::MeshCoordinateRange device_range =
+            tt::tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        tt::tt_metal::distributed::MeshWorkload mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+        tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(*program_ptr), device_range);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_ptr->mesh_command_queue(), mesh_workload, false);
     }
 
-    for (auto [device_ptr, program_ptr] : device_program_map) {
-        tt_metal::Finish(device_ptr->command_queue());
+    // Wait for completion
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
+        tt::tt_metal::distributed::Finish(mesh_device_ptr->mesh_command_queue());
     }
 
-    for (auto [device_ptr, program_ptr] : device_program_map) {
-        tt::tt_metal::detail::ReadDeviceProfilerResults(device_ptr);
+    // Read profiler results
+    for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
+        tt::tt_metal::detail::ReadDeviceProfilerResults(mesh_device_ptr->get_devices()[0]);
     }
 }
 
@@ -354,36 +387,38 @@ void build_and_run_roundtrip_latency_test(
 
 auto is_device_pcie_connected(chip_id_t device_id) { return device_id < 4; }
 
-std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(const std::vector<IDevice*>& devices) {
+std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(
+    const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& mesh_devices) {
     std::vector<tt::tt_metal::hop_eth_sockets> sockets;
     std::unordered_map<uint64_t, std::size_t> n_edge_visits;
-    for (std::size_t i = 0; i < devices.size(); i++) {
-        IDevice* curr_device = devices.at(i);
-        IDevice* next_device = i == devices.size() - 1 ? devices.at(0) : devices.at(i + 1);
+    for (std::size_t i = 0; i < mesh_devices.size(); i++) {
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> curr_device = mesh_devices.at(i);
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> next_device =
+            i == mesh_devices.size() - 1 ? mesh_devices.at(0) : mesh_devices.at(i + 1);
         uint64_t edge = (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(next_device->id());
-        bool edge_needs_tunneling =
-            !is_device_pcie_connected(curr_device->id()) || !is_device_pcie_connected(next_device->id());
 
         std::size_t conn = n_edge_visits[edge];
         std::unordered_map<uint64_t, int> edge_link_idx;
-        auto const& active_eth_cores = curr_device->get_active_ethernet_cores(true);
+
+        // Get the underlying IDevice from the MeshDevice
+        IDevice* curr_idevice = curr_device->get_devices()[0];
+        const auto& active_eth_cores = curr_idevice->get_active_ethernet_cores(true);
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto eth_sender_core_iter = active_eth_cores.begin();
         bool found = false;
         for (; !found && eth_sender_core_iter != active_eth_cores.end(); eth_sender_core_iter++) {
-            if (!cluster.is_ethernet_link_up(curr_device->id(), *eth_sender_core_iter)) {
+            if (!cluster.is_ethernet_link_up(curr_idevice->id(), *eth_sender_core_iter)) {
                 continue;
             }
-            auto [device_id, receiver_core] = curr_device->get_connected_ethernet_core(*eth_sender_core_iter);
-            if (device_id == next_device->id()) {
+            auto [device_id, receiver_core] = curr_idevice->get_connected_ethernet_core(*eth_sender_core_iter);
+            if (device_id == next_device->get_devices()[0]->id()) {
                 uint64_t pair_edge =
-                    (static_cast<uint64_t>(curr_device->id()) << 32) | static_cast<uint64_t>(device_id);
+                    (static_cast<uint64_t>(curr_idevice->id()) << 32) | static_cast<uint64_t>(device_id);
                 if (edge_link_idx[pair_edge] == conn) {
                     CoreCoord eth_sender_core = *eth_sender_core_iter;
                     CoreCoord eth_receiver_core = receiver_core;
-                    chip_id_t receiver_device_id = device_id;
-                    sockets.push_back({receiver_device_id, eth_receiver_core, curr_device->id(), eth_sender_core});
-                    TT_ASSERT(receiver_device_id == next_device->id());
+                    sockets.push_back({next_device, eth_receiver_core, curr_device, eth_sender_core});
+                    TT_ASSERT(device_id == next_device->get_devices()[0]->id());
                     found = true;
                     break;
                 }
@@ -411,7 +446,7 @@ int main(int argc, char** argv) {
         log_trace(tt::LogTest, "Need at least 2 devices to run this test");
         return 0;
     }
-    if (arch == tt::ARCH::GRAYSKULL) {
+    if (arch != tt::ARCH::WORMHOLE_B0) {
         log_trace(tt::LogTest, "Test must be run on WH");
         return 0;
     }
@@ -460,60 +495,62 @@ int main(int argc, char** argv) {
         std::all_of(max_concurrent_samples.begin(), max_concurrent_samples.end(), [](std::size_t n) { return n > 0; }));
 
     T3000TestDevice test_fixture;
-    auto view = test_fixture.mesh_device_->get_view();
 
-    auto get_device_list = [](const MeshDeviceView& view, std::size_t n_hops) {
+    auto get_device_list =
+        [&test_fixture](std::size_t n_hops) -> std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> {
         switch (n_hops) {
             case 2:
-                return std::vector<IDevice*>{
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(0, 1)),
+                return std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>{
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 0)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 1)),
                 };
 
             case 4:
-                return std::vector<IDevice*>{
-                    view.get_device(MeshCoordinate(1, 1)),
-                    view.get_device(MeshCoordinate(0, 1)),
-                    view.get_device(MeshCoordinate(0, 2)),
-                    view.get_device(MeshCoordinate(1, 2)),
+                return std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>{
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 2)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 2)),
                 };
 
             case 8:
-                return std::vector<IDevice*>{
-                    view.get_device(MeshCoordinate(1, 1)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(0, 1)),
-                    view.get_device(MeshCoordinate(0, 2)),
-                    view.get_device(MeshCoordinate(0, 3)),
-                    view.get_device(MeshCoordinate(1, 3)),
-                    view.get_device(MeshCoordinate(1, 2)),
+                return std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>{
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 0)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 0)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 2)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 3)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 3)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 2)),
                 };
 
             case 12:  // Does an extra loop through the inner ring
-                return std::vector<IDevice*>{
-                    view.get_device(MeshCoordinate(1, 1)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(0, 1)),
-                    view.get_device(MeshCoordinate(0, 2)),
-                    view.get_device(MeshCoordinate(1, 2)),
-                    view.get_device(MeshCoordinate(1, 1)),
-                    view.get_device(MeshCoordinate(0, 1)),
-                    view.get_device(MeshCoordinate(0, 2)),
-                    view.get_device(MeshCoordinate(0, 3)),
-                    view.get_device(MeshCoordinate(1, 3)),
-                    view.get_device(MeshCoordinate(1, 2)),
+                return std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>{
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 0)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 0)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 2)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 2)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 1)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 2)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(0, 3)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 3)),
+                    test_fixture.get_mesh_device(tt::tt_metal::distributed::MeshCoordinate(1, 2)),
                 };
 
-            default: TT_THROW("Unsupported hop_count"); return std::vector<IDevice*>{};
+            default:
+                TT_THROW("Unsupported hop_count");
+                return std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>{};
         };
     };
 
     try {
         for (auto n_hops : hop_counts) {
-            auto devices = get_device_list(view, n_hops);
-            std::vector<tt::tt_metal::hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
+            auto mesh_devices = get_device_list(n_hops);
+            std::vector<tt::tt_metal::hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(mesh_devices);
 
             for (auto max_concurrent_samples : max_concurrent_samples) {
                 for (auto num_samples : sample_counts) {
@@ -531,7 +568,7 @@ int main(int argc, char** argv) {
                         std::vector<tt::tt_metal::KernelHandle> receiver_kernel_ids;
                         std::vector<tt::tt_metal::KernelHandle> sender_kernel_ids;
                         tt::tt_metal::build_and_run_roundtrip_latency_test(
-                            devices,
+                            mesh_devices,
                             hop_eth_sockets,
                             num_samples,
                             sample_page_size,
