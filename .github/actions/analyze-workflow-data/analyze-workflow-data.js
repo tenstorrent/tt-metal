@@ -1229,7 +1229,12 @@ async function run() {
       stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
     }
 
-    const finalReport = [mainReport, regressionsSection, stayedFailingSection].join('\n');
+    const alertSection = (alertAll && alertAllMessage)
+      ? ['## Alerts', alertAllMessage, ''].join('\n')
+      : '';
+    const finalReport = [alertSection, mainReport, regressionsSection, stayedFailingSection]
+      .filter(Boolean)
+      .join('\n');
 
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
