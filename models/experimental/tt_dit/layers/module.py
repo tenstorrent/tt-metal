@@ -154,8 +154,12 @@ class ModuleList(Module):
     def __len__(self) -> int:
         return len(self._children)
 
-    def __getitem__(self, key: int) -> Module:
-        return self._children[str(key)]
+    def __getitem__(self, idx: int) -> Module:
+        if idx < 0:
+            idx += len(self._children)
+        if idx < 0 or idx >= len(self._children):
+            raise IndexError
+        return self._children[str(idx)]
 
 
 class Parameter:
