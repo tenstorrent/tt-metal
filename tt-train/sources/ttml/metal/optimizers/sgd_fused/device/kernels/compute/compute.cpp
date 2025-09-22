@@ -120,8 +120,8 @@ void MAIN {
 
             cb_wait_front(cb_update_idx, block_size);
             tile_regs_acquire();
+            sub_tiles_init(cb_param_in_idx, cb_update_idx);
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                sub_tiles_init(cb_param_in_idx, cb_update_idx);  // TODO: Check if here or outside loop
                 sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);
             }
             tile_regs_commit();
