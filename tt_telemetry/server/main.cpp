@@ -52,6 +52,22 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
     }
 
     return result;
+
+/**************************************************************************************************
+ PSD/FSD Testing
+**************************************************************************************************/
+
+#include <psd/psd.hpp>
+
+static void test_psd() {
+    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+
+    tt::tt_metal::PSD psd = tt::tt_metal::PSD(cluster);
+
+    std::cout << "All host names:" << std::endl;
+    for (auto hostname : psd.get_all_hostnames()) {
+        std::cout << "  " << hostname << std::endl;
+    }
 }
 
 /**************************************************************************************************
@@ -157,6 +173,9 @@ static void test_print_link_health() {
 }
 
 int main(int argc, char* argv[]) {
+    test_psd();
+    return 0;
+
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
 
