@@ -22,6 +22,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "impl/kernels/kernel_impl.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -147,6 +149,41 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
     EXPECT_THROW(this->create_kernel(kernel_file), std::exception);
+}
+
+// Unit test for Kernel::compute_hash() - tests that different unpack_to_dest_mode produces different hashes
+TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDestModeShouldProduceDifferentHashes) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp";
+
+    // Create default compute config
+    ComputeConfig config_default;
+
+    // Create specially configured unpack_to_dest_mode
+    std::vector<UnpackToDestMode> unpack_mode_fp32(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_mode_fp32[0] = UnpackToDestMode::UnpackToDestFp32;  // Change CB 0 to FP32 mode
+    ComputeConfig config_fp32 = {.unpack_to_dest_mode = unpack_mode_fp32};
+
+    // Create programs (needed for kernel creation context)
+    auto program_default = CreateProgram();
+    auto program_fp32 = CreateProgram();
+
+    // Create kernel handles for both configurations
+    auto kernel_handle_default = CreateKernel(program_default, kernel_file, CoreCoord(0, 0), config_default);
+    auto kernel_handle_fp32 = CreateKernel(program_fp32, kernel_file, CoreCoord(0, 0), config_fp32);
+
+    // Get the kernels from programs
+    const auto& kernels_default = program_default.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+    const auto& kernels_fp32 = program_fp32.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+
+    // Direct hash comparison - this tests the actual Kernel::compute_hash() method
+    auto hash_default = kernels_default.at(kernel_handle_default)->compute_hash();
+    auto hash_fp32 = kernels_fp32.at(kernel_handle_fp32)->compute_hash();
+
+    // BUG: These should be different but will be the same due to missing unpack_to_dest_mode in config_hash()
+    EXPECT_NE(hash_default, hash_fp32)
+        << "Kernels with different unpack_to_dest_mode should have different compute hashes. "
+        << "hash_default: " << hash_default << ", hash_fp32: " << hash_fp32 << ". "
+        << "If this test fails, it indicates that unpack_to_dest_mode is missing from ComputeKernel::config_hash()";
 }
 
 }  // namespace tt::tt_metal
