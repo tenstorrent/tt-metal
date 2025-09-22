@@ -162,6 +162,7 @@ class MotifTransformer(Module):
                 dim=inner_dim,
                 num_heads=num_attention_heads,
                 head_dim=attention_head_dim,
+                modulation_dim=modulation_dim,
                 context_pre_only=i == num_layers - 1,
                 added_head_scaling=True,
                 ff_activation_fn="silu",
@@ -174,20 +175,10 @@ class MotifTransformer(Module):
         )
 
         self.time_embed_out = Linear(
-            inner_dim,
+            modulation_dim,
             2 * inner_dim,
             mesh_device=mesh_device,
         )
-
-        self.norm_out = DistributedLayerNorm(
-            inner_dim,
-            norm_eps=1e-6,
-            norm_elementwise_affine=False,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            ccl_manager=ccl_manager,
-        )
-        # self.norm_out = AdaLayerNormContinuous(inner_dim, modulation_dim, elementwise_affine=False, eps=1e-6)
 
         self.proj_out = Linear(
             inner_dim,
@@ -265,10 +256,6 @@ class MotifTransformer(Module):
                 ttnn.ReadDeviceProfiler(spatial.device())
 
         spatial = spatial[:, self.register_tokens.shape[1] :]
-
-        return all_gather(
-            spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
 
         # spatial = all_gather(
         #     spatial, dim=1, parallel_factor=self.parallel_config.sequence_parallel, ccl_manager=self.ccl_manager
