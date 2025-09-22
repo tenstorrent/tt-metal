@@ -28,6 +28,7 @@ Arguments
 
 You can run ``tt-triage --help`` to see the available options.
 Some notable options include:
+
  - ``--initialize-with-noc1``: Initializes the debugger context with NOC1 enabled (default: False). Useful if NOC0 is not functioning.
  - ``--dev=<device_id>``: Specifies the device ID to analyze (default: ``in_use``). You can provide multiple ``--dev`` options to analyze several devices. Use ``all`` to analyze every device.
  - ``--remote-exalens``: Connects to a remote exalens server (default: False). This is helpful if tt-triage is fails during UMD initialization. If you encounter errors indicating UMD cannot be initialized, try this option. Open a new terminal and run ``tt-exalens --server`` before starting your workload. Then, in your original terminal, run ``tt-triage --remote-exalens``.
