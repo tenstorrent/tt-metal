@@ -106,8 +106,6 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
 }
 
 inline void my_calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
-
     constexpr uint32_t dst_tile_size_sfpi = 32;
     const uint32_t in0_base_idx = dst_index_in0 * dst_tile_size_sfpi;
     const uint32_t in1_base_idx = dst_index_in1 * dst_tile_size_sfpi;
@@ -148,7 +146,7 @@ inline void my_calculate_sfpu_binary(const uint dst_index_in0, const uint dst_in
  * and writes the result to tile idx_out0 in the Dst registers.
  */
 inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(my_calculate_sfpu_binary, idx_dst0, idx_dst1, idx_out0));
+    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0));
 }
 
 namespace NAMESPACE {
