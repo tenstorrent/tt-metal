@@ -160,6 +160,7 @@ std::optional<MeshCoordinate> MeshCoordinate::get_neighbor(
     for (size_t i = 0; i < dims(); ++i) {
         TT_FATAL(value_[i] < shape[i], "Coordinate {} is out of bounds for shape {}", *this, shape);
     }
+
     dim = normalize_index(dim, shape.dims());
 
     const auto boundary = static_cast<int32_t>(shape[dim]);

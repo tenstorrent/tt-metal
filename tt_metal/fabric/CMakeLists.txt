@@ -55,10 +55,7 @@ target_sources(
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
-set(FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.fbs
-)
+set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
 
 # Collect all generated headers
 set(GENERATED_FBS_HEADERS)

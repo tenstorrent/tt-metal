@@ -1382,9 +1382,9 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
         this->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction);
     for (const auto& src_chan_id : active_channels) {
         // check for end-to-end route before accepting this channel
-        // if (this->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id).empty()) {
-        //     continue;
-        // }
+        if (this->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id).empty()) {
+            continue;
+        }
         forwarding_channels.push_back(src_chan_id);
     }
 
