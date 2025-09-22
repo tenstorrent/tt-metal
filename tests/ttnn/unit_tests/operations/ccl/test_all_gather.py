@@ -13,7 +13,18 @@ from models.utility_functions import skip_for_grayskull
 pytestmark = pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 
 
-def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile):
+def is_unsupported_case(
+    input_shape,
+    dim,
+    mem_config,
+    num_devices,
+    num_links,
+    input_dtype,
+    layout,
+    tile,
+    num_l1_banks=64,
+    mem_config_input=None,
+):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Invalid combination"
 
@@ -24,7 +35,13 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
 
     ## Check that we can readback results
     fast_dispatch_page_size_limit = 55 * 1024
-    elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
+    elem_size_map = {
+        ttnn.uint32: 4,
+        ttnn.bfloat16: 2,
+        ttnn.bfloat8_b: 1,
+    }
+    elem_size = elem_size_map.get(input_dtype, 4)
+    elem_size = 2 if input_dtype == ttnn.bfloat16 else 1 if input_dtype == ttnn.bfloat8_b else 4
     if layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
         # limited to ~55K pages.
@@ -34,9 +51,15 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     tensor_size_bytes = elem_size
     for i in input_shape:
         tensor_size_bytes *= i
-    num_l1_banks = 64
-    if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
-        return True, "L1 buffer can't support large tensor sizes"
+    L1_util = 0
+    if mem_config.buffer_type == ttnn.BufferType.L1:
+        L1_util = L1_util + tensor_size_bytes
+    if mem_config_input is not None:
+        if mem_config_input.buffer_type == ttnn.BufferType.L1:
+            L1_util += tensor_size_bytes / num_devices
+
+    if L1_util > num_l1_banks * 1536 * 1024:
+        return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
 
     # Check that each chip has a non-zero amount of data available
     if input_shape[dim] < num_devices:
