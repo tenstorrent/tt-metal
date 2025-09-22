@@ -33,7 +33,7 @@ class TtUnet:
         self.enc1_1 = Conv(
             [1, 1, 1, 1],
             parameters["encoder1"][0],
-            act_block_h=64,
+            act_block_h=32 * 10,
             reshard=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -44,17 +44,23 @@ class TtUnet:
         self.enc1_2 = Conv(
             [1, 1, 1, 1],
             parameters["encoder1"][1],
-            act_block_h=32,
+            act_block_h=32 * 5,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             conv_args=conv_args["encoder1"][3],
         )
 
-        self.enc2_1 = Conv([1, 1, 1, 1], parameters["encoder2"][0], reshard=True, conv_args=conv_args["encoder2"][0])
+        self.enc2_1 = Conv(
+            [1, 1, 1, 1],
+            parameters["encoder2"][0],
+            reshard=True,
+            conv_args=conv_args["encoder2"][0],
+            act_block_h=32 * 6,
+        )
         self.enc2_2 = Conv(
             [1, 1, 1, 1],
             parameters["encoder2"][1],
-            act_block_h=64,
+            act_block_h=32 * 6,
             auto_shard=True,
             conv_args=conv_args["encoder2"][3],
             enable_act_double_buffer=True,
@@ -187,11 +193,12 @@ class TtUnet:
             conv_args=conv_args["decoder1"][0],
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
+            act_block_h=32 * 10,
         )
         self.dec1_2 = Conv(
             [1, 1, 1, 1],
             parameters["decoder1"][1],
-            act_block_h=32,
+            act_block_h=32 * 10,
             reshard=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -336,12 +343,21 @@ class TtUnet:
         dec2 = self.upconv2(device, dec3)
         ttnn.deallocate(dec3)
 
-        if dec2.is_sharded:
-            dec2 = ttnn.sharded_to_interleaved(dec2, ttnn.L1_MEMORY_CONFIG)
-        if enc2.is_sharded:
-            enc2 = ttnn.sharded_to_interleaved(enc2, ttnn.L1_MEMORY_CONFIG)
+        memory_config = ttnn.create_sharded_memory_config(
+            [1216, 64],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        out_memory_config = ttnn.create_sharded_memory_config(
+            [1216, 128],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        enc2 = ttnn.interleaved_to_sharded(enc2, memory_config)
 
-        dec2 = ttnn.concat([dec2, enc2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        dec2 = ttnn.concat([dec2, enc2], dim=3, memory_config=out_memory_config)
 
         ttnn.deallocate(enc2)
 
@@ -379,7 +395,6 @@ class TtUnet:
         dec1 = self.dec1_1(device, dec1)
 
         dec1 = self.dec1_2(device, dec1)
-        dec1 = ttnn.to_layout(dec1, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         ttnn_output = self.conv(device, dec1)
         ttnn.deallocate(dec1)
         ttnn_output = ttnn.add(ttnn_output, 0.0, dtype=ttnn.bfloat16)
