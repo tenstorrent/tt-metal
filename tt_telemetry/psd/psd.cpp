@@ -56,7 +56,7 @@ static TrayID get_tray_id_for_chip(
 }
 
 static std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip_id, bool using_mock_cluster_desc) {
+    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, chip_id_t chip_id, bool using_mock_cluster_desc) {
     const auto& cluster2 = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster->get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
@@ -69,7 +69,7 @@ static std::pair<TrayID, ASICLocation> get_asic_position(
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
-        if (cluster2.arch() == tt::ARCH::WORMHOLE_B0) {
+        if (arch == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
             auto mmio_device = cluster2.get_associated_mmio_device(chip_id);
@@ -82,7 +82,7 @@ static std::pair<TrayID, ASICLocation> get_asic_position(
                     break;
                 }
             }
-        } else if (cluster2.arch() == tt::ARCH::BLACKHOLE) {
+        } else if (arch == tt::ARCH::BLACKHOLE) {
             // Query ASIC Location from the Cluster Descriptor for BH.
             asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
         } else {
@@ -101,8 +101,9 @@ struct EthEndpoint {
 
 }  // namespace
 
-PSD::PSD(const std::unique_ptr<tt::umd::Cluster>& cluster, bool run_discovery, bool using_mock_cluster_desc) :
-    cluster_(cluster), using_mock_cluster_desc_(using_mock_cluster_desc) {
+PSD::PSD(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, ARCH arch, bool run_discovery, bool using_mock_cluster_desc) :
+    cluster_(cluster), arch_(arch), using_mock_cluster_desc_(using_mock_cluster_desc) {
     if (run_discovery) {
         this->run_discovery();
     }
@@ -207,7 +208,7 @@ void PSD::run_local_discovery() {
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
-        auto [tray_id, asic_location] = get_asic_position(cluster_, src, using_mock_cluster_desc_);
+        auto [tray_id, asic_location] = get_asic_position(cluster_, arch_, src, using_mock_cluster_desc_);
         asic_descriptors_[src_unique_id] =
             ASICDescriptor{TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
@@ -359,7 +360,7 @@ void PSD::exchange_metadata(bool issue_gather) {
                 Rank{rank},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(
-                cluster_, serialized_peer_desc, using_mock_cluster_desc_);
+                cluster_, arch_, serialized_peer_desc, using_mock_cluster_desc_);
             this->merge(std::move(peer_desc));
         }
     }

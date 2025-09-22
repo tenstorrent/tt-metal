@@ -59,10 +59,14 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
 
 #include <psd/psd.hpp>
 
-static void test_psd() {
-    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+#include <llrt/get_platform_architecture.hpp>
 
-    tt::tt_metal::PSD psd = tt::tt_metal::PSD(cluster);
+static void test_psd() {
+    auto rtoptions = tt::llrt::RunTimeOptions();
+    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+    tt::ARCH arch = tt::tt_metal::get_platform_architecture(rtoptions);
+
+    tt::tt_metal::PSD psd = tt::tt_metal::PSD(cluster, arch);
 
     std::cout << "All host names:" << std::endl;
     for (auto hostname : psd.get_all_hostnames()) {
