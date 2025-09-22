@@ -364,7 +364,7 @@ def test_grid_sample_batch_output_channels_flag(
     )
 
     pcc_passed, pcc_message = assert_with_pcc(torch_expected_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(pcc_message)
+    logger.debug(pcc_message)
 
 
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
