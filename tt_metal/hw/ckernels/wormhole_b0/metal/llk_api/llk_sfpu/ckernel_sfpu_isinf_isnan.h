@@ -40,8 +40,6 @@ inline void calculate_isinf() {
         vFloat in = dst_reg[0];
         sfpi::vInt exp = sfpi::exexp(in);
         sfpi::vInt man = sfpi::exman9(in);
-        vFloat outexp = int32_to_float(exp);
-        vFloat outman = int32_to_float(man);
         vFloat out = 0.0f;
         v_if(exp == 128 && man == 0) { out = 1.0f; }
         v_endif;
