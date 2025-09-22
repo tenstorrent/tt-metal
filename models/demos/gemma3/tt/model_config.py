@@ -1405,6 +1405,8 @@ class ModelArgs:
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
         )
+        # We have to update the attention masks on host and copy to device before we execute the trace - this flag will tell generator.py to update the attention mask before executing trace
+        self.update_attention_masks_pre_trace = True
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
