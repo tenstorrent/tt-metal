@@ -50,13 +50,20 @@ jobs:
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
 
           # Set tag-type
-          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]] || [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          echo "Determining tag-type for GITHUB_REF: ${GITHUB_REF}"
+          echo "isReleaseCandidate: $isReleaseCandidate"
+
+          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]] || [[ "${GITHUB_REF}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
+            echo "Matched stable branch or RC tag pattern"
             if [[ "$isReleaseCandidate" == "true" ]]; then
+              echo "Setting tag-type=rc (release candidate)"
               echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
+              echo "Setting tag-type= (production release)"
               echo "tag-type=" >> "$GITHUB_OUTPUT"
             fi
           else
+            echo "No stable/RC match - setting tag-type=dev (development build)"
             echo "tag-type=dev" >> "$GITHUB_OUTPUT"
           fi
 
