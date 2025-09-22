@@ -130,32 +130,28 @@ void kernel_main() {
     noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
-    if constexpr (is_all_to_all_worker) {
-        // Copy partial E[x] and Var[x] data to combine buffers
-        cb_reserve_back(cb_ex_combine, num_combine_tiles_needed);
-        cb_reserve_back(cb_varx_combine, num_combine_tiles_needed);
-        auto l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-        l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
-        auto l1_read_addr_varx_par = get_read_ptr(cb_varx_partial);
-        l1_read_addr_varx_par += all_to_all_tile_offset_bytes;
-        auto l1_write_addr_ex_combine = get_write_ptr(cb_ex_combine);
-        auto l1_write_addr_varx_combine = get_write_ptr(cb_varx_combine);
-        for (uint32_t i = 0; i < num_tiles_to_read; i++) {
-            // Copy partial E[x]
-            noc_async_read(l1_read_addr_ex_par, l1_write_addr_ex_combine, num_bytes_copy_to_combine);
-            l1_read_addr_ex_par += single_tile_size_bytes;
-            l1_write_addr_ex_combine += num_bytes_copy_to_combine;
+    // Copy local partial E[x] and Var[x] data to combine buffers
+    cb_reserve_back(cb_ex_combine, num_combine_tiles_needed);
+    cb_reserve_back(cb_varx_combine, num_combine_tiles_needed);
+    auto l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
+    auto l1_read_addr_varx_par = get_read_ptr(cb_varx_partial);
+    auto l1_write_addr_ex_combine = get_write_ptr(cb_ex_combine);
+    auto l1_write_addr_varx_combine = get_write_ptr(cb_varx_combine);
+    for (uint32_t i = 0; i < block_ht; i++) {
+        // Copy partial E[x]
+        noc_async_read(l1_read_addr_ex_par, l1_write_addr_ex_combine, num_bytes_copy_to_combine);
+        l1_read_addr_ex_par += single_tile_size_bytes;
+        l1_write_addr_ex_combine += num_bytes_copy_to_combine;
 
-            // Copy partial Var[x]
-            noc_async_read(l1_read_addr_varx_par, l1_write_addr_varx_combine, num_bytes_copy_to_combine);
-            l1_read_addr_varx_par += single_tile_size_bytes;
-            l1_write_addr_varx_combine += num_bytes_copy_to_combine;
-        }
-        noc_async_read_barrier();
-        // TODO RM: Do we need to push back if we're syncing via semaphores?
-        // cb_push_back(cb_ex_combine, num_combine_tiles_needed);
-        // cb_push_back(cb_varx_combine, num_combine_tiles_needed);
+        // Copy partial Var[x]
+        noc_async_read(l1_read_addr_varx_par, l1_write_addr_varx_combine, num_bytes_copy_to_combine);
+        l1_read_addr_varx_par += single_tile_size_bytes;
+        l1_write_addr_varx_combine += num_bytes_copy_to_combine;
     }
+    noc_async_read_barrier();
+    // TODO RM: Do we need to push back if we're syncing via semaphores?
+    // cb_push_back(cb_ex_combine, num_combine_tiles_needed);
+    // cb_push_back(cb_varx_combine, num_combine_tiles_needed);
 
     cb_pop_front(cb_ex_partial, block_h);
     cb_pop_front(cb_varx_partial, block_h);

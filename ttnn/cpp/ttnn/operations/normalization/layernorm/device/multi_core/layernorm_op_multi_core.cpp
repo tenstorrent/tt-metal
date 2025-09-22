@@ -670,7 +670,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // two-stage reduce
     bool use_two_stage_reduce = false;
-    if (mcast_1d) {
+    if (mcast_1d && !use_welford) {
         // only do this for row/col dim are full length
         if (row_wise && grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
             grid_size.y > 1) {  // row major and multiple rows
@@ -786,7 +786,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
-    uint32_t num_cores_all_to_all = tt::div_up(block_ht, num_rows_per_all_to_all_worker);
+    uint32_t num_cores_all_to_all = use_welford ? num_blocks : tt::div_up(block_ht, num_rows_per_all_to_all_worker);
     uint32_t num_cores_all_to_all_first_stage = num_cores_all_to_all;
     uint32_t num_cores_all_to_all_second_stage = 0;
     uint32_t num_blocks_first_stage = num_blocks;
@@ -1010,24 +1010,28 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         reader_mcast_receiver_defines["RMSNORM"] = "1";
     }
     // reader compile time args
-    std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t)reduce_receiver_semaphore_id,
-        (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_blocks,
-        (std::uint32_t)block_ht,
-        (std::uint32_t)block_ht * single_tile_size,
-        (std::uint32_t)num_cores_all_to_all_first_stage,
-        (std::uint32_t)num_rows_per_all_to_all_worker,
-        (std::uint32_t)num_rows_per_all_to_all_worker * single_tile_size,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last,
-        (std::uint32_t)num_rows_per_all_to_all_worker_last * single_tile_size,
-        (std::uint32_t)row_wise,
-        (std::uint32_t)num_cores_x_mcast,
-        (std::uint32_t)num_cores_y_mcast,
-        (std::uint32_t)use_two_stage_reduce,
-        (std::uint32_t)num_blocks_first_stage,
-        (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+    std::vector<uint32_t> reader_mcast_sender_compile_time_args(use_welford ? 14 : 17);
+    auto& reader_sender_cta = reader_mcast_sender_compile_time_args;
+    reader_sender_cta[0] = (std::uint32_t)reduce_receiver_semaphore_id;
+    reader_sender_cta[1] = (std::uint32_t)reduce_sender_semaphore_id;
+    reader_sender_cta[2] = (std::uint32_t)num_blocks;
+    reader_sender_cta[3] = (std::uint32_t)block_ht;
+    reader_sender_cta[4] = (std::uint32_t)block_ht * single_tile_size;
+    reader_sender_cta[5] = (std::uint32_t)row_wise;
+    reader_sender_cta[6] = (std::uint32_t)num_cores_x_mcast;
+    reader_sender_cta[7] = (std::uint32_t)num_cores_y_mcast;
+    if (!use_welford) {
+        reader_sender_cta[8] = (std::uint32_t)num_cores_all_to_all_first_stage;
+        reader_sender_cta[9] = (std::uint32_t)num_rows_per_all_to_all_worker;
+        reader_sender_cta[10] = (std::uint32_t)num_rows_per_all_to_all_worker * single_tile_size;
+        reader_sender_cta[11] = (std::uint32_t)num_rows_per_all_to_all_worker_last;
+        reader_sender_cta[12] = (std::uint32_t)num_rows_per_all_to_all_worker_last * single_tile_size;
+        reader_sender_cta[13] = (std::uint32_t)use_two_stage_reduce;
+        reader_sender_cta[14] = (std::uint32_t)num_blocks_first_stage;
+        reader_sender_cta[15] = (std::uint32_t)num_blocks_second_stage;
+        reader_sender_cta[16] = (std::uint32_t)reduce_second_stage_semaphore_id;
+    }
+
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1068,8 +1072,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         // worth of data at a time.
         uint32_t cb_datum_size_bytes = cb_data_format == tt::DataFormat::Float32 ? 4 : /*Float16_b*/ 2;
         uint32_t num_bytes_copy_to_combine = 2 * tt::constants::TILE_HEIGHT * cb_datum_size_bytes;
-        reader_mcast_receiver_compile_time_args.push_back(num_bytes_copy_to_combine);
-        reader_mcast_sender_compile_time_args.push_back(num_bytes_copy_to_combine);
 
         // The number of tiles needed to pack block_ht tiles into combine buffer.
         // Each mean/var tile will have 32 valid entries, which means normally
@@ -1077,12 +1079,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         // puts the valid tile data at every other element, only 16 mean/var
         // tiles can be packed into a single combine buffer tile.
         uint32_t num_combine_tiles_needed = tt::div_up(block_ht, 16);
+
+        reader_sender_cta[8] = num_bytes_copy_to_combine;
+        reader_sender_cta[9] = num_combine_tiles_needed;
+        reader_sender_cta[10] = tt::constants::TILE_HEIGHT;
+        reader_sender_cta[11] = tt::constants::TILE_WIDTH;
+        reader_sender_cta[12] = tt::constants::FACE_HEIGHT;
+        reader_sender_cta[13] = tt::constants::FACE_WIDTH;
+
+        reader_mcast_receiver_compile_time_args.push_back(num_bytes_copy_to_combine);
         reader_mcast_receiver_compile_time_args.push_back(num_combine_tiles_needed);
-        reader_mcast_sender_compile_time_args.push_back(num_combine_tiles_needed);
-        reader_mcast_sender_compile_time_args.push_back(tt::constants::TILE_HEIGHT);
-        reader_mcast_sender_compile_time_args.push_back(tt::constants::TILE_WIDTH);
-        reader_mcast_sender_compile_time_args.push_back(tt::constants::FACE_HEIGHT);
-        reader_mcast_sender_compile_time_args.push_back(tt::constants::FACE_WIDTH);
     }
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
@@ -1095,11 +1101,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // reader kernel
     std::string sender_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_sharded_ln.cpp";
+        use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                      "reader_mcast_sender_unary_sharded_ln_welford.cpp"
+                    : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                      "reader_mcast_sender_unary_sharded_ln.cpp";
     std::string receiver_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-        "reader_mcast_receiver_unary_sharded_ln.cpp";
+        use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                      "reader_mcast_receiver_unary_sharded_ln_welford.cpp"
+                    : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                      "reader_mcast_receiver_unary_sharded_ln.cpp";
 
     if (is_pre_all_gather) {
         sender_reader_kernel_file =
@@ -1404,44 +1414,46 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig(xmm_CB_size, {{xmm_cb_index, cb_data_format}})
             .set_page_size(xmm_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, xmm_cb_config);
-    // ex_partial
     if (!rms_norm) {
+        // ex_partial
         uint32_t ex_cb_partial_index = tt::CBIndex::c_8;
         tt::tt_metal::CircularBufferConfig ex_cb_partial_config =
             tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial_index, cb_data_format}})
                 .set_page_size(ex_cb_partial_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
-        // ex
+        // use_welford ? ex_combine : ex all-gather reduce result
         uint32_t ex_cb_index = tt::CBIndex::c_9;
         tt::tt_metal::CircularBufferConfig ex_cb_config =
             tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex_cb_index, cb_data_format}})
                 .set_page_size(ex_cb_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_config);
-        // ex_external
+        // use_welford ? varx_global : ex_external
         uint32_t ex_cb_external_index = tt::CBIndex::c_10;
         tt::tt_metal::CircularBufferConfig ex_cb_external_config =
             tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external_index, cb_data_format}})
                 .set_page_size(ex_cb_external_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
-    // ex_partial2
+    // use_welford ? varx_partial :ex_partial2
     uint32_t ex_cb_partial2_index = tt::CBIndex::c_11;
     tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
         tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial2_index, cb_data_format}})
             .set_page_size(ex_cb_partial2_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
-    // ex2
+    // use_welford ? varx_combine : ex2
     uint32_t ex2_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig ex2_cb_config =
         tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
             .set_page_size(ex2_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
-    // ex_external2
-    uint32_t ex_cb_external2_index = tt::CBIndex::c_13;
-    tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
-        tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
-            .set_page_size(ex_cb_external2_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
+    if (!use_welford) {
+        // ex_external2
+        uint32_t ex_cb_external2_index = tt::CBIndex::c_13;
+        tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
+            tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
+                .set_page_size(ex_cb_external2_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
+    }
     // ex_global
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig ex_global_cb_config =
