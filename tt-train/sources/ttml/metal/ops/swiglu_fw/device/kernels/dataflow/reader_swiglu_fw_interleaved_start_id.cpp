@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
-#include <debug/dprint.h>
-
-#include <ostream>
 
 #include "dataflow_api.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
@@ -41,18 +39,13 @@ constexpr bool do_mask_hw = true;
 constexpr bool do_mask_hw = false;
 #endif
 
-// TODO(maciek): Decide on one consistent version of whitespace in X[a, b] vs. X[a,b]
-
-// TODO(maciek): Update read_tile to allign Stas's change.
 // TODO(maciek): Move all read_tiles_by_row and read_tiles_by_col to common utils file, and reuse them in other
-// operations. Utility: read contiguous tiles in row-major from DRAM to CB. Before calling this function, make sure to
+// operations.
+// Utility: read contiguous tiles in row-major from DRAM to CB. Before calling this function, make sure to
 // reserve space in the CB and after the call, push the tiles.
+template <typename AddrGen>
 inline void read_tiles_by_row(
-    uint32_t cb_idx,
-    const InterleavedAddrGenFast<true>& addr_gen,
-    uint32_t start_idx,
-    uint32_t num_tiles,
-    const uint32_t tile_bytes) {
+    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t num_tiles, const uint32_t tile_bytes) {
     uint32_t l1_addr = get_write_ptr(cb_idx);
     for (uint32_t t = 0; t < num_tiles; ++t) {
         noc_async_read_tile(start_idx + t, addr_gen, l1_addr);
@@ -62,9 +55,10 @@ inline void read_tiles_by_row(
 
 // Utility: read contiguous tiles in col-major from DRAM to CB. Before calling this function, make sure to reserve space
 // in the CB and after the call, push the tiles.
+template <typename AddrGen>
 inline void read_tiles_by_col(
     uint32_t cb_idx,
-    const InterleavedAddrGenFast<true>& addr_gen,
+    const AddrGen& addr_gen,
     uint32_t start_idx,
     uint32_t num_tiles,
     const uint32_t tile_bytes,
@@ -97,17 +91,16 @@ void kernel_main() {
     }
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_fmt = get_dataformat(cb_input_idx);
 
     // Address generators
-    const InterleavedAddrGenFast<true> x_ag = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_fmt};
-    const InterleavedAddrGenFast<true> w1_ag = {
-        .bank_base_address = w1_address, .page_size = tile_bytes, .data_format = data_fmt};
-    const InterleavedAddrGenFast<true> w2_ag = {
-        .bank_base_address = w2_address, .page_size = tile_bytes, .data_format = data_fmt};
-    const InterleavedAddrGenFast<true> w3_ag = {
-        .bank_base_address = w3_address, .page_size = tile_bytes, .data_format = data_fmt};
+    constexpr auto x_args = TensorAccessorArgs<5>();
+    constexpr auto w1_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    constexpr auto w2_args = TensorAccessorArgs<w1_args.next_compile_time_args_offset()>();
+    constexpr auto w3_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
+    const auto x_address_generator = TensorAccessor(x_args, input_address, tile_bytes);
+    const auto w1_address_generator = TensorAccessor(w1_args, w1_address, tile_bytes);
+    const auto w2_address_generator = TensorAccessor(w2_args, w2_address, tile_bytes);
+    const auto w3_address_generator = TensorAccessor(w3_args, w3_address, tile_bytes);
 
     const uint32_t end_row = start_row + num_rows_to_process;
 
@@ -118,10 +111,10 @@ void kernel_main() {
     //       for k in k_block:
     //         for p_block in p_blocks:
     //           stream X[r, p_block] and W1[p_block, k] for all p in p_block
-    //           [compute M[r,k] = sum_p( X[r,p] * W1[p,k] )]
+    //           [compute M[r, k] = sum_p( X[r, p] * W1[p, k] )]
     //       for c in c_block:
     //         stream W2[k_block, c] for all k in k_block
-    //         [compute Y[r,c] += sum_k( M[r,k] * W2[k,c] )]
+    //         [compute Y[r, c] += sum_k( M[r, k] * W2[k, c] )]
     // ============================================================================
     for (uint32_t r = start_row; r < end_row; ++r) {
         // Loop over c_blocks
@@ -149,7 +142,7 @@ void kernel_main() {
                         cb_reserve_back(cb_input_idx, block_size);
                         // Calculate starting tile index for X. We read X in row-major order, so the offset equals
                         uint32_t x_tile_start = r * Wt + p_block_start;
-                        read_tiles_by_row(cb_input_idx, x_ag, x_tile_start, p_block_size, tile_bytes);
+                        read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes);
                         noc_async_read_barrier();
                         cb_push_back(cb_input_idx, block_size);
 
@@ -157,7 +150,8 @@ void kernel_main() {
                         cb_reserve_back(cb_w1_idx, block_size);
                         // Calculate starting tile index for W1. We read W1 in col-major order, so offset equals
                         uint32_t w1_tile_start = p_block_start * hidden_Wt + k_global;
-                        read_tiles_by_col(cb_w1_idx, w1_ag, w1_tile_start, p_block_size, tile_bytes, hidden_Wt);
+                        read_tiles_by_col(
+                            cb_w1_idx, w1_address_generator, w1_tile_start, p_block_size, tile_bytes, hidden_Wt);
                         noc_async_read_barrier();
                         cb_push_back(cb_w1_idx, block_size);
 
@@ -165,7 +159,8 @@ void kernel_main() {
                         cb_reserve_back(cb_w3_idx, block_size);
                         // Calculate starting tile index for W3. We read W3 in col-major order, so offset equals
                         uint32_t w3_tile_start = p_block_start * hidden_Wt + k_global;
-                        read_tiles_by_col(cb_w3_idx, w3_ag, w3_tile_start, p_block_size, tile_bytes, hidden_Wt);
+                        read_tiles_by_col(
+                            cb_w3_idx, w3_address_generator, w3_tile_start, p_block_size, tile_bytes, hidden_Wt);
                         noc_async_read_barrier();
                         cb_push_back(cb_w3_idx, block_size);
                     }
@@ -182,7 +177,7 @@ void kernel_main() {
                     cb_reserve_back(cb_w2_idx, block_size);
                     // Calculate starting tile index for W2. We read W2 in col-major order, so offset equals
                     uint32_t w2_tile_start = k_block_start * Wt + c_global;
-                    read_tiles_by_col(cb_w2_idx, w2_ag, w2_tile_start, k_block_size, tile_bytes, Wt);
+                    read_tiles_by_col(cb_w2_idx, w2_address_generator, w2_tile_start, k_block_size, tile_bytes, Wt);
                     noc_async_read_barrier();
                     cb_push_back(cb_w2_idx, block_size);
                 }
