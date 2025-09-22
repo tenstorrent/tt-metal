@@ -564,6 +564,8 @@ class TtLlamaAttention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
+        # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
+        # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
         ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
         if ring_distributed_sdpa:
             # Ring attention splits selqen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
