@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/arch.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -124,6 +125,7 @@ struct PhysicalConnectivityGraph {
 class PSD {
 public:
     PSD(const std::unique_ptr<tt::umd::Cluster>& cluster,
+        tt::ARCH arch,
         bool run_discovery = true,
         bool use_mock_cluster_desc = false);
     void run_discovery(bool run_global_discovery = true);
@@ -178,7 +180,8 @@ private:
     void resolve_hostname_uniqueness();
     void validate_graphs();
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
-    bool using_mock_cluster_desc_;
+    const ARCH arch_;
+    const bool using_mock_cluster_desc_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
