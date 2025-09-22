@@ -49,15 +49,21 @@ RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_
     const auto& inter_mesh_connectivity = this->mesh_graph->get_inter_mesh_connectivity();
     this->intra_mesh_table_.resize(intra_mesh_connectivity.size());
     this->inter_mesh_table_.resize(intra_mesh_connectivity.size());
+    this->exit_node_lut_.resize(intra_mesh_connectivity.size());
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
         this->intra_mesh_table_[mesh_id_val].resize(intra_mesh_connectivity[mesh_id_val].size());
         this->inter_mesh_table_[mesh_id_val].resize(intra_mesh_connectivity[mesh_id_val].size());
+        this->exit_node_lut_[mesh_id_val].resize(intra_mesh_connectivity[mesh_id_val].size());
         for (auto& devices_in_mesh : this->intra_mesh_table_[mesh_id_val]) {
             // intra_mesh_table[mesh_id][chip_id] holds a vector of ports to route to other chips in the mesh
             devices_in_mesh.resize(intra_mesh_connectivity[mesh_id_val].size());
         }
         for (auto& devices_in_mesh : this->inter_mesh_table_[mesh_id_val]) {
             // inter_mesh_table[mesh_id][chip_id] holds a vector of ports to route to other meshes
+            devices_in_mesh.resize(intra_mesh_connectivity.size());
+        }
+        for (auto& devices_in_mesh : this->exit_node_lut_[mesh_id_val]) {
+            // exit_node_lut_[mesh_id][chip_id] holds exit chip per destination mesh
             devices_in_mesh.resize(intra_mesh_connectivity.size());
         }
     }
@@ -225,6 +231,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 if (dst_mesh_id == src_mesh_id) {
                     // inter mesh table entry from mesh to itself
                     this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::C;
+                    this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = src_chip_id;
                     continue;
                 }
                 auto& candidate_paths = paths[dst_mesh_id_val];
@@ -232,6 +239,8 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 std::uint32_t min_distance = std::numeric_limits<std::uint32_t>::max();
                 if (candidate_paths.size() == 0) {
                     this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::NONE;
+                    this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] =
+                        std::numeric_limits<chip_id_t>::max();
                     continue;
                 }
                 // TODO: This exit_chip_id doesn't make sense since it is always chip 0
@@ -297,6 +306,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                     //    }
                     //  }
                 }
+                this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = exit_chip_id;
                 mesh_to_exit_nodes_[dst_mesh_id].push_back(FabricNodeId(MeshId{src_mesh_id}, exit_chip_id));
             }
         }
@@ -348,58 +358,20 @@ const std::vector<FabricNodeId>& RoutingTableGenerator::get_exit_nodes_routing_t
 
 FabricNodeId RoutingTableGenerator::get_exit_node_from_mesh_to_mesh(
     MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const {
-    TT_FATAL(*src_mesh_id < this->inter_mesh_table_.size(), "src_mesh_id out of range");
-    TT_FATAL(src_chip_id < this->inter_mesh_table_[*src_mesh_id].size(), "src_chip_id out of range");
-    TT_FATAL(*dst_mesh_id < this->inter_mesh_table_.size(), "dst_mesh_id out of range");
+    TT_FATAL(*src_mesh_id < this->exit_node_lut_.size(), "src_mesh_id out of range");
+    TT_FATAL(src_chip_id < this->exit_node_lut_[*src_mesh_id].size(), "src_chip_id out of range");
+    TT_FATAL(*dst_mesh_id < this->exit_node_lut_[*src_mesh_id][src_chip_id].size(), "dst_mesh_id out of range");
 
-    auto direction = this->inter_mesh_table_[*src_mesh_id][src_chip_id][*dst_mesh_id];
-    if (direction == RoutingDirection::C) {
+    chip_id_t exit_chip = this->exit_node_lut_[*src_mesh_id][src_chip_id][*dst_mesh_id];
+    if (src_mesh_id == dst_mesh_id) {
         return FabricNodeId(src_mesh_id, src_chip_id);
     }
-
     TT_FATAL(
-        direction != RoutingDirection::NONE,
-        "No route from M{}D{} to mesh M{}",
+        exit_chip != std::numeric_limits<chip_id_t>::max(),
+        "No exit chip mapped from M{}D{} to M{}",
         *src_mesh_id,
         src_chip_id,
         *dst_mesh_id);
-
-    MeshShape mesh_shape = this->mesh_graph->get_mesh_shape(src_mesh_id);
-    TT_FATAL(mesh_shape.dims() == 2, "Only 2D mesh supported");
-    uint32_t width = mesh_shape[1];
-    uint32_t height = mesh_shape[0];
-
-    auto src_coord = this->mesh_graph->chip_to_coordinate(src_mesh_id, src_chip_id);
-    auto step = [&](RoutingDirection dir, uint32_t x, uint32_t y) -> std::optional<chip_id_t> {
-        int nx = x, ny = y;
-        switch (dir) {
-            case RoutingDirection::N:
-                nx = x - 1;
-                ny = y;
-                break;
-            case RoutingDirection::S:
-                nx = x + 1;
-                ny = y;
-                break;
-            case RoutingDirection::W:
-                nx = x;
-                ny = y - 1;
-                break;
-            case RoutingDirection::E:
-                nx = x;
-                ny = y + 1;
-                break;
-            default: return std::nullopt;
-        }
-        if (nx < 0 || ny < 0 || nx >= (int)height || ny >= (int)width) {
-            return std::nullopt;
-        }
-        MeshCoordinate next_coord(nx, ny);
-        return this->mesh_graph->coordinate_to_chip(src_mesh_id, next_coord);
-    };
-
-    auto next_chip_opt = step(direction, src_coord[0], src_coord[1]);
-    TT_FATAL(next_chip_opt.has_value(), "Invalid next hop for direction from M{}D{}", *src_mesh_id, src_chip_id);
-    return FabricNodeId(src_mesh_id, next_chip_opt.value());
+    return FabricNodeId(src_mesh_id, exit_chip);
 }
 }  // namespace tt::tt_fabric

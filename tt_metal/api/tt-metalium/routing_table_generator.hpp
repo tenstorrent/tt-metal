@@ -64,6 +64,8 @@ private:
     RoutingTable intra_mesh_table_;
     RoutingTable inter_mesh_table_;
     std::unordered_map<MeshId, std::vector<FabricNodeId>> mesh_to_exit_nodes_;
+    // Direct lookup table: [src_mesh][src_chip][dst_mesh] -> exit chip_id in src_mesh
+    std::vector<std::vector<std::vector<chip_id_t>>> exit_node_lut_;
 
     std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> get_paths_to_all_meshes(
         MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const;
