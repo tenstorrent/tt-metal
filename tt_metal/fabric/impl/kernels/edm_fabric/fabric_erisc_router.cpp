@@ -2327,15 +2327,17 @@ FORCE_INLINE void teardown(
 
 void initialize_state_for_txq1_active_mode() {
     eth_enable_packet_mode(receiver_txq_id);
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        *reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counter_addrs[i]) = 0;
-        *reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counter_addrs[i]) = 0;
-    }
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-        *reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counter_ptrs[i]) = 0;
-        *reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counter_ptrs[i]) = 0;
+        reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+}
+void initialize_state_for_txq1_active_mode_sender_side() {
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
+    }
 }
 
 void kernel_main() {
@@ -2347,6 +2349,9 @@ void kernel_main() {
         constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
+        }
+        if constexpr (is_sender_channel_serviced[0]) {
+            initialize_state_for_txq1_active_mode_sender_side();
         }
     }
 
