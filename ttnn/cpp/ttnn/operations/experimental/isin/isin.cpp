@@ -19,6 +19,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <enchantum/enchantum.hpp>
 #include <numeric>
 
 namespace ttnn::operations::experimental {
@@ -28,8 +29,6 @@ using isin::IsInCB;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-
-constexpr DataType OUTPUT_DATA_TYPE = DataType::UINT8;
 
 struct IsInPreprocessingResult {
     Tensor preprocessed_elements_tensor{};
@@ -42,9 +41,11 @@ struct IsInPreprocessingResult {
 };
 
 void validate_inputs(const Tensor& elements, const Tensor& test_elements) {
-    const auto& elements_shape = elements.logical_shape();
-    const auto& test_elements_shape = test_elements.logical_shape();
-    // must have same dtypes
+    TT_FATAL(
+        elements.dtype() == test_elements.dtype(),
+        "elements.dtype: {}, test_elements.dtype: {}, they must be equal",
+        enchantum::to_string(elements.dtype()),
+        enchantum::to_string(test_elements.dtype()));
 }
 
 uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_elements) {
@@ -52,12 +53,12 @@ uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_ele
     const auto confidence_margin = 0.8f;
     const auto elements_datum_size = elements.element_size();
     const auto test_elements_datum_size = test_elements.element_size();
-    const auto output_datum_size = 4;
+    const auto output_datum_size = elements_datum_size;
 
     return (static_cast<uint32_t>(
                l1_size_per_core * confidence_margin /
                (elements_datum_size + test_elements_datum_size + output_datum_size))) &
-           static_cast<uint32_t>(~(31U));
+           static_cast<uint32_t>(~(63U));
 }
 
 IsInPreprocessingResult isin_preprocessing(const Tensor& elements, const Tensor& test_elements) {
@@ -114,8 +115,8 @@ Tensor isin_postprocessing(Tensor& output_tensor, const IsInPreprocessingResult&
 Tensor IsInOperation::invoke(
     const Tensor& elements,
     const Tensor& test_elements,
-    const bool& assume_unique,
-    const bool& invert,
+    bool assume_unique,
+    bool invert,
     const std::optional<Tensor>& opt_out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
