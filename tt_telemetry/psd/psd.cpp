@@ -57,7 +57,6 @@ static TrayID get_tray_id_for_chip(
 
 static std::pair<TrayID, ASICLocation> get_asic_position(
     const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, chip_id_t chip_id, bool using_mock_cluster_desc) {
-    const auto& cluster2 = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster->get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -73,7 +72,8 @@ static std::pair<TrayID, ASICLocation> get_asic_position(
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
             auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-            auto tunnels = cluster2.get_tunnels_from_mmio_device(mmio_device);
+            auto tunnels_from_mmio_device = discover_tunnels_from_mmio_device(cluster);
+            auto tunnels = tunnels_from_mmio_device.at(mmio_device);
             for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
                 const auto& devices_on_tunnel = tunnels[tunnel];
                 auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
