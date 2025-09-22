@@ -12,7 +12,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      tracy: true
+      # tracy: true
       version: 22.04
   blackhole-multi-card-unit-tests:
     needs: build-artifact-profiler
