@@ -52,6 +52,7 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
+    echo "  --build-ttnn-op-runtime-predictor Build ttnn-op-runtime-predictor."
 }
 
 clean() {
@@ -87,6 +88,7 @@ cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+build_ttnn_op_runtime_predictor="OFF"
 
 # Requested handling for 20.04 -> 22.04 migration
 if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
@@ -139,6 +141,7 @@ enable-coverage
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
+build-ttnn-op-runtime-predictor
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -224,6 +227,8 @@ while true; do
             build_type="Debug";;
         --clean)
 	    clean; exit 0;;
+        --build-ttnn-op-runtime-predictor)
+            build_ttnn_op_runtime_predictor="ON";;
         --)
             shift;break;;
     esac
@@ -279,6 +284,7 @@ echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
+echo "INFO: With cpm module ttnn-op-runtime-predictor: $build_ttnn_op_runtime_predictor"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -405,6 +411,11 @@ if [ "$enable_fake_kernels_target" = "ON" ]; then
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
 else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
+fi
+if [ "$build_ttnn_op_runtime_predictor" = "ON" ]; then
+    cmake_args+=("-DBUILD_TTNN_OP_RUNTIME_PREDICTOR=ON")
+else
+    cmake_args+=("-DBUILD_TTNN_OP_RUNTIME_PREDICTOR=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

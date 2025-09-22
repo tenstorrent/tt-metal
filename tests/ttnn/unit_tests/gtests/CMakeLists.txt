@@ -60,12 +60,79 @@ target_sources(
         test_graph_capture_arguments_transpose.cpp
         test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
+        test_op_runtime_offline.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
     unit_tests_ttnn_basic
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
+
+# Add ttnn-op-runtime-predictor dependency if BUILD_TTNN_OP_RUNTIME_PREDICTOR is enabled
+if(BUILD_TTNN_OP_RUNTIME_PREDICTOR)
+    message(STATUS "BUILD_TTNN_OP_RUNTIME_PREDICTOR is enabled")
+
+    # Try multiple possible variable names for the ttnn-op-runtime-predictor source directory
+    set(TTNN_OP_RUNTIME_PREDICTOR_DIR "")
+    if(ttnn_op_runtime_predictor_SOURCE_DIR)
+        set(TTNN_OP_RUNTIME_PREDICTOR_DIR ${ttnn_op_runtime_predictor_SOURCE_DIR})
+        message(STATUS "Using ttnn_op_runtime_predictor_SOURCE_DIR: ${ttnn_op_runtime_predictor_SOURCE_DIR}")
+    elseif(ttnn-op-runtime-predictor_SOURCE_DIR)
+        set(TTNN_OP_RUNTIME_PREDICTOR_DIR ${ttnn-op-runtime-predictor_SOURCE_DIR})
+        message(STATUS "Using ttnn-op-runtime-predictor_SOURCE_DIR: ${ttnn-op-runtime-predictor_SOURCE_DIR}")
+    else()
+        # Fallback to CPM cache directory - find interface.hpp directly
+        file(GLOB_RECURSE INTERFACE_HPP_FILE "${CMAKE_SOURCE_DIR}/.cpmcache/ttnn-op-runtime-predictor/*/interface/interface.hpp")
+        if(INTERFACE_HPP_FILE)
+            list(GET INTERFACE_HPP_FILE 0 INTERFACE_FILE)
+            get_filename_component(TTNN_OP_RUNTIME_PREDICTOR_DIR ${INTERFACE_FILE} DIRECTORY)
+            get_filename_component(TTNN_OP_RUNTIME_PREDICTOR_DIR ${TTNN_OP_RUNTIME_PREDICTOR_DIR} DIRECTORY)
+            message(STATUS "Found ttnn-op-runtime-predictor at: ${TTNN_OP_RUNTIME_PREDICTOR_DIR}")
+        else()
+            message(
+                FATAL_ERROR
+                "ttnn-op-runtime-predictor interface.hpp not found. Make sure BUILD_TTNN_OP_RUNTIME_PREDICTOR is enabled and the package is downloaded."
+            )
+        endif()
+    endif()
+
+    # Verify the interface directory exists
+    if(NOT EXISTS "${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface/interface.hpp")
+        message(FATAL_ERROR "interface.hpp not found at ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface/interface.hpp")
+    endif()
+
+    message(STATUS "Adding include directory: ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface")
+
+    target_include_directories(
+        unit_tests_ttnn_basic
+        PRIVATE
+            ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface
+            ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/ops/include
+    )
+    target_compile_definitions(unit_tests_ttnn_basic PRIVATE BUILD_TTNN_OP_RUNTIME_PREDICTOR=1)
+
+    # Link the ttnn-op-runtime-predictor ops library
+    target_link_libraries(unit_tests_ttnn_basic PRIVATE ops_library interface_library)
+endif()
+
+add_library(unit_tests_ttnn_slow OBJECT)
+add_library(TTNN::Test::Slow ALIAS unit_tests_ttnn_slow)
+TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_slow)
+target_sources(
+    unit_tests_ttnn_slow
+    PRIVATE
+        test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
+        test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
+        test_multi_cq_multi_dev.cpp
+        test_multiprod_queue.cpp
+)
+target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(
+    unit_tests_ttnn_slow
     PRIVATE
         test_common_libs
         TTNN::CPP
