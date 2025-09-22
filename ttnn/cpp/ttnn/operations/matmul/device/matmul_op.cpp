@@ -1256,8 +1256,6 @@ tt::tt_metal::Tile get_output_tile(
         }
 
         return override_output_tile;
-    } else if (optional_output_tensor_tile.has_value()) {
-        return optional_output_tensor_tile.value();
     } else {
         return tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
     }
