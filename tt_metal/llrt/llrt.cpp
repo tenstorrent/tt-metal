@@ -474,16 +474,16 @@ void return_to_base_firmware_and_wait_for_heartbeat(
 }
 
 void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_core, bool enable) {
-    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    // constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
-    tt::tt_metal::DeviceAddr mailbox_addr = hal.get_dev_addr(k_CoreType, tt::tt_metal::HalL1MemAddrType::MAILBOX);
-    tt::tt_metal::DeviceAddr run_flag_addr =
-        mailbox_addr + hal.get_dev_msgs_factory(k_CoreType)
-                           .offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
-                               tt::tt_metal::dev_msgs::mailboxes_t::Field::aerisc_run_flag);
+    // tt::tt_metal::DeviceAddr mailbox_addr = hal.get_dev_addr(k_CoreType, tt::tt_metal::HalL1MemAddrType::MAILBOX);
+    tt::tt_metal::DeviceAddr run_flag_addr = 0;
+    // mailbox_addr + hal.get_dev_msgs_factory(k_CoreType)
+    //                    .offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
+    //                        tt::tt_metal::dev_msgs::mailboxes_t::Field::aerisc_run_flag);
     std::vector<uint32_t> en = {enable};
     tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
         en.data(), tt_cxy_pair(device_id, virtual_core), run_flag_addr);
