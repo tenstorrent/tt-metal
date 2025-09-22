@@ -2,49 +2,84 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-ResNet Tests for Panoptic DeepLab using real weights from R-52.pkl.
+ResNet Tests for Panoptic DeepLab using real weights from model_final_bd324a.pkl.
 """
 
 import pytest
 import torch
 import ttnn
+import os
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.reference.pytorch_resnet import ResNet
-from models.experimental.panoptic_deeplab.tt.tt_resnet import TtResNet
-from models.experimental.panoptic_deeplab.tt.common import create_resnet_state_dict
+from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
+    create_panoptic_deeplab_parameters,
+    fuse_conv_bn_parameters,
+)
+from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 
 
-def create_resnet_models(device=None):
-    """Create both PyTorch and TTNN ResNet models.
+PDL_L1_SMALL_SIZE = 37 * 1024  # Minimum L1 small size for Panoptic DeepLab
+
+
+def create_panoptic_models(device, weights_path):
+    """Create both PyTorch and TTNN Panoptic DeepLab models.
 
     Args:
         device: TTNN device for model creation
+        weights_path: Path to the model weights file
     """
-    state_dict = create_resnet_state_dict()
+    # Model configuration
+    num_classes = 19
+    project_channels = [32, 64]
+    decoder_channels = [256, 256, 256]
+    sem_seg_head_channels = 256
+    ins_embed_head_channels = 32
+    common_stride = 4
+    train_size = (512, 1024)
 
-    pytorch_model = ResNet()
-
-    pytorch_state_dict = {}
-    for key, value in state_dict.items():
-        if ".bias" in key and not ".norm.bias" in key:
-            continue
-        pytorch_state_dict[key] = value
-
-    pytorch_model.load_state_dict(pytorch_state_dict)
+    # Load PyTorch model with real weights
+    pytorch_model = PytorchPanopticDeepLab(
+        num_classes=num_classes,
+        common_stride=common_stride,
+        project_channels=project_channels,
+        decoder_channels=decoder_channels,
+        sem_seg_head_channels=sem_seg_head_channels,
+        ins_embed_head_channels=ins_embed_head_channels,
+        norm="SyncBN",
+        train_size=train_size,
+        weights_path=weights_path,
+    )
+    pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
     pytorch_model.eval()
-    pytorch_model = pytorch_model.to(torch.bfloat16)
 
-    if device:
-        ttnn_model = TtResNet(device=device, state_dict=state_dict, dtype=ttnn.bfloat16)
-    else:
-        ttnn_model = None
+    # Create TTNN parameters from the PyTorch model with loaded weights
+    ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
 
-    return pytorch_model, ttnn_model, state_dict
+    # Apply Conv+BatchNorm fusion to the parameters
+    logger.info("Applying Conv+BatchNorm fusion to parameters...")
+    fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
+    logger.info("Conv+BatchNorm fusion completed successfully")
+
+    # Create TTNN model with fused parameters
+    ttnn_model = TtPanopticDeepLab(
+        device=device,
+        parameters=fused_parameters,
+        num_classes=num_classes,
+        common_stride=common_stride,
+        project_channels=project_channels,
+        decoder_channels=decoder_channels,
+        sem_seg_head_channels=sem_seg_head_channels,
+        ins_embed_head_channels=ins_embed_head_channels,
+        norm="",
+        train_size=train_size,
+    )
+
+    return pytorch_model, ttnn_model
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "height,width",
@@ -52,13 +87,18 @@ def create_resnet_models(device=None):
 )
 def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds):
     """Test ResNet stem layer PCC between PyTorch and TTNN implementations."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
 
     try:
-        pytorch_model, ttnn_model, state_dict = create_resnet_models(device=device)
+        pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
     except FileNotFoundError:
-        pytest.fail("R-52.pkl file not found. Please place the weights file in the weights folder.")
+        pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
     torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(
@@ -68,18 +108,18 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    ttnn_stem_output = ttnn_model.stem(ttnn_input)
+    ttnn_stem_output = ttnn_model.backbone.stem(ttnn_input)
     with torch.no_grad():
-        torch_stem_output = pytorch_model.stem(torch_input)
+        torch_stem_output = pytorch_model.backbone.stem(torch_input)
 
     ttnn_output_torch = ttnn.to_torch(ttnn_stem_output).permute(0, 3, 1, 2)
-    pcc_passed, pcc_message = assert_with_pcc(torch_stem_output, ttnn_output_torch, 0.95)
+    pcc_passed, pcc_message = assert_with_pcc(torch_stem_output, ttnn_output_torch, 0.99)
 
-    logger.info(f"PCC: {pcc_message}")
+    logger.info(f"ResNet stem PCC: {pcc_message}")
     assert pcc_passed, f"ResNet stem PCC test failed: {pcc_message}"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "height,width",
@@ -88,13 +128,18 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds):
 @pytest.mark.parametrize("layer_name", ["res2", "res3", "res4", "res5"])
 def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_seeds):
     """Test ResNet individual layer PCC between PyTorch and TTNN implementations."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
 
     try:
-        pytorch_model, ttnn_model, state_dict = create_resnet_models(device=device)
+        pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
     except FileNotFoundError:
-        pytest.fail("R-52.pkl file not found. Please place the weights file in the weights folder.")
+        pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
     layer_specs = {
         "res2": (128, 1 / 4, 1 / 4),
@@ -116,40 +161,40 @@ def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_s
     )
 
     if layer_name == "res2":
-        for block in ttnn_model.res2:
+        for block in ttnn_model.backbone.res2:
             ttnn_layer_input = block(ttnn_layer_input)
         ttnn_layer_output = ttnn_layer_input
     elif layer_name == "res3":
-        for block in ttnn_model.res3:
+        for block in ttnn_model.backbone.res3:
             ttnn_layer_input = block(ttnn_layer_input)
         ttnn_layer_output = ttnn_layer_input
     elif layer_name == "res4":
-        for block in ttnn_model.res4:
+        for block in ttnn_model.backbone.res4:
             ttnn_layer_input = block(ttnn_layer_input)
         ttnn_layer_output = ttnn_layer_input
     elif layer_name == "res5":
-        for block in ttnn_model.res5:
+        for block in ttnn_model.backbone.res5:
             ttnn_layer_input = block(ttnn_layer_input)
         ttnn_layer_output = ttnn_layer_input
 
     with torch.no_grad():
         if layer_name == "res2":
-            torch_layer_output = pytorch_model.res2(torch_layer_input)
+            torch_layer_output = pytorch_model.backbone.res2(torch_layer_input)
         elif layer_name == "res3":
-            torch_layer_output = pytorch_model.res3(torch_layer_input)
+            torch_layer_output = pytorch_model.backbone.res3(torch_layer_input)
         elif layer_name == "res4":
-            torch_layer_output = pytorch_model.res4(torch_layer_input)
+            torch_layer_output = pytorch_model.backbone.res4(torch_layer_input)
         elif layer_name == "res5":
-            torch_layer_output = pytorch_model.res5(torch_layer_input)
+            torch_layer_output = pytorch_model.backbone.res5(torch_layer_input)
 
     ttnn_output_torch = ttnn.to_torch(ttnn_layer_output).permute(0, 3, 1, 2)
-    pcc_passed, pcc_message = assert_with_pcc(torch_layer_output, ttnn_output_torch, 0.95)
+    pcc_passed, pcc_message = assert_with_pcc(torch_layer_output, ttnn_output_torch, 0.99)
 
-    logger.info(f"PCC: {pcc_message}")
+    logger.info(f"ResNet {layer_name} PCC: {pcc_message}")
     assert pcc_passed, f"ResNet {layer_name} PCC test failed: {pcc_message}"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "height,width",
@@ -157,13 +202,18 @@ def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_s
 )
 def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds):
     """Test full ResNet PCC between PyTorch and TTNN implementations."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
 
     try:
-        pytorch_model, ttnn_model, state_dict = create_resnet_models(device=device)
+        pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
     except FileNotFoundError:
-        pytest.fail("R-52.pkl file not found. Please place the weights file in the weights folder.")
+        pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
     torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(
@@ -173,9 +223,9 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    ttnn_outputs = ttnn_model(ttnn_input)
+    ttnn_outputs = ttnn_model.backbone(ttnn_input)
     with torch.no_grad():
-        torch_outputs = pytorch_model(torch_input)
+        torch_outputs = pytorch_model.backbone(torch_input)
 
     failed_layers = []
     for layer_name in ["res2", "res3", "res4", "res5"]:
@@ -183,8 +233,8 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds):
         ttnn_output = ttnn_outputs[layer_name]
         ttnn_output_torch = ttnn.to_torch(ttnn_output).permute(0, 3, 1, 2)
 
-        pcc_passed, pcc_message = check_with_pcc(torch_output, ttnn_output_torch, 0.95)
-        logger.info(f"{layer_name} PCC: {pcc_message}")
+        pcc_passed, pcc_message = check_with_pcc(torch_output, ttnn_output_torch, 0.99)
+        logger.info(f"ResNet {layer_name} PCC: {pcc_message}")
 
         if not pcc_passed:
             failed_layers.append(layer_name)
