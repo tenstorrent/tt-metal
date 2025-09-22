@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       galaxy-multi-user-isolation-tests:
-        description: 'Run Galaxy multi-host job'
+        description: 'Run Galaxy multi-host job (not actually used in logic yet)'
         required: false
         default: true
         type: boolean
