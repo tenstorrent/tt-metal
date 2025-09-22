@@ -192,8 +192,6 @@
 // This is now the maximum size available for your application
 #define MEM_ERISC_MAX_SIZE MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE
 
-// For your static assert, use the base of the lowest reserved section
-#define MEM_ERISC_TOP MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE
 // Common Misc
 #define MEM_RETRAIN_COUNT_ADDR 0x7CC10
 #define MEM_RETRAIN_FORCE_ADDR 0x1EFC
@@ -256,12 +254,6 @@
 
 #define MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_AERISC_MAP_END
 #define MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH (MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE)
-
-// Used for Lite Fabric. Otherwise, Kernel config begins after MEM_AERISC_MAP_END and user data goes here.
-// Don't overwrite the scratch area. It's needed for initialization on cores over ethernet
-#define MEM_AERISC_LITE_FABRIC_CONFIG \
-    (MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE + MEM_ERISC_KERNEL_CONFIG_SIZE)
-#define MEM_AERISC_LITE_FABRIC_CONFIG_SIZE 73728
 
 #define MEM_AERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE
 #define MEM_SUBORDINATE_AERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE

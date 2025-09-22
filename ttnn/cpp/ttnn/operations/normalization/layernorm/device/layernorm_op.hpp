@@ -25,6 +25,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core(
     float eps,
     bool legacy_reduction,
     bool legacy_rsqrt,
+    bool use_welford,
     DeviceComputeKernelConfig compute_kernel_config);
 
 tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core_sharded(
