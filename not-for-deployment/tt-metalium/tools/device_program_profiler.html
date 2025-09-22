@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Device Program Profiler &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/device_program_profiler.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Inspector" href="inspector.html" />
+    <link rel="prev" title="Tracy Profiler" href="tracy_profiler.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+<li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Device Program Profiler</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#how-to-run">How to Run</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#example">Example</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#description">Description</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#limitations">Limitations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tools</a></li>
+      <li class="breadcrumb-item active">Device Program Profiler</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tools/device_program_profiler.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="device-program-profiler">
+<span id="id1"></span><h1>Device Program Profiler<a class="headerlink" href="#device-program-profiler" title="Permalink to this heading"></a>
+</h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Tools are only fully supported on source builds.</p>
+</div>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>Device-side performance profiling follows the same scope based profiling method that tracy uses on the host side.</p>
+<p>The macro <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN(</span> <span class="pre">zone_name</span> <span class="pre">)</span></code> is used similar to tracy’s <code class="docutils literal notranslate"><span class="pre">ZoneScopedN</span></code> macro to profile C++ scopes and assign them a custom name.</p>
+<section id="how-to-run">
+<h3>How to Run<a class="headerlink" href="#how-to-run" title="Permalink to this heading"></a>
+</h3>
+<p>Device-side profiling is only allowed in profiler builds. <code class="docutils literal notranslate"><span class="pre">build_metal.sh</span> <span class="pre">--enable-profiler</span> <span class="pre">--build-programming-examples</span></code> is the script for building profiler builds.</p>
+<p>Because downloading profiler results can add high runtime overhead, <code class="docutils literal notranslate"><span class="pre">TT_METAL_DEVICE_PROFILER=1</span></code> environment variable has to be set to perform the download.</p>
+<p>The commands to build and run the <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> example after following <a class="reference internal" href="../get_started/get_started.html#getting-started"><span class="std std-ref">Getting Started</span></a>:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
+build_metal.sh<span class="w"> </span>--enable-profiler
+<span class="nv">TT_METAL_DEVICE_PROFILER</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./build/programming_examples/profiler/test_full_buffer
+</pre></div>
+</div>
+<p>The generated csv is <code class="docutils literal notranslate"><span class="pre">profile_log_device.csv</span></code> and is saved under <code class="docutils literal notranslate"><span class="pre">{$TT_METAL_HOME}/generated/profiler/.logs</span></code> by default.</p>
+<p><code class="docutils literal notranslate"><span class="pre">build_metal.sh</span> <span class="pre">--enable-profiler</span> <span class="pre">--build-programming-examples</span></code> also enables tracy for the build by using the <code class="docutils literal notranslate"><span class="pre">ENABLE_TRACY=ON</span></code> cmake option. In tracy builds, device-side profiling data is also sent to tracy’s GUI.</p>
+</section>
+</section>
+<section id="example">
+<h2>Example<a class="headerlink" href="#example" title="Permalink to this heading"></a>
+</h2>
+<section id="description">
+<h3>Description<a class="headerlink" href="#description" title="Permalink to this heading"></a>
+</h3>
+<p><code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> is a profiler programming example. It show cases how we can use <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> to annotate time on kernel code.</p>
+<p>In this example device side profiling is used to measure the cycle count on the series of “nop” instructions that are looped.</p>
+<p>The host code of the <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> example is in <code class="docutils literal notranslate"><span class="pre">{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/test_full_buffer.cpp</span></code></p>
+<p>On top of tt_metal’s program dispatch API calls, two additional steps specific to this example are taken, which are:</p>
+<ol class="arabic simple">
+<li><p>Setting <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code> and <code class="docutils literal notranslate"><span class="pre">LOOP_SIZE</span></code> defines for the kernels</p></li>
+<li><p>Calling ReadDeviceProfilerResults after the call to Finish to collect the device side profiling data</p></li>
+</ol>
+<p>The kernel code for full buffer is in <code class="docutils literal notranslate"><span class="pre">{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp</span></code> and demonstrated below:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos"> 2</span><span class="c1">//</span>
+<span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos"> 4</span>
+<span class="linenos"> 5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;cstdint&gt;</span>
+<span class="linenos"> 6</span>
+<span class="linenos"> 7</span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 8</span><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">LOOP_COUNT</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">++</span><span class="p">)</span>
+<span class="linenos"> 9</span><span class="w">    </span><span class="p">{</span>
+<span class="linenos">10</span><span class="w">        </span><span class="n">DeviceZoneScopedN</span><span class="p">(</span><span class="s">"TEST-FULL"</span><span class="p">);</span>
+<span class="linenos">11</span><span class="c1">//Max unroll size</span>
+<span class="linenos">12</span><span class="cp">#pragma GCC unroll 65534</span>
+<span class="linenos">13</span><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">LOOP_SIZE</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span>
+<span class="linenos">14</span><span class="w">        </span><span class="p">{</span>
+<span class="linenos">15</span><span class="w">            </span><span class="k">asm</span><span class="p">(</span><span class="s">"nop"</span><span class="p">);</span>
+<span class="linenos">16</span><span class="w">        </span><span class="p">}</span>
+<span class="linenos">17</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">18</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>The inner for loop of “nop” instructions is executed multiple times. The count is determined by the define variable <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code> defined by the host side code.</p>
+<p>Device-side profiler provides marker information for all RISCs and cores used in the program. The following is the portion of the output csv of the <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> test for BRISC on worker core 1,1 on device 0:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="nl">ARCH</span><span class="p">:</span><span class="w"> </span><span class="n">grayskull</span><span class="p">,</span><span class="w"> </span><span class="n">CHIP_FREQ</span><span class="p">[</span><span class="n">MHz</span><span class="p">]</span><span class="o">:</span><span class="w"> </span><span class="mi">1202</span>
+<span class="n">PCIe</span><span class="w"> </span><span class="n">slot</span><span class="p">,</span><span class="w"> </span><span class="n">core_x</span><span class="p">,</span><span class="w"> </span><span class="n">core_y</span><span class="p">,</span><span class="w"> </span><span class="n">RISC</span><span class="w"> </span><span class="n">processor</span><span class="w"> </span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">timer_id</span><span class="p">,</span><span class="w"> </span><span class="n">time</span><span class="p">[</span><span class="n">cycles</span><span class="w"> </span><span class="n">since</span><span class="w"> </span><span class="n">reset</span><span class="p">],</span><span class="w"> </span><span class="n">stat</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">Run</span><span class="w"> </span><span class="n">ID</span><span class="p">,</span><span class="w"> </span><span class="n">zone</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">zone</span><span class="w"> </span><span class="n">phase</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">line</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">file</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">53427</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712278980</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">BRISC</span><span class="o">-</span><span class="n">FW</span><span class="w">    </span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">315</span><span class="p">,</span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">firmware</span><span class="o">/</span><span class="n">src</span><span class="o">/</span><span class="n">tt</span><span class="mi">-1</span><span class="n">xx</span><span class="o">/</span><span class="n">brisc</span><span class="p">.</span><span class="n">cc</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">118963</span><span class="p">,</span><span class="mi">11233712334431</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">BRISC</span><span class="o">-</span><span class="n">FW</span><span class="w">    </span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">315</span><span class="p">,</span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">firmware</span><span class="o">/</span><span class="n">src</span><span class="o">/</span><span class="n">tt</span><span class="mi">-1</span><span class="n">xx</span><span class="o">/</span><span class="n">brisc</span><span class="p">.</span><span class="n">cc</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">25255</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712279447</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">BRISC</span><span class="o">-</span><span class="n">KERNEL</span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">40</span><span class="w"> </span><span class="p">,</span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">firmware</span><span class="o">/</span><span class="n">src</span><span class="o">/</span><span class="n">tt</span><span class="mi">-1</span><span class="n">xx</span><span class="o">/</span><span class="n">brisck</span><span class="p">.</span><span class="n">cc</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">90791</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712325701</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">BRISC</span><span class="o">-</span><span class="n">KERNEL</span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">40</span><span class="w"> </span><span class="p">,</span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">firmware</span><span class="o">/</span><span class="n">src</span><span class="o">/</span><span class="n">tt</span><span class="mi">-1</span><span class="n">xx</span><span class="o">/</span><span class="n">brisck</span><span class="p">.</span><span class="n">cc</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">36986</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712279499</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">102522</span><span class="p">,</span><span class="mi">11233712279792</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">36986</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712279863</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">102522</span><span class="p">,</span><span class="mi">11233712280147</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">36986</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712280205</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
+<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">102522</span><span class="p">,</span><span class="mi">11233712280470</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
+<span class="p">.</span>
+<span class="p">.</span>
+<span class="p">.</span>
+<span class="p">.</span>
+</pre></div>
+</div>
+<p>You can see that the log starts with <code class="docutils literal notranslate"><span class="pre">BRISC-FW</span></code> and <code class="docutils literal notranslate"><span class="pre">BRISC-KERNEL</span></code> begin and end entries. These are always present in device profiler data. Following the source file and line number presented in the log is the best way to understand what scope in code they are profiling.</p>
+<p>In short, <code class="docutils literal notranslate"><span class="pre">BRISC-FW</span></code> is profiling the duration of a single iteration of BRISC forever loop. <code class="docutils literal notranslate"><span class="pre">BRISC-KERNEL</span></code> is profiling the duration of the kernel main function.</p>
+<p>After the default markers, the log presents the data for the <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code> zone from the full buffer test. Source file is pointing to the intermediate kernel source file that gets
+generated. Future updates will make this field to point to the original kernel file.</p>
+<p>In total profiling 125 scopes are supported by device-side profiler. In the snippet above, only the first three entries for the <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code> scope is shown.</p>
+<p>Below is couple of screenshots from tracy’s GUI, presenting the full buffer example.</p>
+<p>Looking at one iteration of FW loop, you can see that all RISCs are reporting 125 profiled zones under their <code class="docutils literal notranslate"><span class="pre">KERNEL</span></code> scope.</p>
+<img alt="tract device zoomed out" src="../_images/tracy-device-zoom-out.png">
+<p>Zooming in to the scopes, you can see single <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code> zones presented in series.</p>
+<img alt="tract device zoomed in" src="../_images/tracy-device-zoom-in.png">
+</section>
+</section>
+<section id="limitations">
+<h2>Limitations<a class="headerlink" href="#limitations" title="Permalink to this heading"></a>
+</h2>
+<ul class="simple">
+<li><p>Each core has limited L1 buffer for recording device side scopes. Space for only 125 scopes is reserved.</p></li>
+<li><p>The cycle count from RISCs on the same core are perfectly synced as they all read from the same clock counter.</p></li>
+<li><p>The cycle counts from RISCs on different cores are closely synced with minor skews, allowing for accurate comparisons on event timestamps across cores.
+<strong>Note</strong> on Grayskull <code class="docutils literal notranslate"><span class="pre">tensix_reset</span></code> and <code class="docutils literal notranslate"><span class="pre">tt-smi</span></code> soft resets will significantly worsen the skew between core clocks making core to core comparison inaccurate and wrong. Full host
+reboot is required for syncing core clocks if soft reset is used.</p></li>
+<li><p>The cycle counts from cores on different devices are usually not synced. Comparing times across devices requires this consideration.</p></li>
+</ul>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="tracy_profiler.html" class="btn btn-neutral float-left" title="Tracy Profiler" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="inspector.html" class="btn btn-neutral float-right" title="Inspector" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

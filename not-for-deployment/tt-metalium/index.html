@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome to TT-Metalium documentation! &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/index.html" />
+  <!--[if lt IE 9]>
+    <script src="_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="_static/jquery.js?v=5d32c60e"></script>
+        <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="_static/doctools.js?v=888ff710"></script>
+        <script src="_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Getting Started" href="get_started/get_started.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="#">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="#">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Welcome to TT-Metalium documentation!</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="welcome-to-tt-metalium-documentation">
+<h1>Welcome to TT-Metalium documentation!<a class="headerlink" href="#welcome-to-tt-metalium-documentation" title="Permalink to this heading"></a>
+</h1>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1">
+<a class="reference internal" href="get_started/get_started.html">Getting Started</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="get_started/get_started.html#installation">Installation</a></li>
+<li class="toctree-l2">
+<a class="reference internal" href="get_started/get_started.html#quick-start-guide">Quick Start Guide</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#basic-usage">Basic Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#intermediate-usage">Intermediate Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="get_started/get_started.html#advanced-usage">Advanced Usage</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="get_started/get_started.html#next-steps">Next Steps</a></li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="installing.html">Install</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="installing.html#prerequisites">Prerequisites:</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#set-up-the-hardware">1: Set Up the Hardware</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="installing.html#install-software-dependencies">2: Install Software Dependencies</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#option-1-tt-installer-script-recommended">Option 1: <strong>TT-Installer</strong> Script (recommended)</a></li>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#option-2-manual-installation">Option 2: Manual Installation</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="installing.html#tt-nn-tt-metalium-installation">TT-NN / TT-Metalium Installation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#there-are-four-options-for-installing-tt-metalium">There are four options for installing TT-Metalium:</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="installing.html#binaries">Binaries</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#step-1-install-the-latest-wheel">Step 1. Install the Latest Wheel:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#step-2-for-models-users-only-set-up-environment-for-models">Step 2. (For models users only) Set Up Environment for Models:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#docker-release-image">Docker Release Image</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="installing.html#source">Source</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#step-1-clone-the-repository">Step 1. Clone the Repository:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#step-2-build-the-library">Step 2. Build the Library:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#step-3-virtual-environment-setup">Step 3. Virtual Environment Setup</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="installing.html#anaconda">Anaconda</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="installing.html#step-1-install-the-latest-package">Step 1. Install the Latest Package:</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="installing.html#you-are-all-set">You are All Set!</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#to-verify-your-installation-for-source-or-wheel-installation-only-try-executing-a-programming-example">To verify your installation (for source or wheel installation only), try executing a programming example:</a></li>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#interested-in-contributing">Interested in Contributing?</a></li>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#multi-card-configuration-tt-topology">Multi-Card Configuration (TT-Topology)</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="installing.html#virtual-machine-requirements">Virtual Machine Requirements</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#why-it-matters">Why It Matters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="installing.html#requirements-for-vms">Requirements for VMs</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1">
+<a class="reference internal" href="tt_metal/examples/index.html">Programming Examples</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/dram_loopback.html">DRAM Loopback</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#device-initialization">Device initialization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#create-buffers-in-dram-and-l1-sram">Create buffers in DRAM and L1 (SRAM)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#sending-real-data-into-dram">Sending real data into DRAM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#creating-a-data-movement-kernel">Creating a data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#setting-runtime-arguments-for-the-data-movement-kernel">Setting runtime arguments for the data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#running-the-program">Running the program</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/dram_loopback.html#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/eltwise_binary.html">Eltwise binary</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#circular-buffers">Circular buffers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#data-movement-and-compute-kernels">Data movement and compute kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_binary.html#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html">Eltwise SFPU</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#the-kernels">The kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#set-up-runtime-arguments">Set up runtime arguments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#program-execution-and-final-check">Program execution and final check</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/eltwise_sfpu.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/matmul_single_core.html">Matmul (Single Core)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#device-initialization-program-setup">Device Initialization &amp; Program Setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#data-preparation-and-golden-reference">Data Preparation and Golden Reference</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#dram-buffer-allocation">DRAM Buffer Allocation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#circular-buffer-orchestration-for-pipelined-matmul">Circular Buffer Orchestration for Pipelined MatMul</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/matmul_single_core.html#matmul-kernel-pipeline-breakdown">Matmul Kernel Pipeline Breakdown</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-reader-kernel">The reader kernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-compute-kernel">The compute kernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#the-writer-kernel">The writer kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#kernel-execution-and-result-verification">Kernel execution and result verification</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_single_core.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core.html">Matmul (Multi Core)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#device-initialization-program-setup">Device Initialization &amp; Program Setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#calculating-work-distribution">Calculating Work Distribution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#buffer-and-circular-buffer-allocation">Buffer and Circular Buffer Allocation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#partitioning-work-in-kernels">Partitioning Work in Kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#kernel-creation-and-parameter-setup">Kernel Creation and Parameter Setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#program-execution-receiving-results-and-cleanup">Program Execution, Receiving Results and Cleanup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#conclusion">Conclusion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/examples/matmul_multi_core.html#references">References</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html">Data Reuse in <cite>matmul_multicore_reuse</cite></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#fine-grained-block-size-control">Fine-Grained Block Size Control</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#intermediate-circular-buffer-configuration">Intermediate Circular Buffer Configuration</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#stride-kernel-arguments">Stride Kernel Arguments</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#intermediate-results-handling">Intermediate Results Handling</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#additional-compile-time-argument">Additional Compile-Time Argument</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#configuring-core-ranges-for-tile-distribution">Configuring Core Ranges for Tile Distribution</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#circular-buffer-creation-for-coregrid">Circular Buffer Creation for CoreGrid</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#multicast-reader-writer-kernel-setup">Multicast Reader/Writer Kernel Setup</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#new-compute-kernel-fused-bias-addition-and-activation-functions">New Compute Kernel: Fused Bias Addition and Activation Functions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#semaphores">Semaphores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html#kernel-runtime-arguments">Kernel Runtime Arguments</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tt_metal/advanced_topics/index.html">Advanced Topics</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/advanced_topics/index.html#hardware-implications-and-the-effects">Hardware implications and the effects</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/advanced_topics/tiles.html">Tiles</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/tiles.html#internal-structure-of-a-tile">Internal structure of a Tile</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/tiles.html#conversion-between-tiles-and-row-major-format">Conversion between tiles and row-major format</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html">Memory from a kernel developer’s perspective</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#data-addressing-on-tenstorrent-processors">Data addressing on Tenstorrent processors</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#risc-v-address-space">RISC-V Address Space</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#dram-tiles">DRAM tiles</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#memory-access-via-the-noc">Memory access via the NoC</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#tensor-layout">Tensor Layout</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#memory-placement">Memory placement</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#lock-step-allocation">Lock step allocation</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#interleaved-memory">Interleaved memory</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#sram-buffers">SRAM buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/advanced_topics/memory_for_kernel_developers.html#sharded-tensor">Sharded tensor</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html">Compute Engines and Data Flow within Tensix</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#component-introduction">Component introduction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#dst-register">Dst register</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#matrix-engine-fpu">Matrix engine/FPU</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#vector-engine-sfpu">Vector engine/SFPU</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tt_metal/apis/index.html">APIs</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/apis/host_apis.html">Host APIs</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/host_apis/program/program.html">Program</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/program/CreateProgram.html">CreateProgram</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/host_apis/buffers/buffers.html">Buffers</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/buffers/CreateBuffer.html">CreateBuffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/buffers/CircularBuffers.html">CircularBuffers</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/buffers/CreateSemaphore.html">CreateSemaphore</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/buffers/DeallocateBuffer.html">DeallocateBuffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/buffers/AssignGlobalBufferToProgram.html">AssignGlobalBufferToProgram</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/host_apis/command_queue/command_queue.html">CommandQueue</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EnqueueWriteBuffer.html">EnqueueWriteBuffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EnqueueWriteSubBuffer.html">EnqueueWriteSubBuffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EnqueueReadBuffer.html">EnqueueReadBuffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EnqueueReadSubBuffer.html">EnqueueReadSubBuffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EnqueueProgram.html">EnqueueProgram</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EnqueueRecordEvent.html">EnqueueRecordEvent</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EnqueueWaitForEvent.html">EnqueueWaitForEvent</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EventQuery.html">EventQuery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/EventSynchronize.html">EventSynchronize</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/LightMetalBeginCapture.html">LightMetalBeginCapture</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/LightMetalEndCapture.html">LightMetalEndCapture</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/Finish.html">Finish</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/command_queue/Synchronize.html">Synchronize</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/host_apis/device_management/device_management.html">Device Management</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/device_management/CreateDevice.html">CreateDevice</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/device_management/CloseDevice.html">CloseDevice</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/device_management/QueryDevices.html">QueryDevices</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/host_apis/kernels/kernels.html">Kernels</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/kernels/CreateKernel.html">CreateKernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/kernels/CreateKernelFromString.html">CreateKernelFromString</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tt_metal/apis/host_apis/runtime_args/runtime_args.html">Runtime Arguments</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/host_apis/profiler/profiler.html">Profiler</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/apis/host_apis/profiler/ReadMeshDeviceProfilerResults.html">ReadMeshDeviceProfilerResults</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/apis/kernel_apis.html">Kernel APIs</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/kernel_apis.html#common-apis">Common APIs</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/circular_buffers.html">Circular Buffer APIs</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/cb_pages_available_at_front.html">cb_pages_available_at_front</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/cb_wait_front.html">cb_wait_front</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/cb_pages_reservable_at_back.html">cb_pages_reservable_at_back</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/cb_reserve_back.html">cb_reserve_back</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/cb_push_back.html">cb_push_back</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/cb_pop_front.html">cb_pop_front</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/get_read_ptr.html">get_read_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/circular_buffers/get_write_ptr.html">get_write_ptr</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/kernel_args/kernel_args.html">Kernel Argument APIs</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/kernel_args/get_arg_addr.html">get_arg_addr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/kernel_args/get_arg_val.html">get_arg_val</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/kernel_args/get_common_arg_addr.html">get_common_arg_addr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/kernel_args/get_common_arg_val.html">get_common_arg_val</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/kernel_args/get_compile_time_arg_val.html">get_compile_time_arg_val</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/kernel_apis.html#data-movement">Data Movement</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/data_movement.html">Data Movement APIs</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read.html">noc_async_read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_set_state.html">noc_async_read_set_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_with_state.html">noc_async_read_with_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_one_packet.html">noc_async_read_one_packet</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_one_packet_set_state.html">noc_async_read_one_packet_set_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_one_packet_with_state.html">noc_async_read_one_packet_with_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_page.html">noc_async_read_page</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_shard.html">noc_async_read_shard</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write.html">noc_async_write</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_multicast.html">noc_async_write_multicast</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_multicast_loopback_src.html">noc_async_write_multicast_loopback_src</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_one_packet.html">noc_async_write_one_packet</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_one_packet_set_state.html">noc_async_write_one_packet_set_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_one_packet_with_state.html">noc_async_write_one_packet_with_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_multicast_one_packet.html">noc_async_write_multicast_one_packet</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_page.html">noc_async_write_page</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_shard.html">noc_async_write_shard</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_inline_dw_write.html">noc_inline_dw_write</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_inline_dw_write_set_state.html">noc_inline_dw_write_set_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_inline_dw_write_with_state.html">noc_inline_dw_write_with_state</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_barrier.html">noc_async_read_barrier</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_barrier.html">noc_async_write_barrier</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_atomic_barrier.html">noc_async_atomic_barrier</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_full_barrier.html">noc_async_full_barrier</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_barrier_with_trid.html">noc_async_read_barrier_with_trid</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_barrier_with_trid.html">noc_async_write_barrier_with_trid</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_writes_flushed.html">noc_async_writes_flushed</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_async_posted_writes_flushed.html">noc_async_posted_writes_flushed</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/get_semaphore.html">get_semaphore</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_semaphore_set.html">noc_semaphore_set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_semaphore_set_remote.html">noc_semaphore_set_remote</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_semaphore_set_multicast.html">noc_semaphore_set_multicast</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_semaphore_set_multicast_loopback_src.html">noc_semaphore_set_multicast_loopback_src</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_semaphore_inc.html">noc_semaphore_inc</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_semaphore_wait.html">noc_semaphore_wait</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/noc_semaphore_wait_min.html">noc_semaphore_wait_min</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/get_noc_addr.html">get_noc_addr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/get_noc_addr_from_bank_id.html">get_noc_addr_from_bank_id</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/get_noc_multicast_addr.html">get_noc_multicast_addr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/data_movement/ordering.html">Ordering (NOC, CMD_BUF, VC)</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/apis/kernel_apis.html#compute">Compute</a><ul>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html">Compute APIs</a><ul>
+<li class="toctree-l5">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#synchronization">Synchronization</a><ul>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/acquire_dst.html">acquire_dst</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/release_dst.html">release_dst</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/reg_api.html">reg_api</a></li>
+</ul>
+</li>
+<li class="toctree-l5">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#compute">Compute</a><ul>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#initialization">Initialization</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/init_functions.html">any_init</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_op_init_funcs.html">binary_init_funcs</a></li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#compute-fpu-matrix-engine">Compute (FPU/matrix engine)</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/add_tiles.html">add_tiles</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sub_tiles.html">sub_tiles</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/mul_tiles.html">mul_tiles</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/add_tiles_bcast.html">add_tiles_bcast</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sub_tiles_bcast.html">sub_tiles_bcast</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/mul_tiles_bcast.html">mul_tiles_bcast</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/matmul_tiles.html">matmul_tiles</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/matmul_block.html">matmul_block</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/reduce_tile.html">reduce_tile</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/transpose_wh_tile.html">transpose_wh_tile</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/tilize.html">tilize</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/untilize.html">untilize</a></li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#compute-sfpu-vector-engine">Compute (SFPU/vector engine)</a><ul>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#basic-arithmetic-operations">Basic arithmetic operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/add_binary_tile.html">add_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sub_binary_tile.html">sub_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/mul_binary_tile.html">mul_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/div_binary_tile.html">div_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/rsub_tile.html">rsub_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/rsub_binary_tile.html">rsub_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/power_tile.html">power_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/power_binary_tile.html">power_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/square_tile.html">square_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sqrt_tile.html">sqrt_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/rsqrt_tile.html">rsqrt_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/recip_tile.html">recip_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/abs_tile.html">abs_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/negative_tile.html">negative_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binop_with_scalar_tile.html">binop_with_scalar_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/tiled_prod_tile.html">tiled_prod_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#integer-operations">Integer operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/add_int_tile.html">add_int_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sub_int_tile.html">sub_int_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/mul_int_tile.html">mul_int_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/rsub_int32_tile.html">rsub_int32_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/gcd_tile.html">gcd_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/lcm_tile.html">lcm_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/remainder_tile.html">remainder_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/fmod_tile.html">fmod_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#exponential-and-logarithmic-functions">Exponential and logarithmic functions</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/exp_tile.html">exp_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/exp2_tile.html">exp2_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/expm1_tile.html">expm1_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/log_tile.html">log_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/log1p_tile.html">log1p_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/log_with_base_tile.html">log_with_base_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/xlogy_binary_tile.html">xlogy_binary_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#comparison-and-logical-operations">Comparison and logical operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_eq_tile.html">unary_eq_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_ne_tile.html">unary_ne_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_gt_tile.html">unary_gt_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_ge_tile.html">unary_ge_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_lt_tile.html">unary_lt_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_le_tile.html">unary_le_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_max_tile.html">unary_max_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/unary_min_tile.html">unary_min_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/max_tile.html">max_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_max_tile.html">binary_max_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_min_tile.html">binary_min_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/ltz_tile.html">ltz_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/lez_tile.html">lez_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/gtz_tile.html">gtz_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/gez_tile.html">gez_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/eqz_tile.html">eqz_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/nez_tile.html">nez_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/logical_not_unary_tile.html">logical_not_unary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/isinf_tile.html">isinf_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/isinf_tile.html#isposinf-tile">isposinf_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/isinf_tile.html#isneginf-tile">isneginf_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/isinf_tile.html#isfinite-tile">isfinite_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/isnan_tile.html">isnan_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/heaviside_tile.html">heaviside_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#bitwise-operations">Bitwise operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/bitwise_and_tile.html">bitwise_and_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/bitwise_or_tile.html">bitwise_or_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/bitwise_xor_tile.html">bitwise_xor_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/bitwise_not_tile.html">bitwise_not_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/bitwise_and_binary_tile.html">bitwise_and_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/bitwise_or_binary_tile.html">bitwise_or_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/bitwise_xor_binary_tile.html">bitwise_xor_binary_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/left_shift_tile.html">left_shift_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/right_shift_tile.html">right_shift_tile</a></li>
+<li class="toctree-l8">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_shift_tile.html">binary_shift_tile</a><ul>
+<li class="toctree-l9"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_shift_tile.html#left-shift">Left Shift</a></li>
+<li class="toctree-l9"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_shift_tile.html#right-shift">Right Shift</a></li>
+<li class="toctree-l9"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/binary_shift_tile.html#logical-right-shift">Logical Right Shift</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#rounding-and-ceiling-functions">Rounding and ceiling functions</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/ceil_tile.html">ceil_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/round_tile.html">Rounding operations</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/round_tile.html#frac-tile">frac_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/round_tile.html#trunc-tile">trunc_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/round_tile.html#round-tile">round_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/round_tile.html#floor-tile">floor_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/clamp_tile.html">clamp_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/threshold_tile.html">threshold_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sign_tile.html">sign_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/signbit_tile.html">signbit_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#hyperbolic-functions">Hyperbolic functions</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/asinh_tile.html">asinh_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/atanh_tile.html">atanh_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#special-mathematical-functions">Special mathematical functions</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/i0_tile.html">i0_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/i1_tile.html">i1_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/cumsum_tile.html">cumsum_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/alt_complex_rotate90_tile.html">alt_complex_rotate90_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#initialization-and-utilities">Initialization and utilities</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute_kernel_hw_startup.html">compute_kernel_hw_startup</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#trigonometric-functions">Trigonometric functions</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/erf_tile.html">erf_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/erfc_tile.html">erfc_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/erfinv_tile.html">erfinv_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/tanh_tile.html">tanh_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/tan_tile.html">tan_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sin_tile.html">sin_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/cos_tile.html">cos_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/asin_tile.html">asin_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/atan_tile.html">atan_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/acos_tile.html">acos_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/acosh_tile.html">acosh_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#activation-functions">Activation functions</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/relu_tile.html">relu_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/relu_tile.html#relu-max-tile">relu_max_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/relu_tile.html#relu-min-tile">relu_min_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/relu_tile.html#leaky-relu-tile">leaky_relu_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/elu_tile.html">elu_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/gelu_tile.html">gelu_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/sigmoid_tile.html">sigmoid_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/celu_tile.html">celu_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/silu_tile.html">silu_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/prelu_tile.html">prelu_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/softplus_tile.html">softplus_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/softsign_tile.html">softsign_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/hardsigmoid_tile.html">hardsigmoid_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/hardtanh_tile.html">hardtanh_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#data-manipulation-and-processing">Data manipulation and processing</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/fill_tile.html">fill_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/identity_tile.html">identity_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/mask_tile.html">mask_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/where_tile.html">where_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/reshuffle_rows_tile.html">reshuffle_rows_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/typecast_tile.html">typecast_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/dropout_tile.html">dropout_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/rand_tile.html">rand_tile</a></li>
+</ul>
+</li>
+<li class="toctree-l7">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/compute/compute.html#quantization-operations">Quantization operations</a><ul>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/quant_tile.html">quant_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/requant_tile.html">requant_tile</a></li>
+<li class="toctree-l8"><a class="reference internal" href="tt_metal/apis/kernel_apis/compute/dequant_tile.html">dequant_tile</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/packing_apis.html">Packing APIs</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/copy_tile.html">copy_tile</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/pack_tile.html">pack_tile</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/pack_untilize.html">pack_untilize_block</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/pack_unpack/reconfig_data_format.html">reconfig_data_format</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html">Low Level Kernels</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#overview">Overview</a></li>
+<li class="toctree-l5">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#compiler-options-flags">Compiler Options/Flags</a><ul>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#example">Example</a></li>
+</ul>
+</li>
+<li class="toctree-l5">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#details">Details</a><ul>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#namespace">Namespace</a></li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#user-visible-data-types">User Visible Data Types</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#user-visible-constants">User Visible Constants</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#user-visible-objects">User Visible Objects</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#macros">Macros</a></li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#data-type-details">Data Type Details</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#vfloat">vFloat</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#vint">vInt</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#vuint">vUInt</a></li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#library">Library</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#grayskull-and-wormhole">Grayskull and Wormhole</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#wormhole-only">Wormhole only</a></li>
+</ul>
+</li>
+<li class="toctree-l6">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#immediate-floating-point-values">Immediate Floating Point Values</a><ul>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#boolean-operators">Boolean Operators</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#vbool">vBool</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#assigning-and-using-constant-registers">Assigning and Using Constant Registers</a></li>
+<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#assigning-lregs">Assigning LRegs</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l5">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#miscellaneous">Miscellaneous</a><ul>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#register-pressure-management">Register Pressure Management</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#optimizer">Optimizer</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#sfpreplay">SFPREPLAY</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#emulation">Emulation</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#tools">Tools</a></li>
+</ul>
+</li>
+<li class="toctree-l5">
+<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#pitfalls-oddities-limitations">Pitfalls/Oddities/Limitations</a><ul>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#arrays-storing-to-memory">Arrays/Storing to Memory</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#function-calls">Function Calls</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#register-spilling">Register Spilling</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#error-messages">Error Messages</a></li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#limitations">Limitations</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="tools/index.html">Tools</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="tools/kernel_print.html">Kernel Debug Print</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/kernel_print.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/kernel_print.html#enabling">Enabling</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tools/watcher.html">Watcher</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#enabling">Enabling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#details">Details</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#gdb-integration">gdb Integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#example">Example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#asserts">Asserts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#pausing">Pausing</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#ring-buffer">Ring Buffer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#stack-usage-measurement">Stack Usage Measurement</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#debug-delays">Debug Delays</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/watcher.html#eth-link">Eth Link</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tools/tracy_profiler.html">Tracy Profiler</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#gui">GUI</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/tracy_profiler.html#profiling-host">Profiling Host</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/tracy_profiler.html#c">C++</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tools/tracy_profiler.html#python">Python</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tools/tracy_profiler.html#python-scripts">Python Scripts</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tools/tracy_profiler.html#pytest-sessions">Pytest Sessions</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tools/tracy_profiler.html#instrumenting-python-code">Instrumenting Python Code</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tools/tracy_profiler.html#signposts-in-python-code">Signposts in Python Code</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tools/tracy_profiler.html#line-level-profiling">Line-level Profiling</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#profiling-device">Profiling Device</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tools/device_program_profiler.html">Device Program Profiler</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/device_program_profiler.html#overview">Overview</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/device_program_profiler.html#how-to-run">How to Run</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/device_program_profiler.html#example">Example</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/device_program_profiler.html#description">Description</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="tools/device_program_profiler.html#limitations">Limitations</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="tools/inspector.html">Inspector</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/inspector.html#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/inspector.html#enabling">Enabling</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1">
+<a class="reference internal" href="resources/support.html">Support</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="resources/support.html#reporting-bugs-feature-proposals-or-support-requests">Reporting bugs, feature proposals, or support requests</a></li>
+<li class="toctree-l2"><a class="reference internal" href="resources/support.html#troubleshooting-and-debugging-tips">Troubleshooting and debugging tips</a></li>
+<li class="toctree-l2"><a class="reference internal" href="resources/support.html#community">Community</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+</div>
+</section>
+
+<section id="indices-and-tables">
+<h1>Indices and tables<a class="headerlink" href="#indices-and-tables" title="Permalink to this heading"></a>
+</h1>
+<ul class="simple">
+<li><p><a class="reference internal" href="genindex.html"><span class="std std-ref">Index</span></a></p></li>
+<li><p><a class="reference internal" href="py-modindex.html"><span class="std std-ref">Module Index</span></a></p></li>
+<li><p><a class="reference internal" href="search.html"><span class="std std-ref">Search Page</span></a></p></li>
+</ul>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="get_started/get_started.html" class="btn btn-neutral float-right" title="Getting Started" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

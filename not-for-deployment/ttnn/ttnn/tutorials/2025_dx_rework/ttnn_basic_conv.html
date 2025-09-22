@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Basic Convolution &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_basic_conv.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Running a Simple CNN Inference on CIFAR-10" href="ttnn_simplecnn_inference.html" />
+    <link rel="prev" title="Multi-Head Attention" href="ttnn_multihead_attention.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Basic Convolution</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Import-the-necessary-libraries">Import the necessary libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Set-manual-seed-for-reproducibility">Set manual seed for reproducibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Create-forward-method">Create forward method</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Set-input-and-convolution-parameters">Set input and convolution parameters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Create-tensors">Create tensors</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Run-convolution-operation">Run convolution operation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-The-Device">Close The Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-example-and-output">Full example and output</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_simplecnn_inference.html">Running a Simple CNN Inference on CIFAR-10</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_visualizer.html">TT-NN Visualizer</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Basic Convolution</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/2025_dx_rework/ttnn_basic_conv.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Basic-Convolution">
+<h1>Basic Convolution<a class="headerlink" href="#Basic-Convolution" title="Permalink to this heading"></a>
+</h1>
+<p>In this tutorial we present the operation of the convolution layer in building neural models.</p>
+<p>Lets create the example file, <code class="docutils literal notranslate"><span class="pre">ttnn_basic_conv.py</span></code></p>
+<section id="Import-the-necessary-libraries">
+<h2>Import the necessary libraries<a class="headerlink" href="#Import-the-necessary-libraries" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Set-manual-seed-for-reproducibility">
+<h2>Set manual seed for reproducibility<a class="headerlink" href="#Set-manual-seed-for-reproducibility" title="Permalink to this heading"></a>
+</h2>
+<p>Setting a manual seed ensures that the results are reproducible by initializing the random number generators to a fixed state.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Open-Tenstorrent-device">
+<h2>Open Tenstorrent device<a class="headerlink" href="#Open-Tenstorrent-device" title="Permalink to this heading"></a>
+</h2>
+<p>Create necessary device on which we will run our program, with custom L1 memory config. An extra parameter we use here, <code class="docutils literal notranslate"><span class="pre">l1_small_size</span></code>, sets aside a portion of the on-chip L1 memory for sliding-window operations, like convolutions, and other kernels that need quick, scratchpad-like memory. For simple CNNs, 8 kB will be enough, moving up to 32 kB or more for more complex models.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Create-forward-method">
+<h2>Create forward method<a class="headerlink" href="#Create-forward-method" title="Permalink to this heading"></a>
+</h2>
+<p>This function performs the convolution operation on the input tensor using the initialized layer parameters. Amongst other inputs, the convolution function takes a configuration parameter: <a class="reference internal" href="../../api/ttnn.Conv2dConfig.html"><span class="doc">ttnn.Conv2dConfig</span></a>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
+    <span class="n">input_tensor</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">weight_tensor</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">bias_tensor</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">out_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">kernel_size</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span>
+    <span class="n">device</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Device</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+    <span class="c1"># Permute input from PyTorch BCHW (batch, channel, height, width)</span>
+    <span class="c1"># to NHWC (batch, height, width, channel) which TTNN expects</span>
+    <span class="n">permuted_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+    <span class="c1"># Get shape after permutation</span>
+    <span class="n">B</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">C</span> <span class="o">=</span> <span class="n">permuted_input</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="c1"># Reshape input to a flat image of shape (1, 1, B*H*W, C)</span>
+    <span class="c1"># This flattens the spatial dimensions and prepares it for TTNN conv2d</span>
+    <span class="n">reshaped_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">permuted_input</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">B</span> <span class="o">*</span> <span class="n">H</span> <span class="o">*</span> <span class="n">W</span><span class="p">,</span> <span class="n">C</span><span class="p">))</span>
+
+    <span class="c1"># Set up convolution configuration for TTNN conv2d</span>
+    <span class="n">conv_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Conv2dConfig</span><span class="p">(</span><span class="n">weights_dtype</span><span class="o">=</span><span class="n">weight_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+
+    <span class="c1"># Perform 2D convolution using TTNN</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">conv2d</span><span class="p">(</span>
+        <span class="n">input_tensor</span><span class="o">=</span><span class="n">reshaped_input</span><span class="p">,</span>
+        <span class="n">weight_tensor</span><span class="o">=</span><span class="n">weight_tensor</span><span class="p">,</span>
+        <span class="n">bias_tensor</span><span class="o">=</span><span class="n">bias_tensor</span><span class="p">,</span>
+        <span class="n">in_channels</span><span class="o">=</span><span class="n">C</span><span class="p">,</span>
+        <span class="n">out_channels</span><span class="o">=</span><span class="n">out_channels</span><span class="p">,</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+        <span class="n">kernel_size</span><span class="o">=</span><span class="n">kernel_size</span><span class="p">,</span>
+        <span class="n">stride</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="n">padding</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="n">batch_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">input_height</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">input_width</span><span class="o">=</span><span class="n">B</span> <span class="o">*</span> <span class="n">H</span> <span class="o">*</span> <span class="n">W</span><span class="p">,</span>
+        <span class="n">conv_config</span><span class="o">=</span><span class="n">conv_config</span><span class="p">,</span>
+        <span class="n">groups</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>  <span class="c1"># No grouped convolution</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Optionally convert back to torch tensor: out_torch = ttnn.to_torch(out)</span>
+    <span class="k">return</span> <span class="n">out</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Set-input-and-convolution-parameters">
+<h2>Set input and convolution parameters<a class="headerlink" href="#Set-input-and-convolution-parameters" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">batch</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">in_channels</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="n">out_channels</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="n">height</span> <span class="o">=</span> <span class="n">width</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># Small dimensions to avoid device memory issues</span>
+<span class="n">kernel_size</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Create-tensors">
+<h2>Create tensors<a class="headerlink" href="#Create-tensors" title="Permalink to this heading"></a>
+</h2>
+<p>We need to create the input tensor, weight tensor, and bias tensor that will be used for the convolution operation. Learn more about Tensors <a class="reference internal" href="../../tensor.html"><span class="doc">here</span></a>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create random input tensor in BCHW format</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">batch</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Random weight tensor for convolution: (out_channels, in_channels, kH, kW)</span>
+<span class="n">w</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">out_channels</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">,</span> <span class="o">*</span><span class="n">kernel_size</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Bias tensor, broadcastable to the output shape</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Run-convolution-operation">
+<h2>Run convolution operation<a class="headerlink" href="#Run-convolution-operation" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Run forward conv pass and print output shape</span>
+<span class="n">out_torch</span> <span class="o">=</span> <span class="n">forward</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"✅ Success! Conv2D output shape: </span><span class="si">{</span><span class="n">out_torch</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Close-The-Device">
+<h2>Close The Device<a class="headerlink" href="#Close-The-Device" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Full-example-and-output">
+<h2>Full example and output<a class="headerlink" href="#Full-example-and-output" title="Permalink to this heading"></a>
+</h2>
+<p>Lets put everything together in a complete example that can be run directly.</p>
+<p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_basic_conv.py">ttnn_basic_conv.py</a></p>
+<p>Running this script will generate output the as shown below:</p>
+<div class="highlight-console notranslate">
+<div class="highlight"><pre><span></span><span class="gp">$ </span>python3<span class="w"> </span><span class="nv">$TT_METAL_HOME</span>/ttnn/tutorials/basic_python/ttnn_basic_conv.py
+<span class="go">2025-07-07 13:02:09.649 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:02:09.651 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:02:09.658 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:190)</span>
+<span class="go">2025-07-07 13:02:09.658 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:02:09.659 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:02:09.666 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:02:09.667 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:02:09.673 | info     |   SiliconDriver | Harvesting mask for chip 0 is 0x100 (NOC0: 0x100, simulated harvesting mask: 0x0). (cluster.cpp:282)</span>
+<span class="go">2025-07-07 13:02:09.772 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:02:09.817 | info     |   SiliconDriver | Opening local chip ids/pci ids: {0}/[7] and remote chip ids {} (cluster.cpp:147)</span>
+<span class="go">2025-07-07 13:02:09.828 | info     |   SiliconDriver | Software version 6.0.0, Ethernet FW version 6.14.0 (Device 0) (cluster.cpp:1039)</span>
+<span class="go">2025-07-07 13:02:09.915 | info     |           Metal | AI CLK for device 0 is:   1000 MHz (metal_context.cpp:128)</span>
+<span class="go">2025-07-07 13:02:10.487 | info     |           Metal | Initializing device 0. Program cache is enabled (device.cpp:428)</span>
+<span class="go">2025-07-07 13:02:10.489 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (hardware_command_queue.cpp:74)</span>
+<span class="go">2025-07-07 13:02:13.921 | warning  |              Op | conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess. (conv2d.cpp:563)</span>
+<span class="go">2025-07-07 13:02:13.922 | warning  |              Op | conv2d: Device bias not properly prepared, pulling back to host and reprocessing. (conv2d.cpp:582)</span>
+<span class="go">2025-07-07 13:02:15.390 | INFO     | __main__:main:78 - ✅ Success! Conv2D output shape: Shape([1, 1, 4, 4])</span>
+<span class="go">2025-07-07 13:02:15.390 | info     |           Metal | Closing mesh device 1 (mesh_device.cpp:488)</span>
+<span class="go">2025-07-07 13:02:15.391 | info     |           Metal | Closing mesh device 0 (mesh_device.cpp:488)</span>
+<span class="go">2025-07-07 13:02:15.391 | info     |           Metal | Closing device 0 (device.cpp:468)</span>
+<span class="go">2025-07-07 13:02:15.391 | info     |           Metal | Disabling and clearing program cache on device 0 (device.cpp:783)</span>
+<span class="go">2025-07-07 13:02:15.392 | info     |           Metal | Closing mesh device 1 (mesh_device.cpp:488)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn_multihead_attention.html" class="btn btn-neutral float-left" title="Multi-Head Attention" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn_simplecnn_inference.html" class="btn btn-neutral float-right" title="Running a Simple CNN Inference on CIFAR-10" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

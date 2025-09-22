@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html" />
+    <link rel="prev" title="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig" href="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.matmul.html">ttnn.matmul</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.linear.html">ttnn.linear</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.matmul_batched_weights.html">ttnn.matmul_batched_weights</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.addmm.html">ttnn.addmm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.sparse_matmul.html">ttnn.sparse_matmul</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseProgramConfig.html">ttnn.MatmulMultiCoreReuseProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastProgramConfig</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html">ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#reports">Reports</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operation-hooks">Operation Hooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ttnn-matmulmulticorereusemulticast1dprogramconfig">
+<h1>ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig<a class="headerlink" href="#ttnn-matmulmulticorereusemulticast1dprogramconfig" title="Permalink to this heading"></a>
+</h1>
+<span class="target" id="id1"></span><dl class="py class">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">MatmulMultiCoreReuseMultiCast1DProgramConfig</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">pybind11_object</span></code></p>
+<p>Configuration class for 1D multicast matmul operations with advanced features.</p>
+<p>This program config is for use with width and height sharded tensors, or very narrow interleaved tensors.</p>
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.compute_with_storage_grid_size">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">compute_with_storage_grid_size</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.compute_with_storage_grid_size" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Grid size for compute cores with storage capability.</p>
+<p>Defines the 2D grid of cores that will be used for computation. In 1D multicast,
+this grid is used to determine the communication pattern for broadcasting data
+along one dimension while distributing computation.</p>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.from_json">
+<span class="sig-name descname"><span class="pre">from_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig" title="ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"><span class="pre">ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig</span></a></span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.from_json" title="Permalink to this definition"></a>
+</dt>
+<dd></dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.fuse_batch">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">fuse_batch</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.fuse_batch" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Whether to fuse batch dimensions into matrix dimensions.</p>
+<p>When true, batch dimensions are incorporated into the matrix computation,
+allowing for more efficient processing of batched operations in the 1D
+multicast implementation.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.fused_activation">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">fused_activation</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.fused_activation" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Optional fused activation function to apply during computation.</p>
+<p>If specified, the activation function is applied directly during the matmul
+operation, eliminating the need for a separate activation pass and improving
+overall performance in 1D multicast scenarios.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.gather_in0">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">gather_in0</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.gather_in0" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Defaults to false.
+Used by ops that call matmul internally. Should not be specified or left as the default value for all other uses.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.hop_cores">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">hop_cores</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.hop_cores" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Defaults to empty set.
+Used by ops that call matmul internally. Should not be specified or left as the default value for all other uses.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.in0_block_w">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">in0_block_w</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.in0_block_w" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Block width for both input tensors along the K dimension (shared inner dimension).</p>
+<p>Determines the data granularity by specifying how many tiles wide each block is
+along the inner dimension for both input_tensor_a and input_tensor_b. This parameter
+impacts 1D multicast performance as it affects the size of data chunks that
+are broadcast across cores and memory access patterns for both tensors.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.mcast_in0">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">mcast_in0</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.mcast_in0" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Whether to multicast the first input tensor (input_tensor_a).</p>
+<p>When true, input_tensor_a is broadcast across cores using the 1D multicast
+pattern, which can significantly reduce memory bandwidth requirements for
+certain matrix shapes and improve performance.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.num_global_cb_receivers">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">num_global_cb_receivers</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.num_global_cb_receivers" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Defaults to 1.
+Used by ops that call matmul internally. Should not be specified or left as the default value for all other uses.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_block_h">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">out_block_h</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_block_h" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Height of output blocks in tiles.</p>
+<p>Defines the output block size along the M dimension. If not specified, defaults
+to per_core_M. This parameter is important for optimizing the 1D multicast
+pattern and memory access efficiency.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_block_w">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">out_block_w</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_block_w" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Width of output blocks in tiles.</p>
+<p>Defines the output block size along the N dimension. If not specified, defaults
+to per_core_N. This affects the efficiency of data distribution in the 1D
+multicast implementation.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_subblock_h">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">out_subblock_h</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_subblock_h" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Height of output subblocks in tiles.</p>
+<p>Controls computation granularity within output blocks along the M dimension.
+In 1D multicast, this affects how computation is scheduled and memory usage
+patterns across the participating cores.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_subblock_w">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">out_subblock_w</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.out_subblock_w" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Width of output subblocks in tiles.</p>
+<p>Controls computation granularity within output blocks along the N dimension.
+This parameter affects the efficiency of the 1D multicast communication pattern
+and compute scheduling.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.per_core_M">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">per_core_M</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.per_core_M" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Number of output tiles each core processes along the M dimension.</p>
+<p>Determines the workload distribution along the M dimension in the 1D multicast
+pattern. This affects both load balancing and communication efficiency.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.per_core_N">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">per_core_N</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.per_core_N" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Number of output tiles each core processes along the N dimension.</p>
+<p>Determines the workload distribution along the N dimension in the 1D multicast
+pattern. This parameter is crucial for achieving optimal performance in
+1D multicast scenarios.</p>
+</dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.to_json">
+<span class="sig-name descname"><span class="pre">to_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig" title="ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"><span class="pre">ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.to_json" title="Permalink to this definition"></a>
+</dt>
+<dd></dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.untilize_out">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">untilize_out</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.untilize_out" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Whether to untilize the output tensor.</p>
+<p>When true, the output is converted from tiled layout to row-major layout during
+the operation. This can be useful when the subsequent operation expects row-major
+data and can eliminate a separate untilization pass. Defaults to false.</p>
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig.html" class="btn btn-neutral float-left" title="ttnn.MatmulMultiCoreReuseMultiCastProgramConfig" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html" class="btn btn-neutral float-right" title="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

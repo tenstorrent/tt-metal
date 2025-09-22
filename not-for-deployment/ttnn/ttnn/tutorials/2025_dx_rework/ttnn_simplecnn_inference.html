@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Running a Simple CNN Inference on CIFAR-10 &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_simplecnn_inference.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="TT-NN Visualizer" href="ttnn_visualizer.html" />
+    <link rel="prev" title="Basic Convolution" href="ttnn_basic_conv.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Running a Simple CNN Inference on CIFAR-10</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Setup-and-Imports">Setup and Imports</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Load-CIFAR-10-Dataset">Load CIFAR-10 Dataset</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Load-or-Initialize-Weights">Load or Initialize Weights</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Define-Convolution-+-Pooling-Stage">Define Convolution + Pooling Stage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Run-Inference-on-Test-Samples">Run Inference on Test Samples</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-The-Device">Close The Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-example-and-output">Full example and output</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_visualizer.html">TT-NN Visualizer</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Running a Simple CNN Inference on CIFAR-10</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/2025_dx_rework/ttnn_simplecnn_inference.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Running-a-Simple-CNN-Inference-on-CIFAR-10">
+<h1>Running a Simple CNN Inference on CIFAR-10<a class="headerlink" href="#Running-a-Simple-CNN-Inference-on-CIFAR-10" title="Permalink to this heading"></a>
+</h1>
+<p>This tutorial demonstrates how to use <strong>TTNN</strong> to perform inference with a simple Convolutional Neural Network (CNN) on the CIFAR-10 dataset.</p>
+<p>We will:</p>
+<ul class="simple">
+<li><p>Load the CIFAR-10 dataset</p></li>
+<li><p>Define a simple CNN using TT-NN operations</p></li>
+<li><p>Run inference on sample images</p></li>
+<li><p>Observe the outputs and accuracy</p></li>
+</ul>
+<section id="Setup-and-Imports">
+<h2>Setup and Imports<a class="headerlink" href="#Setup-and-Imports" title="Permalink to this heading"></a>
+</h2>
+<p>In this script, several libraries are imported to support image classification using a simple cnn on the CIFAR-10 dataset. The os module is used to check if pretrained weight files exist on disk. torch is used for loading model weights, torchvision and its transforms submodule are used to download the CIFAR-10 dataset and apply necessary preprocessing, such as converting images to tensors and normalizing pixel values. The ttnn library is the Tenstorrent neural network API, responsible for
+interfacing with Tenstorrent hardware, performing operations like convolution, pooling, activation, and linear layers, and managing data layout and type conversions between PyTorch and TT-NN formats. Finally, loguru is used for logging messages and debugging output, providing insights into model operations and predictions throughout the inference process.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torchvision</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torchvision.transforms</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">transforms</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Open-Tenstorrent-device">
+<h2>Open Tenstorrent device<a class="headerlink" href="#Open-Tenstorrent-device" title="Permalink to this heading"></a>
+</h2>
+<p>Create necessary device on which we will run our program, with custom L1 memory config. An extra parameter we use here, <code class="docutils literal notranslate"><span class="pre">l1_small_size</span></code>, sets aside a portion of the on-chip L1 memory for sliding-window operations, like convolutions, and other kernels that need quick, scratchpad-like memory. For simple CNNs, 8 kB will be enough, moving up to 32 kB or more for more complex models.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">--- Simple CNN Inference Using TT-NN on CIFAR-10 ---"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Load-CIFAR-10-Dataset">
+<h2>Load CIFAR-10 Dataset<a class="headerlink" href="#Load-CIFAR-10-Dataset" title="Permalink to this heading"></a>
+</h2>
+<p>We will normalize the images and load the test set.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Define input transforms: Convert to tensor and normalize</span>
+<span class="n">transform</span> <span class="o">=</span> <span class="n">transforms</span><span class="o">.</span><span class="n">Compose</span><span class="p">([</span><span class="n">transforms</span><span class="o">.</span><span class="n">ToTensor</span><span class="p">(),</span> <span class="n">transforms</span><span class="o">.</span><span class="n">Normalize</span><span class="p">((</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">),</span> <span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">))])</span>
+
+<span class="c1"># Load CIFAR-10 test data</span>
+<span class="n">testset</span> <span class="o">=</span> <span class="n">torchvision</span><span class="o">.</span><span class="n">datasets</span><span class="o">.</span><span class="n">CIFAR10</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s2">"./data"</span><span class="p">,</span> <span class="n">train</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">download</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">transform</span><span class="o">=</span><span class="n">transform</span><span class="p">)</span>
+<span class="n">testloader</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">DataLoader</span><span class="p">(</span><span class="n">testset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">shuffle</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Load-or-Initialize-Weights">
+<h2>Load or Initialize Weights<a class="headerlink" href="#Load-or-Initialize-Weights" title="Permalink to this heading"></a>
+</h2>
+<p>Optimally we would load pretrained weights and use those for the model, but in case the weights file is not found, just default to random values which most likely will yield poor results. You can run the provided <code class="docutils literal notranslate"><span class="pre">train_and_export_cnn.py</span></code> script to generate the weights to a file named <code class="docutils literal notranslate"><span class="pre">simple_cnn_cifar10_weights.pt</span></code>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="s2">"simple_cnn_cifar10_weights.pt"</span><span class="p">):</span>
+    <span class="n">weights</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">"simple_cnn_cifar10_weights.pt"</span><span class="p">)</span>
+    <span class="n">weights</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">k</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">weights</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+    <span class="p">}</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Loaded pretrained weights"</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">"Weights not found, using random weights"</span><span class="p">)</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">weights</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"conv1.weight"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">16</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="s2">"conv1.bias"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">16</span><span class="p">,),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="s2">"conv2.weight"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">32</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="s2">"conv2.bias"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">32</span><span class="p">,),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="s2">"fc1.weight"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">128</span><span class="p">,</span> <span class="mi">2048</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="s2">"fc1.bias"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">128</span><span class="p">,),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="s2">"fc2.weight"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+        <span class="s2">"fc2.bias"</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">10</span><span class="p">,),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+    <span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Define-Convolution-+-Pooling-Stage">
+<h2>Define Convolution + Pooling Stage<a class="headerlink" href="#Define-Convolution-+-Pooling-Stage" title="Permalink to this heading"></a>
+</h2>
+<p>This function, conv_pool_stage, encapsulates a typical convolutional neural network stage where an input tensor undergoes a 2D convolution followed by an activation and a max pooling operation, all using Tenstorrent’s TT-NN API. It accepts an input tensor in NHWC layout, along with metadata such as its shape, the number of output channels, references to specific weight and bias tensors, the activation type (e.g., ReLU), and the target hardware device. First, it extracts the appropriate weight
+and bias tensors from the given dictionary and reshapes the bias to a broadcastable shape. It defines convolution parameters—kernel size, stride, and padding—and sets up a TT-NN-specific configuration that includes the activation function. If enabled, it logs details like tensor shapes and convolution parameters for debugging the first sample. The convolution is then performed using ttnn.conv2d, followed by a max pooling operation configured with standard 2×2 kernel and stride values. Again, if
+logging is enabled, pooling parameters and resulting tensor shapes are recorded. Finally, the resulting TT tensor after max pooling is returned to be used in the next stage of the network. This function modularizes a common pattern in CNNs and provides flexibility for different layers and debug logging.</p>
+<p>Amongst other inputs, the convolution function takes a configuration parameter described in more detail here: <a class="reference internal" href="../../api/ttnn.Conv2dConfig.html"><span class="doc">ttnn.Conv2dConfig</span></a>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">conv_pool_stage</span><span class="p">(</span>
+    <span class="n">input_tensor</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">input_NHWC</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">,</span>
+    <span class="n">conv_outchannels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">weights</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+    <span class="n">weight_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">bias_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">activation</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">,</span>
+    <span class="n">device</span><span class="p">:</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Device</span><span class="p">,</span>
+    <span class="n">log_first_sample</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Perform convolution + activation + max pooling using TT-NN.</span>
+<span class="sd">    Args:</span>
+<span class="sd">        input_tensor: Input TT tensor in NHWC format.</span>
+<span class="sd">        input_NHWC: Tuple representing (Batch, Height, Width, Channels) of the input tensor.</span>
+<span class="sd">        conv_outchannels: Number of output channels for the convolution layer.</span>
+<span class="sd">        weights: Dictionary containing model weights and biases.</span>
+<span class="sd">        weight_str: Key name for convolution weights in the weights dict.</span>
+<span class="sd">        bias_str: Key name for convolution biases in the weights dict.</span>
+<span class="sd">        activation: Activation function as UnaryWithParam to apply after conv.</span>
+<span class="sd">        device: Target TT device to execute the operations on.</span>
+<span class="sd">        log_first_sample: Whether to log detailed info (used for debugging first sample).</span>
+<span class="sd">    Returns:</span>
+<span class="sd">        Output tensor after conv + max pooling (TT format).</span>
+<span class="sd">    """</span>
+    <span class="c1"># Extract weight and bias tensors from weights dictionary</span>
+    <span class="n">W</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[</span><span class="n">weight_str</span><span class="p">]</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[</span><span class="n">bias_str</span><span class="p">]</span>
+    <span class="n">B</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">))</span>  <span class="c1"># Ensure bias is in correct shape for TT-NN</span>
+
+    <span class="c1"># Define convolution parameters</span>
+    <span class="n">conv_kernel_size</span> <span class="o">=</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+    <span class="n">conv_stride</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">conv_padding</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># Set up TT-NN convolution configuration including activation function</span>
+    <span class="n">conv_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Conv2dConfig</span><span class="p">(</span><span class="n">weights_dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">activation</span><span class="o">=</span><span class="n">activation</span><span class="p">)</span>
+
+    <span class="c1"># Optional detailed logging for the first sample (shape, config, etc.)</span>
+    <span class="k">if</span> <span class="n">log_first_sample</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"====================================================================="</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Input parameters to conv2d:"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  input_tensor shape: </span><span class="si">{</span><span class="n">input_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  weight_tensor shape: </span><span class="si">{</span><span class="n">W</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  bias_tensor shape: </span><span class="si">{</span><span class="n">B</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  in_channels: </span><span class="si">{</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  out_channels: </span><span class="si">{</span><span class="n">conv_outchannels</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  device: </span><span class="si">{</span><span class="n">device</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  kernel_size: </span><span class="si">{</span><span class="n">conv_kernel_size</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  stride: </span><span class="si">{</span><span class="n">conv_stride</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  padding: </span><span class="si">{</span><span class="n">conv_padding</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  batch_size: </span><span class="si">{</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  input_height: </span><span class="si">{</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  input_width: </span><span class="si">{</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  conv_config: </span><span class="si">{</span><span class="n">conv_config</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  groups: </span><span class="si">{</span><span class="mi">0</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+    <span class="c1"># Perform convolution</span>
+    <span class="n">conv1_out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">conv2d</span><span class="p">(</span>
+        <span class="n">input_tensor</span><span class="o">=</span><span class="n">input_tensor</span><span class="p">,</span>
+        <span class="n">weight_tensor</span><span class="o">=</span><span class="n">W</span><span class="p">,</span>
+        <span class="n">bias_tensor</span><span class="o">=</span><span class="n">B</span><span class="p">,</span>
+        <span class="n">in_channels</span><span class="o">=</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span>
+        <span class="n">out_channels</span><span class="o">=</span><span class="n">conv_outchannels</span><span class="p">,</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+        <span class="n">kernel_size</span><span class="o">=</span><span class="n">conv_kernel_size</span><span class="p">,</span>
+        <span class="n">stride</span><span class="o">=</span><span class="n">conv_stride</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="n">conv_padding</span><span class="p">,</span>
+        <span class="n">batch_size</span><span class="o">=</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+        <span class="n">input_height</span><span class="o">=</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+        <span class="n">input_width</span><span class="o">=</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
+        <span class="n">conv_config</span><span class="o">=</span><span class="n">conv_config</span><span class="p">,</span>
+        <span class="n">groups</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Define max pooling parameters</span>
+    <span class="n">max_pool2d_kernel_size</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+    <span class="n">max_pool2d_stride</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+    <span class="n">max_pool2d_padding</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="n">max_pool2d_dilation</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># Optional logging for max pooling input and parameters</span>
+    <span class="k">if</span> <span class="n">log_first_sample</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Input parameters to max_pool2d:"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  input shape: </span><span class="si">{</span><span class="n">conv1_out</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  batch_size: </span><span class="si">{</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  input_h: </span><span class="si">{</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  input_w: </span><span class="si">{</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  channels: </span><span class="si">{</span><span class="n">conv_outchannels</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  kernel_size: </span><span class="si">{</span><span class="n">max_pool2d_kernel_size</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  stride: </span><span class="si">{</span><span class="n">max_pool2d_stride</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  padding: </span><span class="si">{</span><span class="n">max_pool2d_padding</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  dilation: </span><span class="si">{</span><span class="n">max_pool2d_dilation</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  ceil_mode: </span><span class="si">{</span><span class="kc">False</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+    <span class="c1"># Perform max pooling</span>
+    <span class="n">max_pool2d_out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">max_pool2d</span><span class="p">(</span>
+        <span class="n">conv1_out</span><span class="p">,</span>
+        <span class="n">batch_size</span><span class="o">=</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+        <span class="n">input_h</span><span class="o">=</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+        <span class="n">input_w</span><span class="o">=</span><span class="n">input_NHWC</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
+        <span class="n">channels</span><span class="o">=</span><span class="n">conv_outchannels</span><span class="p">,</span>
+        <span class="n">kernel_size</span><span class="o">=</span><span class="n">max_pool2d_kernel_size</span><span class="p">,</span>
+        <span class="n">stride</span><span class="o">=</span><span class="n">max_pool2d_stride</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="n">max_pool2d_padding</span><span class="p">,</span>
+        <span class="n">dilation</span><span class="o">=</span><span class="n">max_pool2d_dilation</span><span class="p">,</span>
+        <span class="n">ceil_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Log output shape after pooling</span>
+    <span class="k">if</span> <span class="n">log_first_sample</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"max_pool2d output shape: </span><span class="si">{</span><span class="n">max_pool2d_out</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"====================================================================="</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">max_pool2d_out</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Run-Inference-on-Test-Samples">
+<h2>Run Inference on Test Samples<a class="headerlink" href="#Run-Inference-on-Test-Samples" title="Permalink to this heading"></a>
+</h2>
+<p>This code snippet performs inference on the first five test samples from the CIFAR-10 dataset using a simple convolutional neural network (SimpleCNN) running on Tenstorrent hardware via the TT-NN API. It initializes counters for tracking the number of correct predictions and total samples processed. For each sample, it converts the input image from a PyTorch tensor to a TT-NN tensor, rearranging its layout from NCHW to NHWC format. The image is then passed through two convolution + pooling
+stages using the conv_pool_stage function. The output is flattened and passed through two fully connected layers (FC1 and FC2), with ReLU applied after FC1. The weights and biases for these layers are converted to the appropriate TT-NN format with tiling and transposing as needed. After obtaining the final logits from FC2, the output is converted back to a PyTorch tensor, and the predicted label is determined by taking the index of the highest logit. The prediction is compared to the true label
+to update the accuracy counters, and the result for each sample is logged. Finally, the overall inference accuracy is printed after processing the five samples.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">correct</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">total</span> <span class="o">=</span> <span class="mi">0</span>
+
+<span class="c1"># Run inference on a few test samples</span>
+<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">label</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">testloader</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">i</span> <span class="o">&gt;=</span> <span class="mi">5</span><span class="p">:</span>
+        <span class="k">break</span>
+
+    <span class="c1"># Convert image to TT tensor</span>
+    <span class="n">ttnn_image</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">ttnn_image_permuated</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">ttnn_image</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>  <span class="c1"># NCHW -&gt; NHWC</span>
+
+    <span class="c1"># Only log details for first sample</span>
+    <span class="n">log_this</span> <span class="o">=</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span>
+
+    <span class="c1"># Apply first conv + pool stage</span>
+    <span class="n">conv1_pool</span> <span class="o">=</span> <span class="n">conv_pool_stage</span><span class="p">(</span>
+        <span class="n">ttnn_image_permuated</span><span class="p">,</span>
+        <span class="n">ttnn_image_permuated</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+        <span class="mi">16</span><span class="p">,</span>
+        <span class="n">weights</span><span class="p">,</span>
+        <span class="s2">"conv1.weight"</span><span class="p">,</span>
+        <span class="s2">"conv1.bias"</span><span class="p">,</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">RELU</span><span class="p">),</span>
+        <span class="n">device</span><span class="p">,</span>
+        <span class="n">log_first_sample</span><span class="o">=</span><span class="n">log_this</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Apply second conv + pool stage</span>
+    <span class="n">conv2_pool</span> <span class="o">=</span> <span class="n">conv_pool_stage</span><span class="p">(</span>
+        <span class="n">conv1_pool</span><span class="p">,</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">16</span><span class="p">),</span>
+        <span class="mi">32</span><span class="p">,</span>
+        <span class="n">weights</span><span class="p">,</span>
+        <span class="s2">"conv2.weight"</span><span class="p">,</span>
+        <span class="s2">"conv2.bias"</span><span class="p">,</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">RELU</span><span class="p">),</span>
+        <span class="n">device</span><span class="p">,</span>
+        <span class="n">log_first_sample</span><span class="o">=</span><span class="n">log_this</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Flatten for FC layers</span>
+    <span class="n">B</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">C</span> <span class="o">=</span> <span class="n">conv2_pool</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">out_flat</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">conv2_pool</span><span class="p">)</span>  <span class="c1"># Convert back to torch</span>
+    <span class="n">out_flat</span> <span class="o">=</span> <span class="n">out_flat</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># NHWC -&gt; NCHW -&gt; Flatten</span>
+
+    <span class="c1"># Prepare fully connected layers</span>
+    <span class="n">W3</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[</span><span class="s2">"fc1.weight"</span><span class="p">]</span>
+    <span class="n">B3</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[</span><span class="s2">"fc1.bias"</span><span class="p">]</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">))</span>  <span class="c1"># Reshape bias for broadcast compatibility</span>
+    <span class="n">W4</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[</span><span class="s2">"fc2.weight"</span><span class="p">]</span>
+    <span class="n">B4</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[</span><span class="s2">"fc2.bias"</span><span class="p">]</span>
+
+    <span class="c1"># Convert to TT format for FC1</span>
+    <span class="n">W3_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">W3</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+    <span class="n">B3_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">B3</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+
+    <span class="c1"># Convert input to TT format</span>
+    <span class="n">x_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">out_flat</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+    <span class="c1"># Apply FC1 + ReLU</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">x_tt</span><span class="p">,</span> <span class="n">W3_tt</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="n">B3_tt</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+
+    <span class="c1"># Convert to TT format for FC2</span>
+    <span class="n">W4_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">W4</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+    <span class="n">B4_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">B4</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+
+    <span class="c1"># Apply FC2 (output logits)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">W4_tt</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="n">B4_tt</span><span class="p">)</span>
+
+    <span class="c1"># Convert prediction back to torch</span>
+    <span class="n">prediction</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+    <span class="n">predicted_label</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">prediction</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+    <span class="n">correct</span> <span class="o">+=</span> <span class="n">predicted_label</span> <span class="o">==</span> <span class="n">label</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+    <span class="n">total</span> <span class="o">+=</span> <span class="mi">1</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sample </span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">: Predicted=</span><span class="si">{</span><span class="n">predicted_label</span><span class="si">}</span><span class="s2">, Actual=</span><span class="si">{</span><span class="n">label</span><span class="o">.</span><span class="n">item</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">TT-NN SimpleCNN Inference Accuracy: </span><span class="si">{</span><span class="n">correct</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">total</span><span class="si">}</span><span class="s2"> = </span><span class="si">{</span><span class="mf">100.0</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">correct</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">total</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">%"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Close-The-Device">
+<h2>Close The Device<a class="headerlink" href="#Close-The-Device" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p>We have built and run a simple CNN using Tenstorrent’s TT-NN library on the CIFAR-10 dataset, observed predictions, and computed accuracy on a few samples.</p>
+<p>For full-scale inference or training, pre-trained weights should be used, and additional optimization strategies may be applied.</p>
+</section>
+<section id="Full-example-and-output">
+<h2>Full example and output<a class="headerlink" href="#Full-example-and-output" title="Permalink to this heading"></a>
+</h2>
+<p>Lets put everything together in a complete example that can be run directly.</p>
+<p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_simplecnn_inference.py">ttnn_simplecnn_inference.py</a></p>
+<p>Running this script will generate output the as shown below:</p>
+<div class="highlight-console notranslate">
+<div class="highlight"><pre><span></span><span class="gp">$ </span>python3<span class="w"> </span><span class="nv">$TT_METAL_HOME</span>/ttnn/tutorials/basic_python/ttnn_simplecnn_inference.py
+<span class="go">2025-07-07 13:10:17.041 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:10:17.043 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:10:17.050 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:190)</span>
+<span class="go">2025-07-07 13:10:17.050 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:10:17.051 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:10:17.057 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:10:17.058 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:10:17.064 | info     |   SiliconDriver | Harvesting mask for chip 0 is 0x100 (NOC0: 0x100, simulated harvesting mask: 0x0). (cluster.cpp:282)</span>
+<span class="go">2025-07-07 13:10:17.161 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
+<span class="go">2025-07-07 13:10:17.224 | info     |   SiliconDriver | Opening local chip ids/pci ids: {0}/[7] and remote chip ids {} (cluster.cpp:147)</span>
+<span class="go">2025-07-07 13:10:17.235 | info     |   SiliconDriver | Software version 6.0.0, Ethernet FW version 6.14.0 (Device 0) (cluster.cpp:1039)</span>
+<span class="go">2025-07-07 13:10:17.321 | info     |           Metal | AI CLK for device 0 is:   1000 MHz (metal_context.cpp:128)</span>
+<span class="go">2025-07-07 13:10:17.889 | info     |           Metal | Initializing device 0. Program cache is enabled (device.cpp:428)</span>
+<span class="go">2025-07-07 13:10:17.891 | warning  |           Metal | Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: 22 (hardware_command_queue.cpp:74)</span>
+<span class="go">2025-07-07 13:10:19.734 | INFO     | __main__:main:15 -</span>
+<span class="go">--- Simple CNN Inference Using TT-NN on CIFAR-10 ---</span>
+<span class="go">Files already downloaded and verified</span>
+<span class="go">2025-07-07 13:10:20.471 | INFO     | __main__:main:30 - Loaded pretrained weights</span>
+<span class="go">2025-07-07 13:10:21.075 | INFO     | __main__:conv_pool_stage:86 - =====================================================================</span>
+<span class="go">2025-07-07 13:10:21.075 | INFO     | __main__:conv_pool_stage:87 - Input parameters to conv2d:</span>
+<span class="go">2025-07-07 13:10:21.075 | INFO     | __main__:conv_pool_stage:88 -   input_tensor shape: Shape([1, 32, 32, 3])</span>
+<span class="go">2025-07-07 13:10:21.075 | INFO     | __main__:conv_pool_stage:89 -   weight_tensor shape: Shape([16, 3, 3, 3])</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:90 -   bias_tensor shape: Shape([1, 1, 1, 16])</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:91 -   in_channels: 3</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:92 -   out_channels: 16</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:93 -   device: MeshDevice(1x1 grid, 1 devices)</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:94 -   kernel_size: (3, 3)</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:95 -   stride: (1, 1)</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:96 -   padding: (1, 1)</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:97 -   batch_size: 1</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:98 -   input_height: 32</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:99 -   input_width: 32</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:100 -   conv_config: Conv2dConfig(weights_dtype=DataType::BFLOAT16,activation=relu,deallocate_activation=0,reallocate_halo_output=1,act_block_h_override=0,act_block_w_div=1,reshard_if_not_optimal=0,override_sharding_config=0,shard_layout=std::nullopt,core_grid=std::nullopt,transpose_shards=0,output_layout=Layout::TILE,enable_act_double_buffer=0,enable_weights_double_buffer=0,enable_split_reader=0,enable_subblock_padding=0,in_place=0,enable_kernel_stride_folding=0)</span>
+<span class="go">2025-07-07 13:10:21.076 | INFO     | __main__:conv_pool_stage:101 -   groups: 0</span>
+<span class="go">2025-07-07 13:10:22.960 | INFO     | __main__:conv_pool_stage:129 - Input parameters to max_pool2d:</span>
+<span class="go">2025-07-07 13:10:22.960 | INFO     | __main__:conv_pool_stage:130 -   input shape: Shape([1, 1, 1024, 16])</span>
+<span class="go">2025-07-07 13:10:22.960 | INFO     | __main__:conv_pool_stage:131 -   batch_size: 1</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:132 -   input_h: 32</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:133 -   input_w: 32</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:134 -   channels: 16</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:135 -   kernel_size: [2, 2]</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:136 -   stride: [2, 2]</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:137 -   padding: [0, 0]</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:138 -   dilation: [1, 1]</span>
+<span class="go">2025-07-07 13:10:22.961 | INFO     | __main__:conv_pool_stage:139 -   ceil_mode: False</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:157 - max_pool2d output shape: Shape([1, 1, 256, 32])</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:158 - =====================================================================</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:86 - =====================================================================</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:87 - Input parameters to conv2d:</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:88 -   input_tensor shape: Shape([1, 1, 256, 32])</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:89 -   weight_tensor shape: Shape([32, 16, 3, 3])</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:90 -   bias_tensor shape: Shape([1, 1, 1, 32])</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:91 -   in_channels: 16</span>
+<span class="go">2025-07-07 13:10:24.026 | INFO     | __main__:conv_pool_stage:92 -   out_channels: 32</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:93 -   device: MeshDevice(1x1 grid, 1 devices)</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:94 -   kernel_size: (3, 3)</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:95 -   stride: (1, 1)</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:96 -   padding: (1, 1)</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:97 -   batch_size: 1</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:98 -   input_height: 16</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:99 -   input_width: 16</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:100 -   conv_config: Conv2dConfig(weights_dtype=DataType::BFLOAT16,activation=relu,deallocate_activation=0,reallocate_halo_output=1,act_block_h_override=0,act_block_w_div=1,reshard_if_not_optimal=0,override_sharding_config=0,shard_layout=std::nullopt,core_grid=std::nullopt,transpose_shards=0,output_layout=Layout::TILE,enable_act_double_buffer=0,enable_weights_double_buffer=0,enable_split_reader=0,enable_subblock_padding=0,in_place=0,enable_kernel_stride_folding=0)</span>
+<span class="go">2025-07-07 13:10:24.027 | INFO     | __main__:conv_pool_stage:101 -   groups: 0</span>
+<span class="go">2025-07-07 13:10:25.120 | INFO     | __main__:conv_pool_stage:129 - Input parameters to max_pool2d:</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:130 -   input shape: Shape([1, 1, 256, 32])</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:131 -   batch_size: 1</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:132 -   input_h: 16</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:133 -   input_w: 16</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:134 -   channels: 32</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:135 -   kernel_size: [2, 2]</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:136 -   stride: [2, 2]</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:137 -   padding: [0, 0]</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:138 -   dilation: [1, 1]</span>
+<span class="go">2025-07-07 13:10:25.121 | INFO     | __main__:conv_pool_stage:139 -   ceil_mode: False</span>
+<span class="go">2025-07-07 13:10:25.669 | INFO     | __main__:conv_pool_stage:157 - max_pool2d output shape: Shape([1, 1, 64, 32])</span>
+<span class="go">2025-07-07 13:10:25.669 | INFO     | __main__:conv_pool_stage:158 - =====================================================================</span>
+<span class="go">2025-07-07 13:10:30.120 | INFO     | __main__:main:238 - Sample 1: Predicted=8, Actual=3</span>
+<span class="go">2025-07-07 13:10:30.136 | INFO     | __main__:main:238 - Sample 2: Predicted=8, Actual=8</span>
+<span class="go">2025-07-07 13:10:30.151 | INFO     | __main__:main:238 - Sample 3: Predicted=8, Actual=8</span>
+<span class="go">2025-07-07 13:10:30.166 | INFO     | __main__:main:238 - Sample 4: Predicted=0, Actual=0</span>
+<span class="go">2025-07-07 13:10:30.181 | INFO     | __main__:main:238 - Sample 5: Predicted=6, Actual=6</span>
+<span class="go">2025-07-07 13:10:30.181 | INFO     | __main__:main:240 -</span>
+<span class="go">TT-NN SimpleCNN Inference Accuracy: 4/5 = 80.00%</span>
+<span class="go">2025-07-07 13:10:30.181 | info     |           Metal | Closing mesh device 1 (mesh_device.cpp:488)</span>
+<span class="go">2025-07-07 13:10:30.182 | info     |           Metal | Closing mesh device 0 (mesh_device.cpp:488)</span>
+<span class="go">2025-07-07 13:10:30.182 | info     |           Metal | Closing device 0 (device.cpp:468)</span>
+<span class="go">2025-07-07 13:10:30.182 | info     |           Metal | Disabling and clearing program cache on device 0 (device.cpp:783)</span>
+<span class="go">2025-07-07 13:10:30.183 | info     |           Metal | Closing mesh device 1 (mesh_device.cpp:488)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn_basic_conv.html" class="btn btn-neutral float-left" title="Basic Convolution" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn_visualizer.html" class="btn btn-neutral float-right" title="TT-NN Visualizer" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

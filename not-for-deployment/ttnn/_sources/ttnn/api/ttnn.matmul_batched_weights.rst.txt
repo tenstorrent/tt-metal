@@ -1,0 +1,8 @@
+﻿ttnn.matmul\_batched\_weights
+=============================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.matmul_batched_weights:
+
+.. autodata:: ttnn.matmul_batched_weights

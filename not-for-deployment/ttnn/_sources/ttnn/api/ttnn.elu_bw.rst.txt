@@ -1,0 +1,8 @@
+﻿ttnn.elu\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.elu_bw:
+
+.. autodata:: ttnn.elu_bw

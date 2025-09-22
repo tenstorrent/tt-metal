@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Profiling TT-NN Operations &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Building and Uplifting Demos" href="demos.html" />
+    <link rel="prev" title="Adding New TT-NN Operation" href="adding_new_ttnn_operation.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Profiling TT-NN Operations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#perf-report-headers">Perf Report Headers</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#profile-this-description">profile_this description</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#using-the-performance-report-with-tt-nn-visualizer">Using the Performance Report with TT-NN Visualizer</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Profiling TT-NN Operations</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ttnn/profiling_ttnn_operations.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="profiling-tt-nn-operations">
+<h1>Profiling TT-NN Operations<a class="headerlink" href="#profiling-tt-nn-operations" title="Permalink to this heading"></a>
+</h1>
+<p>The following set of commands will generate perf reports for <code class="docutils literal notranslate"><span class="pre">resnet</span></code> as an example.</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
+build_metal.sh<span class="w"> </span>--enable-profiler
+./tt_metal/tools/profiler/profile_this.py<span class="w"> </span>-n<span class="w"> </span>resnet<span class="w"> </span>-c<span class="w"> </span><span class="s2">"pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"</span>
+</pre></div>
+</div>
+<p>After the commands finish, the location of the generated csv will be printed on console similar to the image below:</p>
+<img alt="CSV path" src="../_images/ops_perf_location_example.png">
+<p>The <code class="docutils literal notranslate"><span class="pre">-n</span></code> option is used to give a shorter version of the test name to be appended to the CSV file name and be used as the folder name.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">profile_this.py</span></code> script and its CLI options are explained under <a class="reference internal" href="#profile-this-description">profile_this description</a>.</p>
+<p>The headers for the CSV are explained under <a class="reference internal" href="#perf-report-headers">Perf Report Headers</a>.</p>
+<p>Instructions on using the performance report with <a class="reference external" href="https://github.com/tenstorrent/ttnn-visualizer">TT-NN Visualizer</a> are under <a class="reference internal" href="#using-the-performance-report-with-tt-nn-visualizer">Using the Performance Report with TT-NN Visualizer</a>.</p>
+<p><strong>IMPORTANT NOTES</strong>:</p>
+<ul class="simple">
+<li><p>If this is the first time you are running <code class="docutils literal notranslate"><span class="pre">profile_this.py</span></code>, it requires <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies">developer dependencies</a> to be installed.</p></li>
+<li><p>If you have done a reset on your GS device with <code class="docutils literal notranslate"><span class="pre">tt_smi</span></code> or <code class="docutils literal notranslate"><span class="pre">tensix_reset.sh</span></code>, profiling results are not valid due to tensix cores’ skewed timer starts. You need to perform a full reboot with <code class="docutils literal notranslate"><span class="pre">sudo</span> <span class="pre">reboot</span></code> on your host machine to align the timer starts. WH does not have this issue and profiling can be performed after <code class="docutils literal notranslate"><span class="pre">tt_smi</span></code> resets.</p></li>
+<li><p>In order to populate program cache, tests should run their inference layer at least twice and should run it in the same process. If pytest is being used, that would be running in
+the same pytest run. Only the host times for the second run of the layer should be analyzed as the first run was populating the cache and will have much higher times for host side.</p></li>
+<li><p>The first 1000 ops for each device is automatically collected by pytest fixtures at the end of your test.
+If your test has more than 1000 ops, <code class="docutils literal notranslate"><span class="pre">ttl.device.ReadDeviceProfiler(device)</span></code> should be called at every n number of layers that total to less than 1000 ops in order to avoid dropping profiling data of new ops.
+For example for resnet with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, <code class="docutils literal notranslate"><span class="pre">ttl.device.ReadDeviceProfiler(device)</span></code> should be called at least every eighth layer run.
+If profiling data is dropped, you will receive warning messages in the execution log mentioning which RISC of what core of what device dropped profiling data. Note that dispatch
+cores fill up their profiling buffers faster and if only those cores are giving warnings your OP analysis is not affected.</p></li>
+</ul>
+<section id="perf-report-headers">
+<h2>Perf Report Headers<a class="headerlink" href="#perf-report-headers" title="Permalink to this heading"></a>
+</h2>
+<p>The OPs profiler report demonstrates the execution flow of the OPs in the pipeline. Each row in the CSV represents an OP executed.</p>
+<p>For each OP, multiple data points are provided in the columns of the CSV.</p>
+<p>The headers of the columns with their descriptions is below:</p>
+<ul>
+<li><p><strong>OP CODE</strong>: Operation name, for C++ level OPs this code is the name of the class for the OP</p></li>
+<li>
+<p><strong>OP TYPE</strong>: Operation type, where the op ran and which part of code it is coming from</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><em>python_fallback</em>: OP fully implemented in python and running on CPU</p></li>
+<li><p><em>tt_dnn_cpu</em>: OP implemented in C++ and running on CPU</p></li>
+<li><p><em>tt_dnn_device</em>: OP implemented in C++ and running on DEVICE</p></li>
+</ul>
+</div>
+</blockquote>
+</li>
+<li><p><strong>GLOBAL CALL COUNT</strong>: The index of the op in the execution pipeline</p></li>
+<li><p><strong>DEVICE ID</strong>: ID of the device the operation ran on</p></li>
+<li><p><strong>ATTRIBUTES</strong>: Operation attributes</p></li>
+<li>
+<p><strong>MATH FIDELITY</strong>: Math fidelity of the fields</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p>LoFi</p></li>
+<li><p>HiFi2</p></li>
+<li><p>HiFi3</p></li>
+<li><p>HiFi4</p></li>
+</ul>
+</div>
+</blockquote>
+</li>
+<li><p><strong>CORE COUNT</strong>: The number of cores used on the device for this operation</p></li>
+<li><p><strong>PARALLELIZATION STRATEGY</strong>: How the device kernel parallelizes across device cores</p></li>
+<li><p><strong>HOST START TS</strong>: System clock time stamp stored at the very beginning of the OP execution</p></li>
+<li><p><strong>HOST END TS</strong>: System clock time stamp stored at the very end of the OP execution</p></li>
+<li><p><strong>HOST DURATION [ns]</strong>: Duration of the OP in nanoseconds, calculated as end_ts - start_ts</p></li>
+<li><p><strong>DEVICE FW START CYCLE</strong>: Tensix cycle count from the earliest RISC of the earliest core of the device that executed the OP kernel</p></li>
+<li><p><strong>DEVICE FW END CYCLE</strong>: Tensix cycle count from the latest RISC of the latest core of the device that executed the OP kernel</p></li>
+<li><p><strong>DEVICE FW DURATION [ns]</strong>: FW duration on the device for the OP, calculated as (last FW end cycle - first FW start cycle)/core_frequency with cycle markers chosen across all cores and all RISCs</p></li>
+<li><p><strong>DEVICE KERNEL DURATION [ns]</strong>: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across all cores and all RISCs</p></li>
+<li><p><strong>DEVICE BRISC KERNEL DURATION [ns]</strong>: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across BRISCs of all cores</p></li>
+<li><p><strong>DEVICE NCRISC KERNEL DURATION [ns]</strong>: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across NCRISCs of all cores</p></li>
+<li><p><strong>DEVICE TRISC0 KERNEL DURATION [ns]</strong>: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across TRISC0s of all cores</p></li>
+<li><p><strong>DEVICE TRISC1 KERNEL DURATION [ns]</strong>: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across TRISC1s of all cores</p></li>
+<li><p><strong>DEVICE TRISC2 KERNEL DURATION [ns]</strong>: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across TRISC2s of all cores</p></li>
+<li><p><strong>DEVICE COMPUTE CB WAIT FRONT [ns]</strong>: Total time spent on <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> on TRISC0, averaged across all cores</p></li>
+<li><p><strong>DEVICE COMPUTE CB RESERVE BACK [ns]</strong>: Total time spent on <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code> on TRISC2, averaged across all cores</p></li>
+<li><p><strong>COMPUTE KERNEL PATH</strong>: Path of the compute kernels in the program</p></li>
+<li><p><strong>COMPUTE KERNEL HASH</strong>: Kernel hash for compute kernel cache</p></li>
+<li><p><strong>DATAMOVEMENT KERNEL PATH</strong>: Path of the datamovement kernels in the program</p></li>
+<li><p><strong>DATAMOVEMENT KERNEL HASH</strong>: Kernel hash for datamovement kernel cache</p></li>
+<li>
+<p><strong>Input &amp; Output Tensor Headers</strong>: Header template is {Input/Output}_{IO Number}_{Field}. e.g. INPUT_0_MEMORY</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li>
+<dl class="simple">
+<dt><em>SHAPE</em></dt>
+<dd>
+<ul>
+<li><p>W: Tensor batch count</p></li>
+<li><p>Z: Tensor channel count</p></li>
+<li><p>Y: Tensor Height</p></li>
+<li><p>X: Tensor Width</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li>
+<dl class="simple">
+<dt>
+<em>LAYOUT</em>:</dt>
+<dd>
+<ul>
+<li><p>ROW_MAJOR</p></li>
+<li><p>TILE</p></li>
+<li><p>CHANNELS_LAST</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li>
+<dl class="simple">
+<dt>
+<em>DATA TYPE</em>:</dt>
+<dd>
+<ul>
+<li><p>BFLOAT16</p></li>
+<li><p>FLOAT32</p></li>
+<li><p>UINT32</p></li>
+<li><p>BFLOAT8_B</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li>
+<dl class="simple">
+<dt><em>MEMORY</em></dt>
+<dd>
+<ul>
+<li><p>dev_0_dram</p></li>
+<li><p>dec_0_l1</p></li>
+<li><p>host</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+</ul>
+</div>
+</blockquote>
+</li>
+</ul>
+</section>
+<section id="profile-this-description">
+<h2>profile_this description<a class="headerlink" href="#profile-this-description" title="Permalink to this heading"></a>
+</h2>
+<p>CLI options of the  <code class="docutils literal notranslate"><span class="pre">profile_this.py</span></code> script are:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">-c</span></code>, <code class="docutils literal notranslate"><span class="pre">--command</span></code>: This is the required CLI option for providing the test command that has to be profiled</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-o</span></code>, <code class="docutils literal notranslate"><span class="pre">--output-folder</span></code>: This option is for providing the output folder for storing the performance report folder created. The default output folder is <code class="docutils literal notranslate"><span class="pre">${TT_METAL_HOME}/generated/profiler/reports</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-n</span></code>, <code class="docutils literal notranslate"><span class="pre">--name-append</span></code>: Name to be appended to the the performance report folder and its files</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--collect-noc-traces</span></code>: Specifying this option will also create timeline files using <a class="reference external" href="https://github.com/tenstorrent/tt-npe">tt-npe</a> in a subdirectory named <code class="docutils literal notranslate"><span class="pre">npe_viz</span></code> under the the perf report folder. These are used in the NPE tab on TT-NN Visualizer to visualize NoC traffic and congestion.
+<strong>Note</strong>: This option requires that npe is properly installed (See <a class="reference external" href="https://github.com/tenstorrent/tt-npe/blob/main/docs/src/getting_started.md#quick-start">here</a> for instructions).</p></li>
+</ul>
+<p>This scripts performs the following items:</p>
+<ol class="arabic simple">
+<li><p>Executes the provided under test command to generate both host and device side profiling logs</p></li>
+<li><p>Post-processes all the collected logs and aggregate them into the perf csv with a timestamped name (e.g. <code class="docutils literal notranslate"><span class="pre">ops_perf_results_2025_06_25_14_04_34.csv</span></code>)</p></li>
+</ol>
+</section>
+<section id="using-the-performance-report-with-tt-nn-visualizer">
+<h2>Using the Performance Report with TT-NN Visualizer<a class="headerlink" href="#using-the-performance-report-with-tt-nn-visualizer" title="Permalink to this heading"></a>
+</h2>
+<p>The perf report should be created under a folder with a timestamped name (e.g. <code class="docutils literal notranslate"><span class="pre">2025_06_25_14_04_34</span></code>) and look like the following (the <code class="docutils literal notranslate"><span class="pre">npe_viz</span></code> subdirectory only exists if <code class="docutils literal notranslate"><span class="pre">--collect-noc-traces</span></code> is specified):</p>
+<img alt="Tracy performance report" src="../_images/tracy_perf_report.png">
+<p>This folder can be uploaded under the Reports tab in <a class="reference external" href="https://github.com/tenstorrent/ttnn-visualizer">TT-NN Visualizer</a>:</p>
+<img alt="TT-NN Visualizer performance report upload" src="../_images/ttnn_visualizer_perf_report_upload.png">
+<p>The uploaded data can then be viewed in the Performance tab:</p>
+<img alt="TT-NN Visualizer Performance analysis" src="../_images/ttnn_visualizer_performance.png">
+<p>and NPE tab (if <code class="docutils literal notranslate"><span class="pre">--collect-noc-traces</span></code> was used):</p>
+<img alt="TT-NN Visualizer NPE" src="../_images/ttnn_visualizer_npe.png">
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="adding_new_ttnn_operation.html" class="btn btn-neutral float-left" title="Adding New TT-NN Operation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="demos.html" class="btn btn-neutral float-right" title="Building and Uplifting Demos" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

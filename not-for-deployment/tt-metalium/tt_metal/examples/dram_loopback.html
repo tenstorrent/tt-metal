@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DRAM Loopback &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/examples/dram_loopback.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Eltwise binary" href="eltwise_binary.html" />
+    <link rel="prev" title="Programming Examples" href="index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">DRAM Loopback</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#device-initialization">Device initialization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#create-buffers-in-dram-and-l1-sram">Create buffers in DRAM and L1 (SRAM)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#sending-real-data-into-dram">Sending real data into DRAM</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#creating-a-data-movement-kernel">Creating a data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#setting-runtime-arguments-for-the-data-movement-kernel">Setting runtime arguments for the data movement kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#running-the-program">Running the program</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#download-the-result-and-verify-output">Download the result and verify output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html">Eltwise binary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Programming Examples</a></li>
+      <li class="breadcrumb-item active">DRAM Loopback</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/examples/dram_loopback.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="dram-loopback">
+<span id="dram-loopback-example"></span><h1>DRAM Loopback<a class="headerlink" href="#dram-loopback" title="Permalink to this heading"></a>
+</h1>
+<p>This is the simplest example of using the TT-Metal API. A data movement core in the Tensix copies data from DRAM into its L1(SRAM) buffer and back out to DRAM. Hence “loopback”.</p>
+<p>We’ll go through this code section by section. The full source code for this example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/loopback</span></code> directory.</p>
+<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">loopback</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
+./build_metal.sh<span class="w"> </span>--build-programming-examples
+<span class="c1"># To run the example</span>
+./build/programming_examples/loopback
+</pre></div>
+</div>
+<section id="device-initialization">
+<h2>Device initialization<a class="headerlink" href="#device-initialization" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">device_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateDevice</span><span class="p">(</span><span class="n">device_id</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>First we open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N-1). Thus device 0 is the first device and always available if one is installed.</p>
+</section>
+<section id="program-setup">
+<h2>Program setup<a class="headerlink" href="#program-setup" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">command_queue</span><span class="p">();</span>
+<span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateProgram</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. And commands are operations that are run on the device, including but not limited to upload/download of data and program execution.</p>
+<p>Next, we create a <code class="docutils literal notranslate"><span class="pre">Program</span></code> object that we will fill in later. A program is a set of kernels that are executed on the device. If you are familiar with OpenCL, the program in Metalium is different from OpenCL in that All Tensix cores need to to run the exact same kernel at the same time. However in this example, we are only going to use one of all the cores in the device.</p>
+</section>
+<section id="create-buffers-in-dram-and-l1-sram">
+<h2>Create buffers in DRAM and L1 (SRAM)<a class="headerlink" href="#create-buffers-in-dram-and-l1-sram" title="Permalink to this heading"></a>
+</h2>
+<p>Next, we need to declare buffers that will hold the actual data and an intermediate buffer on chip,</p>
+<p>There’s in total 3 buffers to be created:</p>
+<ul class="simple">
+<li><p>An L1 (SRAM) buffer within the core itself that will act as temporary storage</p></li>
+<li><p>A DRAM buffer that will house input data</p></li>
+<li><p>A DRAM buffer that will be written to with output data</p></li>
+</ul>
+<p>There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.</p>
+<p>Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won’t touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in for each (input and output) DRAM buffer. Thus the total size of each DRAM buffer is 50 * 2048 = 102400 bytes. And a single tile worth of buffer on the L1 is 2048 bytes as well. So that we can copy a single tile at a time.</p>
+<p>Note the <code class="docutils literal notranslate"><span class="pre">page_size</span></code> argument in the buffer config and the <code class="docutils literal notranslate"><span class="pre">Interleaved</span></code> in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every <code class="docutils literal notranslate"><span class="pre">page_size</span></code> bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.</p>
+<p>The L1 buffer is created with a size equal to the size of a single tile, which will act as a buffer for old temporary data. Then be written back to DRAM.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">TILE_HEIGHT</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="n">bfloat16</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span>
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">l1_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">L1</span>
+<span class="p">};</span>
+
+<span class="n">Buffer</span><span class="w"> </span><span class="n">l1_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">l1_config</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The only difference between the L1 and DRAM buffer is the <code class="docutils literal notranslate"><span class="pre">BufferType</span></code>. The L1 buffer is created with a <code class="docutils literal notranslate"><span class="pre">BufferType::L1</span></code> and the DRAM buffer is created with a <code class="docutils literal notranslate"><span class="pre">BufferType::DRAM</span></code>.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
+<span class="p">};</span>
+
+<span class="n">Buffer</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">input_dram_buffer_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+
+<span class="n">Buffer</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_dram_buffer_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
+<section id="sending-real-data-into-dram">
+<h2>Sending real data into DRAM<a class="headerlink" href="#sending-real-data-into-dram" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input_vec</span><span class="p">(</span><span class="n">num_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size</span><span class="p">);</span>
+<span class="n">std</span><span class="o">::</span><span class="n">mt19937</span><span class="w"> </span><span class="nf">rng</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">random_device</span><span class="p">{}());</span>
+<span class="n">std</span><span class="o">::</span><span class="n">uniform_real_distribution</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="w"> </span><span class="n">distribution</span><span class="p">(</span><span class="mf">0.0f</span><span class="p">,</span><span class="w"> </span><span class="mf">100.0f</span><span class="p">);</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">input_vec</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bfloat16</span><span class="p">(</span><span class="n">distribution</span><span class="p">(</span><span class="n">rng</span><span class="p">));</span>
+<span class="p">}</span>
+<span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">input_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Send in a randomly-generated BFP16 (Brain 16bit floating point) vector that will act as our input data tensor.</p>
+<p>Note the final <code class="docutils literal notranslate"><span class="pre">false</span></code> argument. This indicates to tt-Metalium that the upload is non-blocking. The function may return as soon as possible while data transfer is still in progress. This is useful for performance, but the program is responsible for ensuring that the the source buffer is not freed before the transfer is complete. In this case, there are future blocking calls/calls to <code class="docutils literal notranslate"><span class="pre">Finish</span></code> that will ensure commands are completed before the program exits, which is also when the source buffer is freed.</p>
+</section>
+<section id="creating-a-data-movement-kernel">
+<h2>Creating a data movement kernel<a class="headerlink" href="#creating-a-data-movement-kernel" title="Permalink to this heading"></a>
+</h2>
+<p>Create a kernel that will copy data from DRAM to L1 and back. Since we are only using one Tensix core, <code class="docutils literal notranslate"><span class="pre">{0,</span> <span class="pre">0}</span></code> is the only core (core on the most top left) we use. And as we are moving data from DRAM to L1, This is a data movement kernel using the movement processor 0, and the default NoC interface.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">};</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compile_args</span><span class="p">;</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">input_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">compile_args</span><span class="p">);</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">output_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">compile_args</span><span class="p">);</span>
+
+<span class="n">KernelHandle</span><span class="w"> </span><span class="n">dram_copy_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compile_args</span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The path to the kernel source file can either be</p>
+<ul class="simple">
+<li><p>Relative to the <code class="docutils literal notranslate"><span class="pre">TT_METAL_KERNEL_PATH</span></code> environment variable (or <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code> if the former is not set), or</p></li>
+<li><p>Absolute path to the file, or</p></li>
+<li><p>Relative to the current working directory</p></li>
+</ul>
+<p>Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code>. If the file is not found, an error will be thrown.</p>
+</div>
+<p>The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier()</span></code> and <code class="docutils literal notranslate"><span class="pre">noc_async_write_barrier()</span></code> after each operation to ensure data integrity before proceeding to the next loop iteration.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_src_addr</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_dst_addr</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w">             </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">32</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w"> </span><span class="c1">// same tile size as in the host code</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">in0_args</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_src_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">out0_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="n">in0_args</span><span class="p">.</span><span class="n">next_compile_time_args_offset</span><span class="p">()</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">out0_args</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_dst_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="n">num_tiles</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+
+<span class="w">        </span><span class="n">noc_async_write_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">out0</span><span class="p">,</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_write_barrier</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> handles address generation for all kinds of buffers automatically. Without the helper, the kernel implementation would be:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_dram_banks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span><span class="w"> </span><span class="c1">// Number of DRAM banks on Wormhole</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Round-robin bank selection</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">bank_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">num_dram_banks</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Offset within the bank for the current tile</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">offset_within_bank</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">num_dram_banks</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">dram_buffer_src_noc_addr</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">get_noc_addr_from_bank_id</span><span class="o">&lt;</span><span class="cm">/*dram=*/</span><span class="nb">true</span><span class="o">&gt;</span><span class="p">(</span><span class="n">bank_id</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_src_addr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset_within_bank</span><span class="p">);</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">dram_buffer_dst_noc_addr</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">get_noc_addr_from_bank_id</span><span class="o">&lt;</span><span class="cm">/*dram=*/</span><span class="nb">true</span><span class="o">&gt;</span><span class="p">(</span><span class="n">bank_id</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_dst_addr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset_within_bank</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">noc_async_read</span><span class="p">(</span><span class="n">dram_buffer_src_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+<span class="w">    </span><span class="n">noc_async_write</span><span class="p">(</span><span class="n">l1_buffer_addr</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_dst_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc_async_write_barrier</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="setting-runtime-arguments-for-the-data-movement-kernel">
+<h2>Setting runtime arguments for the data movement kernel<a class="headerlink" href="#setting-runtime-arguments-for-the-data-movement-kernel" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">runtime_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">l1_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">input_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">output_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">num_tiles</span>
+<span class="p">};</span>
+
+<span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="n">dram_copy_kernel_id</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">runtime_args</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>We now set runtime arguments for our data movement kernel. The kernel can then access these arguments at runtime. For this specific kernel, we need to pass in the following arguments:</p>
+<ul class="simple">
+<li><p>Where the L1 buffer starts (memory address)</p></li>
+<li><p>Where the input DRAM buffer starts (memory address)</p></li>
+<li><p>Where the output DRAM buffer starts (memory address)</p></li>
+<li><p>How many tiles we are copying (this is used to determine how many times to copy data)</p></li>
+</ul>
+</section>
+<section id="running-the-program">
+<h2>Running the program<a class="headerlink" href="#running-the-program" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+<span class="c1">// Equivalently, we could have done:</span>
+<span class="c1">// EnqueueProgram(cq, program, true);</span>
+</pre></div>
+</div>
+<p>Finally, we launch our program. The <code class="docutils literal notranslate"><span class="pre">Finish</span></code> call waits for the the host program only continues execution after everything in the command queue has been completed. The final argument in <code class="docutils literal notranslate"><span class="pre">EnqueueProgram</span></code> indicates that the program is non-blocking. Setting it to <code class="docutils literal notranslate"><span class="pre">true</span></code> would cause the program to block until the program is finished. Efficiently, this is the same as calling <code class="docutils literal notranslate"><span class="pre">Finish</span></code> after the program is enqueued.</p>
+</section>
+<section id="download-the-result-and-verify-output">
+<h2>Download the result and verify output<a class="headerlink" href="#download-the-result-and-verify-output" title="Permalink to this heading"></a>
+</h2>
+<p>Then we can finally read back the data from the output buffer and assert that
+it matches what we sent. Again the final <code class="docutils literal notranslate"><span class="pre">true</span></code> argument causes the data transfer to be blocking. Thus we know that the data is fully available when the function returns.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
+<span class="n">EnqueueReadBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="n">output_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">input_vec</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">input_vec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">result_vec</span><span class="p">[</span><span class="n">i</span><span class="p">])</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">pass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">      </span><span class="k">break</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="validation-and-teardown">
+<h2>Validation and teardown<a class="headerlink" href="#validation-and-teardown" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>We now use <code class="docutils literal notranslate"><span class="pre">CloseDevice</span></code> to teardown our device. This releases resources associated with the device.</p>
+<p>Now we can start adding some compute to our program. Please refer to the <a class="reference internal" href="eltwise_binary.html#eltwise-binary-example"><span class="std std-ref">Eltwise binary example</span></a>.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="index.html" class="btn btn-neutral float-left" title="Programming Examples" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eltwise_binary.html" class="btn btn-neutral float-right" title="Eltwise binary" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

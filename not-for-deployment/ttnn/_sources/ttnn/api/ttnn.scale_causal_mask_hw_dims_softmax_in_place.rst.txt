@@ -1,0 +1,8 @@
+﻿ttnn.scale\_causal\_mask\_hw\_dims\_softmax\_in\_place
+======================================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.scale_causal_mask_hw_dims_softmax_in_place:
+
+.. autodata:: ttnn.scale_causal_mask_hw_dims_softmax_in_place

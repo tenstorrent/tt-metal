@@ -1,0 +1,8 @@
+﻿ttnn.scale\_mask\_softmax\_in\_place
+====================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.scale_mask_softmax_in_place:
+
+.. autodata:: ttnn.scale_mask_softmax_in_place

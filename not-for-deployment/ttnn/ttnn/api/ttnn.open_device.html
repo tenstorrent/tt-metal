@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ttnn.open_device &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.open_device.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="ttnn.close_device" href="ttnn.close_device.html" />
+    <link rel="prev" title="APIs" href="../api.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="../api.html#device">Device</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">ttnn.open_device</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.open_device"><code class="docutils literal notranslate"><span class="pre">open_device()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.close_device.html">ttnn.close_device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.manage_device.html">ttnn.manage_device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.synchronize_device.html">ttnn.synchronize_device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.SetDefaultDevice.html">ttnn.SetDefaultDevice</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.GetDefaultDevice.html">ttnn.GetDefaultDevice</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.format_input_tensor.html">ttnn.format_input_tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.format_output_tensor.html">ttnn.format_output_tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn.pad_to_tile_shape.html">ttnn.pad_to_tile_shape</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operations">Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#reports">Reports</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operation-hooks">Operation Hooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.open_device</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.open_device.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ttnn-open-device">
+<h1>ttnn.open_device<a class="headerlink" href="#ttnn-open-device" title="Permalink to this heading"></a>
+</h1>
+<span class="target" id="id1"></span><dl class="py function">
+<dt class="sig sig-object py" id="ttnn.open_device">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">open_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device_id:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">l1_small_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">trace_region_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dispatch_core_config:</span> <span class="pre">ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">=</span> <span class="pre">&lt;ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">object</span> <span class="pre">at</span> <span class="pre">0x7f4e60185ff0&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">worker_l1_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.multi_device.MeshDevice</span></span></span><a class="headerlink" href="#ttnn.open_device" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Open a device with the given device_id. If the device is already open, return the existing device.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>device_id</strong> (<em>int</em>) – The device ID to open.</p></li>
+<li><p><strong>l1_small_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of the L1 small buffer. Defaults to <cite>ttnn.device.DEFAULT_L1_SMALL_SIZE</cite>.</p></li>
+<li><p><strong>trace_region_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of the trace region. Defaults to <cite>ttnn.device.DEFAULT_TRACE_REGION_SIZE</cite>.</p></li>
+<li><p><strong>worker_l1_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.</p></li>
+<li><p><strong>dispatch_core_type</strong> (<em>ttnn.device.DispatchCoreType</em><em>, </em><em>optional</em>) – The type of dispatch core to use. Defaults to <cite>ttnn.device.DispatchCoreType.WORKER</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<p><em>ttnn.Device</em> – The device with the given device_id.</p>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="go">&lt;ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0&gt;</span>
+</pre></div>
+</div>
+</div>
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../api.html" class="btn btn-neutral float-left" title="APIs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.close_device.html" class="btn btn-neutral float-right" title="ttnn.close_device" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

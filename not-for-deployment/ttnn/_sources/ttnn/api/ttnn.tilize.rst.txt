@@ -1,0 +1,8 @@
+﻿ttnn.tilize
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.tilize:
+
+.. autodata:: ttnn.tilize

@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kernel Debug Print &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/kernel_print.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Watcher" href="watcher.html" />
+    <link rel="prev" title="Tools" href="index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Kernel Debug Print</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tools</a></li>
+      <li class="breadcrumb-item active">Kernel Debug Print</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tools/kernel_print.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="kernel-debug-print">
+<h1>Kernel Debug Print<a class="headerlink" href="#kernel-debug-print" title="Permalink to this heading"></a>
+</h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Tools are only fully supported on source builds.</p>
+</div>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>The device can optionally print to the host terminal or a log file.  This feature can be useful for printing variables,
+addresses, and Circular Buffer data from kernels running on the device. Device-side prints are controlled through API
+calls; the host-side is controlled through environment variables.</p>
+</section>
+<section id="enabling">
+<h2>Enabling<a class="headerlink" href="#enabling" title="Permalink to this heading"></a>
+</h2>
+<p>Kernel debug printing can be enabled and configured using the environment variables shown below.  The first
+environment variable, <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code> specifies which cores the host-side will read print data from, and
+whether this environment variable is defined determines whether printing is enabled during kernel compilation.
+Note that the core coordinates are logical coordinates, so worker cores and ethernet cores both start at (0, 0).</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span>                    <span class="c1"># required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_ETH_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span>                <span class="c1"># optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_CHIPS</span><span class="o">=</span><span class="mi">0</span>                      <span class="c1"># optional, comma separated list of chips OR all. Default is all.</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_RISCVS</span><span class="o">=</span><span class="n">BR</span>                    <span class="c1"># optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_FILE</span><span class="o">=</span><span class="n">log</span><span class="o">.</span><span class="n">txt</span>                 <span class="c1"># optional, default is to print to the screen</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC</span><span class="o">=</span><span class="mi">0</span>   <span class="c1"># optional, enabled by default. Prepends prints with &lt;device id&gt;:(&lt;core x&gt;, &lt;core y&gt;):&lt;RISC&gt;:.</span>
+<span class="n">export</span> <span class="n">TT_METAL_DPRINT_ONE_FILE_PER_RISC</span><span class="o">=</span><span class="mi">1</span>          <span class="c1"># optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.</span>
+</pre></div>
+</div>
+<p>To generate kernel debug prints on the device, include the <code class="docutils literal notranslate"><span class="pre">debug/dprint.h</span></code> header and use the APIs defined there.
+An example with the different features available is shown below:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Direct printing is supported for const char*/char/uint32_t/float</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"Test string"</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="sc">'a'</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mf">0.123456f</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// BF16 type printing is supported via a macro</span>
+<span class="w">    </span><span class="kt">uint16_t</span><span class="w"> </span><span class="n">my_bf16_val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x3dfb</span><span class="p">;</span><span class="w"> </span><span class="c1">// Equivalent to 0.122559</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">BF16</span><span class="p">(</span><span class="n">my_bf16_val</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// dprint.h includes macros for a subset of std::ios and std::iomanip functionality:</span>
+<span class="w">    </span><span class="c1">// SETPRECISION macro has the same behaviour as std::setprecision</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">SETPRECISION</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mf">0.123456f</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// FIXED and DEFAULTFLOAT macros have the same behaviour as std::fixed and std::defaultfloat</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">FIXED</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mf">0.123456f</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">DEFAULTFLOAT</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mf">0.123456f</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// SETW macro is the same as std::setw, but with an optional sticky flag (default true)</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"SETW (sticky): "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">SETW</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"SETW (non-sticky): "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">SETW</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// HEX/DEC/OCT macros corresponding to std::hex/std::dec/std::oct</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">HEX</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">15</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">DEC</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">15</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">OCT</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">15</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// The following prints only occur on a particular RISCV core:</span>
+<span class="w">    </span><span class="n">DPRINT_MATH</span><span class="p">(</span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"this is the math kernel"</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">());</span>
+<span class="w">    </span><span class="n">DPRINT_PACK</span><span class="p">(</span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"this is the pack kernel"</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">());</span>
+<span class="w">    </span><span class="n">DPRINT_UNPACK</span><span class="p">(</span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"this is the unpack kernel"</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">());</span>
+<span class="w">    </span><span class="n">DPRINT_DATA0</span><span class="p">(</span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"this is the data movement kernel on noc 0"</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">());</span>
+<span class="w">    </span><span class="n">DPRINT_DATA1</span><span class="p">(</span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"this is the data movement kernel on noc 1"</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">());</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Data from Circular Buffers can be printed using the <code class="docutils literal notranslate"><span class="pre">TileSlice</span></code> object. It can be constructed as described below, and fed directly to a <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> call.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>cb_id</p></td>
+<td><p>uint8_t</p></td>
+<td><p>Id of the Circular Buffer to print data form.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>tile_idx</p></td>
+<td><p>int</p></td>
+<td><p>Index of tile inside the CB to print data from.</p></td>
+</tr>
+<tr class="row-even">
+<td><p>slice_range</p></td>
+<td><p>SliceRange</p></td>
+<td><p>A struct to describe starting index, ending index, and stride for data to print within the CB. Fields are <code class="docutils literal notranslate"><span class="pre">h0</span></code>, <code class="docutils literal notranslate"><span class="pre">h1</span></code>, <code class="docutils literal notranslate"><span class="pre">hs</span></code>, <code class="docutils literal notranslate"><span class="pre">w0</span></code>, <code class="docutils literal notranslate"><span class="pre">w1</span></code>,
+<code class="docutils literal notranslate"><span class="pre">ws</span></code>, all <code class="docutils literal notranslate"><span class="pre">uint8_t</span></code>.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>cb_type</p></td>
+<td><p>dprint_tslice_cb_t</p></td>
+<td><p>Only used for Data Movement RISCs, specify <code class="docutils literal notranslate"><span class="pre">TSLICE_INPUT_CB</span></code> or <code class="docutils literal notranslate"><span class="pre">TSLICE_OUTPUT_CB</span></code> depending on if the CB to print from is input or output.</p></td>
+</tr>
+<tr class="row-even">
+<td><p>ptr_type</p></td>
+<td><p>dprint_tslice_ptr_t</p></td>
+<td><p>Only used for Data Movement RISCs, specify <code class="docutils literal notranslate"><span class="pre">TSLICE_RD_PTR</span></code> to read from the front of the CB, or <code class="docutils literal notranslate"><span class="pre">TSLICE_WR_PTR</span></code> to read from the back of the CB.
+UNPACK RISC only reads from the front of the CB, PACK RISC only reads from the back of the CB.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>endl_rows</p></td>
+<td><p>bool</p></td>
+<td><p>Whether to add a newline between printed rows, default <code class="docutils literal notranslate"><span class="pre">true</span></code>.</p></td>
+</tr>
+<tr class="row-even">
+<td><p>print_untilized</p></td>
+<td><p>bool</p></td>
+<td><p>Whether to untilize the CB data while printing it (always done for block float formats), default <code class="docutils literal notranslate"><span class="pre">true</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+<p>An example of how to print data from a CB (in this case, <code class="docutils literal notranslate"><span class="pre">CBIndex::c_25</span></code>) is shown below.  Note that sampling happens relative
+to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
+<code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> call has to occur between the <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> calls. For printing a tile from the
+back of the CB, the <code class="docutils literal notranslate"><span class="pre">DPRINT</span></code> call has to occur between the <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code> calls. Currently supported data
+formats for printing from CBs are <code class="docutils literal notranslate"><span class="pre">DataFormat::Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Float16_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp8_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp4_b</span></code>,
+<code class="docutils literal notranslate"><span class="pre">DataFormat::Int8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt16</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Int32</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt832</span></code>.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after</span>
+<span class="w">    </span><span class="c1">// this call. If the tile is from the back of the CB, then print must happen after cb_reserve_back().</span>
+<span class="w">    </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">...</span>
+
+<span class="w">    </span><span class="c1">// Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CBIndex::c_25` and print it.</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">TSLICE</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">SliceRange</span><span class="o">::</span><span class="n">hw0_32_16</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// Note that since the MATH core does not have access to CBs, so this is an invalid print:</span>
+<span class="w">    </span><span class="n">DPRINT_MATH</span><span class="p">({</span><span class="w"> </span><span class="n">DPRINT</span><span class="w">  </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">TSLICE</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">SliceRange</span><span class="o">::</span><span class="n">hw0_32_16</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span><span class="w"> </span><span class="p">});</span><span class="w"> </span><span class="c1">// Invalid</span>
+
+<span class="w">    </span><span class="c1">// Print a full tile</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">r</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">32</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">r</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">SliceRange</span><span class="w"> </span><span class="n">sr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SliceRange</span><span class="p">{.</span><span class="n">h0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">h1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">r</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">hs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">w0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">w1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">ws</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">};</span>
+<span class="w">        </span><span class="c1">// On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to specify whether</span>
+<span class="w">        </span><span class="c1">// the CB is input or output.</span>
+<span class="w">        </span><span class="n">DPRINT_DATA0</span><span class="p">({</span><span class="w"> </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">" --READ--cin1-- "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_INPUT_CB</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_RD_PTR</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span><span class="w"> </span><span class="p">});</span>
+<span class="w">        </span><span class="n">DPRINT_DATA1</span><span class="p">({</span><span class="w"> </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">" --READ--cin1-- "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_OUTPUT_CB</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_WR_PTR</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span><span class="w"> </span><span class="p">});</span>
+<span class="w">        </span><span class="c1">// Unpacker RISC only has rd_ptr and only input CBs, so no extra args</span>
+<span class="w">        </span><span class="n">DPRINT_UNPACK</span><span class="p">({</span><span class="w"> </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">" --READ--cin1-- "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span><span class="w"> </span><span class="p">});</span>
+<span class="w">        </span><span class="c1">// Packer RISC only has wr_ptr</span>
+<span class="w">        </span><span class="n">DPRINT_PACK</span><span class="p">({</span><span class="w"> </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">uint</span><span class="p">)</span><span class="n">r</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">" --READ--cin1-- "</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">TileSlice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sr</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">ENDL</span><span class="p">();</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="p">...</span>
+<span class="w">    </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_25</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The DPRINT buffer for a RISC is only flushed when <code class="docutils literal notranslate"><span class="pre">ENDL()</span></code> is called, a <code class="docutils literal notranslate"><span class="pre">\n</span></code> character is read, or the device that the RISC belongs to is closed.</p>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="index.html" class="btn btn-neutral float-left" title="Tools" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="watcher.html" class="btn btn-neutral float-right" title="Watcher" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

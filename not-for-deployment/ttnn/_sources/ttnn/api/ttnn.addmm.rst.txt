@@ -1,0 +1,8 @@
+﻿ttnn.addmm
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.addmm:
+
+.. autodata:: ttnn.addmm

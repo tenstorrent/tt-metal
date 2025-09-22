@@ -1,0 +1,8 @@
+﻿ttnn.sort
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sort:
+
+.. autodata:: ttnn.sort

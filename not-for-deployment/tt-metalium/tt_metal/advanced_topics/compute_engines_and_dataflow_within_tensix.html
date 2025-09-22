@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compute Engines and Data Flow within Tensix &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="APIs" href="../apis/index.html" />
+    <link rel="prev" title="Memory from a kernel developer’s perspective" href="memory_for_kernel_developers.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Advanced Topics</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="index.html#hardware-implications-and-the-effects">Hardware implications and the effects</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="tiles.html">Tiles</a></li>
+<li class="toctree-l3"><a class="reference internal" href="memory_for_kernel_developers.html">Memory from a kernel developer’s perspective</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Compute Engines and Data Flow within Tensix</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#component-introduction">Component introduction</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#dst-register">Dst register</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#matrix-engine-fpu">Matrix engine/FPU</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#vector-engine-sfpu">Vector engine/SFPU</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Advanced Topics</a></li>
+      <li class="breadcrumb-item active">Compute Engines and Data Flow within Tensix</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="compute-engines-and-data-flow-within-tensix">
+<span id="compute-engines-and-dataflow-within-tensix"></span><h1>Compute Engines and Data Flow within Tensix<a class="headerlink" href="#compute-engines-and-data-flow-within-tensix" title="Permalink to this heading"></a>
+</h1>
+<p>The matrix and vector engines (FPU and SFPU) are integral to Tensix’s compute capabilities. They are designed to efficiently handle a wide range of mathematical operations, particularly those common in machine learning. However, they are highly specialized and do not operate like traditional CPU-attached vector and matrix units. Instead of having direct access to CPU registers and memory, these engines use their own registers and rely on the unpacker and packer to move data between SRAM and the compute engines.</p>
+<p>Understanding the data flow between the register sets, the unpacker and packer, and the engines is critical for achieving optimal performance and resource utilization. Please refer to the relevant hardware and ISA documentation for more details.</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/VectorUnit.md">SFPU on Wormhole</a></p></li>
+<li><p><a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/MatrixUnit.md">FPU on Wormhole</a></p></li>
+</ul>
+<section id="component-introduction">
+<h2>Component introduction<a class="headerlink" href="#component-introduction" title="Permalink to this heading"></a>
+</h2>
+<p>A critical design aspect to understand is that <strong>all registers have a fixed element count</strong>. Each vector register holds exactly N elements, where N depends on the kernel configuration and the specific register set. This differs from x86 SSE/AVX or ARM NEON and is more similar to some GPU warp/wavefront designs. The size of the registers may also change between hardware generations. Thus, a program that depends on a specific register dimension must be rewritten to work across generations. Compute APIs provided by the Metalium kernel library, like <code class="docutils literal notranslate"><span class="pre">matmul_tiles</span></code> and <code class="docutils literal notranslate"><span class="pre">sin_tiles</span></code>, abstract away these details, allowing you to focus on the algorithm rather than the underlying hardware specifics.</p>
+<p>For example, the SFPU <code class="docutils literal notranslate"><span class="pre">LReg</span></code> (the SFPU’s internal vector register) on Wormhole is 32 elements wide, with each element being 32 bits. A conventional SIMD register design would imply a capacity of 1024 bits per register, which could hold 128 elements of int8 data. However, the SFPU treats the register as holding 32 elements of at most 32 bits each, regardless of the actual data type.</p>
+<p>Several key components work together to perform computations within Tensix:</p>
+<ul class="simple">
+<li><p><strong>Unpacker</strong>: Reads data from L1 memory and converts it into the format required by the compute engines, placing it into the <code class="docutils literal notranslate"><span class="pre">SrcA</span></code>, <code class="docutils literal notranslate"><span class="pre">SrcB</span></code>, or <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers.</p></li>
+<li><p><strong>Packer</strong>: Takes results from the compute engines (from the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers), formats them, and moves them back into L1.</p></li>
+<li><p><strong>Vector engine (SFPU)</strong>: Executes complex vector operations, handling data in parallel for efficient computation.</p></li>
+<li><p><strong>Matrix engine (FPU)</strong>: Specializes in large-scale matrix operations, optimized for high throughput.</p></li>
+</ul>
+<p>The compute engines rely on four main register sets:</p>
+<ol class="arabic simple">
+<li><p><strong>SrcA</strong>: The first source register set for the matrix engine.</p></li>
+<li><p><strong>SrcB</strong>: The second source register set for the matrix engine.</p></li>
+<li><p><strong>Dst</strong>: The destination register set for the matrix engine, also used by the vector engine. This register set is exposed in the higher-level API.</p></li>
+<li><p><strong>LReg</strong>: Internal registers within the SFPU for holding vector data during computation.</p></li>
+</ol>
+<p>The following image illustrates the connection between the different components and the registers they can access.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Although a compute kernel is written as a single piece of code, it is compiled into three separate binaries, each running on a different RISC-V core (T0-2) within the Tensix. Synchronization is required to ensure correct data flow and avoid race conditions between these components.</p>
+<p>Furthermore, the unpacker, packer, SFPU, and FPU are not processing cores and cannot make control flow decisions on their own. The RISC-V cores issue commands to the compute engines and manage data flow between them. Explicit synchronization may be needed to ensure the engines have finished their work before the RISC-V cores proceed.</p>
+</div>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="../../_images/tenstorrent-sfpu-fpu-dst-register-diagram-and-dataflow.webp"><img alt="Diagram of the dataflow, registers and engines that the compute kernel have access to" src="../../_images/tenstorrent-sfpu-fpu-dst-register-diagram-and-dataflow.webp" style="width: 807.3000000000001px; height: 601.2px;"></a>
+<figcaption>
+<p><span class="caption-text">The connection between the unpacker, packer, SFPU, FPU, and the various registers is crucial for efficient data processing within the Tensix architecture.</span><a class="headerlink" href="#id1" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>The data format within the compute registers can differ from the format used for storage in SRAM. The unpacker and packer are responsible for converting between these formats in hardware. This allows compute kernels to work with standard data types, like floating-point or integers, while data in SRAM can remain in a more compact representation, such as a block floating-point format.</p>
+<p>This hardware-accelerated type conversion is more efficient than performing it in software. For example, instead of using the compute engines to decompress quantized data, the unpacker can perform this conversion directly. This design makes compute kernels independent of the storage data format and reduces execution time and power consumption.</p>
+<p>The separation of data movement (unpacker/packer) and computation (FPU/SFPU) requires an initialization step. Before invoking a compute operation, the unpacker and packer must be configured to handle the correct input and output data formats. This is critical for ensuring correct results and enabling hardware performance optimizations.</p>
+</section>
+<section id="dst-register">
+<h2>Dst register<a class="headerlink" href="#dst-register" title="Permalink to this heading"></a>
+</h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">Dst</span></code> register set is the primary workspace for compute kernels and the only register set directly exposed through the compute APIs. It serves as the destination for the matrix engine and as both a source and destination for the vector engine.</p>
+<p>The unpacker and packer handle data movement between L1 memory and the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers. The kernel library provides functions for these operations:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// copy_tile: Unpacks a tile from a circular buffer into a Dst register.</span>
+<span class="c1">// Before calling, ensure the source circular buffer has data (e.g., using cb_wait_front).</span>
+<span class="n">copy_tile</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*dst_idx*/</span><span class="mi">0</span><span class="p">);</span>
+
+<span class="c1">// pack_tile: Packs a tile from a Dst register into a circular buffer.</span>
+<span class="c1">// Before calling, ensure the destination circular buffer has space (e.g., using cb_reserve_back).</span>
+<span class="n">pack_tile</span><span class="p">(</span><span class="cm">/*dst_idx*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Since the unpacker, packer, and compute engines operate concurrently on different RISC-V cores, access to the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers must be synchronized. The kernel library provides a set of functions to manage this, ensuring that different hardware components do not access the registers simultaneously.</p>
+<p>A typical compute loop follows this synchronization pattern:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// 0. Wait for input data to be available in the input circular buffers.</span>
+<span class="c1">// e.g. cb_wait_front(...)</span>
+
+<span class="c1">// 1. Acquire Dst registers for the unpacker and math core.</span>
+<span class="c1">//    This must happen after waiting for input data.</span>
+<span class="n">tile_regs_acquire</span><span class="p">();</span>
+
+<span class="c1">// Unpack data and perform math operations.</span>
+<span class="c1">// e.g., copy_tile(...), matmul_tiles(...), add_tiles(...)</span>
+
+<span class="c1">// 2. Commit the results, transferring ownership of Dst registers to the packer.</span>
+<span class="n">tile_regs_commit</span><span class="p">();</span>
+
+<span class="c1">// At this point, the kernel can pop from input CBs and reserve space in output CBs.</span>
+<span class="c1">// This overlaps communication with the packer's work.</span>
+<span class="c1">// e.g. cb_pop_front(...), cb_reserve_back(...)</span>
+
+<span class="c1">// 3. Wait for the packer to be ready to access the Dst registers.</span>
+<span class="n">tile_regs_wait</span><span class="p">();</span>
+
+<span class="c1">// Pack results from Dst registers to output circular buffers.</span>
+<span class="c1">// e.g., pack_tile(...)</span>
+
+<span class="c1">// 4. Release the Dst registers, making them available for the next iteration's acquire step.</span>
+<span class="n">tile_regs_release</span><span class="p">();</span>
+
+<span class="c1">// Announce that data has been written to the output CBs.</span>
+<span class="c1">// e.g., cb_push_back(...)</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The ordering of circular buffer operations (<code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code>, <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code>, <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>, <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code>) is flexible but constrained by data dependencies. The pattern shown in the example minimizes stalls by overlapping communication with the packer’s work. Unpacking into <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers requires first acquiring them, and packing can only begin after waiting for the packer to be ready. However, by no means it is the only correct ordering.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">acquire_dst</span></code> and <code class="docutils literal notranslate"><span class="pre">release_dst</span></code> functions are deprecated. The <code class="docutils literal notranslate"><span class="pre">tile_regs_*</span></code> family of functions provides more explicit control and should be used instead.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Even if a kernel does not pack any data, <code class="docutils literal notranslate"><span class="pre">tile_regs_commit</span></code> and <code class="docutils literal notranslate"><span class="pre">tile_regs_release</span></code> must still be called in sequence after computation to correctly manage the register state. Failure to do so results in undefined behavior.</p>
+</div>
+<p>The capacity and behavior of the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> register set are configured on the host through the <code class="docutils literal notranslate"><span class="pre">ComputeKernelConfig</span></code> struct when creating a kernel. Two key parameters control its operation. Assuming using the standard 32x32 tiles:</p>
+<ul class="simple">
+<li>
+<p><code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span></code>: Configures the data width of the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers.</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">false</span></code> (default): <code class="docutils literal notranslate"><span class="pre">Dst</span></code> holds 16 tiles of 16-bit data.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">true</span></code>: <code class="docutils literal notranslate"><span class="pre">Dst</span></code> holds 8 tiles of 32-bit data.</p></li>
+</ul>
+</li>
+<li>
+<p><code class="docutils literal notranslate"><span class="pre">dst_full_sync_en</span></code>: Controls a double-buffering mechanism for the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers.</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">false</span></code> (default): Enables double-buffering. Only half of the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers are available to the kernel at a time. This allows the packer to work on one half while the math core and unpacker work on the other, overlapping computation and packing to improve performance.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">true</span></code>: Disables double-buffering. The entire <code class="docutils literal notranslate"><span class="pre">Dst</span></code> register set is available to the kernel. This serializes computation and packing, which may be simpler but can reduce throughput.</p></li>
+</ul>
+</li>
+</ul>
+<p>The number of available tiles is determined by the combination of these two settings:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">Number of Dst Tiles Available</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<colgroup>
+<col style="width: 34%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="row-odd">
+<th class="head stub"></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">dst_full_sync_en</span> <span class="pre">=</span> <span class="pre">false</span></code> (Double-Buffering ON)</p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">dst_full_sync_en</span> <span class="pre">=</span> <span class="pre">true</span></code> (Double-Buffering OFF)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<th class="stub"><p><code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span> <span class="pre">=</span> <span class="pre">false</span></code> (16-bit)</p></th>
+<td><p>8</p></td>
+<td><p>16</p></td>
+</tr>
+<tr class="row-odd">
+<th class="stub"><p><code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span> <span class="pre">=</span> <span class="pre">true</span></code> (32-bit)</p></th>
+<td><p>4</p></td>
+<td><p>8</p></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Example host-side kernel configuration</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"path/to/your/compute/kernel.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{</span>
+<span class="w">        </span><span class="p">.</span><span class="n">fp32_dest_acc_en</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="c1">// Use 32-bit Dst registers</span>
+<span class="w">        </span><span class="p">.</span><span class="n">dst_full_sync_en</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="w">  </span><span class="c1">// Enable double-buffering</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">);</span>
+
+<span class="c1">// Number of Dst registers can be checked using ttnn::get_dest_reg_count(const ComputeKernelConfig&amp;)</span>
+</pre></div>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Setting <code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span> <span class="pre">=</span> <span class="pre">true</span></code> only allocates 32-bit per-element storage space in the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers; it does not guarantee that computations are performed in 32-bit precision. For example, the matrix engine might still compute in bfloat16 and store the result in a 32-bit container. Also, the matrix engine’s maximum accuracy is TF32 (19 active bits), which is less than the full 32-bit precision. On the other hand, the vector engine does support the full 32-bit precision (with some limitations as it does not strictly follow IEEE 754 rounding).</p>
+<p>Accessing <code class="docutils literal notranslate"><span class="pre">Dst</span></code> register tiles beyond the number available for the current configuration results in undefined behavior.</p>
+</div>
+</section>
+<section id="matrix-engine-fpu">
+<h2>Matrix engine/FPU<a class="headerlink" href="#matrix-engine-fpu" title="Permalink to this heading"></a>
+</h2>
+<p>The matrix engine, or FPU, performs the bulk of computation for most AI and machine learning workloads. FPU operations take data from <code class="docutils literal notranslate"><span class="pre">SrcA</span></code> and <code class="docutils literal notranslate"><span class="pre">SrcB</span></code> (if needed) and write or accumulate results into <code class="docutils literal notranslate"><span class="pre">Dst</span></code>. The FPU also supports common matrix operations such as element-wise multiplication, addition, subtraction, and pooling.</p>
+<p>FPU operations require initialization before execution. This setup configures the unpacker, packer, and FPU for the specific operation (e.g., matrix multiplication). Re-initialization is not required for repeated operations with the same source, destination, and data type parameters.</p>
+<p>The FPU uses dedicated registers for each operand, and the unpacker can directly write to these registers. The API requires specifying the circular buffer and tile index for each operand. Because the FPU writes results to the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers, the output tile index must also be specified. FPU compute functions often takes the following parameters, depending on the number of operands:</p>
+<ul class="simple">
+<li><p>Index of the circular buffer for the first operand, and the offset of the tile from the buffer’s read head.</p></li>
+<li><p>(If applicable) Index of the circular buffer for the second operand, and the offset of the tile from the buffer’s read head.</p></li>
+<li><p>Offset, in number of tiles, within the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers to write the result.</p></li>
+</ul>
+<p>For example, to perform matrix multiplication:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Configure (un)packer and FPU for matmul mode.</span>
+<span class="c1">// The unpacker is configured based on cb_in0 and cb_in1.</span>
+<span class="c1">// The packer is configured based on cb_out.</span>
+<span class="n">mm_init</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">);</span>
+
+<span class="c1">// Repeated computation can be performed without re-initialization.</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Wait for data to be available in the input circular buffers.</span>
+<span class="w">    </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Acquire Dst registers for the math core.</span>
+<span class="w">    </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Perform matrix multiplication:</span>
+<span class="w">    </span><span class="c1">// - Take tile 0 from CB 0 and tile 0 from CB 1.</span>
+<span class="w">    </span><span class="c1">// - Place the result into Dst tile 0.</span>
+<span class="w">    </span><span class="c1">//              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx   transp</span>
+<span class="w">    </span><span class="n">matmul_tiles</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">         </span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">         </span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="w">      </span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Commit the results, transferring ownership of Dst registers to the packer.</span>
+<span class="w">    </span><span class="n">tile_regs_commit</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Pop tiles from input CBs and reserve space in the output CB.</span>
+<span class="w">    </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Wait for the packer to be ready.</span>
+<span class="w">    </span><span class="n">tile_regs_wait</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Pack the result from Dst tile 0 into the output CB.</span>
+<span class="w">    </span><span class="n">pack_tile</span><span class="p">(</span><span class="cm">/*src_dst_idx*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Announce that data has been written to the output CB.</span>
+<span class="w">    </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Release Dst registers for the next iteration.</span>
+<span class="w">    </span><span class="n">tile_regs_release</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>The same input circular buffers (e.g., <code class="docutils literal notranslate"><span class="pre">cb_in0</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_in1</span></code>) must be specified in both <code class="docutils literal notranslate"><span class="pre">mm_init</span></code> and <code class="docutils literal notranslate"><span class="pre">matmul_tiles</span></code>. Using different circular buffers between these calls results in undefined behavior, as the unpacker may interpret the data incorrectly or read from invalid memory.</p>
+</div>
+<p>The configuration information for the unpacker and packer is derived from the circular buffer metadata. In the example above, circular buffers 0 and 1 are used to configure the unpacker to place their data into <code class="docutils literal notranslate"><span class="pre">SrcA</span></code> and <code class="docutils literal notranslate"><span class="pre">SrcB</span></code>, respectively. The packer is configured to pack data into the format expected by circular buffer 16.</p>
+</section>
+<section id="vector-engine-sfpu">
+<h2>Vector engine/SFPU<a class="headerlink" href="#vector-engine-sfpu" title="Permalink to this heading"></a>
+</h2>
+<p>The vector engine, or SFPU, is designed for high-throughput processing of vector data. Unlike matrix engine APIs, SFPU APIs require the user to explicitly unpack data into the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers before performing computations and then pack the results back into L1 memory. This design enables easier chaining of operations.</p>
+<p>The vector engine APIs also require an initialization phase. The <code class="docutils literal notranslate"><span class="pre">init_sfpu</span></code> function configures the unpacker and packer to handle the data types of the input and output circular buffers. Unlike the matrix engine, the unpacker cannot be configured for a second operand; it assumes that all input circular buffers contain the same underlying data type. As with the matrix engine, ensure that parameters are consistent between initialization and computation calls to avoid undefined behavior.</p>
+<p>For example, to compute the element-wise sum of two tiles:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Configure the (un)packer based on the data formats of the CBs.</span>
+<span class="n">init_sfpu</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">);</span>
+
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Unpack the first tile from CB 0 into Dst tile 0.</span>
+<span class="w">    </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*dst_idx*/</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// Unpack the first tile from CB 1 into Dst tile 1.</span>
+<span class="w">    </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*dst_idx*/</span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Add Dst tiles 0 and 1 together. Store the result back into Dst tile 0.</span>
+<span class="w">    </span><span class="c1">// Pseudocode: dst_tile[0] = dst_tile[0] + dst_tile[1]</span>
+<span class="w">    </span><span class="n">add_binary_tile</span><span class="p">(</span><span class="cm">/*dst_idx_a*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*dst_idx_b*/</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="cm">/*dst_idx_out*/</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// More operations can be chained here, e.g., applying sigmoid.</span>
+<span class="w">    </span><span class="c1">// sigmoid_tile(0);</span>
+
+<span class="w">    </span><span class="n">tile_regs_commit</span><span class="p">();</span>
+<span class="w">    </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">tile_regs_wait</span><span class="p">();</span>
+<span class="w">    </span><span class="n">pack_tile</span><span class="p">(</span><span class="cm">/*dst_idx*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="n">tile_regs_release</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="docutils literal notranslate"><span class="pre">copy_tile_init</span></code> can be used to re-configure the unpacker to consume different data formats from circular buffers. If <code class="docutils literal notranslate"><span class="pre">CBIndex::c_0</span></code> and <code class="docutils literal notranslate"><span class="pre">CBIndex::c_1</span></code> contain different data types, the unpacking part of the above example can be rewritten as follows:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">copy_tile_init</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">);</span>
+<span class="n">copy_tile</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*dst_offset_tiles*/</span><span class="mi">0</span><span class="p">);</span>
+<span class="n">copy_tile_init</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">);</span>
+<span class="n">copy_tile</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*dst_offset_tiles*/</span><span class="mi">1</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">copy_tile_init</span></code> is always needed when unpacking FP32 values into 32-bit <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers. <code class="docutils literal notranslate"><span class="pre">init_sfpu</span></code> assumes a 16-bit storage size and sets up the unpacker for bfloat16, which would cause a loss of precision if an explicit initialization is not performed.</p>
+<p>Similarly, the <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format</span></code> function and its variants can be used to change the packer’s output data format. This is necessary when a computation produces multiple tiles that must be written to circular buffers with different data formats. For example, to pack two tiles into two separate circular buffers, each with a unique data format:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">pack_reconfig_data_format</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">);</span>
+<span class="n">pack_tile</span><span class="p">(</span><span class="cm">/*src_idx*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">);</span>
+<span class="n">pack_reconfig_data_format</span><span class="p">(</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_17</span><span class="p">);</span>
+<span class="n">pack_tile</span><span class="p">(</span><span class="cm">/*src_idx*/</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_17</span><span class="p">,</span><span class="w"> </span><span class="cm">/*tile_offset_in_cb*/</span><span class="mi">0</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+<p>After data is unpacked into the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers, the vector engine can load data from <code class="docutils literal notranslate"><span class="pre">Dst</span></code> into its internal <code class="docutils literal notranslate"><span class="pre">LReg</span></code> registers directly, without involving other hardware blocks. For more details on programming the SFPU, see the <a class="reference internal" href="../apis/kernel_apis/sfpu/llk.html#llk"><span class="std std-ref">Low Level Kernels programming guide</span></a>. The <code class="docutils literal notranslate"><span class="pre">dst_reg</span></code> variable provides an <code class="docutils literal notranslate"><span class="pre">LReg</span></code>-sized view into the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers. For example, on Wormhole and Blackhole, <code class="docutils literal notranslate"><span class="pre">LReg</span></code> is 32 elements wide, so the first <code class="docutils literal notranslate"><span class="pre">Dst</span></code> tile corresponds to <code class="docutils literal notranslate"><span class="pre">dst_reg[0:31]</span></code>. To illustrate:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">sfpu_example_function</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Load the first 32 elements of the 1st tile into an LReg.</span>
+<span class="w">    </span><span class="n">vFloat</span><span class="w"> </span><span class="n">vec1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="w">    </span><span class="c1">// Load the first 32 elements of the 2nd tile into another LReg.</span>
+<span class="w">    </span><span class="n">vFloat</span><span class="w"> </span><span class="n">vec2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">32</span><span class="p">];</span>
+
+<span class="w">    </span><span class="c1">// Store the results back into the Dst registers.</span>
+<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vec1</span><span class="p">;</span>
+<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">32</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vec2</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Due to the <a class="reference internal" href="tiles.html#internal-structure-of-a-tile"><span class="std std-ref">internal structure of tiles</span></a>, <code class="docutils literal notranslate"><span class="pre">dst_reg[0:3]</span></code> typically contains the first face of the tile, <code class="docutils literal notranslate"><span class="pre">dst_reg[4:7]</span></code> contains the second face, and so on.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="memory_for_kernel_developers.html" class="btn btn-neutral float-left" title="Memory from a kernel developer’s perspective" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../apis/index.html" class="btn btn-neutral float-right" title="APIs" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tensor &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tensor.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="APIs" href="api.html" />
+    <link rel="prev" title="Using TT-NN" href="usage.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Using TT-NN</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Tensor</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#shape">Shape</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#layout">Layout</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#data-type">Data Type</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#limitation-of-bfloat8-b">Limitation of BFLOAT8_B</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#storage">Storage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#tensor-sharding">Tensor Sharding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#memory-config">Memory Config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#apis">APIs</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#ttnn.Shape"><code class="docutils literal notranslate"><span class="pre">Shape</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.Shape.rank"><code class="docutils literal notranslate"><span class="pre">Shape.rank</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#ttnn.Shape.to_rank"><code class="docutils literal notranslate"><span class="pre">Shape.to_rank()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Tensor</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ttnn/tensor.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tensor">
+<h1>Tensor<a class="headerlink" href="#tensor" title="Permalink to this heading"></a>
+</h1>
+<p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> is a multi-dimensional matrix containing elements of a single data type.</p>
+<section id="shape">
+<h2>Shape<a class="headerlink" href="#shape" title="Permalink to this heading"></a>
+</h2>
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> uses <a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> to store its shape.</p>
+<p><a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> can be used to store dimensions for a tensor of rank 1 to rank 8 (inclusive).</p>
+<p><a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> stores the shape of both the actual data and the data padded to tile dimensions. Which can be different due to hardware requirements.</p>
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape([16,</span> <span class="pre">32])</span></code> is a shape of 2D tensor with 16 rows and 32 columns. Where the number of actual rows and columns is 16 and 32 respectively.
+And the padded dimensions match the actual dimensions. The tensor of this shape has 16 * 32 elements in the storage.</p>
+<figure class="align-center" id="id1">
+<img alt="Tensor" src="../_images/tensor.png">
+<figcaption>
+<p><span class="caption-text">Tensor with 16 rows and 32 columns.</span><a class="headerlink" href="#id1" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Printing the shape would show the actual shape:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">]))</span>
+<span class="go">ttnn.Shape([16, 32])</span>
+</pre></div>
+</div>
+</section>
+<section id="layout">
+<span id="ttnn-layout"></span><h2>Layout<a class="headerlink" href="#layout" title="Permalink to this heading"></a>
+</h2>
+<p id="ttnn-row-major-layout"><strong>ttnn.ROW_MAJOR_LAYOUT</strong></p>
+<p>Row major layout has the consecutive elements of a row next to each other.</p>
+<figure class="align-center" id="id2">
+<img alt="Tensor With Row-Major Layout" src="../_images/tensor_with_row_major_layout.png">
+<figcaption>
+<p><span class="caption-text">4x4 tensor with a row-major layout.</span><a class="headerlink" href="#id2" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>You can create row major layout tensors using any creation function (e.g. <a class="reference internal" href="api/ttnn.zeros.html#id1"><span class="std std-ref">ttnn.zeros</span></a>, <a class="reference internal" href="api/ttnn.ones.html#id1"><span class="std std-ref">ttnn.ones</span></a>,  <a class="reference internal" href="api/ttnn.from_torch.html#id1"><span class="std std-ref">ttnn.from_torch</span></a>, etc.) by passing <cite>layout=ttnn.ROW_MAJOR_LAYOUT</cite> as an argument.
+.. code-block:: python</p>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.ROW_MAJOR</span>
+</pre></div>
+</div>
+<p id="ttnn-tile-layout"><strong>ttnn.TILE_LAYOUT</strong></p>
+<p>In tile layout, the elements themselves are placed within a 32x32 square called a tile.
+The tiles themselves are then still stored in a row-major order. In order to transition to TILE_LAYOUT, <a class="reference internal" href="api/ttnn.to_layout.html#id1"><span class="std std-ref">ttnn.to_layout</span></a> can be used.
+When the height or width of the tensor are not divisible by 32, padding is automatically provided.</p>
+<figure class="align-center" id="id3">
+<img alt="Tensor With Tile Layout" src="../_images/tensor_with_tile_layout.png">
+<figcaption>
+<p><span class="caption-text">4x4 tensor stored using 2x2 tiles. Note that ttnn Tensors by default have 32x32 tiles. This image is for illustrative purposes only.</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>You can create tile layout tensors using any creation function (e.g. <a class="reference internal" href="api/ttnn.full.html#id1"><span class="std std-ref">ttnn.full</span></a>, <a class="reference internal" href="api/ttnn.from_torch.html#id1"><span class="std std-ref">ttnn.from_torch</span></a>)  by passing <cite>layout=ttnn.TILE_LAYOUT</cite> as an argument. You can also convert a row-major tensor to tile layout with <a class="reference internal" href="api/ttnn.to_layout.html#id1"><span class="std std-ref">ttnn.to_layout</span></a>.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.ROW_MAJOR</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+</pre></div>
+</div>
+<p>Data inside the tile isn’t contiguous. Each tile is split into faces (“sub-tiles”). By default, tile size is 32x32, and face size is 16x16 – 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0-&gt;face1-&gt;face2-&gt;face3 on the picture below)</p>
+<figure class="align-center" id="id4">
+<img alt="Tile Faces" src="../_images/tile_faces.png">
+<figcaption>
+<p><span class="caption-text">A tile with 4 faces. Each face is 16x16 elements.</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is decomposed into multiple face multiplications.</p>
+<p>To create a tensor with a tile layout, you can pass layout=ttnn.TILE_LAYOUT in most tensor-creation functions, or change row-major tensor with <a class="reference internal" href="api/ttnn.to_layout.html#id1"><span class="std std-ref">ttnn.to_layout</span></a>.
+You can specify tile size and face orientation. If transpose_tile==true, then the faces’ order is transposed, i.e. they are placed in memory in col-major fashion (face0-&gt;face2-&gt;face1-&gt;face3 on the image above), and values inside faces are also transposed.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_t</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">tile</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Tile</span><span class="p">((</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">transpose_tile</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">tile</span><span class="p">)</span>
+<span class="go">Tile with shape: [16, 32]</span>
+</pre></div>
+</div>
+</section>
+<section id="data-type">
+<span id="ttnn-datatype"></span><h2>Data Type<a class="headerlink" href="#data-type" title="Permalink to this heading"></a>
+</h2>
+<p>ttnn supports the following data types:</p>
+<ul class="simple">
+<li><p><strong>uint16</strong></p></li>
+<li><p><strong>uint32</strong></p></li>
+<li><p><strong>float32</strong></p></li>
+<li><p><strong>bfloat16</strong></p></li>
+<li><p><strong>bfloat8_b</strong></p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> uses a minimum of 4 bytes to store a row of the tensor in <a class="reference internal" href="#ttnn-row-major-layout"><span class="std std-ref">ttnn.ROW_MAJOR_LAYOUT</span></a> on the device.
+That means that the width of a tensor on the device must be a multiple of <cite>4 / sizeof(dtype)</cite>. The exact numbers are shown below:</p>
+<table class="docutils align-default" id="id5">
+<caption>
+<span class="caption-text">Required Width Multiples for Data Types</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
+</caption>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Data Type</p></th>
+<th class="head"><p>Required Width Multiple</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>ttnn.uint16</p></td>
+<td><p>2</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>ttnn.uint32</p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-even">
+<td><p>ttnn.float32</p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>ttnn.bfloat16</p></td>
+<td><p>2</p></td>
+</tr>
+<tr class="row-even">
+<td><p>ttnn.bfloat8_b</p></td>
+<td><p>32 (Special case because the tensor has to be in tile layout)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="limitation-of-bfloat8-b">
+<span id="bfloat8-b-limitations"></span><h2>Limitation of BFLOAT8_B<a class="headerlink" href="#limitation-of-bfloat8-b" title="Permalink to this heading"></a>
+</h2>
+<p>The BFLOAT8_B format utilizes a block-floating point (BFP) representation, where 16 consecutive numbers share a single exponent, determined by the largest value in the group.</p>
+<p>This shared exponent introduces specific behaviors and limitations, as observed during operations like reciprocal:</p>
+<ul class="simple">
+<li><p>When the group contains numbers with large magnitude differences, smaller values may be flushed to zero, resulting in inaccurate reciprocal results or numerical instability.</p></li>
+<li><p>Inputs with extreme values (e.g., infinities) can dominate the shared exponent, causing other numbers in the group to lose precision or be rounded off to zero.</p></li>
+</ul>
+<p>For inputs that include zero, the reciprocal result is a large constant value: 1.7014118346046923e+38.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>Avoid using the BFLOAT8_B format for operations like reciprocal on datasets with high variance in magnitude or frequent occurrences of zero.</p></li>
+<li><p>Preprocess data to ensure a more uniform distribution of magnitudes within groups of 16.</p></li>
+<li><p>Validate the outputs using higher precision formats when dealing with critical applications.</p></li>
+</ul>
+<p>The BFLOAT8_B format is optimized for scenarios with homogeneous values across groups but is unsuitable for operations that expand the range, such as reciprocal, due to inherent precision constraints.</p>
+</div>
+</section>
+<section id="storage">
+<span id="ttnn-storage"></span><h2>Storage<a class="headerlink" href="#storage" title="Permalink to this heading"></a>
+</h2>
+<p><strong>OWNED_HOST_STORAGE</strong></p>
+<blockquote>
+<div>
+<p>The buffer of the tensor is on the host and its allocation/deallocation is owned by ttnn.</p>
+</div>
+</blockquote>
+<p><strong>BORROWED_HOST_STORAGE</strong></p>
+<blockquote>
+<div>
+<p>The buffer of the tensor is on the host and it was borrowed from <code class="docutils literal notranslate"><span class="pre">torch</span></code> / <code class="docutils literal notranslate"><span class="pre">numpy</span></code> / an external buffer.</p>
+</div>
+</blockquote>
+<p><strong>DEVICE_STORAGE</strong></p>
+<blockquote>
+<div>
+<p>The buffer of the tensor is on a ttnn device. And its allocation/deallocation is owned by ttnn.</p>
+</div>
+</blockquote>
+</section>
+<section id="tensor-sharding">
+<h2>Tensor Sharding<a class="headerlink" href="#tensor-sharding" title="Permalink to this heading"></a>
+</h2>
+<p>Sharding refers to a tensor that is split across a distributed memory space, with that distribution ideally being abstracted away.
+Currently we support L1 sharding, which refers to the distribution of a tensor across the L1 memory space of different cores.</p>
+<p>Sharded tensors are represented in two dimensions, we compress a higher rank tensor into two-dims by compressing all upper dims in dim 0 and keeping the last dimension the same.
+For example a [1,2,3,4] tensor will be represented as a [6,4] 2D tensor before sharding.
+Data in a <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> is organized in tiles, and these tiles are typically in row-major order.
+The size of the tile depends on the <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout</span></code> and <a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> of the tensor.
+Refer to the section about <a class="reference internal" href="#ttnn-layout"><span class="std std-ref">Layout</span></a> to learn more.</p>
+<p><strong>Data Organization on Host</strong></p>
+<p>A sharded tensor’s tiles are organized in sharded order on the device which we will highlight with an example.
+A tensor is only sharded on device and on the host the tiles remain in row-major order.
+Below is an example of a tensor on the host, with each tile labelled.</p>
+<figure class="align-center" id="id6">
+<img alt="A tensor on the host before it is sharded" src="../_images/host_tensor.png">
+<figcaption>
+<p><span class="caption-text">A tensor in 4x4 tiles in row-major order. Each tile is 32x32 elements making this tensor 128x128 tensor.</span><a class="headerlink" href="#id6" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>There are a few key attributes that needs to be defined with respect to sharding (specifically in L1):</p>
+<ul class="simple">
+<li><p><strong>Core Grid</strong>: Represents the cores who’s L1 will have a shard of a tensor. Each core will have a single shard.</p></li>
+<li><p><strong>Shard Shape</strong>: The shape in elements of a single shard, this is the subset of the tensor that will be on each core.</p></li>
+<li><p><strong>Sharding Strategy</strong>: Represents how the tensor will be split. Height sharded represents splitting a tensor in rows. Width sharding represents splitting a tensor in columns. Block sharding represents splitting a tensor along a 2D grid.</p></li>
+<li><p><strong>Shard Orientation</strong>: Represents the order of the cores in the 2D shard grid that we read and write our shards to. This can be either row-major or column-major.</p></li>
+</ul>
+<p><strong>Data Organization on Device</strong></p>
+<p>Now that we know the key attributes and understand how an unsharded 2D tensor looks like.
+Lets shard this tensor.
+Using the <a class="reference internal" href="api/ttnn.to_memory_config.html#id1"><span class="std std-ref">ttnn.to_memory_config</span></a> we can take an unsharded host tensor and write it to a sharded device tensor.
+In the example below we have a 2x2 core grid, a shard shape of [64,64] ([2,2] in tiles), a sharding strategy of block sharding, and a sharded orientation of row-major.</p>
+<figure class="align-center" id="id7">
+<img alt="A tensor that is block sharded" src="../_images/sharded_tensor.png">
+<figcaption>
+<p><span class="caption-text">A 4x4 (in tiles) tensor sharded across 4 cores. The C(x,y) represents the coordinates (which are in row-major order due to shard orientation). The P&lt;number&gt; represents the tile in each core’s L1. The H&lt;number&gt; represents the equivalent row-major unsharded host tensors tiles.</span><a class="headerlink" href="#id7" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+</section>
+<section id="memory-config">
+<span id="ttnn-memoryconfig"></span><h2>Memory Config<a class="headerlink" href="#memory-config" title="Permalink to this heading"></a>
+</h2>
+<p><strong>ttnn.DRAM_MEMORY_CONFIG</strong></p>
+<blockquote>
+<div>
+<p>The buffer of the tensor is interleaved and is stored in DRAM.</p>
+</div>
+</blockquote>
+<p><strong>ttnn.L1_MEMORY_CONFIG</strong></p>
+<blockquote>
+<div>
+<p>The buffer of the tensor is interleaved and is stored in the the local cache of a core</p>
+</div>
+</blockquote>
+<p><strong>ttnn.create_sharded_memory_config</strong></p>
+<blockquote>
+<div>
+<p>The buffer of the tensor is sharded (physically distributed). Currently the tensor can only be physically distributed across different cores’ L1.
+Use <a class="reference internal" href="api/ttnn.create_sharded_memory_config.html#id1"><span class="std std-ref">ttnn.create_sharded_memory_config</span></a> to create a sharded memory config.</p>
+</div>
+</blockquote>
+</section>
+<section id="apis">
+<h2>APIs<a class="headerlink" href="#apis" title="Permalink to this heading"></a>
+</h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="ttnn.Shape">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">Shape</span></span><a class="headerlink" href="#ttnn.Shape" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">pybind11_object</span></code></p>
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Shape.rank">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">rank</span></span><a class="headerlink" href="#ttnn.Shape.rank" title="Permalink to this definition"></a>
+</dt>
+<dd></dd>
+</dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="ttnn.Shape.to_rank">
+<span class="sig-name descname"><span class="pre">to_rank</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Shape" title="ttnn._ttnn.types.Shape"><span class="pre">ttnn._ttnn.types.Shape</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg0</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="#ttnn.Shape" title="ttnn._ttnn.types.Shape"><span class="pre">ttnn._ttnn.types.Shape</span></a></span></span><a class="headerlink" href="#ttnn.Shape.to_rank" title="Permalink to this definition"></a>
+</dt>
+<dd></dd>
+</dl>
+
+</dd>
+</dl>
+
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="usage.html" class="btn btn-neutral float-left" title="Using TT-NN" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="api.html" class="btn btn-neutral float-right" title="APIs" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory from a kernel developer’s perspective &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/advanced_topics/memory_for_kernel_developers.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Compute Engines and Data Flow within Tensix" href="compute_engines_and_dataflow_within_tensix.html" />
+    <link rel="prev" title="Tiles" href="tiles.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Advanced Topics</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="index.html#hardware-implications-and-the-effects">Hardware implications and the effects</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="tiles.html">Tiles</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Memory from a kernel developer’s perspective</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#data-addressing-on-tenstorrent-processors">Data addressing on Tenstorrent processors</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tensor-layout">Tensor Layout</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#memory-placement">Memory placement</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html">Compute Engines and Data Flow within Tensix</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Advanced Topics</a></li>
+      <li class="breadcrumb-item active">Memory from a kernel developer’s perspective</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/advanced_topics/memory_for_kernel_developers.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="memory-from-a-kernel-developer-s-perspective">
+<span id="memory-for-kernel-developers"></span><h1>Memory from a kernel developer’s perspective<a class="headerlink" href="#memory-from-a-kernel-developer-s-perspective" title="Permalink to this heading"></a>
+</h1>
+<p>Memory on Tenstorrent processors works differently than on traditional CPUs and GPUs. Instead of a single address space shared by all cores, memory is addressed by an (<code class="docutils literal notranslate"><span class="pre">x</span></code>, <code class="docutils literal notranslate"><span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">local_address</span></code>) tuple. This is due to the mesh-based design, where each node on the NoC has its own local resources. This design has important implications for writing compute kernels. Which core uses which memory can significantly affect performance, so understanding how memory works is essential for writing efficient kernels.</p>
+<p>This document is intended for kernel developers who want to understand memory on Tenstorrent processors beyond just using the APIs. It assumes you are familiar with the first five programming examples (from DRAM loopback to multi-core matrix multiplication). Review the <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/METALIUM_GUIDE.md">Metalium Programming Model Guide</a> for foundational understanding of the hardware architecture and programming model.</p>
+<section id="data-addressing-on-tenstorrent-processors">
+<h2>Data addressing on Tenstorrent processors<a class="headerlink" href="#data-addressing-on-tenstorrent-processors" title="Permalink to this heading"></a>
+</h2>
+<section id="risc-v-address-space">
+<h3>RISC-V Address Space<a class="headerlink" href="#risc-v-address-space" title="Permalink to this heading"></a>
+</h3>
+<p>For a kernel running on data-movement core 0 of Tensix core (0, 0), the binary is placed in that core’s shared SRAM (historically “L1”). At runtime, instructions stream from shared SRAM into a small per-core instruction cache (0.5-2 KiB, about 128-512 instructions) to cut repeated SRAM fetches. Each RISC-V core also has a small private memory region for its stack and locals; this region and the shared SRAM are mapped at identical addresses on every core. The shared SRAM is always accessible to all cores; only the private region is isolated. Because many on-core agents contend for shared SRAM, RISC-V loads and stores to it have limited bandwidth and a latency of several cycles.</p>
+<p>Refer to the <a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/BabyRISCV/README.md">Baby RISC-V</a> documentation for the RISC-V address space. The <a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/L1.md">L1 page</a> documents the shared SRAM (L1) organization, its clients and performance characteristics.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// the function (machine code) lives on L1. When executed, a 0.5~2KiB</span>
+<span class="c1">// instruction cache (depending on which core is selected) reduces</span>
+<span class="c1">// SRAM access pressure</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="c1">// lives on per-core private memory</span>
+<span class="w">    </span><span class="c1">// Because of this, passing the address of this variable to another core</span>
+<span class="w">    </span><span class="c1">// will not work, as the other core does not have access to the private memory</span>
+<span class="w">    </span><span class="c1">// it lives on. And has the core has its own private memory mapped at the same address</span>
+
+<span class="w">    </span><span class="c1">// Variable `cb_idx` lives in per-core memory but points to a circular buffer in shared SRAM</span>
+<span class="w">    </span><span class="c1">// Because shared SRAM is mapped in the core's address space, you can cast it to a pointer</span>
+<span class="w">    </span><span class="c1">// and access it as if it were a regular memory.</span>
+<span class="w">    </span><span class="c1">// However note that the RISC-V cores itself have low bandwidth to SRAM, the bulk of compute</span>
+<span class="w">    </span><span class="c1">// is done via peripherals which have much higher bandwidth to SRAM.</span>
+<span class="w">    </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// Treating it as address because the address is in shared SRAM</span>
+<span class="w">    </span><span class="c1">// DPRINT &lt;&lt; ((uint32_t*)cb_addr)[0] &lt;&lt; std::endl;</span>
+
+<span class="w">    </span><span class="c1">// `dram_addr` is a DRAM address, however the address is not mapped in the RISC-V address space</span>
+<span class="w">    </span><span class="c1">// and the content must be explicitly fetched from DRAM using NoC APIs and requesting a transfer</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The memory blocks and related peripherals within the Tensix core can be visualized with the following diagram. Compute-related blocks are not shown as they are consumers of the memory system rather than part of the memory hierarchy discussed here.</p>
+<figure class="align-default">
+<img alt="The main memory blocks that exist in a Tensix Core" src="../../_images/tensix-memory-diagram.webp">
+</figure>
+</section>
+<section id="dram-tiles">
+<h3>DRAM tiles<a class="headerlink" href="#dram-tiles" title="Permalink to this heading"></a>
+</h3>
+<p>Tensix tiles are one type of tile on the NoC. Each Tensix tile contains 1.5MB of SRAM. DRAM tiles, in contrast, connect to memory controllers that interface with off-chip GDDR memory. This provides significantly more storage capacity but with higher latency and lower bandwidth compared to SRAM.</p>
+<p>For example, Wormhole has 6 DRAM controllers, each connected to 2GB of GDDR6 memory (2 channels, 1GB per channel). The following image shows Wormhole’s NoC grid with DRAM tiles labeled D1 to D6, corresponding to controllers 1-6. Multiple DRAM tiles can connect to the same controller to improve NoC connectivity. The DRAM tile placement is optimized for physical routing constraints rather than uniform distribution.</p>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="../../_images/tenstorrent-wormhole-logical-noc-diagram.webp"><img alt="The logical NoC diagram of Wormhole with DRAM tiles labeled D1 to D6." src="../../_images/tenstorrent-wormhole-logical-noc-diagram.webp" style="width: 65%;"></a>
+<figcaption>
+<p><span class="caption-text">The NoC grid of the Tenstorrent Wormhole processor (D = DRAM, T = Tensix, E = Ethernet, A = ARC/management, P = PCIe).</span><a class="headerlink" href="#id1" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>For Wormhole, within each DRAM tile, the 1st channel is mapped to address 0 and the 2nd channel is mapped from address 1GB.</p>
+<figure class="align-center" id="id2">
+<a class="reference internal image-reference" href="../../_images/tenstorrent-wormhole-dram-tile-connect-gddr.webp"><img alt="The DRAM tile connection to GDDR memory." src="../../_images/tenstorrent-wormhole-dram-tile-connect-gddr.webp" style="width: 65%;"></a>
+<figcaption>
+<p><span class="caption-text">The DRAM tile connection to GDDR memory. Each DRAM tile has 2 channels, each with 1GB of memory.</span><a class="headerlink" href="#id2" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+</section>
+<section id="memory-access-via-the-noc">
+<h3>Memory access via the NoC<a class="headerlink" href="#memory-access-via-the-noc" title="Permalink to this heading"></a>
+</h3>
+<p>RISC-V cores can only access their private memory and the local shared SRAM directly. Accessing SRAM on other Tensix cores or DRAM requires sending DMA requests through the NoC. These requests specify the target tile’s (x, y) coordinates and the address within that tile.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="n">addr_on_target_tile</span><span class="p">);</span>
+<span class="n">noc_async_read</span><span class="p">(</span><span class="n">noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">ptr_l1_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">);</span>
+
+<span class="c1">// for writing</span>
+<span class="n">noc_async_write</span><span class="p">(</span><span class="n">ptr_l1_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">);</span>
+</pre></div>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Private memory (including the stack) is only accessible by the core that owns it. NoC requests can only access shared SRAM addresses:</p>
+<ul class="simple">
+<li><p>Stack variables cannot be used as DMA source or destination</p></li>
+<li><p>L1 buffers (allocated in the host program) and circular buffers are accessible via NoC</p></li>
+</ul>
+<p>e.g. The following <strong>will not</strong> work.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// This WILL NOT work as arr lives on the stack which is private to the core</span>
+<span class="kt">int</span><span class="w"> </span><span class="n">arr</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span>
+<span class="n">noc_async_read</span><span class="p">(</span><span class="n">noc_addr</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="p">(</span><span class="o">&amp;</span><span class="n">arr</span><span class="p">),</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="n">arr</span><span class="p">));</span>
+</pre></div>
+</div>
+</div>
+<p>The same scheme works for all tiles on the NoC (as long as the address maps to valid memory). If the NoC request goes to a Tensix or Ethernet tile, it accesses their SRAM; if to a DRAM tile, it accesses DRAM; to the PCIe controller, it accesses the peripheral. Thus making the real address a tuple of (<code class="docutils literal notranslate"><span class="pre">x</span></code>, <code class="docutils literal notranslate"><span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">local_addr</span></code>).</p>
+<p>Accessing raw DRAM is straightforward. The following creates a read request of size 0x100 to DRAM tile D1 at address 0x1000:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr_from_bank_id</span><span class="o">&lt;</span><span class="nb">true</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mh">0x1000</span><span class="p">);</span>
+<span class="n">noc_async_read</span><span class="p">(</span><span class="n">noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">ptr_l1_buffer</span><span class="p">,</span><span class="w"> </span><span class="mh">0x100</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>From the information above, the following is true on Wormhole (and analogous for other generation of processors):</p>
+<ul class="simple">
+<li><p>All 3 D1 tiles are connected to the same DRAM controller</p></li>
+<li><p>Reading from different D1 tiles at the same address returns the same data</p></li>
+<li><p>Address 0x1000 is within the first 1GB, so the 1st channel of the GDDR chip is used</p></li>
+<li><p>Using all 6 DRAM controllers simultaneously provides the full 12GB capacity</p></li>
+</ul>
+<p>As the <code class="docutils literal notranslate"><span class="pre">async</span></code> naming in <code class="docutils literal notranslate"><span class="pre">noc_async_read/write</span></code> indicates. NoC requests are asynchronous, <em>may</em> complete out of order, and may or may not return immediately due to various factors. A barrier is needed to ensure that all read or write operations are complete before proceeding.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">noc_async_read_barrier</span><span class="p">();</span><span class="w"> </span><span class="c1">// Wait for all read operations to complete</span>
+<span class="n">noc_async_write_barrier</span><span class="p">();</span><span class="w"> </span><span class="c1">// Wait for all write operations to complete</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="tensor-layout">
+<h2>Tensor Layout<a class="headerlink" href="#tensor-layout" title="Permalink to this heading"></a>
+</h2>
+<p>Tensors are the primary data structure that Metalium is designed to work with, though they are not strictly the only supported data structure. Tensors are multi-dimensional arrays used to represent various types of data, from images to text. As the fundamental data structure in modern machine learning frameworks, tensors provide flexibility and power for diverse computational tasks. Metalium is designed to facilitate efficient tensor operations.</p>
+<p>Multiple tensor memory layouts exist, with traditional systems using either C-style row-major or Fortran-style column-major ordering. Metalium supports C-style row-major ordering but uses a custom tiled layout for optimal computation performance on the Tensix core. This tiled layout reduces silicon area, power consumption, and memory bandwidth by matching the Tensix core’s compute units and memory architecture.</p>
+<p>Due to the lack of a linear, flat address space, data placement (onto each memory resource) requires explicit decisions about distribution and chunk size. Distribution will be discussed in a future section. The chunk size, or the amount of data stored before switching to the next storage location, is referred to as the <strong>page size</strong>.</p>
+<p>In row-major layout, a single row of the tensor occupies one page, enabling simpler programming and lower logic overhead for common patterns of data access.</p>
+<figure class="align-center" id="id3">
+<a class="reference internal image-reference" href="../../_images/tenstorrent-row-major-memory-layout.webp"><img alt="The row-major memory layout of a tensor." src="../../_images/tenstorrent-row-major-memory-layout.webp" style="width: 787.8000000000001px; height: 594.75px;"></a>
+<figcaption>
+<p><span class="caption-text">The row-major memory layout of a tensor. The data is stored in a single contiguous block of memory, with the last dimension varying the fastest.</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>In contrast, the tiled layout provides optimal performance for computations on the Tensix core. It divides the tensor into smaller tiles, typically 2D tiles of size 32x32 (padded as needed). Each tile is stored in a separate page, enabling efficient access patterns that align with the Tensix core’s internal compute units. See <a class="reference internal" href="tiles.html#tiles"><span class="std std-ref">Tile documentation</span></a> for details on the tile layout and its implications.</p>
+<figure class="align-center" id="id4">
+<a class="reference internal image-reference" href="../../_images/tenstorrent-tile-memory-layout.webp"><img alt="The tiled memory layout of a tensor." src="../../_images/tenstorrent-tile-memory-layout.webp" style="width: 936.0px; height: 452.40000000000003px;"></a>
+<figcaption>
+<p><span class="caption-text">The tiled memory layout of a tensor.</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+</section>
+<section id="memory-placement">
+<h2>Memory placement<a class="headerlink" href="#memory-placement" title="Permalink to this heading"></a>
+</h2>
+<p>Due to the lack of a single linear address space, data placement requires explicit decisions about location and distribution across available resources. The following factors determine optimal data placement:</p>
+<ul class="simple">
+<li><p><strong>Target tile selection</strong>: Which specific tile should store each piece of data</p></li>
+<li><p><strong>Memory type</strong>: Whether data should reside in DRAM or SRAM based on access patterns and capacity requirements</p></li>
+<li><p><strong>Access pattern optimization</strong>: Minimizing NoC traffic by placing frequently accessed data close to consuming cores</p></li>
+<li><p><strong>Compatibility across generations</strong>: Ensuring kernels can run on different Tenstorrent generations with varying memory configurations, without code changes</p></li>
+</ul>
+<p>There is no one-size-fits-all solution for data placement. The optimal strategy depends on the specific kernel, its access patterns and the underlying hardware architecture.</p>
+<section id="lock-step-allocation">
+<h3>Lock step allocation<a class="headerlink" href="#lock-step-allocation" title="Permalink to this heading"></a>
+</h3>
+<p>Each generation of Tenstorrent processors has a different memory configuration. For example, Wormhole has 6 DRAM controllers with 2 GB each, while Blackhole has 8 controllers with 4 GB each. Passing in a separate address for each DRAM controller to a kernel is not practical nor scalable. Similarly, providing 64 addresses for each Tensix core (as on a Wormhole n150) for data residing on SRAM is not feasible.</p>
+<p>Lock-step allocation solves this problem. For DRAM allocation, the buffer size is divided and rounded up by the number of DRAM tiles. Allocation assumes the processor has only 1/N of the total memory. The resulting address is then shared across all DRAM tiles, effectively multiplying the available space and restoring the allocated area to the requested amount. This approach ensures that a single pointer (plus the memory type, which is known before kernel execution) can uniquely identify an object, regardless of the underlying memory configuration. The same applies to SRAM allocation, where the address is shared across all Tensix cores.</p>
+<figure class="align-center" id="id5">
+<img alt="The lock-step allocation diagram." src="../../_images/tenstorrent-lock-step-allocation-cross-banks.webp">
+<figcaption>
+<p><span class="caption-text">The lock-step where single address can be used across multiple DRAM tiles. At the cost of some memory waste.</span><a class="headerlink" href="#id5" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Lock step allocation has inherent trade-offs. When allocating X bytes on one DRAM controller, all other controllers must reserve the same amount. Additionally, if the allocation size is not evenly divisible by the number of controllers, some banks will contain unused space. Despite these limitations, the programming model simplification justifies the overhead - kernels receive a single address parameter instead of N hardware-dependent pointers, at the cost of some memory waste and explicit specification of the storage pattern.</p>
+</section>
+<section id="interleaved-memory">
+<h3>Interleaved memory<a class="headerlink" href="#interleaved-memory" title="Permalink to this heading"></a>
+</h3>
+<p>Interleaved is the simplest memory placement scheme. Data is round‑robined across all available memory resources at <code class="docutils literal notranslate"><span class="pre">page_size</span></code> granularity. This approach is the most generic and works well for most kernels. It ensures that data is evenly distributed across all memory banks and not hot-spotted on any single one. At the cost of less efficient memory access patterns for certain operations such as matrix multiplication and convolution, where locality is paramount.</p>
+<p>The following example is a typical interleaved memory allocation for a DRAM buffer. It allocates a buffer of size <code class="docutils literal notranslate"><span class="pre">tile_size_bytes</span> <span class="pre">*</span> <span class="pre">n_tiles</span></code> bytes. The <code class="docutils literal notranslate"><span class="pre">page_size</span></code> is set to the size of a tile, which 2KiB for bfloat16 tiles - each DRAM controller will hold a tile of data, and the next tile will be stored on the next DRAM controller, and so on.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">64</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">elements_per_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_WIDTH</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_HEIGHT</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="n">bfloat16</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">elements_per_tile</span><span class="p">;</span>
+
+<span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span><span class="p">};</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">in0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">();</span>
+
+<span class="c1">// Tell the kernel how to access the memory</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compile_time_args</span><span class="p">;</span><span class="w"> </span><span class="c1">// passed to kernel during kernel setup</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src0_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">compile_time_args</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The above code allocates 64 tiles of size 2KiB each, for a total of 128KiB. Across DRAM controllers. We can visualize the allocation (as a 1D array) as follows:</p>
+<figure class="align-center" id="id6">
+<a class="reference internal image-reference" href="../../_images/tenstorrent-interleaved-allocation-64-tiles-wh.webp"><img alt="Allocating 64 tiles of interleaved memory on Wormhole" src="../../_images/tenstorrent-interleaved-allocation-64-tiles-wh.webp" style="width: 65%;"></a>
+<figcaption>
+<p><span class="caption-text">Allocation of 64 tiles of bfloat16 in interleaved memory on Wormhole (6 DRAM controllers). Each tile is 1024 elements of bfloat16, or 2KiB. The allocation round-robins across the 6 DRAM controllers.</span><a class="headerlink" href="#id6" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>As interleaved memory is the most common allocation scheme. Instead of manually calculating the address and tile coordinates, utilities are provided to enable easy access. <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> enables efficient, random access to interleaved memory. Allowing tile/page sized granularity for read and writes.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// access parameters are passed in compile time, starting from parameter 0</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">in0_args</span><span class="p">,</span><span class="w"> </span><span class="n">in0_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+<span class="p">...</span>
+
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_in0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in0_addr</span><span class="p">);</span><span class="w"> </span><span class="c1">// read the i-th tile from the interleaved buffer</span>
+
+<span class="w">    </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+<span class="w">    </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="sram-buffers">
+<h3>SRAM buffers<a class="headerlink" href="#sram-buffers" title="Permalink to this heading"></a>
+</h3>
+<p>It is also possible to allocate buffers in SRAM. This is useful for small buffers that need to be accessed with high bandwidth, low latency and high locality. SRAM provides much higher bandwidth and lower latency than DRAM, making it ideal for intermediate data that needs to be accessed frequently during computation. However, SRAM is a very limited resource, so it is important to use it wisely and deallocate as soon as it is no longer needed.</p>
+<p>Allocating on SRAM is exactly the same as allocating on DRAM, except that the buffer type is set to <code class="docutils literal notranslate"><span class="pre">BufferType::L1</span></code>. The following example allocates the same buffer as above, but in SRAM instead of DRAM. In this case, the round-robin allocation is done across all Tensix cores instead of DRAM controllers.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">sram_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">L1</span><span class="p">};</span><span class="w"> </span><span class="c1">// change here</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">src0_sram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">sram_config</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">in0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src0_sram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">();</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compile_time_args</span><span class="p">;</span>
+<span class="c1">// The knowledge that the buffer lives on SRAM is captured</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src0_sram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">compile_time_args</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>As allocation type and scheme is known at compile time. The same <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> helper can be used to access the SRAM buffer with 0 change to the kernel.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Nothing changes compared to reading from DRAM as allocation on DRAM or SRAM is known before</span>
+<span class="c1">// kernel compilation.</span>
+<span class="c1">// Whether accessing DRAM or SRAM is stored in TensorAccessorArgs.</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">in0_args</span><span class="p">,</span><span class="w"> </span><span class="n">in0_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+<span class="p">...</span>
+
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_in0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
+<span class="w">    </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in0_addr</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+<span class="w">    </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="sharded-tensor">
+<h3>Sharded tensor<a class="headerlink" href="#sharded-tensor" title="Permalink to this heading"></a>
+</h3>
+<p>Interleaved memory, while simple and generic, does not always provide optimal performance for all kernels. It can lead to NoC contention since each link can only carry one packet at a time. When multiple packets attempt to traverse the same link, one must wait, causing delays and reduced throughput. The problem is true for both Interleaved DRAM and SRAM buffers. This is particularly problematic for high-bandwidth kernels with predictable access patterns, such as matrix multiplication or convolution. In these cases, more advanced memory allocation schemes that reduce contention and improve data locality often provide better performance.</p>
+<figure class="align-center" id="id7">
+<a class="reference internal image-reference" href="../../_images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp"><img alt="NoC congestion under DRAM access" src="../../_images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp" style="width: 1040.0px; height: 911.3000000000001px;"></a>
+<figcaption>
+<p><span class="caption-text">It is possible to have contention on the NoC when multiple packets try to traverse the same link.</span><a class="headerlink" href="#id7" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Sharded memory is a more advanced allocation scheme that allows for, but not necessarily makes, a more efficient memory access pattern. It is used for kernels that require more control over data placement and access patterns. Sharded memory allows you to specify which tiles should store which data, and how the data should be partitioned across those tiles.</p>
+<p>Metalium supports several sharding schemes:</p>
+<ul class="simple">
+<li><p><strong>Height sharding</strong>: Data is partitioned across tiles based on the height dimension</p></li>
+<li><p><strong>Width sharding</strong>: Data is partitioned across tiles based on the width dimension</p></li>
+<li><p><strong>Block sharding</strong>: Data is partitioned across tiles on both width and height dimensions</p></li>
+</ul>
+<p>Sharding is usually only done for SRAM buffers.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">tt</span><span class="o">::</span><span class="nn">constants</span><span class="p">;</span>
+<span class="n">ShardSpecBuffer</span><span class="w"> </span><span class="n">shard_spec</span><span class="p">(</span>
+<span class="w">    </span><span class="n">cores</span><span class="p">,</span><span class="w">                                            </span><span class="c1">// The core grid on which data is distributed on</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="kt">uint32_t</span><span class="p">(</span><span class="n">tiles_per_core_width</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">TILE_HEIGHT</span><span class="p">),</span><span class="w">   </span><span class="c1">// Width and height in bytes</span>
+<span class="w">      </span><span class="kt">uint32_t</span><span class="p">(</span><span class="n">tiles_per_core_height</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="p">)</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="n">ShardOrientation</span><span class="o">::</span><span class="n">ROW_MAJOR</span><span class="p">,</span><span class="w">                      </span><span class="c1">// direction (across cores) to distribute shards</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="n">TILE_HEIGHT</span><span class="p">,</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="w"> </span><span class="p">},</span><span class="w">                      </span><span class="c1">// Page size in elements</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="n">height_tiles</span><span class="p">,</span><span class="w"> </span><span class="n">width_tiles</span><span class="w"> </span><span class="p">});</span><span class="w">                   </span><span class="c1">// shape of the overall matrix/tensor in shards</span>
+
+<span class="c1">// Allocate a sharded buffer in L1</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">buf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">ShardedBufferConfig</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_layout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorMemoryLayout</span><span class="o">::</span><span class="n">HEIGHT_SHARDED</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">shard_parameters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">shard_spec</span><span class="p">});</span>
+
+<span class="c1">// Describe access pattern for kernel (compile-time args packing helper).</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compile_time_args</span><span class="p">;</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">buf</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">compile_time_args</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Accessing of sharded memory is done exactly like accessing interleaved memory. <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> enables efficient, random access to sharded memory. Allowing tile/page sized granularity for read and writes.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Note the concepts (DRAM vs SRAM, interleaved vs sharded) are mostly independent of each other. You can have interleaved DRAM buffers (most common), interleaved SRAM buffers (often used for temporary data), sharded SRAM buffers (for specific use cases where they benefit from the bandwidth) and sharded DRAM buffers (rarely used due to limited DRAM vs NoC bandwidth thus not described above). The best approach depends on the specific kernel and its access patterns.</p>
+</div>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="tiles.html" class="btn btn-neutral float-left" title="Tiles" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="compute_engines_and_dataflow_within_tensix.html" class="btn btn-neutral float-right" title="Compute Engines and Data Flow within Tensix" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

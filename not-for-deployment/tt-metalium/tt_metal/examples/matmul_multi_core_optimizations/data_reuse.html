@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Reuse in matmul_multicore_reuse &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/examples/matmul_multi_core_optimizations/data_reuse.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Data Multicasting in matmul_multicore_reuse_mcast" href="data_mcast.html" />
+    <link rel="prev" title="Matmul (Multi Core Optimized)" href="../matmul_multi_core_optimized.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../index.html">Programming Examples</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../dram_loopback.html">DRAM Loopback</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../eltwise_binary.html">Eltwise binary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../eltwise_sfpu.html">Eltwise SFPU</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul_single_core.html">Matmul (Single Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul_multi_core.html">Matmul (Multi Core)</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Data Reuse in <cite>matmul_multicore_reuse</cite></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#fine-grained-block-size-control">Fine-Grained Block Size Control</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#intermediate-circular-buffer-configuration">Intermediate Circular Buffer Configuration</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#stride-kernel-arguments">Stride Kernel Arguments</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#intermediate-results-handling">Intermediate Results Handling</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="data_mcast.html">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Programming Examples</a></li>
+          <li class="breadcrumb-item"><a href="../matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+      <li class="breadcrumb-item active">Data Reuse in <cite>matmul_multicore_reuse</cite></li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/tt_metal/examples/matmul_multi_core_optimizations/data_reuse.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="data-reuse-in-matmul-multicore-reuse">
+<span id="matmul-multi-core-data-reuse-example"></span><h1>Data Reuse in <cite>matmul_multicore_reuse</cite><a class="headerlink" href="#data-reuse-in-matmul-multicore-reuse" title="Permalink to this heading"></a>
+</h1>
+<section id="fine-grained-block-size-control">
+<h2>Fine-Grained Block Size Control<a class="headerlink" href="#fine-grained-block-size-control" title="Permalink to this heading"></a>
+</h2>
+<p>Advanced matrix dimension controls are found in the Programming Example’s matmul_common directory, namely Block Matrix Multiply Ops (bmm_op.hpp). Including this header allows us advanced dynamic means of defining and retrieving matrix parameters. Our matmul kernels that work out-of-the-box perform on row-major and tile-major layouts, so you have the power to define your own outer-dimensional tile sizes, desired core grid dimensions, as well as your own input block width, all depending on your problem at hand.</p>
+<p>In our reuse example, we can employ the <code class="docutils literal notranslate"><span class="pre">get_large_matmul_params(...)</span></code> function and pass our inputs as described above. By doing so, we let METALIUM’s bmm op utility functions do the heavy lifting for us mathematically, and calculate our matmul’s exact work-per-core size and work output size seamlessly. (You can consult the header for the prime factorization method used, plus many other details).</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">matmul_params</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bmm_op_utils</span><span class="o">::</span><span class="n">get_large_matmul_params</span><span class="p">(</span><span class="n">Mt</span><span class="p">,</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">,</span><span class="w"> </span><span class="n">num_cores_x</span><span class="p">,</span><span class="w"> </span><span class="n">in0_block_w</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">per_core_M</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">get</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">(</span><span class="n">matmul_params</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">per_core_N</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">get</span><span class="o">&lt;</span><span class="mi">1</span><span class="o">&gt;</span><span class="p">(</span><span class="n">matmul_params</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">get</span><span class="o">&lt;</span><span class="mi">2</span><span class="o">&gt;</span><span class="p">(</span><span class="n">matmul_params</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">get</span><span class="o">&lt;</span><span class="mi">3</span><span class="o">&gt;</span><span class="p">(</span><span class="n">matmul_params</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Take note of the example’s use of “subblocks” above. Recall that until now, we have optimized matmul by dividing matrices into blocks and subdivided those into tiles, which are laid out neatly on our compute cores. A key optimization here in <cite>matmul_multicore_reuse</cite> is the introduction of an intermediate subdivision of blocks, called subblocks. Below are some optimal subblock layouts already provided for you in the header, which run efficiently on our hardware.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">array</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">tuple</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="o">&gt;</span><span class="w"> </span><span class="n">SUBBLOCK_HW_CHOICES</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{{</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+<span class="p">}};</span>
+</pre></div>
+</div>
+</section>
+<section id="intermediate-circular-buffer-configuration">
+<h2>Intermediate Circular Buffer Configuration<a class="headerlink" href="#intermediate-circular-buffer-configuration" title="Permalink to this heading"></a>
+</h2>
+<p>In addition to our double-buffer config, we introduce a third circular buffer denoted as <code class="docutils literal notranslate"><span class="pre">interm0_cb_index</span></code>. Out of the 32 possible circular buffers provided by the API (which you can view in the <code class="docutils literal notranslate"><span class="pre">$TT_METAL_HOME/tt_metal/hostdevcommon/kernel_structs.h</span></code> file), this one belongs to a subset of intermediate CBs. This buffer acts as a temporary storage for the intermediate results of matrix multiplication before they are combined into the final output.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">interm0_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_24</span><span class="p">;</span><span class="w"> </span><span class="c1">// Index for the intermediate circular buffer</span>
+<span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="kt">uint8_t</span><span class="p">,</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="o">&gt;</span><span class="w"> </span><span class="n">output_cb_data_format_spec</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">{</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format</span><span class="p">},</span><span class="w"> </span><span class="c1">// Output buffer configuration</span>
+<span class="w">    </span><span class="p">{</span><span class="n">interm0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format</span><span class="p">}</span><span class="w"> </span><span class="c1">// Intermediate buffer configuration</span>
+<span class="p">};</span>
+<span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_output_config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CircularBufferConfig</span><span class="p">(</span><span class="n">out_CB_size</span><span class="p">,</span><span class="w"> </span><span class="n">output_cb_data_format_spec</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">interm0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">cb_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">cb_output_config</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="stride-kernel-arguments">
+<h2>Stride Kernel Arguments<a class="headerlink" href="#stride-kernel-arguments" title="Permalink to this heading"></a>
+</h2>
+<p>The runtime arguments for the read, write, and compute kernels are set up in a certain way to employ data reuse through the intermediate circular buffer. This setup aligns with the execution model of the <code class="docutils literal notranslate"><span class="pre">bmm_tile_layout.cpp</span></code> reader and writer kernels, and <code class="docutils literal notranslate"><span class="pre">bmm_large_block_zm.cpp</span></code> compute kernel.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cm">/*</span>
+<span class="cm">* Create Kernels (Reader, Writer, Compute)</span>
+<span class="cm">*/</span>
+<span class="c1">// Create reader and writer kernels per core</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">reader_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_1_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">writer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">writer_compile_time_args</span><span class="p">});</span>
+
+<span class="c1">// Create compute kernel</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">mm_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/compute/bmm_large_block_zm.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">math_fidelity</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_kernel_args</span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Recall our compile-time kernel compute args:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_kernel_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_block_w</span>
+<span class="w">    </span><span class="n">in0_num_subblocks</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_num_subblocks</span>
+<span class="w">    </span><span class="n">in0_block_num_tiles</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_block_num_tiles</span>
+<span class="w">    </span><span class="n">in0_subblock_num_tiles</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_subblock_num_tiles</span>
+
+<span class="w">    </span><span class="n">in1_num_subblocks</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_num_subblocks</span>
+<span class="w">    </span><span class="n">in1_block_num_tiles</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_block_num_tiles</span>
+<span class="w">    </span><span class="n">in1_per_core_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_per_core_w</span>
+
+<span class="w">    </span><span class="n">num_blocks</span><span class="p">,</span><span class="w"> </span><span class="c1">// num_blocks</span>
+
+<span class="w">    </span><span class="n">out_subblock_h</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_subblock_h</span>
+<span class="w">    </span><span class="n">out_subblock_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_subblock_w</span>
+<span class="w">    </span><span class="n">out_subblock_num_tiles</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_subblock_num_tiles</span>
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="c1">// batch</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>To properly run the reader and writer kernels, we must set up the runtime arguments with this information.  For each block of in0 and in1 matrices, we read the tiles pertaining to a certain subblock from DRAM into that core’s L1, and we perform the bmm_large_block_zm on tiles therein using stride arguments.  Recall each tile is a member of a certain subblock, and subblocks are distributed across different cores in the core grid (specifically, in each core’s L1). The writer kernel then stores the partial matmul results into its corresponding output subblock.</p>
+<p>Reader:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">src0_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="c1">// in0_tensor_addr</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Kt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">per_core_M</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">output_idx_y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_tensor_start_tile_id</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_tensor_stride_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_tensor_stride_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_tensor_next_block_stride</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_block_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">per_core_M</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_block_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">per_core_M</span><span class="p">,</span><span class="w"> </span><span class="c1">//in0_block_num_tiles</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">src1_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="c1">// in1_tensor_addr</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">per_core_N</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">output_idx_x</span><span class="p">,</span><span class="w"> </span><span class="c1">//in1_tensor_start_tile_id</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_tensor_stride_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_tensor_stride_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">//in1_tensor_next_block_stride</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">per_core_N</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_block_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">//in1_block_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">per_core_N</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_block_num_tiles</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Kt</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// num_blocks</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Mt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="c1">// MtKt</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Kt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">// KtNt</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">B</span><span class="p">,</span><span class="w"> </span><span class="c1">// batch</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">bcast_batch</span><span class="w"> </span><span class="c1">// bcast_B</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Writer:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="c1">// out_buffer_addr</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">output_idx_x</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">per_core_N</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">output_idx_y</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">per_core_M</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_tensor_start_tile_id</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_tensor_stride_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w">  </span><span class="c1">// out_tensor_stride_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_tensor_next_subblock_stride_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_tensor_next_subblock_stride_h</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_subblock_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_subblock_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_subblocks_w * out_subblocks_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">per_core_N</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_num_subblocks_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">per_core_M</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="p">,</span><span class="w"> </span><span class="c1">// out_num_subblocks_h</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">Mt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">// MtNt</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="c1">// batch</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="intermediate-results-handling">
+<h2>Intermediate Results Handling<a class="headerlink" href="#intermediate-results-handling" title="Permalink to this heading"></a>
+</h2>
+<p>In <code class="docutils literal notranslate"><span class="pre">bmm_large_block_zm.cpp</span></code>,</p>
+<ol class="loweralpha">
+<li>
+<p><strong>Preparing the Intermediate Buffer</strong>:</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><strong>Reserving Partial Results Space</strong>: For a given block (excluding the last block), we reserve space for intermediate (ie. partial) results in the rear of the intermediate circular buffer with <code class="docutils literal notranslate"><span class="pre">cb_reserve_back(...)</span></code>. Each consecutive subblock within this block will access this space, and contribute their partial results.</p></li>
+</ul>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_24</span><span class="p">,</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">);</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><strong>Storing Partial Results</strong>: Partial results are stored via a packing mechanism with <code class="docutils literal notranslate"><span class="pre">pack_tile(...)</span></code> into the above reserved space.</p></li>
+</ul>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">pack_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_24</span><span class="p">);</span>
+<span class="p">}</span>
+<span class="n">cb_push_back</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_24</span><span class="p">,</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p><strong>Computing with Partial Results</strong>:</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><strong>Result Retrieval</strong>: During block computations after the first block, we retrieve the stored results <code class="docutils literal notranslate"><span class="pre">cb_wait_front(...)</span></code> for further computation. This retrieval, also known as “reloading” data, is the heart of our data reuse concept.  It is leveraged only when our flag <code class="docutils literal notranslate"><span class="pre">enable_reload</span></code> is set to true.  Recall from our understanding of circular buffers that there needs be synchronization that all tile work thus far be finished before contributing more partial results.</p></li>
+</ul>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">enable_reload</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_24</span><span class="p">,</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">);</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_24</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_24</span><span class="p">,</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><strong>Execution with `matmul_tiles`</strong>: Now we are ready to compute partial results and integrate them back into the computation stream (or for the last block of computation, culminate our data reuse to produce the final output tensor).  We call the <code class="docutils literal notranslate"><span class="pre">matmul_tiles(...)</span></code> function to execute our matmul on the core’s subblocks of tiles.</p></li>
+</ul>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Compute output sub-block from in0_subblock x in1_subblock</span>
+<span class="kt">int</span><span class="w"> </span><span class="n">dst_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="kt">int</span><span class="w"> </span><span class="n">in0_index_h_offset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">h</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">h</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="p">;</span><span class="w"> </span><span class="n">h</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="p">;</span><span class="w"> </span><span class="n">w</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="n">in1_index_inner_dim_offset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">inner_dim</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">inner_dim</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">in0_block_w</span><span class="p">;</span><span class="w"> </span><span class="n">inner_dim</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kt">int</span><span class="w"> </span><span class="n">in0_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in0_index_subblock_offset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">in0_index_h_offset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">inner_dim</span><span class="p">;</span>
+<span class="w">            </span><span class="kt">int</span><span class="w"> </span><span class="n">in1_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in1_index_subblock_offset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">in1_index_inner_dim_offset</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">w</span><span class="p">;</span>
+<span class="w">            </span><span class="n">matmul_tiles</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">,</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">,</span><span class="w"> </span><span class="n">in0_index</span><span class="p">,</span><span class="w"> </span><span class="n">in1_index</span><span class="p">,</span><span class="w"> </span><span class="n">dst_index</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="cm">/* transpose */</span><span class="p">);</span>
+<span class="w">            </span><span class="n">in1_index_inner_dim_offset</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">in1_per_core_w</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="n">dst_index</span><span class="o">++</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="n">in0_index_h_offset</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">in0_block_w</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p><strong>Wrapping Up the Intermediate Buffer</strong>:</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><strong>Freeing Up Space</strong>: After all partial results have been computed and stored in our output subblock, we have completed the cycle of reuse, so now we free up the space in the intermediate circular buffer with <code class="docutils literal notranslate"><span class="pre">cb_pop_front(...)</span></code>.</p></li>
+</ul>
+</div>
+</blockquote>
+</li>
+</ol>
+</section>
+<section id="conclusion">
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Permalink to this heading"></a>
+</h2>
+<p>Those are the additional steps for getting <code class="docutils literal notranslate"><span class="pre">matmul_multicore_data_reuse</span></code> operations up and running on the compute engine. To see a more complicated example using core-to-core data movement, please refer to the <a class="reference internal" href="data_mcast.html#matmul-multi-core-optimized-data-mcast-example"><span class="std std-ref">Matmul multi-core data mcast example</span></a>.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../matmul_multi_core_optimized.html" class="btn btn-neutral float-left" title="Matmul (Multi Core Optimized)" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="data_mcast.html" class="btn btn-neutral float-right" title="Data Multicasting in matmul_multicore_reuse_mcast" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

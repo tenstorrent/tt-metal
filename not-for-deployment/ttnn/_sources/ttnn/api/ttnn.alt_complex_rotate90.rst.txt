@@ -1,0 +1,8 @@
+﻿ttnn.alt\_complex\_rotate90
+===========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.alt_complex_rotate90:
+
+.. autodata:: ttnn.alt_complex_rotate90

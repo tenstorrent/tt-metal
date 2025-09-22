@@ -1,0 +1,8 @@
+﻿ttnn.conv\_transpose2d
+======================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.conv_transpose2d:
+
+.. autodata:: ttnn.conv_transpose2d

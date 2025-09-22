@@ -1,0 +1,8 @@
+﻿ttnn.bitwise\_left\_shift
+=========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bitwise_left_shift:
+
+.. autodata:: ttnn.bitwise_left_shift

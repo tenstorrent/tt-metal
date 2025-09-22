@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pack_tile &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/pack_unpack/pack_tile.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+    <link rel="next" title="pack_untilize_block" href="pack_untilize.html" />
+    <link rel="prev" title="copy_tile" href="copy_tile.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../index.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../host_apis.html">Host APIs</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#common-apis">Common APIs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../../kernel_apis.html#compute">Compute</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="../compute/compute.html">Compute APIs</a></li>
+<li class="toctree-l4 current"><a class="reference internal" href="packing_apis.html">Packing APIs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../sfpu/llk.html">Low Level Kernels</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
+          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
+          <li class="breadcrumb-item"><a href="packing_apis.html">Packing APIs</a></li>
+      <li class="breadcrumb-item active">pack_tile</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/pack_unpack/pack_tile.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="pack-tile">
+<h1>pack_tile<a class="headerlink" href="#pack-tile" title="Permalink to this heading"></a>
+</h1>
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel9pack_tileEv8uint32_t8uint32_tNSt8uint32_tE">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">out_of_order_output</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a63c43acd48809eac8f0fd79a09cac7b7"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ifrom_dst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">output_tile_index</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel9pack_tileEv8uint32_t8uint32_tNSt8uint32_tE" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Copies a single tile from the DEST register buffer at a specified index to a specified CB at a given index. For the out_tile_index to be valid for this call, cb_reserve_back(n) has to be called first to reserve at least some number n &gt; 0 of tiles in the output CB. out_tile_index = 0 then references the first tile in the reserved section of the CB, up to index n - 1, which will then be visible to the consumer in the same order after a cb_push_back call. The DEST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Each subsequent pack call will increment the write pointer in the cb by single tile size. The pointer is then again set to a valid position with space for n reserved tiles by another cb_reserve_back call.</p>
+<p>Operates in tandem with functions cb_reserve_back and cb_push_back.</p>
+<p>A typical use case is first the producer ensures that there is a number of tiles available in the buffer via cb_reserve_back, then the producer uses the pack_tile call to copy a tile from one of DEST slots to a slot in reserved space and finally cb_push_back is called to announce visibility of the reserved section of the circular buffer to the consumer.</p>
+<p>When the <code class="docutils literal notranslate"><span class="pre">out_of_order_output</span></code> flag is set to true, <code class="docutils literal notranslate"><span class="pre">pack_tile</span></code> behaves like other APIs in that it writes the output tile to the tile index specified by the user in <code class="docutils literal notranslate"><span class="pre">output_tile_index</span></code> within the reserved region of the circular buffer, but relative to the position that might have been previously updated by <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code> function. If <code class="docutils literal notranslate"><span class="pre">out_of_order_output</span></code> is false (the default), <code class="docutils literal notranslate"><span class="pre">pack_tile</span></code> always operates sequentially: it writes to the next tile index starting from index 0, and the <code class="docutils literal notranslate"><span class="pre">output_tile_index</span></code> parameter is ignored. In this mode, each call to <code class="docutils literal notranslate"><span class="pre">pack_tile</span></code> advances the internal write pointer for the reserved region, which is reset after <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code> function.</p>
+<p>NOTE: pack_tile doesn’t need explicit initialization function prior to its call. Other op-specific initialization functions (such as <code class="docutils literal notranslate"><span class="pre">tilize_init</span></code>, <code class="docutils literal notranslate"><span class="pre">reduce_init</span></code>, etc.) ensure proper initialization of the packer. The reason for this stems from the fact that MATH and PACK threads need to be explicitly synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate API call.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>out_of_order_output   </p></td>
+<td><p>Whether to allow out-of-order output   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>ifrom_dst   </p></td>
+<td><p>The index of the tile in the DEST register   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DEST register (16)   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>The identifier of the output circular buffer (CB)   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>output_tile_index   </p></td>
+<td><p>The index of the tile in the output CB to copy to   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the CB   </p></td>
+<td><p>False   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel15pack_tile_blockE8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a5c7bce23ec5e5086e912115aed3e3357"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_tile_block</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ifrom_dst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ntiles</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15pack_tile_blockE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Copies a block of tiles from the DEST register buffer starting at a specified index to a specified circular buffer (CB). The DEST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. Before calling this function, cb_reserve_back(n) must be called to reserve at least n &gt; 0 tiles in the output CB. Each call to <code class="docutils literal notranslate"><span class="pre">pack_tile_block</span></code> will copy <code class="docutils literal notranslate"><span class="pre">ntiles</span></code> tiles from the DEST register to the reserved region of the CB, starting from index 0. The internal write pointer in the CB is advanced by <code class="docutils literal notranslate"><span class="pre">ntiles</span></code> after each call, and is reset by another cb_push_back call. Operates in tandem with functions cb_reserve_back and cb_push_back.</p>
+<p>A typical use case is for the producer to ensure that there are enough tiles available in the buffer via cb_reserve_back, then use pack_tile_block to copy a block of tiles from the DEST slots to the reserved space in the CB, and finally call cb_push_back to announce visibility of the reserved section of the circular buffer to the consumer.</p>
+<p>NOTE: pack_tile_block doesn’t need explicit initialization function prior to its call. Other op-specific initialization functions (such as <code class="docutils literal notranslate"><span class="pre">tilize_init</span></code>, <code class="docutils literal notranslate"><span class="pre">reduce_init</span></code>, etc.) ensure proper initialization of the packer. The reason for this stems from the fact that MATH and PACK threads need to be explicitly synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate API call.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ifrom_dst   </p></td>
+<td><p>The index of the first tile in the DEST register   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DEST register (16)   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>The identifier of the output circular buffer (CB)   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ntiles   </p></td>
+<td><p>The number of tiles to copy from DEST to CB   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DEST register (16)   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_t">
+<span class="target" id="namespaceckernel_1acf3b8db847f3303013fd120fef491dac"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_cb_id</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Reconfigures the packer output data format by specifying the CB ID of the new operand. This function call will always perform the reconfiguration, regardless of the data format of the old operand. If the new CB ID is the same as the current one, reconfiguration will still occur.</p>
+<p>NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense that they are called before the call to the packer function that uses the new configuration. It is recommended to call this function right after other op-specific initialization functions.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>new_cb_id   </p></td>
+<td><p>New data format operand value   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Any   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_tK8uint32_t">
+<span class="target" id="namespaceckernel_1a61c686246be6a10b4764e6ea44695aa5"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_reconfig_data_format</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_cb_id</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel25pack_reconfig_data_formatEK8uint32_tK8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Reconfigures the packer output data format by specifying the CB IDs of the old and new operands. This function internally calls the reconfiguration function with the new CB ID, but before it does so, it checks if the old and new data formats are different. If they are the same, it does not perform the reconfiguration. This function is useful when you want to ensure that the packer only reconfigures when different data format is wanted, avoiding unnecessary reconfiguration overhead.</p>
+<p>NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense that they are called before the call to the packer function that uses the new configuration. It is recommended to call this function right after other op-specific initialization functions.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>old_cb_id   </p></td>
+<td><p>Previous data format operand value   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Any   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>new_cb_id   </p></td>
+<td><p>New data format operand value   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Any   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel20pack_reconfig_l1_accEK8uint32_t">
+<span class="target" id="namespaceckernel_1ad0c6749f2bb88aafc343a6bd67911d66"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">pack_reconfig_l1_acc</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">l1_acc_en</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel20pack_reconfig_l1_accEK8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Helper function to reconfigure the packer L1 accumulation flag. This function would ideally be called after other initialization functions that initialize the packer for a specific operation. This function configures the packer to accumulate the values it takes from DEST with the ones that are already in L1 at a given CB ID and tile index.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">l1_acc_en</span></code> parameter must be set to either 0 (disable accumulation) or 1 (enable accumulation). Other values are not valid.</p>
+<p>NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense that they are called before the call to the packer function that uses the new configuration. It is recommended to call this function right after other op-specific initialization functions.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>l1_acc_en   </p></td>
+<td><p>L1 accumulation enable flag   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 or 1   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="copy_tile.html" class="btn btn-neutral float-left" title="copy_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="pack_untilize.html" class="btn btn-neutral float-right" title="pack_untilize_block" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

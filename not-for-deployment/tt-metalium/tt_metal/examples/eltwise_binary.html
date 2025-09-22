@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Eltwise binary &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/examples/eltwise_binary.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Eltwise SFPU" href="eltwise_sfpu.html" />
+    <link rel="prev" title="DRAM Loopback" href="dram_loopback.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html">DRAM Loopback</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Eltwise binary</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#program-setup">Program setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#circular-buffers">Circular buffers</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#data-movement-and-compute-kernels">Data movement and compute kernels</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#download-the-result-and-verify-output">Download the result and verify output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Programming Examples</a></li>
+      <li class="breadcrumb-item active">Eltwise binary</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/examples/eltwise_binary.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="eltwise-binary">
+<span id="eltwise-binary-example"></span><h1>Eltwise binary<a class="headerlink" href="#eltwise-binary" title="Permalink to this heading"></a>
+</h1>
+<p>We now build a program that performs elementwise binary operations on a pair of equal-sized tensors using the FPU (matrix engine). The FPU can perform a variety of complex operations efficiently, including matrix multiplication and reduction. It can also perform common elementwise operations like addition. This example will add two tensors together using the FPU.</p>
+<p>Although looking trivial, this example introduces essential concepts that are used in more complicated programs. Namely the compute kernel and the use of circular buffers. Tenstorrent devices are designed with explicit data movement in mind. Leading to a separate compute kernel. And for circular buffers is the primary way to move data between kernels.</p>
+<p>We’ll go through any new code section by section. This builds on top of
+previous examples. Note that we have this exact, full example program is located under
+<code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/eltwise_binary</span></code>, so you can follow along.</p>
+<p>To build and execute, you may use the following commands. Note that we include
+the necessary environment variables here, but you may possibly need more
+depending on the most up-to-date installation methods.</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
+./build_metal.sh<span class="w"> </span>--build-programming-examples
+<span class="c1"># To run the example</span>
+./build/programming_examples/eltwise_binary
+</pre></div>
+</div>
+<section id="program-setup">
+<h2>Program setup<a class="headerlink" href="#program-setup" title="Permalink to this heading"></a>
+</h2>
+<p>Initializing Metalium is almost the same as before. To recap, we need to</p>
+<ol class="arabic simple">
+<li><p>Open a device (again we are using device 0)</p></li>
+<li><p>Obtain the command queue to issue down/uploads and program execution</p></li>
+<li><p>Create a program object to hold our kernels</p></li>
+<li><p>Define the core we are going to use (in this case, only one at {0, 0})</p></li>
+<li><p>Some basic constants for tile and total buffer sizes</p></li>
+</ol>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">device_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="n">IDevice</span><span class="o">*</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateDevice</span><span class="p">(</span><span class="n">device_id</span><span class="p">);</span>
+
+<span class="n">CommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">command_queue</span><span class="p">();</span>
+
+<span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateProgram</span><span class="p">();</span>
+
+<span class="k">constexpr</span><span class="w"> </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">};</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">64</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">elements_per_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">TILE_HEIGHT</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="n">bfloat16</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">elements_per_tile</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>This time, instead of 2 DRAM buffers to copy data out and back, we will create 3 buffers. 2 as data sources and 1 as the output. Page size is set to one tile. This is the most common setting for buffers in Metalium as the compute engines expect to operate on tiles of data.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="p">,</span><span class="w">                       </span><span class="c1">// The device to create the buffer on</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span><span class="w">      </span><span class="c1">// The size of the buffer in bytes</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span><span class="w">           </span><span class="c1">// The page size of the buffer in bytes. In this case, will be</span>
+<span class="w">                                            </span><span class="c1">// one tile per page.</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span><span class="p">};</span><span class="w">       </span><span class="c1">// This is a DRAM buffer.</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">config</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">src1_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">config</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">config</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Data preparation and upload is the same as before. For this example, buffer 0 will be filled with random values, and buffer 1 will be filled with a constant of -1 just for demonstration purposes. The data is then uploaded to the device asynchronously like before.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">val_to_add</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">-1.0f</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">mt19937</span><span class="w"> </span><span class="nf">rng</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">random_device</span><span class="p">{}());</span>
+<span class="n">std</span><span class="o">::</span><span class="n">uniform_real_distribution</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="w"> </span><span class="n">distribution</span><span class="p">(</span><span class="mf">0.0f</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">);</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src0_data</span><span class="p">(</span><span class="n">elements_per_tile</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">);</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src1_data</span><span class="p">(</span><span class="n">elements_per_tile</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">,</span><span class="w"> </span><span class="n">bfloat16</span><span class="p">(</span><span class="n">val_to_add</span><span class="p">));</span>
+<span class="k">for</span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">a_data</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bfloat16</span><span class="p">(</span><span class="n">distribution</span><span class="p">(</span><span class="n">rng</span><span class="p">));</span>
+<span class="p">}</span>
+<span class="c1">// Upload the data from host to the device.</span>
+<span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">a_data</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">src1_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">b_data</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="circular-buffers">
+<h2>Circular buffers<a class="headerlink" href="#circular-buffers" title="Permalink to this heading"></a>
+</h2>
+<p>Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 32 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tiles_per_cb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="w"> </span><span class="n">src0_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
+<span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">c0_cfg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CircularBufferConfig</span><span class="p">(</span>
+<span class="w">    </span><span class="cm">/*total_size=*/</span><span class="n">tiles_per_cb</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="cm">/*data_format_spec=*/</span><span class="p">{{</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="o">::</span><span class="n">Float16_b</span><span class="p">}})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+<span class="n">CBHandle</span><span class="w"> </span><span class="n">cb_src0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">c0_cfg</span><span class="p">);</span>
+
+<span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="w"> </span><span class="n">src1_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">;</span>
+<span class="n">CBHandle</span><span class="w"> </span><span class="n">cb_src1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">CircularBufferConfig</span><span class="p">(</span>
+<span class="w">    </span><span class="cm">/*total_size=*/</span><span class="n">tiles_per_cb</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="cm">/*data_format_spec=*/</span><span class="p">{{</span><span class="n">src1_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="o">::</span><span class="n">Float16_b</span><span class="p">}})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">src1_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">));</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="w"> </span><span class="n">dst_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">;</span>
+<span class="n">CBHandle</span><span class="w"> </span><span class="n">cb_dst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">CircularBufferConfig</span><span class="p">(</span>
+<span class="w">    </span><span class="cm">/*total_size=*/</span><span class="n">tiles_per_cb</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="cm">/*data_format_spec=*/</span><span class="p">{{</span><span class="n">dst_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="o">::</span><span class="n">Float16_b</span><span class="p">}})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">dst_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">));</span>
+</pre></div>
+</div>
+<p>The API to create a circular buffer is more complicated than for a buffer, providing finer grained control for advanced use cases. At the core, there are a few critical parameters:</p>
+<ul class="simple">
+<li><p>The index of the circular buffer</p></li>
+<li><p>The total size of the circular buffer in bytes (and thus the number of pages within)</p></li>
+<li><p>The data format of the circular buffer (bfloat16, block float4, etc..)</p></li>
+<li><p>How large each pages is
+* For most cases, this should be the same as the size of a tile of the underlying data format</p></li>
+</ul>
+<p>For instance, to create a circular buffer of 2 tiles of bfloat16 data, we need to set the total size to <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">tile_size_bytes</span></code>. The page size set to <code class="docutils literal notranslate"><span class="pre">tile_size_bytes</span></code> and the data format is set to bfloat16.</p>
+</section>
+<section id="data-movement-and-compute-kernels">
+<h2>Data movement and compute kernels<a class="headerlink" href="#data-movement-and-compute-kernels" title="Permalink to this heading"></a>
+</h2>
+<p>In the previous example (DRAM loopback), we used a single kernel to perform the entire operation; to read data from DRAM and write it back out. The Tensix core in fact contains 5 RISC-V cores. 2 of them are the data movement cores, which connects to the NoC and can issue commands to access other on chip resources (including DRAM). The other 3 are compute cores, which operates cooperatively and runs a single compute kernel. They have access to the matrix and vector engines, which performs the majority of the compute work on a Tensix.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Unlike traditional multi core processors. Where a problem is broken down into subtasks as assigned to the cores while each core runs the same code (SPMD, single program multiple data). The compute cores on a Tensix are designed to run different code. The compute kernel is compiled 3 times. Once for each of the 3 compute cores and generating 3 different binaries.  They work collaboratively to perform a single task. The 3 compute cores are the Unpack, Math and Pack cores. They are responsible for moving data from L1 into the matrix or vector engines, issue commands for computation and moving the results back out to L1. Which can be done at the same time for high throughput.</p>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reader_args</span><span class="p">;</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src0_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">reader_args</span><span class="p">);</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src1_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">reader_args</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">reader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_args</span><span class="p">});</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_args</span><span class="p">;</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">dst_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">writer_args</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">writer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_1_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">writer_args</span><span class="p">});</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">compute</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ComputeConfig</span><span class="p">{.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>Notice the <code class="docutils literal notranslate"><span class="pre">ComputeConfig</span></code> object. This indicates to the framework that a compute kernel should be created. There’s a plethora of settings that can be set here. The most important one is the <code class="docutils literal notranslate"><span class="pre">math_fidelity</span></code> setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.</p>
+<p>Now let’s look at the kernels. First the reader kernel. This kernel reads both input buffers from DRAM and pushes them into the circular buffers (will discuss in the following section) for the compute kernel to consume. For now, consider the circular buffers as a pipe. Data can be pushed into the pipe and read out of it. And both ends must ensure there is space to do so.</p>
+<p>To do so, the reader creates 2 interleaved address generators. Unlike on most processors, the Tensix doesn’t just see raw bytes. The address generator contains metadata about the data it is associated to enable the data be read out of the DRAM in the correct format. Then in a loop, the program waits for space to be available in the circular buffers. Once there is, it reads a tile from DRAM and pushes it into the circular buffer. The <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier()</span></code> call ensures waits for the read to finish before committing the data to the circular buffer. This is important as the read is asynchronous and data is not guaranteed to be there when the program continues.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">in0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">in1_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// The circular buffers to read the tiles into (same as the ones in the host program)</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_in1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_tile_size</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">in0_args</span><span class="p">,</span><span class="w"> </span><span class="n">in0_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in1_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="n">in0_args</span><span class="p">.</span><span class="n">next_compile_time_args_offset</span><span class="p">()</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">in1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">in1_args</span><span class="p">,</span><span class="w"> </span><span class="n">in1_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">));</span>
+<span class="w">        </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in1</span><span class="p">,</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">));</span>
+
+<span class="w">        </span><span class="c1">// Wait until tile reads are done</span>
+<span class="w">        </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The compute kernel performs the actual elementwise addition. It initializes the matrix engine for addition, then enters a loop. Inside the loop, it waits for data to be available in the input circular buffers, and for the destination registers to be free. The destination registers (16 in total, with 8 usable at a time) are used to transfer data to and from the computation engines. The kernel adds the input tiles, writes the result to destination register 0, waits to be sure the result is ready, and waits for the output circular buffer to have space, and pushes the computed tile into it. Finally, it marks the input tiles as consumed, the output tile as produced, and releases the registers.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp</span>
+<span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">MAIN</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_1</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dst_reg_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+
+<span class="w">    </span><span class="n">binary_op_init_common</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span>
+<span class="w">    </span><span class="n">add_tiles_init</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in1</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Loop over all the tiles and perform the computation</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
+
+<span class="w">        </span><span class="n">add_tiles</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="cm">/*offset_0*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/*offset_1*/</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">dst_reg_id</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">tile_regs_commit</span><span class="p">();</span>
+<span class="w">        </span><span class="n">tile_regs_wait</span><span class="p">();</span>
+
+<span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">pack_tile</span><span class="p">(</span><span class="n">dst_reg</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span><span class="w"> </span><span class="c1">// copy result to out0</span>
+<span class="w">        </span><span class="n">tile_regs_release</span><span class="p">();</span>
+
+<span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The writer kernel looks similar to the reader kernel. Instead of reading, it writes data back into DRAM and uses the appropriate API to do so.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">out_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// same as the one in the host program</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_tile_size</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">out_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessorArgs</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">out_args</span><span class="p">,</span><span class="w"> </span><span class="n">out_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_write_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="n">get_read_ptr</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">));</span>
+<span class="w">        </span><span class="n">noc_async_write_barrier</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Then the host program sets the kernel arguments and launches the program. There is no difference in setting the arguments for the compute kernel.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Unlike OpenCL/CUDA. Each kernel (reader, compute and writer) can have it’s own set of arguments. Furthermore, on a multi cored program (i.e. using more then 1 Tensix core), kernels within each core can have different arguments. This enables Metalium to exploit the grid like nature of the Tenstorrent processors to achieve high performance.</p>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">reader</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">src0_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">src1_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">});</span>
+<span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">writer</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">dst_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">});</span>
+<span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">compute</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">n_tiles</span><span class="p">});</span>
+
+<span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="download-the-result-and-verify-output">
+<h2>Download the result and verify output<a class="headerlink" href="#download-the-result-and-verify-output" title="Permalink to this heading"></a>
+</h2>
+<p>Finally, we download the result and verify the output. Again we read the data into a vector and wait for the transfer to finish. The result is then compared to the expected output. Note that we use a loose tolerance for the comparison because of the nature of bfloat16.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
+<span class="n">EnqueueReadBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking=*/</span><span class="nb">true</span><span class="p">);</span>
+
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">eps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1e-2f</span><span class="p">;</span><span class="w"> </span><span class="c1">// loose tolerance because of the nature of bfloat16</span>
+<span class="n">TT_FATAL</span><span class="p">(</span><span class="n">result_vec</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">a_data</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="s">"Result vector size mismatch"</span><span class="p">);</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">expected</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a_data</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">to_float</span><span class="p">()</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">val_to_add</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">actual</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result_vec</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">to_float</span><span class="p">();</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">abs</span><span class="p">(</span><span class="n">expected</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">actual</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">eps</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">pass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">log_error</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">LogTest</span><span class="p">,</span><span class="w"> </span><span class="s">"Result mismatch at index {}: expected {}, got {}"</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">expected</span><span class="p">,</span><span class="w"> </span><span class="n">actual</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="validation-and-teardown">
+<h2>Validation and teardown<a class="headerlink" href="#validation-and-teardown" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>We now use <code class="docutils literal notranslate"><span class="pre">CloseDevice</span></code> to teardown our device. This releases resources associated with the device.</p>
+<p>Next we will explore the use of the vector engine (SFPU) to perform the same operation.
+<a class="reference internal" href="eltwise_sfpu.html#eltwise-sfpu-example"><span class="std std-ref">Eltwise sfpu example</span></a>.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="dram_loopback.html" class="btn btn-neutral float-left" title="DRAM Loopback" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="eltwise_sfpu.html" class="btn btn-neutral float-right" title="Eltwise SFPU" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

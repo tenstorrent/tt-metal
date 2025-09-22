@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Add Tensors &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_add_tensors.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="More Basic Tensor Operations" href="ttnn_basic_operations.html" />
+    <link rel="prev" title="Tutorials" href="../../tutorials.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Add Tensors</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Tensor-Creation">Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Addition-Operation-and-Conversion">Addition Operation and Conversion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-Example-and-Output">Full Example and Output</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_simplecnn_inference.html">Running a Simple CNN Inference on CIFAR-10</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_visualizer.html">TT-NN Visualizer</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Add Tensors</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/2025_dx_rework/ttnn_add_tensors.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Add-Tensors">
+<h1>Add Tensors<a class="headerlink" href="#Add-Tensors" title="Permalink to this heading"></a>
+</h1>
+<p>The following simple examples demonstrate how to create two tensors and add them together. TT-NN is a high-level Python API designed for developers to run models like LLaMA, Mistral, Stable Diffusion, and more. For a full list of models see the <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/models/README.md">model matrix</a>.</p>
+<p>Lets create the example file, <code class="docutils literal notranslate"><span class="pre">ttnn_add_tensors.py</span></code></p>
+<section id="Import-Libraries">
+<h2>Import Libraries<a class="headerlink" href="#Import-Libraries" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Open-Tenstorrent-device">
+<h2>Open Tenstorrent device<a class="headerlink" href="#Open-Tenstorrent-device" title="Permalink to this heading"></a>
+</h2>
+<p>We will create a device to run the program.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Open the Device</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Tensor-Creation">
+<h2>Tensor Creation<a class="headerlink" href="#Tensor-Creation" title="Permalink to this heading"></a>
+</h2>
+<p>Create two TT-NN tensors, and initialize them with values 1 and 2 respectively. The preferred tensor shape is (32, 32) which matches the hardware tile size. Learn more about tensors <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/docs/source/ttnn/ttnn/tensor.rst">here</a>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create two TT-NN tensors with TILE_LAYOUT</span>
+<span class="n">tt_tensor1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+    <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span>
+    <span class="n">fill_value</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">tt_tensor2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+    <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span>
+    <span class="n">fill_value</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Input tensors:"</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">tt_tensor1</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">tt_tensor2</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Addition-Operation-and-Conversion">
+<h2>Addition Operation and Conversion<a class="headerlink" href="#Addition-Operation-and-Conversion" title="Permalink to this heading"></a>
+</h2>
+<p>Now we can perform the addition operation on the two TT-NN tensors and log out the result.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Perform eltwise addition on the device</span>
+<span class="n">tt_result</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">tt_tensor1</span><span class="p">,</span> <span class="n">tt_tensor2</span><span class="p">)</span>
+
+<span class="c1"># Log output tensor</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Output tensor:"</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">tt_result</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Close-the-Device">
+<h2>Close the Device<a class="headerlink" href="#Close-the-Device" title="Permalink to this heading"></a>
+</h2>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Device closed successfully."</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Full-Example-and-Output">
+<h2>Full Example and Output<a class="headerlink" href="#Full-Example-and-Output" title="Permalink to this heading"></a>
+</h2>
+<p>Combine all previous examples for a complete example that can be run directly. This example opens a Tenstorrent device, creates two tensors, performs the addition, and logs the output tensor.</p>
+<p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_add_tensors.py">ttnn_add_tensors.py</a></p>
+<p>Running this script will output the input tensors and the result of their addition, which should be a tensor filled with 3s. As shown below</p>
+<div class="highlight-console notranslate">
+<div class="highlight"><pre><span></span><span class="gp">$ </span>python3<span class="w"> </span><span class="nv">$TT_METAL_HOME</span>/ttnn/tutorials/basic_python/ttnn_add_tensors.py
+<span class="go">2025-06-23 09:36:58.211 | INFO     | __main__:main:29 - Input tensors:</span>
+<span class="go">2025-06-23 09:36:58.211 | INFO     | __main__:main:30 - ttnn.Tensor([[ 1.00000,  1.00000,  ...,  1.00000,  1.00000],</span>
+<span class="go">            [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],</span>
+<span class="go">            ...,</span>
+<span class="go">            [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],</span>
+<span class="go">            [ 1.00000,  1.00000,  ...,  1.00000,  1.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)</span>
+<span class="go">2025-06-23 09:36:58.211 | INFO     | __main__:main:31 - ttnn.Tensor([[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],</span>
+<span class="go">            [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],</span>
+<span class="go">            ...,</span>
+<span class="go">            [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],</span>
+<span class="go">            [ 2.00000,  2.00000,  ...,  2.00000,  2.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)</span>
+<span class="go">2025-06-23 09:37:00.524 | INFO     | __main__:main:37 - Output tensor:</span>
+<span class="go">2025-06-23 09:37:00.525 | INFO     | __main__:main:38 - ttnn.Tensor([[ 3.00000,  3.00000,  ...,  3.00000,  3.00000],</span>
+<span class="go">            [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],</span>
+<span class="go">            ...,</span>
+<span class="go">            [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],</span>
+<span class="go">            [ 3.00000,  3.00000,  ...,  3.00000,  3.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../../tutorials.html" class="btn btn-neutral float-left" title="Tutorials" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn_basic_operations.html" class="btn btn-neutral float-right" title="More Basic Tensor Operations" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

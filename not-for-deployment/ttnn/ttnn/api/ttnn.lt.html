@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ttnn.lt &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.lt.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="ttnn.le" href="ttnn.le.html" />
+    <link rel="prev" title="ttnn.ge" href="ttnn.ge.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.add.html">ttnn.add</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.addalpha.html">ttnn.addalpha</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.subalpha.html">ttnn.subalpha</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.multiply.html">ttnn.multiply</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.subtract.html">ttnn.subtract</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.div.html">ttnn.div</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.div_no_nan.html">ttnn.div_no_nan</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.floor_div.html">ttnn.floor_div</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.remainder.html">ttnn.remainder</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.fmod.html">ttnn.fmod</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.gcd.html">ttnn.gcd</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.lcm.html">ttnn.lcm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_and_.html">ttnn.logical_and_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_or_.html">ttnn.logical_or_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_xor_.html">ttnn.logical_xor_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rpow.html">ttnn.rpow</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rsub.html">ttnn.rsub</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ldexp.html">ttnn.ldexp</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_and.html">ttnn.logical_and</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_or.html">ttnn.logical_or</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_xor.html">ttnn.logical_xor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_and.html">ttnn.bitwise_and</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_or.html">ttnn.bitwise_or</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_xor.html">ttnn.bitwise_xor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logaddexp.html">ttnn.logaddexp</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logaddexp2.html">ttnn.logaddexp2</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.hypot.html">ttnn.hypot</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.xlogy.html">ttnn.xlogy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.squared_difference.html">ttnn.squared_difference</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.gt.html">ttnn.gt</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.gt_.html">ttnn.gt_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.lt_.html">ttnn.lt_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ge_.html">ttnn.ge_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.le_.html">ttnn.le_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.eq_.html">ttnn.eq_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ne_.html">ttnn.ne_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ge.html">ttnn.ge</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.lt</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.le.html">ttnn.le</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.eq.html">ttnn.eq</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ne.html">ttnn.ne</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.isclose.html">ttnn.isclose</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.nextafter.html">ttnn.nextafter</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.maximum.html">ttnn.maximum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.minimum.html">ttnn.minimum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.outer.html">ttnn.outer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.pow.html">ttnn.pow</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.polyval.html">ttnn.polyval</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scatter.html">ttnn.scatter</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.atan2.html">ttnn.atan2</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.add_bw.html">ttnn.add_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.assign_bw.html">ttnn.assign_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.atan2_bw.html">ttnn.atan2_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.bias_gelu_bw.html">ttnn.bias_gelu_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.div_bw.html">ttnn.div_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.embedding_bw.html">ttnn.embedding_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.fmod_bw.html">ttnn.fmod_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.remainder_bw.html">ttnn.remainder_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.addalpha_bw.html">ttnn.addalpha_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.subalpha_bw.html">ttnn.subalpha_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.xlogy_bw.html">ttnn.xlogy_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.hypot_bw.html">ttnn.hypot_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ldexp_bw.html">ttnn.ldexp_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logaddexp_bw.html">ttnn.logaddexp_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.logaddexp2_bw.html">ttnn.logaddexp2_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.mul_bw.html">ttnn.mul_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.sub_bw.html">ttnn.sub_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.squared_difference_bw.html">ttnn.squared_difference_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.concat_bw.html">ttnn.concat_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rsub_bw.html">ttnn.rsub_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.min_bw.html">ttnn.min_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.max_bw.html">ttnn.max_bw</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#reports">Reports</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operation-hooks">Operation Hooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.lt</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.lt.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ttnn-lt">
+<h1>ttnn.lt<a class="headerlink" href="#ttnn-lt" title="Permalink to this heading"></a>
+</h1>
+<span class="target" id="id1"></span><dl class="py data">
+<dt class="sig sig-object py" id="ttnn.lt">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">lt</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.lt',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.binary.lt_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.lt" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Compares if <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> is less than <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p>
+<div class="math notranslate nohighlight">
+\[\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i &lt; \mathrm{{input\_tensor\_b}}_i)\]</div>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
+<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>) – the input tensor.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – data type for the output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>activations</strong> (<em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – list of activation functions to apply to the output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
+</dd>
+</dl>
+<p>Supports broadcasting.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes, layouts, and ranks:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+<th class="head"><p>Ranks</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Float32, BFLOAT16, BFLOAT8_B, INT32</p></td>
+<td><p>TILE</p></td>
+<td><p>2, 3, 4</p></td>
+</tr>
+</tbody>
+</table>
+<p>INT32 supported only for tensor-tensor.</p>
+</div>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">lt</span><span class="p">(</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="o">/</span><span class="n">scalar</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn.ge.html" class="btn btn-neutral float-left" title="ttnn.ge" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.le.html" class="btn btn-neutral float-right" title="ttnn.le" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

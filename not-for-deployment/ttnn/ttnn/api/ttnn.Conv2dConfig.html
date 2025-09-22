@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ttnn.Conv2dConfig &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.Conv2dConfig.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="ttnn.Conv2dSliceConfig" href="ttnn.Conv2dSliceConfig.html" />
+    <link rel="prev" title="ttnn.prepare_conv_transpose2d_bias" href="ttnn.prepare_conv_transpose2d_bias.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#convolution">Convolution</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.conv1d.html">ttnn.conv1d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.conv2d.html">ttnn.conv2d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.conv3d.html">ttnn.experimental.conv3d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.conv_transpose2d.html">ttnn.conv_transpose2d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_weights.html">ttnn.prepare_conv_weights</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_bias.html">ttnn.prepare_conv_bias</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_transpose2d_weights.html">ttnn.prepare_conv_transpose2d_weights</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_transpose2d_bias.html">ttnn.prepare_conv_transpose2d_bias</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.Conv2dConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.Conv2dSliceConfig.html">ttnn.Conv2dSliceConfig</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#reports">Reports</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operation-hooks">Operation Hooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.Conv2dConfig</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.Conv2dConfig.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ttnn-conv2dconfig">
+<h1>ttnn.Conv2dConfig<a class="headerlink" href="#ttnn-conv2dconfig" title="Permalink to this heading"></a>
+</h1>
+<span class="target" id="id1"></span><dl class="py class">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">Conv2dConfig</span></span><a class="headerlink" href="#ttnn.Conv2dConfig" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">pybind11_object</span></code></p>
+<p>Conv2DConfig is a structure that contains all the Tenstorrent device specific &amp; implementation specific flags for the <a class="reference internal" href="ttnn.conv1d.html#ttnn.conv1d" title="ttnn.conv1d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv1d()</span></code></a>, <a class="reference internal" href="ttnn.conv2d.html#ttnn.conv2d" title="ttnn.conv2d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv2d()</span></code></a> and <a class="reference internal" href="ttnn.conv_transpose2d.html#ttnn.conv_transpose2d" title="ttnn.conv_transpose2d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv_transpose2d()</span></code></a> ops</p>
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.act_block_h_override">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">act_block_h_override</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.act_block_h_override" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Controls the size of the activation block height.</p>
+<p>The activation matrix is created from the input tensor, and is matrix multiplied with the weights tensor to generate the output tensor.
+The activation block is the chunk of the activation matrix that is available in L1 Memory, as the activation matrix gets divided among cores, and also can be further subdivided within a core.
+If set to 0, the the maximum possible size for the activation block is used, which is equal to output_matrix_height_per_core.
+This leads to large temporary Circular Buffers when the output matrix height is large, leading to OOM.</p>
+<p>This flag specifies the height of the activation block to act_block_h_override. This must be a multiple of 32, and must evenly divide the maximum possible size of the activation block.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.act_block_w_div">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">act_block_w_div</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.act_block_w_div" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Reduces the width of the activation block to reduce Circular Buffer sizes and prevent OOM. Valid only for Width Sharded Conv2d.
+This is only useful when the input channels is greater than 32 * num_cores. For n150, thats 32 * 64 =  2048.
+This is a divisor of the activation block width.
+A value of 1 means no reduction, and a value of 2 means the activation block width is halved.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.activation">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">activation</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.activation" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Fused activation function to be applied on the output.
+None means no activation function.
+Use ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) for ReLU activation.
+Supported activation functions include:
+RELU, SILU, GELU, SIGMOID, TANH, etc.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.core_grid">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">core_grid</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.core_grid" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Core Grid to be used for sharding the input tensor.
+This flag is only used when override_sharding_config is set to true.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.deallocate_activation">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">deallocate_activation</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.deallocate_activation" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
+If true, the activation tensor will be deallocated after the halo micro-op is done.
+Should not be used if the input to the conv op is used by another op.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_act_double_buffer">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_act_double_buffer</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_act_double_buffer" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Doubles the size of the Activation Circular Buffer to allow for double buffering, preventing stalls of the activation reader kernel.
+This improves performance, but increases memory usage.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_activation_reuse">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_activation_reuse</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_activation_reuse" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>===================== EXPERIMENTAL FEATURE ======================</p>
+<p>Enables reusing data between consecutive image rows.
+It can be enabled for height sharding only and boosts image2column performance,
+so its meant to be used for reader-bound convolutions.</p>
+</dd>
+</dl>
+
+<hr class="docutils">
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_kernel_stride_folding">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_kernel_stride_folding</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_kernel_stride_folding" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>===================== EXPERIMENTAL FEATURE ======================</p>
+<p>Enables tensor folding optimization when strides match kernel dimensions.</p>
+<p>This feature is under development and may change without notice.
+Use with caution in production environments (Issue: #22378).</p>
+<p>When enabled, this optimization reshapes tensors as follows:</p>
+<ul class="simple">
+<li><p>Input tensor (NHWC format):
+- From: (N, H, W, IC)
+- To: (N, H / stride[0], W / stride[1], IC * stride[0] * stride[1])</p></li>
+<li><p>Weight tensor:
+- From: (OC, IC, kernel[0], kernel[1])
+- To: (1, 1, IC * (kernel[0] + pad_h) * (kernel[1] + pad_w), OC)
+Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding argument,
+where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].</p></li>
+</ul>
+<p>Note: This optimization is currently only applied when all of the following conditions are met:
+1. The input tensor is stored in DRAM memory.
+2. The input tensor’s height and width are divisible by the stride dimensions.
+3. Stride values are equal to or less than the kernel dimensions.
+4. Input tensor’s padding must be zero.
+5. Input tensor data type is not BFLOAT8_B.</p>
+</dd>
+</dl>
+
+<hr class="docutils">
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_split_reader">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_split_reader</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_split_reader" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>This uses both the reader &amp; writer cores to carry out the activation reader operation.
+This is useful when the input tensor is large, and the activation reader is a bottleneck.
+This is only supported for Height Sharded Conv2D.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_weights_double_buffer">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_weights_double_buffer</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_weights_double_buffer" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Doubles the size of the Weights Circular Buffer to allow for double buffering, preventing stalls of the weights reader kernel.
+This improves performance, but increases the memory usage of the weights tensor.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.full_inner_dim">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">full_inner_dim</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.full_inner_dim" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies only to block sharded layout.
+By default inner dim of activation matrix will be sliced by kernel_h.
+If L1 constraints allowed it we can use full inner dim.
+This will increase perf, but it will take more L1 space.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.in_place">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">in_place</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.in_place" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Enables support for in_place halo.
+This re-uses the input tensor as the output for halo, overwriting the input tensor.
+This can be used if the input tensor is not used by any other op after the conv op.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.output_layout">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">output_layout</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.output_layout" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>The layout of the output tensor. Can be either <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout.TILE</span></code> or <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout.ROW_MAJOR</span></code>.
+Conv2D expects it’s input to be in <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout.ROW_MAJOR</span></code> format.
+If the input is in <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout.TILE</span></code> format, the halo micro-op will convert it to <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout.ROW_MAJOR</span></code> format.
+So if the next op is a conv op, it is recommended to set this to <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout.ROW_MAJOR</span></code>.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.override_sharding_config">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">override_sharding_config</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.override_sharding_config" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Boolean flag that allows the core grid for the conv op to be specified.
+If true, then core_grid must also be specified.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.reallocate_halo_output">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">reallocate_halo_output</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.reallocate_halo_output" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>reallocate_halo_output is a boolean that indicates whether the halo output tensor should be moved to reduce memory fragmentation, before the conv micro-op is called.
+This is ideally used with deallocate_activation = true, when facing OOM issues in the conv micro-op.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.reshard_if_not_optimal">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">reshard_if_not_optimal</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.reshard_if_not_optimal" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>This flag is used to determine if the input tensor should be resharded if the input tensor current shard config is not optimal.
+This flag is used only if the input tensor is already sharded. If it is not sharded, the input tensor will anyway be sharded to the optimal config.</p>
+<p>If this flag is false, the conv op will try to execute the op with the current shard config.
+It is recommended to set this flag to true if the input dimensions of the previous conv op and the current op are significantly different, either due to differences in the input vs output channels, or large stride / kernel size / dilation.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.shard_layout">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">shard_layout</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.shard_layout" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Optional argument that determines the TensorMemoryLayout to be used for the input and output tensor.
+If this is not specified, the op will try to determine the optimal layout based on it’s own heuristics.
+Can be either <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.TensorMemoryLayout.HEIGHT_SHARDED</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.TensorMemoryLayout.BLOCK_SHARDED</span></code> or <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.TensorMemoryLayout.WIDTH_SHARDED</span></code>.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.transpose_shards">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">transpose_shards</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.transpose_shards" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Determines if the Shard Orientation should be Row Major or Column Major.
+If true, the shard orientation is Row Major. If false, the shard orientation is Column Major.
+This is useful for Block Sharded Conv2D when the device core grid is not a square.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.weights_dtype">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">weights_dtype</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.weights_dtype" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Optional argument which specifies the data type of the preprocessed weights &amp; bias tensor if the Conv2D op is responsible for preparing the weights.
+Supports ttnn.bfloat16 and ttnn.bfloat8_b.
+If unspecified, the preprocessed weights will be in the same format as the input weights.
+If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.bfloat16 or ttnn.float32 in row major format.</p>
+</dd>
+</dl>
+
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn.prepare_conv_transpose2d_bias.html" class="btn btn-neutral float-left" title="ttnn.prepare_conv_transpose2d_bias" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.Conv2dSliceConfig.html" class="btn btn-neutral float-right" title="ttnn.Conv2dSliceConfig" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

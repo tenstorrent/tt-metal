@@ -1,0 +1,8 @@
+﻿ttnn.clip
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.clip:
+
+.. autodata:: ttnn.clip

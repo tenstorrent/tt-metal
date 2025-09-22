@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ttnn.layer_norm &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.layer_norm.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="ttnn.rms_norm" href="ttnn.rms_norm.html" />
+    <link rel="prev" title="ttnn.group_norm" href="ttnn.group_norm.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.group_norm.html">ttnn.group_norm</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.layer_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax.html">ttnn.softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax_in_place.html">ttnn.softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax_in_place.html">ttnn.scale_mask_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_causal_mask_hw_dims_softmax_in_place.html">ttnn.scale_causal_mask_hw_dims_softmax_in_place</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#reports">Reports</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operation-hooks">Operation Hooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.layer_norm</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.layer_norm.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ttnn-layer-norm">
+<h1>ttnn.layer_norm<a class="headerlink" href="#ttnn-layer-norm" title="Permalink to this heading"></a>
+</h1>
+<span class="target" id="id1"></span><dl class="py data">
+<dt class="sig sig-object py" id="ttnn.layer_norm">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">layer_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.layer_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.layer_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.layer_norm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<dl>
+<dt>Compute layer norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</dt>
+<dd>
+<p>See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer Normalization</a> for more details.</p>
+<div class="math notranslate nohighlight">
+\[\text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta\]</div>
+<dl class="simple">
+<dt>Where:</dt>
+<dd>
+<ul class="simple">
+<li><p><span class="math notranslate nohighlight">\(\mu\)</span> and <span class="math notranslate nohighlight">\(\sigma^2\)</span> are the mean and variance of the input tensor, respectively</p></li>
+<li><p><span class="math notranslate nohighlight">\(\gamma\)</span> and <span class="math notranslate nohighlight">\(\beta\)</span> are the learnable scale and shift parameters, respectively</p></li>
+<li><p><span class="math notranslate nohighlight">\(\epsilon\)</span> is a small constant</p></li>
+</ul>
+</dd>
+</dl>
+</dd>
+</dl>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>epsilon</strong> (<em>float</em>) – 1e-12.</p></li>
+<li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>residual_input_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>program_config</strong> (<em>ttnn.ProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em>) – </p></li>
+<li><p><strong>Returns</strong> – ttnn.Tensor: the output tensor.</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported data types and layouts by tensor:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id3">
+<caption>
+<span class="caption-text">residual_input_tensor</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id4">
+<caption>
+<span class="caption-text">weight (gamma) and bias (beta)</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id5">
+<caption>
+<span class="caption-text">stats (POST_ALL_GATHER only)</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id6">
+<caption>
+<span class="caption-text">output_tensor</span><a class="headerlink" href="#id6" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B (typically matches input; PRE_ALL_GATHER produces BF16)</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>Rank: input rank must be &gt;= 1. See Limitations for additional sharding/distributed constraints.</p>
+</div>
+<dl class="simple">
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>All input tensors must be on-device.</p></li>
+<li><p>Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.</p></li>
+<li><p>If <cite>residual_input_tensor</cite> is provided, it must match the input’s padded shape.</p></li>
+<li><p><cite>weight</cite>/<cite>bias</cite> tensors:
+- If TILE: last padded dim must match input’s last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
+- If ROW_MAJOR: last padded dim must be TILE_WIDTH and the stick count must align with the input width.</p></li>
+<li><p>If the input is sharded, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">residual_input_tensor</span></code> must have identical shard spec and memory config.</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn.group_norm.html" class="btn btn-neutral float-left" title="ttnn.group_norm" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.rms_norm.html" class="btn btn-neutral float-right" title="ttnn.rms_norm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

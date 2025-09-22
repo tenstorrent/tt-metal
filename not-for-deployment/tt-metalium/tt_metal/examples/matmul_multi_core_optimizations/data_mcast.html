@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Multicasting in matmul_multicore_reuse_mcast &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/examples/matmul_multi_core_optimizations/data_mcast.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Advanced Topics" href="../../advanced_topics/index.html" />
+    <link rel="prev" title="Data Reuse in matmul_multicore_reuse" href="data_reuse.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../index.html">Programming Examples</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../dram_loopback.html">DRAM Loopback</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../eltwise_binary.html">Eltwise binary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../eltwise_sfpu.html">Eltwise SFPU</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul_single_core.html">Matmul (Single Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul_multi_core.html">Matmul (Multi Core)</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="data_reuse.html">Data Reuse in <cite>matmul_multicore_reuse</cite></a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#additional-compile-time-argument">Additional Compile-Time Argument</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#configuring-core-ranges-for-tile-distribution">Configuring Core Ranges for Tile Distribution</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#circular-buffer-creation-for-coregrid">Circular Buffer Creation for CoreGrid</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#multicast-reader-writer-kernel-setup">Multicast Reader/Writer Kernel Setup</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#new-compute-kernel-fused-bias-addition-and-activation-functions">New Compute Kernel: Fused Bias Addition and Activation Functions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#semaphores">Semaphores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#kernel-runtime-arguments">Kernel Runtime Arguments</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Programming Examples</a></li>
+          <li class="breadcrumb-item"><a href="../matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+      <li class="breadcrumb-item active">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/tt_metal/examples/matmul_multi_core_optimizations/data_mcast.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="data-multicasting-in-matmul-multicore-reuse-mcast">
+<span id="matmul-multi-core-optimized-data-mcast-example"></span><h1>Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite><a class="headerlink" href="#data-multicasting-in-matmul-multicore-reuse-mcast" title="Permalink to this heading"></a>
+</h1>
+<p><strong>Note</strong>: This example only works on Grayskull.</p>
+<p>Let’s level up our code and show how you can leverage and fully customize METALIUM’s core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work. This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core.  However, rather than map tile-work statically to your coregrid, we map in0’s rows and in1’s columns to the coregrid’s edges, and cascade work core-to-core dynamically.  A fun tidbit: “torrent” in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.</p>
+<section id="additional-compile-time-argument">
+<h2>Additional Compile-Time Argument<a class="headerlink" href="#additional-compile-time-argument" title="Permalink to this heading"></a>
+</h2>
+<p>We introduced an out_block_num_tiles parameter in our reuse example, yet in our mcast example, we leverage it at compile time to navigate the complexity of multicasting partial results alongside fused operations – namely the bias and activation functions – which we will demonstrate further below.  Let’s pass it as follows:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_kernel_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="p">...</span>
+<span class="n">out_block_tiles</span><span class="w"> </span><span class="c1">// out_block_num_tiles</span>
+<span class="p">};</span>
+<span class="n">log_info</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">LogVerif</span><span class="p">,</span><span class="w"> </span><span class="s">" -- out_block_tiles= {} --"</span><span class="p">,</span><span class="w"> </span><span class="n">out_block_tiles</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="configuring-core-ranges-for-tile-distribution">
+<h2>Configuring Core Ranges for Tile Distribution<a class="headerlink" href="#configuring-core-ranges-for-tile-distribution" title="Permalink to this heading"></a>
+</h2>
+<p>We can define our coregrid from any upper-left corner and define its range with any height and width that our problem calls for.  The cores that make up the grid can be relegated specific broadcast roles (sender or receiver cores) and compute workloads (only certain tiles of in0 and in1).  We start with the following initializations for the grid itself, upper-left corner, and grid edge vectors:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">start_core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">};</span>
+<span class="n">CoreCoord</span><span class="w"> </span><span class="n">core_range</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bmm_op_utils</span><span class="o">::</span><span class="n">get_core_range</span><span class="p">(</span><span class="n">num_blocks_y</span><span class="p">,</span><span class="w"> </span><span class="n">num_blocks_x</span><span class="p">,</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">,</span><span class="w"> </span><span class="n">num_cores_x</span><span class="p">);</span>
+</pre></div>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">start_core_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start_core</span><span class="p">.</span><span class="n">x</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">start_core_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start_core</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core_range</span><span class="p">.</span><span class="n">x</span><span class="p">;</span><span class="w">  </span><span class="c1">// Core count along x-axis</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core_range</span><span class="p">.</span><span class="n">y</span><span class="p">;</span><span class="w">  </span><span class="c1">// Core count along y-axis</span>
+</pre></div>
+</div>
+<p>Next, we define the mcast role of the entire coregrid, the uppermost edge, and the leftmost edge vectors of cores like so:</p>
+<ul>
+<li>
+<p><strong>``all_cores``</strong>: Outlines the boundary of all inclusive cores for the matmul kernel.</p>
+<blockquote>
+<div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">all_cores</span><span class="p">(</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p><strong>``left_column``</strong>: Isolates the left column of cores for specialized tasks; in this case, multicasting in0 tiles.</p>
+<blockquote>
+<div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">left_column</span><span class="p">(</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p><strong>``all_except_left_column``</strong>: Designates which cores will peform their share of in0 and in1 tile work, and calculate their partial results.</p>
+<blockquote>
+<div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">all_except_left_column</span><span class="p">(</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+</ul>
+<p>Then, we define the data flow framework.  The basic idea is that we initiate in0 row and in1 column data flow from the upper-left core of the coregrid (0,0) and designate this as our master sender core.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">in0_sender_in1_sender</span><span class="p">(</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">},</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>Then we mcast send in0 rows of work vertically down the coregrid’s left_column (from DRAM into each of these core’s L1).  These left_column cores are responsible for disseminating the <strong>same</strong> in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section.  We also ensure they are desginated as receiver cores because they will also take on in1 column work.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">in0_sender_in1_receiver</span><span class="p">(</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>We also mcast send in1 columns of work horizontally across the coregrid (left to right) into left_column and all_except_left_column ranges of cores.  You can imagine the top row of our coregrid (minus the master sender core) will be responsible for disseminating all the <strong>different</strong> in1 columns of work.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">in0_receiver_in1_sender</span><span class="p">(</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>The remining tiles act as receivers for both in0 and in1 tile data.  Essentially we are computing output_tile work (partial results of our output matrix) on each core, wherein each core has been simultaneously mcasted a unique chunk of in0 and in1 tile data to compute on.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRange</span><span class="w"> </span><span class="nf">in0_receiver_in1_receiver</span><span class="p">(</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>This leaves each core with exactly the work it needs to compute its partial results of the output matrix.  We will end up using 4 dataflow kernels:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">in0</span> <span class="n">sender</span>
+<span class="n">in0</span> <span class="n">receiver</span>
+<span class="n">in1</span> <span class="n">sender</span><span class="o">+</span><span class="n">writer</span>
+<span class="n">in1</span> <span class="n">receiver</span><span class="o">+</span><span class="n">writer</span>
+</pre></div>
+</div>
+</section>
+<section id="circular-buffer-creation-for-coregrid">
+<h2>Circular Buffer Creation for CoreGrid<a class="headerlink" href="#circular-buffer-creation-for-coregrid" title="Permalink to this heading"></a>
+</h2>
+<p>Recall in our data reuse example, we created our L1 circular buffers for all the cores like so:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">cb_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">cb_output_config</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>METALIUM also allows us to pass all of our CoreRanges defined above through a <code class="docutils literal notranslate"><span class="pre">CoreRangeSet(...)</span></code> function call as the 2nd argument.  Let’s do so with the following:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">cb_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">CoreRangeSet</span><span class="p">({</span><span class="n">all_cores</span><span class="p">}),</span><span class="w"> </span><span class="n">cb_output_config</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>In fact, you can instantiate circular buffers on any one of these three options: <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">std::variant&lt;CoreCoord,</span> <span class="pre">CoreRange,</span> <span class="pre">CoreRangeSet&gt;</span></code>.  Please refer to the CircularBuffers page for further details.</p>
+</section>
+<section id="multicast-reader-writer-kernel-setup">
+<h2>Multicast Reader/Writer Kernel Setup<a class="headerlink" href="#multicast-reader-writer-kernel-setup" title="Permalink to this heading"></a>
+</h2>
+<p>In datareuse, we spawned reader and writer kernels per core.  In mcast, we have desginated core ranges (or more generally speaking, “groups”), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.</p>
+<p>Below, let’s set some core ID’s associated with a specific sender-receiver kernel.  Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the <code class="docutils literal notranslate"><span class="pre">$TT_METAL_HOME/tt_metal/impl/kernels/data_types.hpp</span></code> file.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Create reader and writer kernels per core group</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_sender_in1_sender_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">in0_sender_in1_sender</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_sender_in1_receiver_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">in0_sender_in1_receiver</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_receiver_in1_sender_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">in0_receiver_in1_sender</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_1_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_receiver_in1_receiver_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">in0_receiver_in1_receiver</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_1_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">unary_writer_kernel_noc0_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">all_except_left_column</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">writer_compile_time_args</span><span class="p">});</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">unary_writer_kernel_noc1_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">left_column</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_1_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">writer_compile_time_args</span><span class="p">});</span>
+</pre></div>
+</div>
+<p>If you are interested in further details on how these work, we implore you to check out the exact dataflow kernels located in the <code class="docutils literal notranslate"><span class="pre">$TT_METAL_HOME/tt_metal/programming_examples/matmul_common/kernels/dataflow</span></code> file.  You can see there are many arguments with which to experiment with, such as mcast destination nocs.  You can imagine defining your own mcast scheme.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">in0_mcast_dest_noc_start_x</span>
+<span class="n">in0_mcast_dest_noc_start_y</span>
+<span class="n">in0_mcast_dest_noc_end_x</span>
+<span class="n">in0_mcast_dest_noc_end_y</span>
+</pre></div>
+</div>
+</section>
+<section id="new-compute-kernel-fused-bias-addition-and-activation-functions">
+<h2>New Compute Kernel: Fused Bias Addition and Activation Functions<a class="headerlink" href="#new-compute-kernel-fused-bias-addition-and-activation-functions" title="Permalink to this heading"></a>
+</h2>
+<p>Like all the examples preceeding, we call our compute kernel as usual, except here we introduce a new one called “bmm_large_block_zm_fused_bias_activation”.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">mm_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"tt_metal/programming_examples/matmul_common/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">math_fidelity</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_kernel_args</span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<ol class="loweralpha">
+<li>
+<p><strong>Flow Control through Conditionals</strong></p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p>When bias fusion is enabled (<cite>FUSE_BIAS</cite>), intermediate results are directly packed and may not require reloading for subsequent operations within the same batch, indicated by <cite>enable_reload = false</cite>. We can employ this as a means of minimizing mem-to-mem operations.</p></li>
+<li><p>For kernels without bias fusion or when the <cite>PACKER_L1_ACC</cite> is not defined, we determine whether intermediate results need to be reloaded based on the computation phase (ie. our <cite>spill</cite> condition and the current <cite>block</cite>). This ensures that for operations that accumulate results over multiple blocks, intermediate data is correctly managed across iterations.</p></li>
+</ul>
+</div>
+</blockquote>
+</li>
+<li>
+<p><strong>Bias Broadcasting Mechanism</strong></p>
+<blockquote>
+<div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">add_bcast_rows_init_short</span><span class="p">();</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">bcast_tile_idx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">in1_index_subblock_offset</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="p">;</span><span class="w"> </span><span class="n">k</span><span class="o">++</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">add_tiles_bcast_rows</span><span class="p">(</span><span class="n">mm_partials_cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">bias_cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">bcast_tile_idx</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span>
+<span class="w">        </span><span class="n">bcast_tile_idx</span><span class="o">++</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p><strong>In-place Activation Function</strong></p>
+<blockquote>
+<div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#ifdef SFPU_OP_INIT_ACTIVATION</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">SFPU_OP_FUNC_ACTIVATION</span>
+<span class="p">}</span>
+<span class="cp">#endif</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+<li>
+<p><strong>Handling Partial Results</strong></p>
+<blockquote>
+<div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">enable_reload</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">reload_from_cb_to_dst</span><span class="p">(</span><span class="n">in0_cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">in1_cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">mm_partials_cb_id</span><span class="p">,</span><span class="w"> </span><span class="n">out_subblock_num_tiles</span><span class="p">,</span><span class="w"> </span><span class="n">out_subblock_w</span><span class="p">,</span><span class="w"> </span><span class="n">out_subblock_h</span><span class="p">,</span><span class="w"> </span><span class="n">in0_block_w</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</blockquote>
+</li>
+</ol>
+</section>
+<section id="semaphores">
+<h2>Semaphores<a class="headerlink" href="#semaphores" title="Permalink to this heading"></a>
+</h2>
+<p>To cleanly coordinate the distribution and processing of in0 and in1 tiles in our mcast strategy, we should introduce semaphores. Without these, we run the risk of mcast sending data from one Tensix core to another too early (before the first Tensix core’s CB stream is fully populated), or mcast receiving too few packets of data and thus computing prematurely (before the second Tensix core’s CB stream is fully populated).  METALIUM makes this very simple, by allowing you to call the CreateSemaphore function and simply passing the entire CoreGrid number of cores.  Therefore, we define our sender and receiver core semaphores as follows, to maintain synchronization of compute across the device.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">in0_mcast_sender_semaphore</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateSemaphore</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">INVALID</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">in0_mcast_receiver_semaphore</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateSemaphore</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">INVALID</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">in1_mcast_sender_semaphore</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateSemaphore</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">INVALID</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">in1_mcast_receiver_semaphore</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateSemaphore</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">INVALID</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="kernel-runtime-arguments">
+<h2>Kernel Runtime Arguments<a class="headerlink" href="#kernel-runtime-arguments" title="Permalink to this heading"></a>
+</h2>
+<p>Recall that we just desginated NCRISCs to handle our DRAM-&gt;CoreGrid L1 data movement.  METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordintates.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">src0_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="c1">// in0_buffer_addr</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Kt</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">per_core_M</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">core_idx_y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_buffer_start_tile_id</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_buffer_stride_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Kt</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_buffer_stride_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_buffer_next_block_stride</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_block_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">per_core_M</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_block_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">per_core_M</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_block_num_tiles</span>
+
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">src1_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="c1">// in1_buffer_addr</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">per_core_N</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">core_idx_x</span><span class="p">,</span><span class="w"> </span><span class="c1">//in1_buffer_start_tile_id</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_buffer_stride_w</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">// in1_buffer_stride_h</span>
+<span class="w">    </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_block_w</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Nt</span><span class="p">,</span><span class="w"> </span><span class="c1">//in1_buffer_next_block_stride</span>
+<span class="w">    </span><span class="p">...</span>
+</pre></div>
+</div>
+<p>For runtime, we need to set a few more IDs on corner cores of our CoreGrid, that will act solely as worker cores.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">KernelHandle</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reader_kernel_ids</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">KernelHandle</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_kernel_ids</span><span class="p">;</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores_r</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_y</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores_c</span><span class="p">;</span><span class="w"> </span><span class="n">core_idx_x</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">core_idx_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">core_idx_y</span><span class="p">};</span>
+
+<span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">left_core</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">core</span><span class="p">.</span><span class="n">y</span><span class="p">};</span>
+<span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">left_core_plus_one</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">core</span><span class="p">.</span><span class="n">y</span><span class="p">};</span>
+<span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">right_core</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">core</span><span class="p">.</span><span class="n">y</span><span class="p">};</span>
+<span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">top_core</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">core</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_y</span><span class="p">};</span>
+<span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">top_core_plus_one</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">core</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">};</span>
+<span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">bottom_core</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">core</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="n">start_core_y</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">};</span>
+
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">left_core_physical</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">left_core</span><span class="p">);</span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">left_core_plus_one_physical</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">left_core_plus_one</span><span class="p">);</span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">right_core_physical</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">right_core</span><span class="p">);</span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">top_core_physical</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">top_core</span><span class="p">);</span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">top_core_plus_one_physical</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">top_core_plus_one</span><span class="p">);</span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">bottom_core_physical</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">bottom_core</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>At this point we can specificy exactly which worker core plays which role for mcasting in0 and in1 data.  Here we can map the physical core on device with:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">right_core_physical</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_start_x</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">right_core_physical</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_start_y</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">left_core_plus_one_physical</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_end_x</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">left_core_plus_one_physical</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_end_y</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="p">(</span><span class="n">num_cores_c</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="c1">// in0_mcast_num_dests</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">left_core_physical</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_sender_noc_x</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">left_core_physical</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_sender_noc_y</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_mcast_sender_semaphore</span><span class="p">,</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in0_mcast_receiver_semaphore</span><span class="p">,</span>
+
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">bottom_core_physical</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_start_x</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">bottom_core_physical</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_start_y</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">top_core_plus_one_physical</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_end_x</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">top_core_plus_one_physical</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_dest_noc_end_y</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="p">(</span><span class="n">num_cores_r</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="c1">// in0_mcast_num_dests</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">top_core_physical</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_sender_noc_x</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">top_core_physical</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="c1">// in0_mcast_sender_noc_y</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in1_mcast_sender_semaphore</span><span class="p">,</span>
+<span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="w">  </span><span class="n">in1_mcast_receiver_semaphore</span><span class="p">,</span>
+<span class="p">...</span>
+</pre></div>
+</div>
+<p>Finally, we push our IDs into our reader and writer kernel handler vectors, and targets our NCRISC (RISCV_0) and BRISC (RISCV_1) processors.  For our master send core (0,0), which initiates data movement for both matrices in0 and in1:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">if</span><span class="p">(</span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_sender_in1_sender_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
+<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_sender_in1_sender_id</span><span class="p">);</span>
+<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>For the left_column cores, we task them with receiving in1 columns from the top and sending in0 rows to the right:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_sender_in1_receiver_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
+<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_sender_in1_receiver_id</span><span class="p">);</span>
+<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc1_id</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>For the upper_row cores (minus the upper-left master send core), we task them with receiving matrix in0 rows from the left, and sending in1 columns upwards.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_idx_x</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">core_idx_y</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_receiver_in1_sender_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
+<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_receiver_in1_sender_id</span><span class="p">);</span>
+<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>For all other cores (between the left_column and upper_row cores, minus the master send core), we task these with receiving in0 rows from the left and in1 columns from the top, thereby dividing work appropriately and commencing the partial results computation process.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_kernel_in0_receiver_in1_receiver_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">mm_reader_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_1_default</span>
+<span class="w">    </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">writer_args</span><span class="p">);</span><span class="w"> </span><span class="c1">// RISCV_0_default</span>
+<span class="w">    </span><span class="n">reader_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">mm_reader_kernel_in0_receiver_in1_receiver_id</span><span class="p">);</span>
+<span class="w">    </span><span class="n">writer_kernel_ids</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">unary_writer_kernel_noc0_id</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="data_reuse.html" class="btn btn-neutral float-left" title="Data Reuse in matmul_multicore_reuse" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../advanced_topics/index.html" class="btn btn-neutral float-right" title="Advanced Topics" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

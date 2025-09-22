@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tracy Profiler &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/tracy_profiler.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Device Program Profiler" href="device_program_profiler.html" />
+    <link rel="prev" title="Watcher" href="watcher.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+<li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Tracy Profiler</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#gui">GUI</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#profiling-host">Profiling Host</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#c">C++</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#python">Python</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#profiling-device">Profiling Device</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tools</a></li>
+      <li class="breadcrumb-item active">Tracy Profiler</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tools/tracy_profiler.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tracy-profiler">
+<h1>Tracy Profiler<a class="headerlink" href="#tracy-profiler" title="Permalink to this heading"></a>
+</h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Tools are only fully supported on source builds.</p>
+</div>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p><a class="reference external" href="https://github.com/wolfpld/tracy">Tracy</a> is an opens-source C++ profiling tool with sampling and code instrumentation profiling capabilities.</p>
+<p>Documentation can be found here: <a class="reference external" href="https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf">https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf</a>. Reading the <code class="docutils literal notranslate"><span class="pre">Quick-start</span> <span class="pre">guide</span></code> section can help with the rest of this documentation.</p>
+<p>All host-side code, including python code, in tt_metal can be profiled using Tracy.</p>
+</section>
+<section id="gui">
+<h2>GUI<a class="headerlink" href="#gui" title="Permalink to this heading"></a>
+</h2>
+<p>Tracy requires installing a desktop GUI application on local machine to view profiling results. You can view saved results and also real-time profiling data if network connectivity to the remote machine running the application is available.</p>
+<p>Mac users can use brew to install tracy. On your terminal run:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>brew<span class="w"> </span>uninstall<span class="w"> </span>tracy<span class="w"> </span><span class="c1">#Remove any old version of tracy</span>
+wget<span class="w"> </span>-P<span class="w"> </span>~/<span class="w"> </span>--no-check-certificate<span class="w"> </span>--no-cache<span class="w"> </span>--no-cookies<span class="w"> </span>https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
+brew<span class="w"> </span>install<span class="w"> </span>~/tracy.rb
+rm<span class="w"> </span>~/tracy.rb
+</pre></div>
+</div>
+<p>Once installed run tracy GUI with:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>tracy
+</pre></div>
+</div>
+<p>The application will start showing a window similar to the image below.</p>
+<a class="reference internal image-reference" href="../_images/tracy-get-started.png"><img alt="Tracy get started" src="../_images/tracy-get-started.png" style="width: 294.0px; height: 170.0px;"></a>
+<p>Set client address to the IP address of the remote machine, listen over port 8086 (e.g. 172.27.28.132:8086) and click connect.</p>
+<p>“Waiting for connection …” window will pop-up after clicking connect.</p>
+<p>Once the host machine starts running a tracy enabled application, GUI will automatically start collecting profiling data and will draw it in real time.</p>
+</section>
+<section id="profiling-host">
+<h2>Profiling Host<a class="headerlink" href="#profiling-host" title="Permalink to this heading"></a>
+</h2>
+<section id="c">
+<h3>C++<a class="headerlink" href="#c" title="Permalink to this heading"></a>
+</h3>
+<p>Build with the profiler option (i.e. <code class="docutils literal notranslate"><span class="pre">ENABLE_TRACY=ON</span></code> cmake option) is required for profiling with tracy.</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>build_metal.sh<span class="w"> </span>--enable-profiler
+</pre></div>
+</div>
+<p>With this build variant, all C++ marked zones will be profiled.</p>
+<p>Zones in Tracy are marked sections of code that users are interested in profiling. Tracy provides macros such as  <code class="docutils literal notranslate"><span class="pre">ZoneScoped;</span></code> to accomplish this.
+Please refer to section 3 of Tracy’s documentation for further information on zones and available macros.</p>
+<p>Here is a snapshot of Tracy C++ profiling:</p>
+<img alt="Tracy C++ run" src="../_images/tracy-c%2B%2B-run.png">
+<p>For example, the <code class="docutils literal notranslate"><span class="pre">Device</span></code> constructor shown above is instrumented as follows:</p>
+<div class="highlight-C++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">Device</span><span class="o">::</span><span class="n">Device</span><span class="p">(</span><span class="n">chip_id_t</span><span class="w"> </span><span class="n">device_id</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">l1_bank_remap</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">id_</span><span class="p">(</span><span class="n">device_id</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">ZoneScoped</span><span class="p">;</span>
+<span class="w">    </span><span class="k">this</span><span class="o">-&gt;</span><span class="n">initialize</span><span class="p">(</span><span class="n">l1_bank_remap</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="python">
+<h3>Python<a class="headerlink" href="#python" title="Permalink to this heading"></a>
+</h3>
+<p>Python provides <code class="docutils literal notranslate"><span class="pre">sys.setprofile</span></code> and <code class="docutils literal notranslate"><span class="pre">sys.settrace</span></code> functions as standard function for tracing and profiling python code and we use these functions to integrate python profiling with Tracy.</p>
+<p>The following are various methods for profiling python code with tracy in the tt_metal project.</p>
+<section id="python-scripts">
+<h4>Python Scripts<a class="headerlink" href="#python-scripts" title="Permalink to this heading"></a>
+</h4>
+<p>Profiling python code with tracy requires running your python code with our python <code class="docutils literal notranslate"><span class="pre">tracy</span></code> module.</p>
+<p>For profiling your entire python program, run your program as follows:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>tracy<span class="w"> </span><span class="o">{</span>test_script<span class="o">}</span>.py
+</pre></div>
+</div>
+</section>
+<section id="pytest-sessions">
+<h4>Pytest Sessions<a class="headerlink" href="#pytest-sessions" title="Permalink to this heading"></a>
+</h4>
+<p>For pytest scripts you can import pytest as a module and pass its arguments accordingly. For example, to profile a BERT unit test you can run the following:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>tracy<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_query_key_value_and_split_heads_with_program_cache
+</pre></div>
+</div>
+<img alt="Tracy Python run" src="../_images/tracy-python-run.png">
+</section>
+<section id="instrumenting-python-code">
+<h4>Instrumenting Python Code<a class="headerlink" href="#instrumenting-python-code" title="Permalink to this heading"></a>
+</h4>
+<p>Instrumentation can also be done without using the pytest fixture.</p>
+<p>The following shows how to profile a function called <code class="docutils literal notranslate"><span class="pre">function_under_test</span></code> and all of its child python function calls by manually enabling tracy profiler.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">function_under_test</span><span class="p">():</span>
+    <span class="n">child_function_1</span><span class="p">()</span>
+    <span class="n">child_function_2</span><span class="p">()</span>
+
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">tracy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Profiler</span>
+<span class="n">profiler</span> <span class="o">=</span> <span class="n">Profiler</span><span class="p">()</span>
+
+<span class="n">profiler</span><span class="o">.</span><span class="n">enable</span><span class="p">()</span>
+<span class="n">function_under_test</span><span class="p">()</span>
+<span class="n">profiler</span><span class="o">.</span><span class="n">disable</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Similar to the pytest setup, calling the parent script with <code class="docutils literal notranslate"><span class="pre">-p</span></code> option will profile the region where profiler is enabled.</p>
+<p><strong>Note</strong>, it is recommended to sandwich the function call between the enable and disable calls rather than having them as first and last calls in the function being profiled.
+This is because <code class="docutils literal notranslate"><span class="pre">settrace</span></code> and <code class="docutils literal notranslate"><span class="pre">setprofile</span></code> trigger on more relevant events when the setup is done previous to the function call.</p>
+</section>
+<section id="signposts-in-python-code">
+<h4>Signposts in Python Code<a class="headerlink" href="#signposts-in-python-code" title="Permalink to this heading"></a>
+</h4>
+<p><code class="docutils literal notranslate"><span class="pre">signpost(header,</span> <span class="pre">message)</span></code> from the <code class="docutils literal notranslate"><span class="pre">tracy</span></code> module can be placed anywhere in the code path for your test. This call will produce a row in the op report CSV and a message in the tracy run.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">tracy</span><span class="w"> </span><span class="kn">import</span> <span class="n">signpost</span>
+
+<span class="n">signpost</span><span class="p">(</span><span class="n">header</span><span class="o">=</span><span class="s2">"Run number 5"</span><span class="p">,</span> <span class="n">message</span><span class="o">=</span><span class="s2">"This is the run after 5 warmup runs"</span><span class="p">)</span>
+
+<span class="n">run_inference</span><span class="p">()</span>
+
+<span class="n">signpost</span><span class="p">(</span><span class="n">header</span><span class="o">=</span><span class="s2">"Run result post proc"</span><span class="p">)</span>
+
+<span class="n">post_proc</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Above example will show up as follows.</p>
+<p>Op report CSV</p>
+<img alt="" src="../_images/tracy-signpost-opreprot.png">
+<p>Tracy run</p>
+<img alt="Tracy get started" src="../_images/tracy-signpost-run.png">
+</section>
+<section id="line-level-profiling">
+<h4>Line-level Profiling<a class="headerlink" href="#line-level-profiling" title="Permalink to this heading"></a>
+</h4>
+<p>In some cases, significant duration of a function, does not get broken down to smaller child calls with explainable durations. This is usually either due to inline work that is
+not wrapped inside a function or a call to a function that is defined as part of a shared object. For example, <code class="docutils literal notranslate"><span class="pre">pytorch</span></code> function calls do not come in as native python calls and will not generate python call events.</p>
+<p>Line-level profiling is only provided with partial profiling because it produces substantially more data.</p>
+<p>Add  <code class="docutils literal notranslate"><span class="pre">-l</span></code> option to enable line-level profiling:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>tracy<span class="w"> </span>-p<span class="w"> </span>-l<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_query_key_value_and_split_heads_with_program_cache
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+<section id="profiling-device">
+<h2>Profiling Device<a class="headerlink" href="#profiling-device" title="Permalink to this heading"></a>
+</h2>
+<p>In tracy enabled builds, device data of all active cores on devices used for the test will automatically show up.</p>
+<p>Please refer to <a class="reference internal" href="device_program_profiler.html#device-program-profiler"><span class="std std-ref">Device Program Profiler</span></a> for more detailed overview of device side profiling with tracy.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="watcher.html" class="btn btn-neutral float-left" title="Watcher" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="device_program_profiler.html" class="btn btn-neutral float-right" title="Device Program Profiler" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

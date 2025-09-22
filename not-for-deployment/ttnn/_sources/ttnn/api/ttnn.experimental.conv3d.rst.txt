@@ -1,0 +1,8 @@
+﻿ttnn.experimental.conv3d
+========================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.conv3d:
+
+.. autodata:: ttnn.experimental.conv3d

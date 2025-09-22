@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TT-NN Visualizer &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_visualizer.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Onboarding New Functionality" href="../../onboarding.html" />
+    <link rel="prev" title="Running a Simple CNN Inference on CIFAR-10" href="ttnn_simplecnn_inference.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_simplecnn_inference.html">Running a Simple CNN Inference on CIFAR-10</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">TT-NN Visualizer</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#prerequisites">Prerequisites</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#running-ttnn-visualizer">Running TTNN Visualizer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#model-profiling">Model Profiling</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#generating-the-memory-report">Generating the Memory Report</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#generating-the-performance-report">Generating the Performance Report</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#result-analysis">Result Analysis</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#uploading-reports">Uploading Reports</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#operations-tab">Operations Tab</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tensors-tab">Tensors Tab</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#buffers-tab">Buffers Tab</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#graph-tab">Graph Tab</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#performance-tab">Performance Tab</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#recap">Recap</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">TT-NN Visualizer</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/2025_dx_rework/ttnn_visualizer.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tt-nn-visualizer">
+<h1>TT-NN Visualizer<a class="headerlink" href="#tt-nn-visualizer" title="Permalink to this heading"></a>
+</h1>
+<p>In this tutorial, we’ll explore the <strong>TT-NN Visualizer</strong> – a powerful tool designed to help developers understand and optimize models running on Tenstorrent hardware. This tool offers intuitive, in-depth insights into your neural network’s execution flow, memory usage, and performance characteristics.</p>
+<p><strong>Main features include:</strong></p>
+<ul class="simple">
+<li><p>A detailed, searchable list of all operations used within the model</p></li>
+<li><p>Interactive graph visualizations of operations and data flow</p></li>
+<li><p>L1, DRAM, and circular buffer memory plots with interactivity</p></li>
+<li><p>Tensor-level insights, including shape, layout, type, and memory placement</p></li>
+<li><p>Complete overview of all buffers used during the model run</p></li>
+<li><p>Core-level input/output visualization with sharding and tiling details</p></li>
+<li><p>L1 memory usage over time, including peak memory visualization</p></li>
+<li><p>Hierarchical view of device operations with associated memory buffers</p></li>
+<li><p>High-level operation flow graph for the full model</p></li>
+<li><p>Ability to load reports from local files or remote servers via SSH</p></li>
+<li><p>Support for running multiple instances of the tool simultaneously</p></li>
+</ul>
+<p>TT-NN Visualizer gives you a comprehensive overview of how your model utilizes hardware resources. It helps identify optimization opportunities, debug bottlenecks, and better understand your model’s execution at the system level.</p>
+<p>For more details, visit the official <a class="reference external" href="https://github.com/tenstorrent/ttnn-visualizer">ttnn-visualizer GitHub repository</a>. You can also watch the full walkthrough video <a class="reference external" href="https://youtu.be/lHtcD8cHoes?feature=shared">here</a>.</p>
+<hr class="docutils">
+<section id="prerequisites">
+<h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Permalink to this heading"></a>
+</h2>
+<p>The visualization workflow is divided into two stages:</p>
+<ol class="arabic simple">
+<li><p><strong>Model profiling and data collection</strong></p></li>
+<li><p><strong>Visualization and analysis using TT-NN Visualizer</strong></p></li>
+</ol>
+<p>To collect profiling data, you’ll need the <a class="reference external" href="https://github.com/tenstorrent/tt-metal">tt-metal</a> project. The visualizer expects two sets of files:</p>
+<ul class="simple">
+<li><p>A <strong>memory report</strong></p></li>
+<li><p>A <strong>performance report</strong></p></li>
+</ul>
+<p>You can generate both by enabling profiling during model execution. To do this, clone and build <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> with the profiler enabled:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>./build_metal.sh<span class="w"> </span>-p
+</pre></div>
+</div>
+<p>Then, install <code class="docutils literal notranslate"><span class="pre">ttnn-visualizer</span></code> via pip:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>ttnn-visualizer
+</pre></div>
+</div>
+<p>For installation from source or system requirements, see the <a class="reference external" href="https://github.com/tenstorrent/ttnn-visualizer/blob/main/docs/getting-started.md">getting started guide</a>.</p>
+<blockquote>
+<div>
+<p><strong>NOTE:</strong>
+You can run the visualizer on your local machine and either connect remotely to your Tenstorrent system via SSH or copy the generated profiling files to your local machine for offline analysis.</p>
+</div>
+</blockquote>
+</section>
+<hr class="docutils">
+<section id="running-ttnn-visualizer">
+<h2>Running TTNN Visualizer<a class="headerlink" href="#running-ttnn-visualizer" title="Permalink to this heading"></a>
+</h2>
+<p>Once installed, launch the application using:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>ttnn-visualizer
+</pre></div>
+</div>
+<p>This starts a local server at <a class="reference external" href="http://localhost:8000">http://localhost:8000</a>. Open this address in a browser (preferably Chrome). You’ll be greeted by the visualizer’s homepage:</p>
+<p><img alt="TTNN Visualizer Homepage" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/1_ttnn_visualizer_homepage.jpg?raw=true"></p>
+<p>Initially, you’ll only see the <strong>Reports</strong> tab active. Once the memory and performance reports are uploaded, all other tabs become available.</p>
+</section>
+<hr class="docutils">
+<section id="model-profiling">
+<h2>Model Profiling<a class="headerlink" href="#model-profiling" title="Permalink to this heading"></a>
+</h2>
+<p>In this tutorial, we’ll profile the YOLOv4 model (320x320 input) trained on the COCO dataset. The model can be found in:</p>
+<p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4"><code class="docutils literal notranslate"><span class="pre">tt-metal/models/demos/yolov4</span></code></a></p>
+<blockquote>
+<div>
+<p><strong>NOTE</strong>
+This tutorial uses the predefined YOLOv4 model as an example, but you can profile any model by wrapping it in a pytest test case and following the same steps. For more information on creating custom test cases, refer to the <a class="reference external" href="https://github.com/tenstorrent/tt-metal">tt-metal documentation</a>.</p>
+</div>
+</blockquote>
+<section id="generating-the-memory-report">
+<h3>Generating the Memory Report<a class="headerlink" href="#generating-the-memory-report" title="Permalink to this heading"></a>
+</h3>
+<p>TT-NN uses configuration options for profiling. These can be set either through:</p>
+<ul class="simple">
+<li><p>A configuration file (<code class="docutils literal notranslate"><span class="pre">TTNN_CONFIG_PATH</span></code>)</p></li>
+<li><p>Inline overrides (<code class="docutils literal notranslate"><span class="pre">TTNN_CONFIG_OVERRIDES</span></code>)</p></li>
+</ul>
+<p>We’ll use a config file for flexibility:</p>
+<ol class="arabic simple">
+<li><p><strong>Create a setup file</strong> called <code class="docutils literal notranslate"><span class="pre">vis.setup</span></code> and paste in the following:</p></li>
+</ol>
+<div class="highlight-json notranslate">
+<div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"enable_fast_runtime_mode"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"enable_logging"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"report_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ttnn_visualizer_tutorial"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"enable_graph_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"enable_detailed_buffer_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"enable_detailed_tensor_report"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"enable_comparison_mode"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Here’s what each configuration option does:</p>
+<ul class="simple">
+<li><p><strong>enable_fast_runtime_mode</strong> - Must be disabled to enable logging,</p></li>
+<li><p><strong>enable_logging</strong> - Synchronizes main thread after every operation and logs the operation,</p></li>
+<li><p><strong>report_name</strong> (<em>optional</em>) - Name of the report used by the visualizer. If not provided, no data will be dumped to disk,</p></li>
+<li><p><strong>enable_detailed_buffer_report</strong> (if <em>report_name</em> is set) - Enable to visualize the detailed buffer report after every operation,</p></li>
+<li><p><strong>enable_graph_report</strong> (if <em>report_name</em> is set) - Enable to visualize the graph after every operation,</p></li>
+<li><p><strong>enable_detailed_tensor_report</strong> (if <em>report_name</em> is set) - Enable to visualize the values of input and output tensors of every operation,</p></li>
+<li><p><strong>enable_comparison_mode</strong> (if <em>report_name</em> is set) - Enable to test the output of operations against their golden implementation.</p></li>
+</ul>
+<blockquote>
+<div>
+<p><strong>NOTE:</strong>
+This config file corresponds to the recommended setup in TTNN Visualizer docs, but feel free to adjust it to your needs.</p>
+</div>
+</blockquote>
+<ol class="arabic simple" start="2">
+<li><p><strong>Set the path</strong> to this file in your environment:</p></li>
+</ol>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TTNN_CONFIG_PATH</span><span class="o">=</span>path/to/vis.setup
+</pre></div>
+</div>
+<blockquote>
+<div>
+<p><strong>Note:</strong>
+Ensure all required global variables from <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> are also exported.</p>
+</div>
+</blockquote>
+<p>Now run the profiling by simply running pytest:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>pytest<span class="w"> </span>models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4<span class="o">[</span><span class="m">0</span>-pretrained_weight_true-0<span class="o">]</span>
+</pre></div>
+</div>
+<p>At the start of execution, you should see logs similar to:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="o">(</span>python_env<span class="o">)</span><span class="w"> </span>/root/tt-metal$<span class="w"> </span>pytest<span class="w"> </span>models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4<span class="o">[</span><span class="m">0</span>-pretrained_weight_true-0<span class="o">]</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.664<span class="w"> </span><span class="p">|</span><span class="w"> </span>DEBUG<span class="w">    </span><span class="p">|</span><span class="w"> </span>ttnn:&lt;module&gt;:73<span class="w"> </span>-<span class="w"> </span>Loading<span class="w"> </span>ttnn<span class="w"> </span>configuration<span class="w"> </span>from<span class="w"> </span>/root/tt-metal/vis.setup
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.665<span class="w"> </span><span class="p">|</span><span class="w"> </span>DEBUG<span class="w">    </span><span class="p">|</span><span class="w"> </span>ttnn:&lt;module&gt;:83<span class="w"> </span>-<span class="w"> </span>Initial<span class="w"> </span>ttnn.CONFIG:
+Config<span class="o">{</span><span class="nv">cache_path</span><span class="o">=</span>/root/.cache/ttnn,model_cache_path<span class="o">=</span>/root/.cache/ttnn/models,tmp_dir<span class="o">=</span>/tmp/ttnn,enable_model_cache<span class="o">=</span>false,<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span><span class="nv">enable_fast_runtime_mode</span><span class="o">=</span>false,throw_exception_on_fallback<span class="o">=</span>false,enable_logging<span class="o">=</span>true,enable_graph_report<span class="o">=</span>false,enable_detailed_buffer_report<span class="o">=</span>true,<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span><span class="nv">enable_detailed_tensor_report</span><span class="o">=</span>false,enable_comparison_mode<span class="o">=</span>false,comparison_mode_should_raise_exception<span class="o">=</span>false,<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span><span class="nv">comparison_mode_pcc</span><span class="o">=</span><span class="m">0</span>.9999,root_report_path<span class="o">=</span>generated/ttnn/reports,report_name<span class="o">=</span>ttnn_visualizer_tutorial,4042956046390500517<span class="o">}</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.754<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">   </span>SiliconDriver<span class="w"> </span><span class="p">|</span><span class="w"> </span>Opened<span class="w"> </span>PCI<span class="w"> </span>device<span class="w"> </span><span class="m">4</span><span class="p">;</span><span class="w"> </span>KMD<span class="w"> </span>version:<span class="w"> </span><span class="m">1</span>.34.0<span class="p">;</span><span class="w"> </span>API:<span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span>IOMMU:<span class="w"> </span>disabled<span class="w"> </span><span class="o">(</span>pci_device.cpp:197<span class="o">)</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.758<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">          </span>Device<span class="w"> </span><span class="p">|</span><span class="w"> </span>Opening<span class="w"> </span>user<span class="w"> </span>mode<span class="w"> </span>device<span class="w"> </span>driver<span class="w"> </span><span class="o">(</span>tt_cluster.cpp:192<span class="o">)</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.758<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">   </span>SiliconDriver<span class="w"> </span><span class="p">|</span><span class="w"> </span>Opened<span class="w"> </span>PCI<span class="w"> </span>device<span class="w"> </span><span class="m">4</span><span class="p">;</span><span class="w"> </span>KMD<span class="w"> </span>version:<span class="w"> </span><span class="m">1</span>.34.0<span class="p">;</span><span class="w"> </span>API:<span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span>IOMMU:<span class="w"> </span>disabled<span class="w"> </span><span class="o">(</span>pci_device.cpp:197<span class="o">)</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.761<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">   </span>SiliconDriver<span class="w"> </span><span class="p">|</span><span class="w"> </span>Opened<span class="w"> </span>PCI<span class="w"> </span>device<span class="w"> </span><span class="m">4</span><span class="p">;</span><span class="w"> </span>KMD<span class="w"> </span>version:<span class="w"> </span><span class="m">1</span>.34.0<span class="p">;</span><span class="w"> </span>API:<span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span>IOMMU:<span class="w"> </span>disabled<span class="w"> </span><span class="o">(</span>pci_device.cpp:197<span class="o">)</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.764<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">   </span>SiliconDriver<span class="w"> </span><span class="p">|</span><span class="w"> </span>Harvesting<span class="w"> </span>mask<span class="w"> </span><span class="k">for</span><span class="w"> </span>chip<span class="w"> </span><span class="m">0</span><span class="w"> </span>is<span class="w"> </span>0x80<span class="w"> </span><span class="o">(</span>NOC0:<span class="w"> </span>0x80,<span class="w"> </span>simulated<span class="w"> </span>harvesting<span class="w"> </span>mask:<span class="w"> </span>0x0<span class="o">)</span>.<span class="w"> </span><span class="o">(</span>cluster.cpp:295<span class="o">)</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.776<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">   </span>SiliconDriver<span class="w"> </span><span class="p">|</span><span class="w"> </span>Opened<span class="w"> </span>PCI<span class="w"> </span>device<span class="w"> </span><span class="m">4</span><span class="p">;</span><span class="w"> </span>KMD<span class="w"> </span>version:<span class="w"> </span><span class="m">1</span>.34.0<span class="p">;</span><span class="w"> </span>API:<span class="w"> </span><span class="m">1</span><span class="p">;</span><span class="w"> </span>IOMMU:<span class="w"> </span>disabled<span class="w"> </span><span class="o">(</span>pci_device.cpp:197<span class="o">)</span>
+<span class="m">2025</span>-08-01<span class="w"> </span><span class="m">09</span>:20:51.836<span class="w"> </span><span class="p">|</span><span class="w"> </span>info<span class="w">     </span><span class="p">|</span><span class="w">   </span>SiliconDriver<span class="w"> </span><span class="p">|</span><span class="w"> </span>Opening<span class="w"> </span><span class="nb">local</span><span class="w"> </span>chip<span class="w"> </span>ids/pci<span class="w"> </span>ids:<span class="w"> </span><span class="o">{</span><span class="m">0</span><span class="o">}</span>/<span class="o">[</span><span class="m">4</span><span class="o">]</span><span class="w"> </span>and<span class="w"> </span>remote<span class="w"> </span>chip<span class="w"> </span>ids<span class="w"> </span><span class="o">{}</span><span class="w"> </span><span class="o">(</span>cluster.cpp:157<span class="o">)</span>
+</pre></div>
+</div>
+<p>In the configuration output, look for the report path at the end:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>Config<span class="o">{</span>...root_report_path<span class="o">=</span>generated/ttnn/reports,report_name<span class="o">=</span>ttnn_visualizer_tutorial,4042956046390500517<span class="o">}</span>
+</pre></div>
+</div>
+<p>The final number (<code class="docutils literal notranslate"><span class="pre">4042956046390500517</span></code>) indicates the memory report output directory. Once execution completes, navigate to <code class="docutils literal notranslate"><span class="pre">generated/ttnn/reports/4042956046390500517/</span></code> which will contain:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">config.json</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">db.sqlite</span></code></p></li>
+</ul>
+<p>Upload this entire directory to the visualizer under the <strong>Memory reports</strong> section.</p>
+</section>
+<hr class="docutils">
+<section id="generating-the-performance-report">
+<h3>Generating the Performance Report<a class="headerlink" href="#generating-the-performance-report" title="Permalink to this heading"></a>
+</h3>
+<p>For the performance report, we’ll use the <code class="docutils literal notranslate"><span class="pre">tracy</span> <span class="pre">profiler</span></code>. If you’re using the same terminal session, first unset the previous configuration to avoid regenerating the memory report:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">unset</span><span class="w"> </span>TTNN_CONFIG_PATH
+<span class="c1"># Or if set inline:</span>
+<span class="nb">unset</span><span class="w"> </span>TTNN_CONFIG_OVERRIDES
+</pre></div>
+</div>
+<p>Run profiling using Tracy:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>tracy<span class="w"> </span>-p<span class="w"> </span>-r<span class="w"> </span>-v<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4<span class="o">[</span><span class="m">0</span>-pretrained_weight_true-0<span class="o">]</span>
+</pre></div>
+</div>
+<p>At the end, the tool will output the path to a directory looking like:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="m">2025</span>-08-01<span class="w"> </span><span class="m">10</span>:51:02.731<span class="w"> </span><span class="p">|</span><span class="w"> </span>INFO<span class="w">     </span><span class="p">|</span><span class="w"> </span>tt_metal.tools.profiler.process_ops_logs:generate_reports:905<span class="w"> </span>-<span class="w"> </span>OPs<span class="w"> </span>csv<span class="w"> </span>generated<span class="w"> </span>at:<span class="w"> </span>/root/tt-metal/generated/profiler/reports/2025_08_01_10_51_02/ops_perf_results_2025_08_01_10_51_02.csv
+</pre></div>
+</div>
+<p>containing:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">ops_perf_results_&lt;timestamp&gt;.csv</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">device_profile_log.txt</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&lt;name&gt;.tracy</span></code> (Tracy file)</p></li>
+</ul>
+<p>Upload this entire directory to the visualizer as the <strong>Performance report</strong>.</p>
+</section>
+</section>
+<hr class="docutils">
+<section id="result-analysis">
+<h2>Result Analysis<a class="headerlink" href="#result-analysis" title="Permalink to this heading"></a>
+</h2>
+<section id="uploading-reports">
+<h3>Uploading Reports<a class="headerlink" href="#uploading-reports" title="Permalink to this heading"></a>
+</h3>
+<p>Once both report directories are uploaded, all analysis tabs will become available:</p>
+<p><img alt="Upload" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/2_upload_files.jpg?raw=true"></p>
+<blockquote>
+<div>
+<p><strong>NOTE:</strong>
+If everything went according to plan, you should see a message at the bottom of the page that both reports have been synchronized.</p>
+</div>
+</blockquote>
+</section>
+<hr class="docutils">
+<section id="operations-tab">
+<h3>Operations Tab<a class="headerlink" href="#operations-tab" title="Permalink to this heading"></a>
+</h3>
+<p>This tab provides a complete, interactive list of all operations in your model:</p>
+<ul class="simple">
+<li><p>Filter/search operations by name,</p></li>
+<li><p>View input and output tensors per operation,</p></li>
+<li><p>See Python-level execution time,</p></li>
+<li><p>Click “Memory Details” to inspect memory layout for each operation.</p></li>
+</ul>
+<p><img alt="Operations Tab" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/3_operations_tab.jpg?raw=true"></p>
+<p>Memory Details offers a breakdown of:</p>
+<ul class="simple">
+<li><p>Per-core tensor placement (L1, DRAM),</p></li>
+<li><p>Tile layout and memory reuse,</p></li>
+<li><p>Operation-to-buffer relationships.</p></li>
+</ul>
+<p><img alt="Operation Memory Details" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/4_operation_details.jpg?raw=true"></p>
+</section>
+<hr class="docutils">
+<section id="tensors-tab">
+<h3>Tensors Tab<a class="headerlink" href="#tensors-tab" title="Permalink to this heading"></a>
+</h3>
+<p>The Tensors tab provides detailed insights into all tensors used throughout your model’s execution. View comprehensive tensor information including:</p>
+<ul class="simple">
+<li><p>Shape, datatype, layout (e.g., row-major or tiled),</p></li>
+<li><p>Placement (L1 or DRAM),</p></li>
+<li><p>Sharding details,</p></li>
+<li><p>Tensor movement between operations.</p></li>
+</ul>
+<p><img alt="Tensors Tab" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/5_tensors_tab.jpg?raw=true"></p>
+<p>You can also filter tensors by high memory usage, making it easy to identify optimization candidates.</p>
+<p><img alt="High Usage Tensors" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/6_tensors_high_usage.jpg?raw=true"></p>
+</section>
+<hr class="docutils">
+<section id="buffers-tab">
+<h3>Buffers Tab<a class="headerlink" href="#buffers-tab" title="Permalink to this heading"></a>
+</h3>
+<p>Visualize all memory buffers used during execution:</p>
+<ul class="simple">
+<li><p>Table and chart views available,</p></li>
+<li><p>See allocation location (L1, DRAM),</p></li>
+<li><p>Correlate buffers with operations and tensor flow,</p></li>
+<li><p>Understand buffer reuse and lifetimes.</p></li>
+</ul>
+<p>Useful for estimating memory headroom or pinpointing inefficient allocations.</p>
+<p><img alt="Buffers Tab" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/7_buffers_tab.jpg?raw=true"></p>
+</section>
+<hr class="docutils">
+<section id="graph-tab">
+<h3>Graph Tab<a class="headerlink" href="#graph-tab" title="Permalink to this heading"></a>
+</h3>
+<p>Visual representation of the model:</p>
+<ul class="simple">
+<li><p>Shows operations as nodes and tensor flow as edges,</p></li>
+<li><p>Click nodes for details on inputs, outputs, and execution,</p></li>
+<li><p>Zoom and pan to explore subnetworks or specific paths,</p></li>
+<li><p>Helpful for understanding overall model structure and execution paths.</p></li>
+</ul>
+<p><img alt="Graph Tab" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/8_graph_tab.jpg?raw=true"></p>
+</section>
+<hr class="docutils">
+<section id="performance-tab">
+<h3>Performance Tab<a class="headerlink" href="#performance-tab" title="Permalink to this heading"></a>
+</h3>
+<p>Here you’ll find advanced profiling data:</p>
+<ul class="simple">
+<li><p>Operation runtime (ms) and execution order,</p></li>
+<li><p>Number of cores used per op,</p></li>
+<li><p>FLOPs and utilization analysis,</p></li>
+<li><p>Charts showing runtime distribution per operation category,</p></li>
+<li><p>Identify runtime bottlenecks or underutilized operations.</p></li>
+</ul>
+<p>Toggle <strong>Matmul Optimization Analysis</strong> to get hints about suboptimal matrix ops.</p>
+<p><img alt="Performance Tab" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/9_performance_tab.jpg?raw=true"></p>
+<p>Use this tab to:</p>
+<ul class="simple">
+<li><p>Optimize kernel configurations,</p></li>
+<li><p>Increase parallelism where needed,</p></li>
+<li><p>Understand memory and compute utilization in detail.</p></li>
+</ul>
+<p>Visualize performance on graphs.</p>
+<p><img alt="Performance Graph" src="https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/10_performance_graph.jpg?raw=true"></p>
+<blockquote>
+<div>
+<p><strong>NOTE</strong>
+A comprehensive performance report analysis guide can be found in the official <a class="reference external" href="https://github.com/tenstorrent/tt-perf-report">tt-perf-report</a> repository.</p>
+</div>
+</blockquote>
+</section>
+</section>
+<hr class="docutils">
+<section id="recap">
+<h2>Recap<a class="headerlink" href="#recap" title="Permalink to this heading"></a>
+</h2>
+<p>To summarize:</p>
+<ol class="arabic">
+<li>
+<p><strong>Build tt-metal with profiler support</strong>:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>./build_metal.sh<span class="w"> </span>-p
+</pre></div>
+</div>
+</li>
+<li>
+<p><strong>Install and launch TTNN Visualizer</strong>:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>ttnn-visualizer
+ttnn-visualizer
+</pre></div>
+</div>
+</li>
+<li>
+<p><strong>Generate profiling data</strong>:</p>
+<ul class="simple">
+<li><p>Memory Report: Use <code class="docutils literal notranslate"><span class="pre">pytest</span></code> with config</p></li>
+<li><p>Performance Report: Use <code class="docutils literal notranslate"><span class="pre">tracy</span></code></p></li>
+</ul>
+</li>
+<li><p><strong>Upload the report directories</strong> to the visualizer</p></li>
+<li>
+<p><strong>Explore model details</strong> using:</p>
+<ul class="simple">
+<li><p><strong>Operations</strong>: See execution flow and memory per operation</p></li>
+<li><p><strong>Tensors</strong>: Inspect data types, layout, and sharding</p></li>
+<li><p><strong>Buffers</strong>: Analyze memory allocation</p></li>
+<li><p><strong>Graph</strong>: Visualize the model’s structure</p></li>
+<li><p><strong>Performance</strong>: Find and fix performance bottlenecks</p></li>
+</ul>
+</li>
+</ol>
+<p>TT-NN Visualizer gives you everything you need to deeply understand your model’s interaction with the hardware — and where it can be improved.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn_simplecnn_inference.html" class="btn btn-neutral float-left" title="Running a Simple CNN Inference on CIFAR-10" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../onboarding.html" class="btn btn-neutral float-right" title="Onboarding New Functionality" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,8 @@
+﻿ttnn.prepare\_conv\_transpose2d\_bias
+=====================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.prepare_conv_transpose2d_bias:
+
+.. autofunction:: ttnn.prepare_conv_transpose2d_bias

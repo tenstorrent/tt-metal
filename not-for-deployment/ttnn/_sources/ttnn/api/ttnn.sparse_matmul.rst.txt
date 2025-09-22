@@ -1,0 +1,8 @@
+﻿ttnn.sparse\_matmul
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sparse_matmul:
+
+.. autodata:: ttnn.sparse_matmul

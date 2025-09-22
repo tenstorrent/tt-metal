@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tilize &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/tilize.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+    <link rel="next" title="untilize" href="untilize.html" />
+    <link rel="prev" title="transpose_wh_tile" href="transpose_wh_tile.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../index.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../host_apis.html">Host APIs</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#common-apis">Common APIs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../../kernel_apis.html#compute">Compute</a><ul class="current">
+<li class="toctree-l4 current"><a class="reference internal" href="compute.html">Compute APIs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../pack_unpack/packing_apis.html">Packing APIs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../sfpu/llk.html">Low Level Kernels</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
+          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
+          <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
+      <li class="breadcrumb-item active">tilize</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/tilize.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tilize">
+<h1>tilize<a class="headerlink" href="#tilize" title="Permalink to this heading"></a>
+</h1>
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel11tilize_initE8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a6e04cf1fcbf9742c75859a02b7c57965"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel11tilize_initE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Initializes the tilize operation. Should be called once at the beginning of a kernel.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>Input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4I_b_bEN7ckernel21tilizeA_B_reduce_initEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">neginf_srcA</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">zero_srcA_reduce</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ae5fba5f336b2847bcf27014fe225ffbe"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilizeA_B_reduce_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1_scaler</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">num_faces</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">4</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">face_r_dim</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">16</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_bEN7ckernel21tilizeA_B_reduce_initEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Initializes the tilize operation with reduction. Should be called once at the beginning of a kernel.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>neginf_srcA   </p></td>
+<td><p>NegInf source A flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Template   </p></td>
+<td><p>zero_srcA_reduce   </p></td>
+<td><p>Zero source A for reduce flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb0   </p></td>
+<td><p>Input circular buffer A identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>icb1_scaler   </p></td>
+<td><p>Input circular buffer for scaler   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>num_faces   </p></td>
+<td><p>Number of faces per tile   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 4   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>face_r_dim   </p></td>
+<td><p>Number of rows in each face   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 16   </p></td>
+<td><p>False   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel25tilize_init_short_with_dtE8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1abbc077d029fa62bdddb438a775e6fe68"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_init_short_with_dt</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel25tilize_init_short_with_dtE8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Re-initializes the tilize operation and reconfigures the unpacker with CB data type.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>old_icb   </p></td>
+<td><p>Previous input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>new_icb   </p></td>
+<td><p>New input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel12tilize_blockE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a602b774975bba3de4f61bc0a856d2e7d"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_block</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">input_tile_index</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">output_tile_index</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel12tilize_blockE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Performs the tilize operation on a block.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>Input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>input_tile_index   </p></td>
+<td><p>Index of the input tile in the icb   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt;= 0   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>output_tile_index   </p></td>
+<td><p>Index of the output tile in the ocb   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt;= 0   </p></td>
+<td><p>False   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4I_b_NSt8uint32_tE_b_bEN7ckernel22unpack_tilizeA_B_blockEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">neginf_srcA</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">reload_srcB</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">zero_srcA</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">zero_srcA_reduce</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1af72e2c94fb7c07a526597eea8b55cddd"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">unpack_tilizeA_B_block</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">tile_idx_b</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">num_faces</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">4</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">srca_face_r_dim</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">16</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_NSt8uint32_tE_b_bEN7ckernel22unpack_tilizeA_B_blockEv8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Unpacks and tilizes a block from two input CBs.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>neginf_srcA   </p></td>
+<td><p>NegInf source A flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Template   </p></td>
+<td><p>reload_srcB   </p></td>
+<td><p>Reload source B flag   </p></td>
+<td><p>std::uint32_t   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Template   </p></td>
+<td><p>zero_srcA   </p></td>
+<td><p>Zero source A flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Template   </p></td>
+<td><p>zero_srcA_reduce   </p></td>
+<td><p>Zero source A for reduce flag   </p></td>
+<td><p>bool   </p></td>
+<td><p>true/false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb0   </p></td>
+<td><p>Input circular buffer A identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>icb1   </p></td>
+<td><p>Input circular buffer B identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>block   </p></td>
+<td><p>Size of tile block to work on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt; 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>tile_idx_b   </p></td>
+<td><p>Tile index for source B   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>&gt;= 0   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>num_faces   </p></td>
+<td><p>Number of faces per tile   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 4   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>srca_face_r_dim   </p></td>
+<td><p>Number of rows in each face (A)   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to 16   </p></td>
+<td><p>False   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel13tilize_uninitE8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a920c52ea4b0a347de6914b972d43809f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_uninit</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13tilize_uninitE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Uninitializes the tilize operation before re-initializing for another operation.</p>
+<p>NOTE: This function is not in line with our programming model, and will be removed by the end of 2025 as a part of tt-metal#22904.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>Input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel21tilize_uninit_with_dtE8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a65059565d3ea2aea2707b5383b0269a5"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">tilize_uninit_with_dt</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">old_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">new_icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel21tilize_uninit_with_dtE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Uninitializes the tilize operation and reconfigures the unpacker with CB data types.</p>
+<p>NOTE: This function is not in line with our programming model, and will be removed by the end of 2025 as a part of tt-metal#22904.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>old_icb   </p></td>
+<td><p>Previous input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Function   </p></td>
+<td><p>new_icb   </p></td>
+<td><p>New input circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>Output circular buffer identifier   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
+</tr>
+</tbody>
+</table>
+
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="transpose_wh_tile.html" class="btn btn-neutral float-left" title="transpose_wh_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="untilize.html" class="btn btn-neutral float-right" title="untilize" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

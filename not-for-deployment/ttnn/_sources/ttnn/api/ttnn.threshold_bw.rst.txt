@@ -1,0 +1,8 @@
+﻿ttnn.threshold\_bw
+==================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.threshold_bw:
+
+.. autodata:: ttnn.threshold_bw
