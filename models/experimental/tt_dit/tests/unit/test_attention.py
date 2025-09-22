@@ -49,7 +49,7 @@ from ...utils.tensor import bf16_tensor
         pytest.param(3072, 3072, 128, 24, 3072, False, False, False, 1, 4096, 512, True, id="flux1_joint"),
         pytest.param(3072, 0, 128, 24, 3072, True, True, False, 1, 4096 + 512, 0, True, id="flux1_single"),
         pytest.param(1920, 1920, 64, 30, 1920, False, False, True, 2, 4100, 333, False, id="motif"),
-        # pytest.param(1920, 1920, 64, 30, 1920, True, False, True, 2, 4100, 333, False, id="motif_context_pre_only"),
+        pytest.param(1920, 1920, 64, 30, 1920, True, False, True, 2, 4100, 333, False, id="motif_context_pre_only"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -72,6 +72,8 @@ def test_attention_flux(
     prompt_seq_len: int,
     use_rope: bool,
 ) -> None:
+    torch.manual_seed(0)
+
     joint_attention = added_kv_proj_dim != 0
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -126,7 +128,6 @@ def test_attention_flux(
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    torch.manual_seed(0)
     spatial_input = torch.randn((batch_size, spatial_seq_len, query_dim))
     prompt_input = torch.randn((batch_size, prompt_seq_len, query_dim)) if joint_attention else None
     rope_cos = torch.randn([spatial_seq_len + prompt_seq_len, 128]) if use_rope else None

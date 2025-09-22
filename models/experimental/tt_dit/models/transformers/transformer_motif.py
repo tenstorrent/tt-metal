@@ -266,6 +266,10 @@ class MotifTransformer(Module):
 
         spatial = spatial[:, self.register_tokens.shape[1] :]
 
+        return all_gather(
+            spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
+        )
+
         # spatial = all_gather(
         #     spatial, dim=1, parallel_factor=self.parallel_config.sequence_parallel, ccl_manager=self.ccl_manager
         # )
@@ -297,107 +301,6 @@ class MotifTransformer(Module):
         return spatial.reshape([batch_size, height, width, self.out_channels])
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        ### First, convert Motif state dict to diffusers compatible (as far as possible) state dict.
-
-        renames = {
-            "pos_embed": "pos_embed.pos_embed",
-            "text_cond.projection.weight": "context_embedder.weight",
-            "text_cond.projection.bias": "context_embedder.bias",
-            "final_modulation.weight": "norm_out.linear.weight",
-            "final_modulation.bias": "norm_out.linear.bias",
-            "final_linear_SD3.weight": "proj_out.weight",
-            "final_linear_SD3.bias": "proj_out.bias",
-            "patching.projection_SD3.weight": "pos_embed.proj.weight",
-            "patching.projection_SD3.bias": "pos_embed.proj.bias",
-            "time_emb.time_emb.linear_1.weight": "time_text_embed.timestep_embedder.linear_1.weight",
-            "time_emb.time_emb.linear_1.bias": "time_text_embed.timestep_embedder.linear_1.bias",
-            "time_emb.time_emb.linear_2.weight": "time_text_embed.timestep_embedder.linear_2.weight",
-            "time_emb.time_emb.linear_2.bias": "time_text_embed.timestep_embedder.linear_2.bias",
-            "time_emb.pooled_text_emb.linear_1.weight": "time_text_embed.text_embedder.linear_1.weight",
-            "time_emb.pooled_text_emb.linear_1.bias": "time_text_embed.text_embedder.linear_1.bias",
-            "time_emb.pooled_text_emb.linear_2.weight": "time_text_embed.text_embedder.linear_2.weight",
-            "time_emb.pooled_text_emb.linear_2.bias": "time_text_embed.text_embedder.linear_2.bias",
-        }
-
-        block_renames = {
-            "attn.o_proj.weight": "attn.to_out.0.weight",
-            "attn.add_o_proj.weight": "attn.to_add_out.weight",
-            "attn.q_norm_x.weight": "attn.norm_q.weight",
-            "attn.k_norm_x.weight": "attn.norm_k.weight",
-            "attn.q_norm_c.weight": "attn.norm_added_q.weight",
-            "attn.k_norm_c.weight": "attn.norm_added_k.weight",
-            "attn.q_scale": "attn.added_head_factors",
-            "affine_params_c.projection.weight": "norm1_context.linear.weight",
-            "affine_params_c.projection.bias": "norm1_context.linear.bias",
-            "affine_params_x.projection.weight": "norm1.linear.weight",
-            "affine_params_x.projection.bias": "norm1.linear.bias",
-            "mlp_3_c.gate_proj.weight": "ff_context.net.0.proj.weight",
-            "mlp_3_c.gate_proj.bias": "ff_context.net.0.proj.bias",
-            "mlp_3_c.down_proj.weight": "ff_context.net.2.weight",
-            "mlp_3_c.down_proj.bias": "ff_context.net.2.bias",
-            "mlp_3_x.gate_proj.weight": "ff.net.0.proj.weight",
-            "mlp_3_x.gate_proj.bias": "ff.net.0.proj.bias",
-            "mlp_3_x.down_proj.weight": "ff.net.2.weight",
-            "mlp_3_x.down_proj.bias": "ff.net.2.bias",
-        }
-
-        for src, dst in renames.items():
-            state[dst] = state.pop(src)
-
-        for i in range(self.num_layers):
-            src_prefix = f"mmdit_blocks.{i}."
-            dst_prefix = f"transformer_blocks.{i}."
-
-            for src, dst in block_renames.items():
-                state[f"{dst_prefix}{dst}"] = state.pop(f"{src_prefix}{src}")
-
-            x_weight = state.pop(f"{src_prefix}linear_1_x.weight")
-            x_bias = state.pop(f"{src_prefix}linear_1_x.bias")
-
-            q_weight = state.pop(f"{src_prefix}attn.q_proj.weight")
-            state[f"{dst_prefix}attn.to_q.weight"] = q_weight @ x_weight
-            state[f"{dst_prefix}attn.to_q.bias"] = q_weight @ x_bias
-            k_weight = state.pop(f"{src_prefix}attn.k_proj.weight")
-            state[f"{dst_prefix}attn.to_k.weight"] = k_weight @ x_weight
-            state[f"{dst_prefix}attn.to_k.bias"] = k_weight @ x_bias
-            v_weight = state.pop(f"{src_prefix}attn.v_proj.weight")
-            state[f"{dst_prefix}attn.to_v.weight"] = v_weight @ x_weight
-            state[f"{dst_prefix}attn.to_v.bias"] = v_weight @ x_bias
-
-            c_weight = state.pop(f"{src_prefix}linear_1_c.weight")
-            c_bias = state.pop(f"{src_prefix}linear_1_c.bias")
-
-            add_q_weight = state.pop(f"{src_prefix}attn.add_q_proj.weight")
-            state[f"{dst_prefix}attn.add_q_proj.weight"] = add_q_weight @ c_weight
-            state[f"{dst_prefix}attn.add_q_proj.bias"] = add_q_weight @ c_bias
-            add_k_weight = state.pop(f"{src_prefix}attn.add_k_proj.weight")
-            state[f"{dst_prefix}attn.add_k_proj.weight"] = add_k_weight @ c_weight
-            state[f"{dst_prefix}attn.add_k_proj.bias"] = add_k_weight @ c_bias
-            add_v_weight = state.pop(f"{src_prefix}attn.add_v_proj.weight")
-            state[f"{dst_prefix}attn.add_v_proj.weight"] = add_v_weight @ c_weight
-            state[f"{dst_prefix}attn.add_v_proj.bias"] = add_v_weight @ c_bias
-
-            state[f"{dst_prefix}attn.to_out.0.bias"] = torch.zeros_like(state[f"{dst_prefix}attn.to_out.0.weight"][0])
-            state[f"{dst_prefix}attn.to_add_out.bias"] = torch.zeros_like(
-                state[f"{dst_prefix}attn.to_add_out.weight"][0]
-            )
-
-            _convert_ada_norm(state, f"{dst_prefix}norm1.linear", pre_only=False)
-            _convert_ada_norm(state, f"{dst_prefix}norm1_context.linear", pre_only=i == self.num_layers - 1)
-
-        state["pos_embed.pos_embed"] = state["pos_embed.pos_embed"].unsqueeze(0)
-
-        # Unused since we can set context_pre_only=True in the last block.
-        last_block_prefix = f"transformer_blocks.{self.num_layers - 1}"
-        del state[f"{last_block_prefix}.attn.to_add_out.weight"]
-        del state[f"{last_block_prefix}.attn.to_add_out.bias"]
-        del state[f"{last_block_prefix}.ff_context.net.0.proj.weight"]
-        del state[f"{last_block_prefix}.ff_context.net.0.proj.bias"]
-        del state[f"{last_block_prefix}.ff_context.net.2.weight"]
-        del state[f"{last_block_prefix}.ff_context.net.2.bias"]
-
-        ### Second, convert diffusers state dict to tt_dit state dict.
-
         rename_substate(state, "norm_out.linear", "time_embed_out")  # chunks=2 if sharded
         rename_substate(state, "norm_out.norm", "norm_out")
 
@@ -417,3 +320,108 @@ def _convert_ada_norm(state: dict[str, torch.Tensor], prefix: str, *, pre_only: 
     else:
         state[f"{prefix}.weight"] = torch.concat([ws[1], ws[0], ws[2], ws[4], ws[3], ws[5]])
         state[f"{prefix}.bias"] = torch.concat([bs[1], bs[0], bs[2] + 1, bs[4], bs[3] - 1, bs[5]])
+
+
+def convert_motif_transformer_block_state(
+    state: dict[str, torch.Tensor], *, prefix: str = "", is_last_block: bool
+) -> None:
+    renames = {
+        "attn.o_proj.weight": "attn.to_out.0.weight",
+        "attn.add_o_proj.weight": "attn.to_add_out.weight",
+        "attn.q_norm_x.weight": "attn.norm_q.weight",
+        "attn.k_norm_x.weight": "attn.norm_k.weight",
+        "attn.q_norm_c.weight": "attn.norm_added_q.weight",
+        "attn.k_norm_c.weight": "attn.norm_added_k.weight",
+        "attn.q_scale": "attn.added_head_factors",
+        "affine_params_c.projection.weight": "norm1_context.linear.weight",
+        "affine_params_c.projection.bias": "norm1_context.linear.bias",
+        "affine_params_x.projection.weight": "norm1.linear.weight",
+        "affine_params_x.projection.bias": "norm1.linear.bias",
+        "mlp_3_c.gate_proj.weight": "ff_context.net.0.proj.weight",
+        "mlp_3_c.gate_proj.bias": "ff_context.net.0.proj.bias",
+        "mlp_3_c.down_proj.weight": "ff_context.net.2.weight",
+        "mlp_3_c.down_proj.bias": "ff_context.net.2.bias",
+        "mlp_3_x.gate_proj.weight": "ff.net.0.proj.weight",
+        "mlp_3_x.gate_proj.bias": "ff.net.0.proj.bias",
+        "mlp_3_x.down_proj.weight": "ff.net.2.weight",
+        "mlp_3_x.down_proj.bias": "ff.net.2.bias",
+    }
+
+    for src, dst in renames.items():
+        state[f"{prefix}{dst}"] = state.pop(f"{prefix}{src}")
+
+    x_weight = state.pop(f"{prefix}linear_1_x.weight")
+    x_bias = state.pop(f"{prefix}linear_1_x.bias")
+
+    q_weight = state.pop(f"{prefix}attn.q_proj.weight")
+    state[f"{prefix}attn.to_q.weight"] = q_weight @ x_weight
+    state[f"{prefix}attn.to_q.bias"] = q_weight @ x_bias
+    k_weight = state.pop(f"{prefix}attn.k_proj.weight")
+    state[f"{prefix}attn.to_k.weight"] = k_weight @ x_weight
+    state[f"{prefix}attn.to_k.bias"] = k_weight @ x_bias
+    v_weight = state.pop(f"{prefix}attn.v_proj.weight")
+    state[f"{prefix}attn.to_v.weight"] = v_weight @ x_weight
+    state[f"{prefix}attn.to_v.bias"] = v_weight @ x_bias
+
+    c_weight = state.pop(f"{prefix}linear_1_c.weight")
+    c_bias = state.pop(f"{prefix}linear_1_c.bias")
+
+    add_q_weight = state.pop(f"{prefix}attn.add_q_proj.weight")
+    state[f"{prefix}attn.add_q_proj.weight"] = add_q_weight @ c_weight
+    state[f"{prefix}attn.add_q_proj.bias"] = add_q_weight @ c_bias
+    add_k_weight = state.pop(f"{prefix}attn.add_k_proj.weight")
+    state[f"{prefix}attn.add_k_proj.weight"] = add_k_weight @ c_weight
+    state[f"{prefix}attn.add_k_proj.bias"] = add_k_weight @ c_bias
+    add_v_weight = state.pop(f"{prefix}attn.add_v_proj.weight")
+    state[f"{prefix}attn.add_v_proj.weight"] = add_v_weight @ c_weight
+    state[f"{prefix}attn.add_v_proj.bias"] = add_v_weight @ c_bias
+
+    state[f"{prefix}attn.to_out.0.bias"] = torch.zeros_like(state[f"{prefix}attn.to_out.0.weight"][0])
+    state[f"{prefix}attn.to_add_out.bias"] = torch.zeros_like(state[f"{prefix}attn.to_add_out.weight"][0])
+
+    _convert_ada_norm(state, f"{prefix}norm1.linear", pre_only=False)
+    _convert_ada_norm(state, f"{prefix}norm1_context.linear", pre_only=is_last_block)
+
+    # Unused since we can set context_pre_only=True in the last block.
+    if is_last_block:
+        del state[f"{prefix}attn.to_add_out.weight"]
+        del state[f"{prefix}attn.to_add_out.bias"]
+        del state[f"{prefix}ff_context.net.0.proj.weight"]
+        del state[f"{prefix}ff_context.net.0.proj.bias"]
+        del state[f"{prefix}ff_context.net.2.weight"]
+        del state[f"{prefix}ff_context.net.2.bias"]
+
+
+def convert_motif_transformer_state(state: dict[str, torch.Tensor], *, num_layers: int) -> None:
+    renames = {
+        "pos_embed": "pos_embed.pos_embed",
+        "text_cond.projection.weight": "context_embedder.weight",
+        "text_cond.projection.bias": "context_embedder.bias",
+        "final_modulation.weight": "norm_out.linear.weight",
+        "final_modulation.bias": "norm_out.linear.bias",
+        "final_linear_SD3.weight": "proj_out.weight",
+        "final_linear_SD3.bias": "proj_out.bias",
+        "patching.projection_SD3.weight": "pos_embed.proj.weight",
+        "patching.projection_SD3.bias": "pos_embed.proj.bias",
+        "time_emb.time_emb.linear_1.weight": "time_text_embed.timestep_embedder.linear_1.weight",
+        "time_emb.time_emb.linear_1.bias": "time_text_embed.timestep_embedder.linear_1.bias",
+        "time_emb.time_emb.linear_2.weight": "time_text_embed.timestep_embedder.linear_2.weight",
+        "time_emb.time_emb.linear_2.bias": "time_text_embed.timestep_embedder.linear_2.bias",
+        "time_emb.pooled_text_emb.linear_1.weight": "time_text_embed.text_embedder.linear_1.weight",
+        "time_emb.pooled_text_emb.linear_1.bias": "time_text_embed.text_embedder.linear_1.bias",
+        "time_emb.pooled_text_emb.linear_2.weight": "time_text_embed.text_embedder.linear_2.weight",
+        "time_emb.pooled_text_emb.linear_2.bias": "time_text_embed.text_embedder.linear_2.bias",
+    }
+
+    for src, dst in renames.items():
+        state[dst] = state.pop(src)
+
+    state["pos_embed.pos_embed"] = state["pos_embed.pos_embed"].unsqueeze(0)
+
+    for i in range(num_layers):
+        rename_substate(state, f"mmdit_blocks.{i}", f"transformer_blocks.{i}")
+        convert_motif_transformer_block_state(
+            state,
+            prefix=f"transformer_blocks.{i}.",
+            is_last_block=i == num_layers - 1,
+        )

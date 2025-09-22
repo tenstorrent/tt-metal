@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from ...models.transformers.transformer_motif import MotifTransformer
+from ...models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_state
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...reference.motif_image import configuration_motifimage, modeling_dit
@@ -139,7 +139,9 @@ def test_transformer_motif(
     assert not missing
 
     logger.info("loading state dict into TT-NN model...")
-    tt_model.load_torch_state_dict(state_dict)
+    converted_state_dict = dict(state_dict)
+    convert_motif_transformer_state(converted_state_dict, num_layers=num_layers)
+    tt_model.load_torch_state_dict(converted_state_dict, strict=False)
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, in_channels, height // vae_scale_factor, width // vae_scale_factor])
@@ -163,8 +165,6 @@ def test_transformer_motif(
     logger.info("running torch model...")
     with torch.no_grad():
         torch_output = torch_model.forward(spatial, timestep, prompt_embeddings, pooled)
-
-    _, prompt_seq_len, _ = prompt.shape
 
     logger.info("running TT model...")
     tt_output = tt_model.forward(
