@@ -36,16 +36,26 @@ def calculate_initialization_parameters(
         ],
         dim=-1,
     )
-    batch, _, depth, width, _ = bbox_corners.size()
-    bbox_corners = bbox_corners.flatten(2, 3)
+    batch, height, depth, width, _ = bbox_corners.size()
+    bbox_corners = bbox_corners.flatten(2, 3).permute(0, 2, 1, 3)
     area = (
         (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * feature_height * feature_width * 0.25 + EPSILON
     ).unsqueeze(1)
     visible = area > EPSILON
 
     area = 1 / area
-    area_nhwc = area.permute(0, 2, 3, 1)  # Convert to NHWC format
-    visible_nhwc = visible.permute(0, 2, 3, 1)  # Convert to NHWC format
+    area_nhwc = (
+        area.permute(0, 2, 3, 1)
+        .repeat(1, 1, 1, channels)
+        .reshape(1, depth * width, 1, channels * height)
+        .permute(0, 2, 1, 3)
+    )  # Convert to N1HW*C format
+    visible_nhwc = (
+        visible.permute(0, 2, 3, 1)
+        .repeat(1, 1, 1, channels)
+        .reshape(1, depth * width, 1, channels * height)
+        .permute(0, 2, 1, 3)
+    )  # Convert to N1HW*C format
     top_left_bc = bbox_corners[..., [0, 1]]
     btm_right_bc = bbox_corners[..., [2, 3]]
     top_right_bc = bbox_corners[..., [2, 1]]
@@ -54,7 +64,7 @@ def calculate_initialization_parameters(
     batch_size, grid_h, grid_w, _ = top_left_bc.shape
     input_shape_nhwc = [batch_size, feature_height, feature_width, channels]
 
-    # bbox_corners_tt = ttnn.from_torch(bbox_corners, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # reshape
     if use_precomputed_grid:
         prepare_grid_lambda = lambda torch_grid_bf16, input_shape_nhwc: ttnn.to_device(
             ttnn.prepare_grid_sample_grid(
@@ -65,6 +75,7 @@ def calculate_initialization_parameters(
             ),
             device,
         )
+
         top_left_bc_tt = prepare_grid_lambda(top_left_bc, input_shape_nhwc)
         btm_right_bc_tt = prepare_grid_lambda(btm_right_bc, input_shape_nhwc)
         top_right_bc_tt = prepare_grid_lambda(top_right_bc, input_shape_nhwc)
@@ -80,13 +91,18 @@ def calculate_initialization_parameters(
         )
         btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
+    top_left_bc_tt = ttnn.reshape(top_left_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
+    btm_right_bc_tt = ttnn.reshape(btm_right_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
+    top_right_bc_tt = ttnn.reshape(top_right_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
+    btm_left_bc_tt = ttnn.reshape(btm_left_bc_tt, [batch_size, grid_h, 1, grid_w * 6])
+
     visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     return (
         [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
         visible_tt,
         area_tt,
-        [batch, depth, width],
+        [batch, height, depth, width],
     )
     # return area_tt
 
@@ -115,6 +131,11 @@ class OFT:
         self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
             device, channels, cell_size, grid_height, features_shape_hw, calib, grid, self.scale, use_precomputed_grid
         )
+
+        in_channels = self.linear_weight.shape[0]
+        self.linear_weight = ttnn.reshape(self.linear_weight, [in_channels // self.shape[1], self.shape[1], channels])
+        self.linear_weight = ttnn.permute(self.linear_weight, (1, 0, 2))
+        self.linear_weight = ttnn.reshape(self.linear_weight, [in_channels, channels])
 
         # integral_image_quantization_strategy
         # None - no quantization
@@ -150,18 +171,40 @@ class OFT:
         if integral_image.get_layout() == ttnn.TILE_LAYOUT:
             integral_image = ttnn.to_layout(integral_image, ttnn.ROW_MAJOR_LAYOUT)
 
+        integral_image = ttnn.to_memory_config(integral_image, ttnn.L1_MEMORY_CONFIG)
+
         top_left = ttnn.grid_sample(
-            integral_image, self.bbox_corners[0], use_precomputed_grid=self.use_precomputed_grid
+            integral_image,
+            self.bbox_corners[0],
+            use_precomputed_grid=self.use_precomputed_grid,
+            batch_output_channels=True,
         )
+        top_left = ttnn.permute(top_left, (0, 2, 1, 3))
+        top_left = ttnn.to_layout(top_left, ttnn.TILE_LAYOUT)
         btm_right = ttnn.grid_sample(
-            integral_image, self.bbox_corners[1], use_precomputed_grid=self.use_precomputed_grid
+            integral_image,
+            self.bbox_corners[1],
+            use_precomputed_grid=self.use_precomputed_grid,
+            batch_output_channels=True,
         )
+        btm_right = ttnn.permute(btm_right, (0, 2, 1, 3))
+        btm_right = ttnn.to_layout(btm_right, ttnn.TILE_LAYOUT)
         top_right = ttnn.grid_sample(
-            integral_image, self.bbox_corners[2], use_precomputed_grid=self.use_precomputed_grid
+            integral_image,
+            self.bbox_corners[2],
+            use_precomputed_grid=self.use_precomputed_grid,
+            batch_output_channels=True,
         )
+        top_right = ttnn.permute(top_right, (0, 2, 1, 3))
+        top_right = ttnn.to_layout(top_right, ttnn.TILE_LAYOUT)
         btm_left = ttnn.grid_sample(
-            integral_image, self.bbox_corners[3], use_precomputed_grid=self.use_precomputed_grid
+            integral_image,
+            self.bbox_corners[3],
+            use_precomputed_grid=self.use_precomputed_grid,
+            batch_output_channels=True,
         )
+        btm_left = ttnn.permute(btm_left, (0, 2, 1, 3))
+        btm_left = ttnn.to_layout(btm_left, ttnn.TILE_LAYOUT)
 
         vox_feats = ttnn.subtract(top_left, top_right)
         vox_feats = ttnn.add(vox_feats, btm_right)
@@ -172,8 +215,9 @@ class OFT:
 
         n, h, w, c = vox_feats.shape
         logger.debug(f"TTNN: {n=}, {h=}, {w=}, {c=}")
-        vox_feats = ttnn.permute(vox_feats, (0, 2, 3, 1))
-        vox_feats = ttnn.reshape(vox_feats, (1, 1, w, h * c))  # PCC 0.0019216915015543698
+
+        # vox_feats = ttnn.permute(vox_feats, (0, 2, 3, 1))
+        # vox_feats = ttnn.reshape(vox_feats, (1, 1, w, h * c))  # PCC 0.0019216915015543698
 
         if vox_feats.get_layout() != ttnn.TILE_LAYOUT:
             vox_feats = ttnn.to_layout(vox_feats, ttnn.TILE_LAYOUT)

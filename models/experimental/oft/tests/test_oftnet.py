@@ -31,9 +31,9 @@ from loguru import logger
     "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       (torch.bfloat16, False, 0.757, 0.826, 0.996, 0.876),
-       (torch.bfloat16,  True, 0.762, 0.887, 0.998, 0.905),
-       ( torch.float32, False, 0.753, 0.854, 0.997, 0.805),
+       ( torch.bfloat16, False, 0.756, 0.827, 0.996, 0.877),
+       ( torch.bfloat16,  True, 0.762, 0.887, 0.998, 0.905),
+       ( torch.float32, False, 0.755, 0.852, 0.997, 0.804),
        ( torch.float32,  True, 0.924, 0.886, 0.998, 0.902)
     ],
     # fmt: on
@@ -44,7 +44,7 @@ from loguru import logger
         "fp32_use_host_oft",
     ],
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
+@pytest.mark.parametrize("checkpoints_path", [r"/localdev/njovanovic/checkpoint-0600.pth"])
 def test_oftnet(
     device,
     checkpoints_path,
