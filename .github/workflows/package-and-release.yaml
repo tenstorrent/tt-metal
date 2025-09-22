@@ -43,7 +43,7 @@ jobs:
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
 
           # Set tag-type
-          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]]; then
+          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]] || [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             if [[ "$isReleaseCandidate" == "true" ]]; then
               echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
@@ -93,7 +93,7 @@ jobs:
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
     runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
+    if: ${{ (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/')) || inputs.dry-run }}
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
@@ -184,7 +184,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
+    if: ${{ (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/')) || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
