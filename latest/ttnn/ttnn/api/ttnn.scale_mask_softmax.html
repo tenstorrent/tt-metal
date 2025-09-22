@@ -168,7 +168,7 @@ are applied before the softmax operation for efficiency.</p>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the output tensor. If not provided, inherits from input tensor.</p></li>
 <li><p><strong>is_causal_mask</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether the mask is a causal mask. Defaults to False.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the operation.</p></li>
-<li><p><strong>numeric_stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use numerically stable softmax computation. Defaults to False.</p></li>
+<li><p><strong>numeric_stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use numerically stable softmax computation. Defaults to True.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
