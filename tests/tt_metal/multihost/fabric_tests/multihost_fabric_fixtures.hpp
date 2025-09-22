@@ -30,12 +30,6 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,
         "Multi-Host Routing tests require multiple hosts in the system");
-
-    // Print out cluster description
-    log_info(
-        tt::LogTest,
-        "Cluster description: \n{}",
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->serialize());
 }
 
 inline const std::vector<eth_coord_t>& get_eth_coords_for_2x4_t3k() {
@@ -118,6 +112,28 @@ public:
     virtual std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() = 0;
     // The derived fixture must infer if the current system is suitable for the requested
     // topology in the Mesh Graph, when implementing this function.
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& eth_coord_mapping = this->get_eth_coord_mapping();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   eth_coord_mapping.size() &&
+               cluster.user_exposed_chip_ids().size() == eth_coord_mapping[0].size();
+    }
+};
+
+class InterMeshRoutingControlPlaneFixture : public ControlPlaneFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported system.";
+        }
+
+        validate_and_setup_control_plane_config(this);
+    }
+
+    // Derived Classes (Fixtures specialized for topology/system) must define this
+    virtual std::string get_path_to_mesh_graph_desc() = 0;
+    virtual std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() = 0;
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& eth_coord_mapping = this->get_eth_coord_mapping();
@@ -241,21 +257,27 @@ class NanoExabox1x8FabricFixture : public Fixture {
 // Dedicated Fabric and Distributed Test Fixtures fir Multi-Host + Multi-Mesh Tests
 using IntermeshSplit2x2FabricFixture = Split2x2FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceSplit2x2Fixture = Split2x2FabricFixture<MultiMeshDeviceFabricFixture>;
+using InterMeshRoutingSplit2x2Fixture = Split2x2FabricFixture<InterMeshRoutingControlPlaneFixture>;
 
 using InterMeshSplit1x2FabricFixture = Split1x2FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceSplit1x2Fixture = Split1x2FabricFixture<MultiMeshDeviceFabricFixture>;
+using InterMeshRoutingSplit1x2Fixture = Split1x2FabricFixture<InterMeshRoutingControlPlaneFixture>;
 
 using IntermeshDual2x2FabricFixture = Dual2x2FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceDual2x2Fixture = Dual2x2FabricFixture<MultiMeshDeviceFabricFixture>;
+using InterMeshRoutingDual2x2Fixture = Dual2x2FabricFixture<InterMeshRoutingControlPlaneFixture>;
 
 using InterMeshDual2x4FabricFixture = Dual2x4FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceDual2x4Fixture = Dual2x4FabricFixture<MultiMeshDeviceFabricFixture>;
+using InterMeshRoutingDual2x4Fixture = Dual2x4FabricFixture<InterMeshRoutingControlPlaneFixture>;
 
 using IntermeshNanoExabox2x4FabricFixture = NanoExabox2x4FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDeviceFabricFixture>;
+using InterMeshRoutingNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<InterMeshRoutingControlPlaneFixture>;
 
 using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
+using InterMeshRoutingNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<InterMeshRoutingControlPlaneFixture>;
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

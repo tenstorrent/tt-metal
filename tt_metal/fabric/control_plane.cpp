@@ -466,7 +466,6 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
-
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
