@@ -15,10 +15,11 @@ ttnn::Tensor SGDFusedOptimizer::invoke(
     float momentum,
     float dampening,
     float weight_decay,
+    bool nesterov,
     const std::optional<ttnn::Tensor>& param_out,
     const std::optional<ttnn::Tensor>& momentum_in,
     const std::optional<ttnn::Tensor>& momentum_out) {
     return ttnn::prim::ttml_sgd_fused(
-        param_in, grad, lr, momentum, dampening, weight_decay, param_out, momentum_in, momentum_out);
+        param_in, grad, lr, momentum, dampening, weight_decay, nesterov, param_out, momentum_in, momentum_out);
 }
 }  // namespace ttml::metal::optimizers::sgd_fused
