@@ -120,7 +120,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
-    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+    elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
     else
         echo "Your blackhole hw topology is not supported to run Llama demo model tests!"
@@ -140,7 +140,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
-    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+    elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
     else
         echo "Your blackhole hw topology is not supported to run Llama demo stress tests!"
@@ -226,7 +226,7 @@ test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
-hw_topology_test_suites["blackhole_rackbox"]="
+hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
