@@ -32,6 +32,7 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 constexpr uint32_t momentum = get_compile_time_arg_val(3);
 constexpr uint32_t one_minus_dampening = get_compile_time_arg_val(4);
+constexpr uint32_t weight_decay = get_compile_time_arg_val(5);
 
 inline void pack_and_push_two_cbs(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
     cb_reserve_back(cb_output_1, block_size);
@@ -59,13 +60,27 @@ void MAIN {
         for (uint32_t col = 0; col < Wt; col += block_size) {
             cb_wait_front(cb_grad_idx, block_size);
             cb_wait_front(cb_momentum_in_idx, block_size);
+            cb_wait_front(cb_param_in_idx, block_size);
 
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                copy_tile_init(cb_param_in_idx);
+                const uint32_t theta_register = block_size + block_idx;
+                copy_tile(cb_param_in_idx, /* tile_idx */ block_idx, /* register_idx */ theta_register);
+
+                // weight_decay * theta_{t-1}
+                binop_with_scalar_tile_init();
+                mul_unary_tile(theta_register, weight_decay);
+
                 copy_tile_init(cb_grad_idx);
                 const uint32_t grad_register = block_idx;
                 copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
 
+                // g_t <- g_t + weight_decay * theta_{t-1}
+                add_binary_tile_init();
+                add_binary_tile(grad_register, theta_register, grad_register);
+
+                // g_t * (1 - dampening)
                 binop_with_scalar_tile_init();
                 mul_unary_tile(grad_register, one_minus_dampening);
 
@@ -73,9 +88,11 @@ void MAIN {
                 const uint32_t momentum_register = block_size + block_idx;
                 copy_tile(cb_momentum_in_idx, /* tile_idx */ block_idx, /* register_idx */ momentum_register);
 
+                // m_{t-1} * momentum
                 binop_with_scalar_tile_init();
                 mul_unary_tile(momentum_register, momentum);
 
+                // g_t <- g_t * (1 - dampening) + m_{t-1} * momentum
                 add_binary_tile_init();
                 add_binary_tile(grad_register, momentum_register, grad_register);
             }
@@ -101,7 +118,6 @@ void MAIN {
             cb_pop_front(cb_momentum_out_idx, block_size);
             pack_and_push_block(cb_update_idx, block_size);
 
-            cb_wait_front(cb_param_in_idx, block_size);
             cb_wait_front(cb_update_idx, block_size);
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
