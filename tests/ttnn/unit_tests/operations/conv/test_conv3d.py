@@ -134,16 +134,7 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     return tt_input, conv3d_module, gt_output, kernel_config, (N, D_out, H_out, W_out)
 
 
-def run_conv3d_test(
-    device,
-    input_shape,
-    out_channels,
-    kernel_size,
-    stride,
-    padding,
-    padding_mode,
-    grid_size=(1, 1),
-):
+def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
         input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
     )
@@ -231,14 +222,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
             new_shape = (input_shape[0], input_shape[1] * (i + 1), input_shape[2], input_shape[3], input_shape[4])
             dummy.append(ttnn.from_torch(torch.randn(new_shape), device=device, layout=ttnn.TILE_LAYOUT))
             run_conv3d_test(
-                device,
-                new_shape,
-                out_channels,
-                kernel_size,
-                stride,
-                padding,
-                padding_mode,
-                grid_size=grid_size,
+                device, new_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
             )
 
     assert device.num_program_cache_entries() == 2
