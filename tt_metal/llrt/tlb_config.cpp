@@ -52,27 +52,13 @@ void configure_static_tlbs(
     using get_static_tlb_size_ptr = std::int32_t (*)();
     get_static_tlb_size_ptr get_static_tlb_size;
 
-    // const uint32_t dynamic_tlb_count = 16;
-    // uint32_t dynamic_tlb_base_index, dynamic_tlb_16m_size, dram_channel_0_peer2peer_region_start, dram_channel_0_x,
-        // dram_channel_0_y;
-
     // Need to set these values based on arch because UMD does not expose architecture_implementation
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0:
             get_static_tlb_size = wormhole::get_static_tlb_size;
-            // dynamic_tlb_base_index = tt::umd::wormhole::DYNAMIC_TLB_BASE_INDEX;
-            // dynamic_tlb_16m_size = tt::umd::wormhole::DYNAMIC_TLB_16M_SIZE;
-            // dram_channel_0_peer2peer_region_start = tt::umd::wormhole::DRAM_CHANNEL_0_PEER2PEER_REGION_START;
-            // dram_channel_0_x = tt::umd::wormhole::DRAM_CHANNEL_0_X;
-            // dram_channel_0_y = tt::umd::wormhole::DRAM_CHANNEL_0_Y;
             break;
         case tt::ARCH::BLACKHOLE:
             get_static_tlb_size = blackhole::get_static_tlb_size;
-            // dynamic_tlb_base_index = tt::umd::blackhole::DYNAMIC_TLB_BASE_INDEX;
-            // dynamic_tlb_16m_size = 0;
-            // dram_channel_0_peer2peer_region_start = tt::umd::blackhole::DRAM_CHANNEL_0_PEER2PEER_REGION_START;
-            // dram_channel_0_x = tt::umd::blackhole::DRAM_CHANNEL_0_X;
-            // dram_channel_0_y = tt::umd::blackhole::DRAM_CHANNEL_0_Y;
             break;
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
     }
@@ -92,25 +78,6 @@ void configure_static_tlbs(
     for (const CoreCoord& core : sdesc.get_cores(CoreType::ETH, sdesc.get_umd_coord_system())) {
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, TLB_DATA::Strict);
     }
-
-    // TODO (#9932): Remove workaround for BH
-    // if (arch != tt::ARCH::BLACKHOLE) {
-    //     // Setup static TLBs for MMIO mapped data space
-    //     uint64_t peer_dram_offset = dram_channel_0_peer2peer_region_start;
-    //     for (uint32_t tlb_id = dynamic_tlb_base_index; tlb_id < dynamic_tlb_base_index + dynamic_tlb_count; tlb_id++) {
-    //         device_driver.configure_tlb(
-    //             mmio_device_id, CoreCoord(dram_channel_0_x, dram_channel_0_y), 16 * (1 << 20), peer_dram_offset);
-    //         // Align address space of 16MB TLB to 16MB boundary
-    //         peer_dram_offset += dynamic_tlb_16m_size;
-    //     }
-    // } else {
-    //     // Setup static 4GB tlbs for DRAM cores
-    //     uint32_t dram_addr = 0;
-    //     for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
-    //         tt_xy_pair dram_core = blackhole::ddr_to_noc0(dram_channel);
-    //         device_driver.configure_tlb(mmio_device_id, dram_core, 4ULL * (1 << 30ULL), dram_addr, TLB_DATA::Posted);
-    //     }
-    // }
 }
 
 }  // namespace ll_api
