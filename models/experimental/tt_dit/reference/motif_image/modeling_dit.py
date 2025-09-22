@@ -375,7 +375,7 @@ class MotifDiT(nn.Module):
                 emb_x = torch.cat((self.register_tokens.expand(emb_x.shape[0], -1, -1), emb_x), dim=1)
 
         # time embedding into text embedding
-        if hasattr(self, "use_time_token_in_attn"):  # BUG: should be hasattr(self, "t_token_proj")
+        if hasattr(self, "t_token_proj"):
             t_token = self.t_token_proj(emb_t).unsqueeze(1)
             emb_c = torch.cat([emb_c, t_token], dim=1)  # (N, [T_c + 1], C)
 
