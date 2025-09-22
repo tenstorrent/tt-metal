@@ -6,6 +6,13 @@ import ttnn
 from models.demos.yolov11.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 class TtnnDetect:
     def __init__(self, device, parameter, conv_pt):
         self.cv2_0_0 = TtnnConv(device, parameter.cv2[0][0], conv_pt.cv2[0][0], is_detect=True)
@@ -43,6 +50,10 @@ class TtnnDetect:
         self.strides = conv_pt.strides
 
     def __call__(self, device, y1, y2, y3):
+        print("shape are", y1.shape, y2.shape, y3.shape)
+        p(y1, "y1")
+        p(y2, "y2")
+        p(y3, "y3")
         x1 = self.cv2_0_0(device, y1)
         x1 = self.cv2_0_1(device, x1)
         x1 = self.cv2_0_2(x1)
@@ -93,7 +104,7 @@ class TtnnDetect:
         c = self.dfl(ya)
         ttnn.deallocate(ya)
         c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
-        c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
@@ -104,6 +115,7 @@ class TtnnDetect:
         c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
         c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
         c1 = anchor - c1
+        print("c111", c1.layout)
         c2 = anchor + c2
         z1 = c2 - c1
         z2 = c1 + c2

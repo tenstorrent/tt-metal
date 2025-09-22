@@ -29,7 +29,11 @@ def create_yolov11_input_tensors(
             ),
         )
         ttnn_input_tensor = ttnn.from_torch(
-            ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, mesh_mapper=inputs_mesh_mapper
+            ttnn_input_tensor,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            mesh_mapper=inputs_mesh_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     else:
         n, c, h, w = torch_input_tensor.shape
@@ -154,7 +158,7 @@ def create_yolov11_model_parameters_detect(
         model=model, run_model=lambda model: model(input_tensor_1, input_tensor_2, input_tensor_3), device=None
     )
 
-    feats = [28, 14, 7]
+    feats = [80, 40, 20]
     strides = [8.0, 16.0, 32.0]
 
     anchors, strides = make_anchors(device, feats, strides, mesh_mapper=weights_mesh_mapper)
