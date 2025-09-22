@@ -35,16 +35,27 @@ def test_unet_model(batch, groups, device, iterations, reset_seeds):
     run_unet_model(batch, groups, device, iterations)
 
 
-def filter_outliers(measurements, z_threshold=2.0):
-    """Remove outliers using z-score filtering."""
-    if len(measurements) < 10:
+def filter_outliers(measurements, trim_percentage=0.2):
+    """Remove outliers using trimmed mean filtering."""
+    if len(measurements) < 3:
         return measurements
 
-    mean = np.mean(measurements)
-    std = np.std(measurements)
-    filtered = [x for x in measurements if abs(x - mean) < z_threshold * std]
+    # Sort measurements
+    sorted_measurements = sorted(measurements)
+    n = len(sorted_measurements)
 
-    logger.info(f"Filtered {len(measurements) - len(filtered)} outliers from {len(measurements)} measurements")
+    # Calculate number of elements to trim from each end
+    trim_count = int(n * trim_percentage / 2)
+
+    # If trim_count would leave less than 1 element, don't trim
+    if n - 2 * trim_count < 1:
+        return measurements
+
+    filtered = sorted_measurements[trim_count : n - trim_count]
+
+    logger.info(
+        f"Trimmed {len(measurements) - len(filtered)} outliers from {len(measurements)} measurements (trim_percentage={trim_percentage})"
+    )
     return filtered
 
 
@@ -144,11 +155,12 @@ def test_unet_trace_perf(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2660.0),)
+    "batch, groups, num_runs, iterations, expected_compile_time, expected_throughput", ((1, 4, 12, 256, 30.0, 2660.0),)
 )
 def test_unet_trace_perf_multi_device(
     batch: int,
     groups: int,
+    num_runs: int,
     iterations: int,
     expected_compile_time: float,
     expected_throughput: float,
@@ -159,15 +171,11 @@ def test_unet_trace_perf_multi_device(
         test_unet_trace_2cq_multi_device,
     )
 
-    num_runs = 8
-
     model_name = "unet_shallow-trace_2cq_same_io-multi_device"
 
-    # Multiple measurement runs
     fps_results = []
     inference_times = []
     compile_times = []
-
     for run_idx in range(num_runs):
         logger.info(f"Measurement run {run_idx + 1}/{num_runs}...")
         result = test_unet_trace_2cq_multi_device(batch, groups, iterations, mesh_device, reset_seeds)
@@ -176,9 +184,8 @@ def test_unet_trace_perf_multi_device(
         inference_times.append(result.inference_time)
         compile_times.append(result.inference_and_compile_time - result.inference_time)
 
-        logger.info(f"  Run {run_idx + 1} FPS: {result.get_fps():.2f}")
+        logger.info(f"Run {run_idx + 1} throughput: {result.get_fps():.2f} fps")
 
-        # Brief pause between runs for thermal stability
         if run_idx < num_runs - 1:
             time.sleep(1.0)
 
@@ -212,10 +219,7 @@ def test_unet_trace_perf_multi_device(
     confidence_margin = 2 * fps_std  # 95% confidence interval
     performance_threshold = expected_throughput - confidence_margin
 
-    logger.info(f"Performance check: {final_fps:.2f} fps >= {performance_threshold:.2f} fps")
-
     assert (
         final_fps >= performance_threshold
     ), f"Expected performance {expected_throughput:.2f} ± {confidence_margin:.2f} fps but got {final_fps:.2f} ± {fps_std:.2f} fps"
-
-    logger.success(f"✅ UNet performance test passed: {final_fps:.2f} ± {fps_std:.2f} fps")
+    logger.success(f"Test passed: {final_fps:.2f} ± {fps_std:.2f} fps")
