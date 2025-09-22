@@ -53,6 +53,8 @@ if ! $PYTHON "${SCRIPT_PY}" \
     exit 1
 fi
 
-if which clang-format > /dev/null; then
-    clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}"
+# some environment does not have a compatible clang-format, in which case we should
+# ignore the failure
+if clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}"; then
+    :
 fi
