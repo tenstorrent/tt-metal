@@ -105,7 +105,6 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
     _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0);
 }
 
-template <BinaryOp BINOP>
 inline void my_calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
     // SFPU microcode
@@ -115,39 +114,7 @@ inline void my_calculate_sfpu_binary(const uint dst_index_in0, const uint dst_in
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat result = 0.0f;
-
-        if constexpr (BINOP == BinaryOp::ADD) {
-            result = in0 + in1;
-        } else if constexpr (BINOP == BinaryOp::SUB) {
-            result = in0 - in1;
-        } else if constexpr (BINOP == BinaryOp::MUL) {
-            result = in0 * in1;
-        } else if constexpr (BINOP == BinaryOp::DIV) {
-            // v_if(in1 == 0) {
-            //     v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            //     v_else {
-            //         result = std::numeric_limits<float>::infinity();
-            //         result = sfpi::setsgn(result, in0);
-            //     }
-            //     v_endif;
-            // }
-            // v_elseif(in0 == in1) { result = sfpi::vConst1; }
-            // v_else { result = in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(in1), in1); }
-            // v_endif;
-        } else if constexpr (BINOP == BinaryOp::RSUB) {
-            result = in1 - in0;
-        } else if constexpr (BINOP == BinaryOp::POW) {
-            // result = _calculate_sfpu_binary_power_(in0, in1);
-        } else if constexpr (BINOP == BinaryOp::XLOGY) {
-            // v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
-            // v_else {
-            //     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-            //     _calculate_log_body_<false>(0, dst_index_out);
-            //     result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
-            // }
-            // v_endif;
-        }
-
+        result = in0 + in1;
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
