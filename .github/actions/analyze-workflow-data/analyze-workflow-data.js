@@ -143,6 +143,7 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
     // Query job/step status once to validate findings and/or provide fallback
     let hasFailingJob = false;
     let failingLabel = 'no failing job detected';
+    let apiCheckSucceeded = false;
     try {
       const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
       const jobs = Array.isArray(data.jobs) ? data.jobs : [];
@@ -154,6 +155,7 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
           if (step) { failingJob = job; failingStep = step; break; }
         }
       }
+      apiCheckSucceeded = true;
       if (failingJob) {
         hasFailingJob = true;
         failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`;
@@ -163,7 +165,8 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
     }
 
     // If we found FAILED lines but the run has no failing job, suppress false positives
-    if ((snippets && snippets.length > 0) && !hasFailingJob) {
+    // Only do this if the API check succeeded; on API failure, keep the snippets.
+    if ((snippets && snippets.length > 0) && apiCheckSucceeded && !hasFailingJob) {
       snippets = [];
     }
 
