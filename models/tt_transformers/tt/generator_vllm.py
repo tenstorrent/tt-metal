@@ -490,7 +490,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
                 getattr(input_processor, "tokenizer") if hasattr(input_processor, "tokenizer") else input_processor
             )
             text_prompt = tokenizer.decode(prompt, skip_special_tokens=False)
-            logger.warning(f"Tokens decoded back to text")
+            logger.warning(f"Applied workaround: decoded {len(prompt)} tokens back to text for processor compatibility")
         else:
             text_prompt = prompt
 
