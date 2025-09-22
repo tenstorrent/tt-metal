@@ -93,7 +93,7 @@ class Attention(Module):
             self.to_add_out = None
 
         self.added_head_factors = (
-            Parameter(shape=[self.n_local_heads, 1], device=mesh_device)
+            Parameter(shape=[self.padded_heads, 1], device=mesh_device, mesh_mapping={tp_axis: 0})
             if added_head_scaling and self.add_qkv_proj is not None
             else None
         )
