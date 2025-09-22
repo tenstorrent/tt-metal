@@ -5,6 +5,7 @@
 import pytest
 import torch
 from loguru import logger
+from tracy.process_model_log import get_samples_per_s
 
 from models.common.utility_functions import disable_persistent_kernel_cache, profiler, skip_for_grayskull
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
@@ -13,7 +14,6 @@ from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 from models.demos.wormhole.mamba.tt.model_config import ModelMode
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from tt_metal.tools.profiler.process_model_log import get_samples_per_s
 
 
 def is_nearby(actual: float, expected: float, lower_margin: float = 0.03, upper_margin: float = 0.03):

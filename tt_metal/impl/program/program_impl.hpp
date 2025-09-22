@@ -12,7 +12,6 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "dev_msgs.h"                    // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"        // Kernel
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
@@ -89,8 +88,8 @@ struct KernelGroup {
     uint32_t total_rta_size{};
     // kernel_text_offsets is indexed by processor index within core.
     std::vector<uint32_t> kernel_text_offsets;
-    launch_msg_t launch_msg{};
-    go_msg_t go_msg{};
+    dev_msgs::launch_msg_t launch_msg;
+    dev_msgs::go_msg_t go_msg;
 
     KernelGroup(
         const detail::ProgramImpl& program,
@@ -98,7 +97,8 @@ struct KernelGroup {
         std::vector<KernelHandle> kernel_ids,
         uint32_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
-        const CoreRangeSet& new_ranges);
+        const CoreRangeSet& new_ranges,
+        const dev_msgs::Factory& dev_msgs_factory);
 
     CoreType get_core_type() const;
 };

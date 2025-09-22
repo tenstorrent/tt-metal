@@ -77,7 +77,7 @@ void kernel_main() {
         } else {
             auto shard_pages = accessor_dst.shard_pages(shard_id);
             for (const auto& page : shard_pages) {
-                noc_async_read_page(page.page_id(), accessor_src, page.get_noc_addr());
+                noc_async_read_page(page.page_id(), accessor_src, page.noc_addr());
             }
         }
     }
