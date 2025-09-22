@@ -935,6 +935,9 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
 
+    this->routing_table_generator_->print_routing_tables();
+    this->routing_table_generator_->mesh_graph->print_connectivity();
+
     // When running multi-host workloads, have all hosts in the system exchange their local intermesh link tables
     // with all other hosts in the system. This information is used to assign directions to intermesh links.
     this->exchange_intermesh_link_tables();

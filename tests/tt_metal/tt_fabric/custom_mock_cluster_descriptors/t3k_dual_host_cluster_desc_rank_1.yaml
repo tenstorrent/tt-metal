@@ -9,65 +9,65 @@ arch:
   7: wormhole_b0
 chips:
   0:
-    - 2
-    - 0
+    - 1
+    - 1
     - 0
     - 0
   1:
-    - 1
-    - 0
-    - 0
-    - 0
-  2:
-    - 1
-    - 1
-    - 0
-    - 0
-  3:
     - 2
     - 1
     - 0
     - 0
-  4:
-    - 3
+  2:
+    - 2
     - 0
+    - 0
+    - 0
+  3:
+    - 1
+    - 0
+    - 0
+    - 0
+  4:
+    - 0
+    - 1
     - 0
     - 0
   5:
-    - 0
-    - 0
-    - 0
-    - 0
-  6:
-    - 0
-    - 1
-    - 0
-    - 0
-  7:
     - 3
     - 1
     - 0
     - 0
+  6:
+    - 3
+    - 0
+    - 0
+    - 0
+  7:
+    - 0
+    - 0
+    - 0
+    - 0
 chip_unique_ids:
-  7: 14521741342
-  6: 14521741341
-  5: 14521741335
-  4: 14521741320
-  3: 10226774046
-  2: 10226774045
-  1: 10226774039
-  0: 10226774024
+  7: 14521741476
+  6: 14521741368
+  5: 14521741363
+  4: 14521741357
+  3: 10226774180
+  2: 10226774072
+  1: 10226774067
+  0: 10226774061
 ethernet_connections:
   -
     - chip: 0
-      chan: 0
+      chan: 6
     - chip: 1
-      chan: 0
+      chan: 6
   -
     - chip: 0
-      chan: 1
+      chan: 7
     - chip: 1
-      chan: 1
+      chan: 7
   -
     - chip: 0
       chan: 8
@@ -110,14 +110,14 @@ ethernet_connections:
       chan: 15
   -
     - chip: 2
-      chan: 6
+      chan: 0
     - chip: 3
-      chan: 6
+      chan: 0
   -
     - chip: 2
-      chan: 7
+      chan: 1
     - chip: 3
-      chan: 7
+      chan: 1
   -
     - chip: 2
       chan: 8
@@ -161,60 +161,60 @@ ethernet_connections:
 ethernet_connections_to_remote_devices:
   -
     - chip: 3
-      chan: 1
-    - remote_chip_id: 10226774067
-      chan: 1
+      chan: 7
+    - remote_chip_id: 10226774039
+      chan: 7
   -
     - chip: 3
-      chan: 0
-    - remote_chip_id: 10226774067
-      chan: 0
+      chan: 6
+    - remote_chip_id: 10226774039
+      chan: 6
   -
     - chip: 2
-      chan: 1
-    - remote_chip_id: 10226774061
-      chan: 1
+      chan: 7
+    - remote_chip_id: 10226774024
+      chan: 7
   -
     - chip: 2
-      chan: 0
-    - remote_chip_id: 10226774061
-      chan: 0
+      chan: 6
+    - remote_chip_id: 10226774024
+      chan: 6
   -
     - chip: 1
-      chan: 7
-    - remote_chip_id: 10226774180
-      chan: 7
+      chan: 1
+    - remote_chip_id: 10226774046
+      chan: 1
   -
     - chip: 1
-      chan: 6
-    - remote_chip_id: 10226774180
-      chan: 6
+      chan: 0
+    - remote_chip_id: 10226774046
+      chan: 0
   -
     - chip: 0
-      chan: 7
-    - remote_chip_id: 10226774072
-      chan: 7
+      chan: 1
+    - remote_chip_id: 10226774045
+      chan: 1
   -
     - chip: 0
-      chan: 6
-    - remote_chip_id: 10226774072
-      chan: 6
+      chan: 0
+    - remote_chip_id: 10226774045
+      chan: 0
 chips_with_mmio:
-  - 0: 3
-  - 1: 0
-  - 2: 1
-  - 3: 2
+  - 0: 1
+  - 1: 2
+  - 2: 3
+  - 3: 0
 harvesting:
   0:
     noc_translation: true
-    harvest_mask: 640
+    harvest_mask: 544
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
     l2cpu_harvesting_mask: 0
   1:
     noc_translation: true
-    harvest_mask: 768
+    harvest_mask: 528
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
@@ -228,35 +228,35 @@ harvesting:
     l2cpu_harvesting_mask: 0
   3:
     noc_translation: true
-    harvest_mask: 257
+    harvest_mask: 520
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
     l2cpu_harvesting_mask: 0
   4:
     noc_translation: true
-    harvest_mask: 513
+    harvest_mask: 768
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
     l2cpu_harvesting_mask: 0
   5:
     noc_translation: true
-    harvest_mask: 12
+    harvest_mask: 528
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
     l2cpu_harvesting_mask: 0
   6:
     noc_translation: true
-    harvest_mask: 516
+    harvest_mask: 520
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
     l2cpu_harvesting_mask: 0
   7:
     noc_translation: true
-    harvest_mask: 640
+    harvest_mask: 513
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
