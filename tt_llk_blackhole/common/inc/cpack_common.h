@@ -162,11 +162,8 @@ inline void packer_addr_counter_init()
 }
 
 template <bool untilize = false, bool tilize = false>
-inline void set_packer_strides(const uint pack_src_format, const uint pack_dst_format, const uint tile_c_dim)
+inline void set_packer_strides(const uint pack_src_format, [[maybe_unused]] const uint pack_dst_format, const uint tile_c_dim)
 {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
     uint x_stride = (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float32)   ? 4
                     : (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float16) ? 2
                                                                                                         : 1;
@@ -295,11 +292,8 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
 
 template <bool is_fp32_dest_acc_en>
 inline void reconfig_packer_data_format(
-    const uint pack_src_format, const uint pack_dst_format, const uint tile_size, const uint face_r_dim, const uint tile_c_dim)
+    const uint pack_src_format, const uint pack_dst_format, const uint tile_size, [[maybe_unused]] const uint face_r_dim, const uint tile_c_dim)
 {
-    // Get pointer to registers for current state ID
-    volatile uint* cfg = get_cfg_pointer();
-
     const uint pack_output_src_format = (uint)pack_src_format & 0xF;
     const uint pack_output_dst_format = (uint)pack_dst_format & 0xF;
 
@@ -380,18 +374,17 @@ inline void configure_pack(
     const uint pack_src_format,
     const uint pack_dst_format,
     const uint tile_size,
-    const uint face_r_dim   = FACE_R_DIM,
-    const uint tile_c_dim   = TILE_C_DIM,
-    const uint num_faces    = 4,
-    const bool partial_face = false,
-    const bool narrow_tile  = false,
-    const uint relu_config  = 0)
+    const uint face_r_dim                   = FACE_R_DIM,
+    const uint tile_c_dim                   = TILE_C_DIM,
+    const uint num_faces                    = 4,
+    const bool partial_face                 = false,
+    [[maybe_unused]] const bool narrow_tile = false,
+    const uint relu_config                  = 0)
 {
     // Get pointer to registers for current state ID
     volatile uint* cfg = get_cfg_pointer();
 
     const uint pack_output_src_format = (uint)pack_src_format & 0xF;
-    const uint pack_output_dst_format = (uint)pack_dst_format & 0xF;
 
     set_packer_strides<untilize, tilize>(pack_src_format, pack_dst_format, tile_c_dim);
 

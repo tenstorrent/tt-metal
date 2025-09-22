@@ -359,7 +359,7 @@ template <
     BroadcastType src_b_bcast_type,
     int MATH_FIDELITY_DESC                       = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const std::uint32_t transpose, const std::uint32_t acc_to_dest)
+inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, [[maybe_unused]] const std::uint32_t transpose, const std::uint32_t acc_to_dest)
 {
     constexpr int MATH_FIDELITY_PHASES    = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr int MATH_FIDELITY_INCREMENT = get_math_fidelity_increment(MATH_FIDELITY_DESC);

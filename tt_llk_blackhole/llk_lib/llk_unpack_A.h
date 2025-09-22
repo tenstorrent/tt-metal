@@ -192,12 +192,12 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_init_(
-    const std::uint32_t transpose_of_faces          = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t face_r_dim                  = FACE_R_DIM,
-    const std::uint32_t num_faces                   = 4,
-    const std::uint32_t unpack_src_format           = 0,
-    const std::uint32_t unpack_dst_format           = 0)
+    const std::uint32_t transpose_of_faces                           = 0,
+    [[maybe_unused]] const std::uint32_t within_face_16x16_transpose = 0,
+    const std::uint32_t face_r_dim                                   = FACE_R_DIM,
+    const std::uint32_t num_faces                                    = 4,
+    const std::uint32_t unpack_src_format                            = 0,
+    const std::uint32_t unpack_dst_format                            = 0)
 {
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
     config_unpacker_x_end<UNP_SEL>(face_r_dim);
@@ -210,7 +210,10 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_(
-    const std::uint32_t address, const bool transpose_of_faces = 0, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
+    const std::uint32_t address,
+    [[maybe_unused]] const bool transpose_of_faces = 0,
+    const std::uint32_t unpack_src_format          = 0,
+    const std::uint32_t unpack_dst_format          = 0)
 {
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);

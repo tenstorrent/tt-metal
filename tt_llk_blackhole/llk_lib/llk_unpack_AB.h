@@ -99,11 +99,11 @@ inline void _llk_unpack_AB_hw_configure_(
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool narrow_tile          = false,
-    const std::uint32_t transpose   = 0,
-    const std::uint32_t acc_to_dest = 0)
+    const std::uint32_t face_r_dim                   = FACE_R_DIM,
+    const std::uint32_t num_faces                    = 4,
+    const bool narrow_tile                           = false,
+    const std::uint32_t transpose                    = 0,
+    [[maybe_unused]] const std::uint32_t acc_to_dest = 0)
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
 
@@ -114,7 +114,7 @@ inline void _llk_unpack_AB_init_(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b, const bool transpose_of_faces = 0 /*not used*/)
+inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b, [[maybe_unused]] const bool transpose_of_faces = 0)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 

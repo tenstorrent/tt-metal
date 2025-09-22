@@ -73,8 +73,7 @@ void run_kernel()
 
 void run_kernel()
 {
-    const std::uint32_t ct_dim = 1;
-    const bool UNTILIZE        = true;
+    const bool UNTILIZE = true;
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);

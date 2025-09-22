@@ -469,11 +469,11 @@ inline void _llk_unpack_fast_tilize_hw_configure_(const std::uint32_t unpack_src
 inline void _llk_unpack_fast_tilize_mop_config_()
 {
     // Y moves to the next tile, Z moves to the next row (both ch0 and ch1)
-    constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0 = 0b00'00'00'00;
+    // constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0 = 0b00'00'00'00;
     constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1 = 0b00'10'00'01;
-    constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0 = 0b00'00'10'00;
+    // constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0 = 0b00'00'10'00;
     constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1 = 0b00'11'00'01;
-    constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_3_CH0Z_0 = 0b00'00'11'00;
+    // constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_3_CH0Z_0 = 0b00'00'11'00;
 
     // UNPACR instructions are used with unit_dim 2 and SKIP instructions are used with unit_dim 3
     ckernel_unpack_template tmp = ckernel_unpack_template(
@@ -606,7 +606,7 @@ inline void _llk_unpack_fast_tilize_block_(
 
     // Y moves to the next tile, Z moves to the next row (both ch0 and ch1)
     constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0 = 0b00'00'00'00;
-    constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1 = 0b00'10'00'01;
+    // constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1 = 0b00'10'00'01;
     constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0 = 0b00'00'10'00;
     constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1 = 0b00'11'00'01;
     constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_3_CH0Z_0 = 0b00'00'11'00;

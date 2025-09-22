@@ -295,7 +295,7 @@ inline void _llk_pack_fast_tilize_addrmod_config_(const std::uint32_t unit_dim)
         .set(ADDR_MOD_3);
 }
 
-inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
+inline void _llk_pack_fast_tilize_mop_config_([[maybe_unused]] const std::uint32_t unit_dim)
 {
     // UNPACR instructions are used with unit_dim 1 and 2 and SKIP instructions are used with unit_dim 3
     ckernel_unpack_template tmp = ckernel_unpack_template(

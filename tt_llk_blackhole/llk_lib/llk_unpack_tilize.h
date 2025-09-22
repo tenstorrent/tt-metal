@@ -16,7 +16,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const bool unpack_to_dest = false)
+inline void _llk_unpack_tilize_mop_config_([[maybe_unused]] const bool narrow_tile = false, const bool unpack_to_dest = false)
 {
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -104,11 +104,11 @@ inline void _llk_unpack_tilize_init_(
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
-    std::uint32_t unpack_src_format = 0,
-    std::uint32_t block_ct_dim      = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool narrow_tile          = false)
+    std::uint32_t unpack_src_format                 = 0,
+    [[maybe_unused]] std::uint32_t block_ct_dim     = 0,
+    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
+    [[maybe_unused]] const std::uint32_t num_faces  = 4,
+    const bool narrow_tile                          = false)
 {
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
@@ -117,13 +117,6 @@ inline void _llk_unpack_tilize_(
                                 (unpack_src_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Int32));
 
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, tile_index) << (narrow_tile ? 0 : 1);
-    // Each iteration unpacks 2 face_r_dimx16 faces (1st 0,1 2nd 2,3 unless tile is <=16x32)
-    // For narrow tile we unpack 1 face in each iteration
-    // Offset address is in 16B words
-    // Datum count = tile_index*face_r_dim (/16 to get word count)
-
-    const std::uint32_t block_c_dim_16B   = block_ct_dim * (narrow_tile ? FACE_C_DIM / 16 : TILE_C_DIM / 16);
-    std::uint32_t bot_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, face_r_dim * block_c_dim_16B); //*N rows / 16 to get 16B word aligned address
 
     // Program srcA and srcB base addresses
     // FIXME MT: This should be revisited for narrow tiles

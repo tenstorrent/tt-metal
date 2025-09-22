@@ -75,12 +75,12 @@ template <
     bool write_tile_header       = true,
     bool tilize                  = false>
 inline void _llk_pack_mop_config_(
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false,
-    const bool narrow_tile         = false)
+    [[maybe_unused]] const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim           = FACE_R_DIM,
+    const std::uint32_t tile_c_dim           = TILE_C_DIM,
+    const std::uint32_t num_faces            = 4,
+    [[maybe_unused]] const bool partial_face = false,
+    [[maybe_unused]] const bool narrow_tile  = false)
 {
     static_assert(FaceLayout == DstTileFaceLayout::RowMajor, "FaceLayout must be RowMajor");
 

@@ -107,7 +107,7 @@ inline void _relu_max_(T threshold)
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, VecType threshold, int sfpload_instr_mod)
+inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, int sfpload_instr_mod)
 {
     for (int d = 0; d < iterations; d++)
     {
