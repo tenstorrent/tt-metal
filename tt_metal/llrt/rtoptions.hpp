@@ -276,12 +276,12 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    inline const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
-    inline void set_inspector_rpc_server_host(const std::string& host) { inspector_settings.rpc_server_host = host; }
-    inline uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
-    inline void set_inspector_rpc_server_port(uint16_t port) { inspector_settings.rpc_server_port = port; }
-    inline bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
-    inline void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
+    const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
+    void set_inspector_rpc_server_host(const std::string& host) { inspector_settings.rpc_server_host = host; }
+    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
+    void set_inspector_rpc_server_port(uint16_t port) { inspector_settings.rpc_server_port = port; }
+    bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
+    void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
