@@ -41,3 +41,4 @@ jobs:
       version: 'v0.63.0'
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      os: ubuntu-22.04
