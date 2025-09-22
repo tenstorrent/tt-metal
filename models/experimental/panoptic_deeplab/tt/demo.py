@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import os
 from typing import Dict, Tuple
 
@@ -74,14 +73,15 @@ def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> 
         # Calculate distances between centroids
         distances = cdist(centroids, centroids)
 
-        # Find pairs to merge
+        # Find pairs to merge - use more aggressive iterative merging
         merged = set()
         for i in range(len(instance_ids)):
             if i in merged:
                 continue
 
-            for j in range(i + 1, len(instance_ids)):
-                if j in merged:
+            # Merge all instances within distance to instance i
+            for j in range(len(instance_ids)):
+                if i == j or j in merged:
                     continue
 
                 if distances[i, j] < max_distance:
@@ -89,6 +89,7 @@ def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> 
                     mask_j = result == instance_ids[j]
                     result[mask_j] = instance_ids[i]
                     merged.add(j)
+                    logger.debug(f"Merged {category_id} instance {instance_ids[j]} into {instance_ids[i]}")
 
     return result
 
@@ -249,12 +250,9 @@ def create_panoptic_visualization(
     logger.info(f"DEBUG: Max center prediction: {center_tensor.max().item():.6f}")
     logger.info(f"DEBUG: Number of pixels above center threshold: {(center_tensor > center_threshold).sum().item()}")
 
-    # Additional debug: show distribution of center values
-    center_flat = center_tensor.flatten()
-    center_sorted = torch.sort(center_flat, descending=True)[0]
-    logger.info(f"DEBUG: Top 10 center values: {center_sorted[:10].tolist()}")
-    logger.info(f"DEBUG: Center values > 0.01: {(center_tensor > 0.01).sum().item()}")
-    logger.info(f"DEBUG: Center values > 0.05: {(center_tensor > 0.05).sum().item()}")
+    # Additional debug info for threshold tuning
+    logger.debug(f"DEBUG: Center values > 0.01: {(center_tensor > 0.01).sum().item()}")
+    logger.debug(f"DEBUG: Center values > 0.05: {(center_tensor > 0.05).sum().item()}")
 
     panoptic_seg, center_points = get_panoptic_segmentation(
         semantic_tensor,
@@ -270,7 +268,7 @@ def create_panoptic_visualization(
         foreground_mask=None,
     )
 
-    logger.info(f"DEBUG: get_panoptic_segmentation returned {len(np.unique(panoptic_seg))} unique segments")
+    logger.debug(f"DEBUG: get_panoptic_segmentation returned {len(np.unique(panoptic_seg))} unique segments")
 
     # Create visualization
     panoptic_seg = panoptic_seg.squeeze(0).numpy()  # Remove batch dimension
@@ -278,9 +276,47 @@ def create_panoptic_visualization(
     # Calculate semantic classes early for use in post-processing
     semantic_classes = np.argmax(semantic_pred, axis=2)
 
-    # Skip post-processing to avoid artifacts - use raw panoptic segmentation
-    # panoptic_seg = merge_nearby_instances(panoptic_seg, max_distance=15)
-    # panoptic_seg = expand_instances_to_semantic(panoptic_seg, semantic_classes, expand_radius=6)
+    # Get unique segment IDs
+    unique_raw = np.unique(panoptic_seg)
+
+    # Clean up any invalid segment IDs
+    max_valid_id = 18999  # Max valid ID (class 18, instance 999)
+    invalid_ids = unique_raw[unique_raw > max_valid_id]
+    if len(invalid_ids) > 0:
+        logger.warning(f"Found invalid segment IDs: {invalid_ids}")
+        for invalid_id in invalid_ids:
+            panoptic_seg[panoptic_seg == invalid_id] = 0
+
+    # Clean up mixed semantic-panoptic assignments to fix color bleeding
+    cleaned_panoptic = panoptic_seg.copy()
+
+    for segment_id in unique_raw:
+        if segment_id == 0 or segment_id == 255:
+            continue
+        category_id = segment_id // 1000
+        mask = panoptic_seg == segment_id
+        semantic_at_mask = semantic_classes[mask]
+
+        if len(semantic_at_mask) > 0:
+            semantic_counts = np.bincount(semantic_at_mask, minlength=19)
+            most_common_semantic = np.argmax(semantic_counts)
+            agreement_ratio = semantic_counts[most_common_semantic] / len(semantic_at_mask)
+
+            # Remove pixels that don't match the panoptic segment's class
+            if agreement_ratio < 0.98:  # Less than 98% semantic agreement
+                wrong_semantic_mask = mask & (semantic_classes != category_id)
+                cleaned_panoptic[wrong_semantic_mask] = 0  # Set wrong pixels to background
+
+    # Update panoptic segmentation with cleaned version
+    panoptic_seg = cleaned_panoptic
+
+    # Enable post-processing for TTNN to merge fragmented instances - use raw panoptic segmentation for PyTorch
+    # Check if this is TTNN output (has more fragmentation) vs PyTorch (cleaner)
+    if len(np.unique(panoptic_seg)) > 10:  # Even lower threshold - be more aggressive
+        logger.info("Detected over-segmentation, applying post-processing to merge instances...")
+
+        panoptic_seg = merge_nearby_instances(panoptic_seg, max_distance=80)
+        logger.info(f"After merging: {len(np.unique(panoptic_seg))} unique segments")
 
     # Create segments_info from panoptic segmentation
     segments_info = []
@@ -356,13 +392,17 @@ def create_panoptic_visualization(
                 color_dim = [int(c * 0.7) for c in color]
                 vis_image[class_mask] = color_dim
 
-    # Apply panoptic segmentation with clean, stable colors - NO color variation
-    for segment in segments_info:
+    # Create colored visualization with clean, stable colors
+
+    # Apply panoptic segmentation colors
+    # Sort segments by area (largest first) to ensure proper layering
+    segments_sorted = sorted(segments_info, key=lambda x: x["area"], reverse=True)
+    for segment in segments_sorted:
         segment_id = segment["id"]
         category_id = segment["category_id"]
         mask = panoptic_seg == segment_id
 
-        # Get exact base color for this category - no modifications
+        # Get color for this category
         if category_id < len(CITYSCAPES_CATEGORIES):
             color = CITYSCAPES_CATEGORIES[category_id]["color"]
         else:
@@ -370,23 +410,21 @@ def create_panoptic_visualization(
             np.random.seed(segment_id)
             color = np.random.randint(128, 255, 3).tolist()
 
-        # Apply color directly without any modifications
+        # Apply color
         vis_image[mask] = color
 
-    # Blend with original image for better visualization
+    # Create final blended visualization
     alpha = 0.6
     blended = cv2.addWeighted(original_image, 1 - alpha, vis_image, alpha, 0)
 
-    return blended, {"segments": segments_info, "panoptic_seg": panoptic_seg}
+    return blended, {"segments": segments_info, "panoptic_seg": panoptic_seg, "pure_vis": vis_image}
 
 
 def save_predictions(
     output_dir: str,
     image_name: str,
     original_image: np.ndarray,
-    semantic_pred: np.ndarray,
     panoptic_vis: np.ndarray,
-    panoptic_info: Dict,
 ):
     """Save prediction results to files."""
     os.makedirs(output_dir, exist_ok=True)
@@ -396,28 +434,8 @@ def save_predictions(
     # Save original image
     cv2.imwrite(os.path.join(output_dir, f"{base_name}_original.jpg"), cv2.cvtColor(original_image, cv2.COLOR_RGB2BGR))
 
-    # Save semantic segmentation
-    semantic_colored = np.zeros((semantic_pred.shape[0], semantic_pred.shape[1], 3), dtype=np.uint8)
-    for i, category in enumerate(CITYSCAPES_CATEGORIES):
-        if i < semantic_pred.shape[2]:
-            mask = np.argmax(semantic_pred, axis=2) == i
-            semantic_colored[mask] = category["color"]
-
-    cv2.imwrite(
-        os.path.join(output_dir, f"{base_name}_semantic.jpg"), cv2.cvtColor(semantic_colored, cv2.COLOR_RGB2BGR)
-    )
-
-    # Save panoptic segmentation
+    # Save panoptic segmentation (blended)
     cv2.imwrite(os.path.join(output_dir, f"{base_name}_panoptic.jpg"), cv2.cvtColor(panoptic_vis, cv2.COLOR_RGB2BGR))
-
-    # Save segmentation info
-    with open(os.path.join(output_dir, f"{base_name}_info.json"), "w") as f:
-        # Convert numpy arrays to lists for JSON serialization
-        serializable_info = {
-            "segments": panoptic_info["segments"],
-            "num_segments": len(panoptic_info["segments"]),
-        }
-        json.dump(serializable_info, f, indent=2)
 
     logger.info(f"Saved predictions for {image_name} to {output_dir}")
 
@@ -461,10 +479,6 @@ def run_panoptic_deeplab_demo(
     original_image = cv2.imread(image_path)
     original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
     original_image = cv2.resize(original_image, (target_size[1], target_size[0]))
-
-    # Convert input to TTNN format (NHWC)
-    ttnn_input_torch = input_tensor.permute(0, 2, 3, 1)
-    ttnn_input = ttnn.from_torch(ttnn_input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     try:
         # Load PyTorch model with weights
@@ -511,10 +525,10 @@ def run_panoptic_deeplab_demo(
         logger.error("Please download the Panoptic DeepLab weights and place them at the specified path.")
         return
 
-    # Priprema ulaza
-    pytorch_input = preprocess_image(image_path, target_size).to(dtype=torch.bfloat16)
+    # Prepare inputs for both models
+    pytorch_input = input_tensor.to(dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(
-        pytorch_input.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
     logger.info("Running PyTorch inference...")
@@ -525,56 +539,43 @@ def run_panoptic_deeplab_demo(
     logger.info("Running TTNN inference...")
     ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits, _ = ttnn_model.forward(ttnn_input)
 
-    # a) Obrada i čuvanje TTNN rezultata
-    logger.info("--- Processing TTNN Results ---")
-    # Konverzija TTNN izlaza u numpy
-    semantic_np_ttnn = ttnn.to_torch(ttnn_semantic_logits).float().squeeze(0).numpy()  # (1,H,W,C) -> (H,W,C)
-    center_np_ttnn = ttnn.to_torch(ttnn_center_logits).float().squeeze(0).numpy()  # (1,H,W,1) -> (H,W,1)
-    offset_np_ttnn = ttnn.to_torch(ttnn_offset_logits).float().squeeze(0).numpy()  # (1,H,W,2) -> (H,W,2)
-
-    logger.debug(
-        f"TTNN numpy shapes -> semantic: {semantic_np_ttnn.shape}, center: {center_np_ttnn.shape}, offset: {offset_np_ttnn.shape}"
-    )
-
-    # Kreiranje vizualizacije
+    # Process TTNN results
+    logger.info("Processing TTNN results...")
+    semantic_np_ttnn = ttnn.to_torch(ttnn_semantic_logits).float().squeeze(0).numpy()
+    center_np_ttnn = ttnn.to_torch(ttnn_center_logits).float().squeeze(0).numpy()
+    offset_np_ttnn = ttnn.to_torch(ttnn_offset_logits).float().squeeze(0).numpy()
     panoptic_vis_ttnn, panoptic_info_ttnn = create_panoptic_visualization(
-        semantic_np_ttnn, center_np_ttnn, offset_np_ttnn, original_image
+        semantic_np_ttnn,
+        center_np_ttnn,
+        offset_np_ttnn,
+        original_image,
+        center_threshold=0.4,  # Slightly higher to reduce initial fragments
+        score_threshold=0.4,  # Slightly higher to reduce initial fragments
+        stuff_area=100,  # Larger area threshold to filter small pieces
+        top_k=20,  # Fewer initial instances for cleaner merging
+        nms_kernel=17,  # Even larger NMS to reduce duplicates
     )
 
-    # Čuvanje slika
+    # Save TTNN results
     image_name = os.path.basename(image_path)
     ttnn_output_dir = os.path.join(output_dir, "ttnn_output")
-    save_predictions(
-        ttnn_output_dir, image_name, original_image, semantic_np_ttnn, panoptic_vis_ttnn, panoptic_info_ttnn
-    )
+    save_predictions(ttnn_output_dir, image_name, original_image, panoptic_vis_ttnn)
 
-    # b) Obrada i čuvanje PyTorch rezultata
-    logger.info("--- Processing PyTorch Results ---")
-    # Konverzija PyTorch izlaza (NCHW) u numpy (HWC)
-    semantic_np_pytorch = (
-        pytorch_semantic_logits.float().squeeze(0).permute(1, 2, 0).numpy()
-    )  # (1,C,H,W) -> (C,H,W) -> (H,W,C)
+    # Process PyTorch results
+    logger.info("Processing PyTorch results...")
+    semantic_np_pytorch = pytorch_semantic_logits.float().squeeze(0).permute(1, 2, 0).numpy()
     center_np_pytorch = pytorch_center_logits.float().squeeze(0).permute(1, 2, 0).numpy()
-    offset_np_pytorch = (
-        pytorch_offset_logits.float().squeeze(0).permute(1, 2, 0).numpy()
-    )  # (1,2,H,W) -> (2,H,W) -> (H,W,2)
-
-    logger.debug(
-        f"PyTorch numpy shapes -> semantic: {semantic_np_pytorch.shape}, center: {center_np_pytorch.shape}, offset: {offset_np_pytorch.shape}"
-    )
-
-    # Kreiranje vizualizacije
+    offset_np_pytorch = pytorch_offset_logits.float().squeeze(0).permute(1, 2, 0).numpy()
     panoptic_vis_pytorch, panoptic_info_pytorch = create_panoptic_visualization(
         semantic_np_pytorch, center_np_pytorch, offset_np_pytorch, original_image
     )
 
-    # Čuvanje slika u odvojenom direktorijumu
+    # Save PyTorch results
     pytorch_output_dir = os.path.join(output_dir, "pytorch_output")
-    save_predictions(
-        pytorch_output_dir, image_name, original_image, semantic_np_pytorch, panoptic_vis_pytorch, panoptic_info_pytorch
-    )
+    save_predictions(pytorch_output_dir, image_name, original_image, panoptic_vis_pytorch)
 
-    logger.info(f"Demo completed! Results for both models saved to {output_dir}")
+    logger.info(f"Demo completed! Results saved to {output_dir}")
+    logger.info("Output includes original and panoptic images for both TTNN and PyTorch models")
 
 
 def run_panoptic_deeplab_batch_demo(
