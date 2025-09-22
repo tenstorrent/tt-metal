@@ -144,7 +144,7 @@ def fill_type_ids(schema, type_ids: dict[int, str], prefix: str = ""):
 def main():
     if len(sys.argv) != 3:
         print("Usage: generate_rpc_stub.py <capnp_file> <output_stub_file>")
-        sys.exit(1)
+        sys.exit(0)
 
     capnp_file = sys.argv[1]
     output_stub_file = sys.argv[2]
