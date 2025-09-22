@@ -46,23 +46,18 @@ class Model(SharedStateAddOn, AbstractModule):
         ), "Number of non-MoE blocks cannot be greater than the total number of blocks."
         (state_dict,) = state_dicts
 
-        mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
-            mesh_device.shape[0], hf_config.first_k_dense_replace
-        )
+        _, mlp_meta_layer_indices = cls.get_meta_layer_mapping(mesh_device.shape[0], hf_config.first_k_dense_replace)
 
-        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
+        _, moe_meta_layer_indices = cls.get_meta_layer_mapping(
             mesh_device.shape[0], hf_config.first_k_dense_replace, hf_config.num_hidden_layers
         )
 
         decoder_block_state_dicts = np.array(
             [
-                (
-                    sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
-                    if layer_idx < hf_config.num_hidden_layers
-                    else None
-                )
-                for layer_idx in range(max(mlp_meta_layer_indices.max(), moe_meta_layer_indices.max()) + 1)
+                sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
+                for layer_idx in range(hf_config.num_hidden_layers)
             ]
+            + [None]
         )
 
         return {
@@ -113,7 +108,7 @@ class Model(SharedStateAddOn, AbstractModule):
             - pad_map: A list of lists of shape (num_meta_layers, num_mesh_rows), where
             each element is a boolean indicating if that position is padding (True) or a valid layer index (False).
             - mapping: A list of lists of shape (num_meta_layers, num_mesh_rows), where
-            each element is an int (layer index) or undefined value for padding positions.
+            each element is an int (layer index) or -1 for padding positions.
         """
         if end_layer_idx is None:
             end_layer_idx = start_layer_idx
@@ -122,12 +117,15 @@ class Model(SharedStateAddOn, AbstractModule):
         assert num_mesh_rows > 0 and num_layers >= 0
 
         mapping = (
-            torch.arange(start_layer_idx, end_layer_idx)
+            torch.arange(ttnn.core.roundup(num_layers, num_mesh_rows))
             .reshape(num_mesh_rows, ttnn.core.divup(num_layers, num_mesh_rows))
             .T
+            + start_layer_idx
         )
+        mask = mapping >= end_layer_idx
+        mapping[mask] = -1
 
-        return mapping >= end_layer_idx, mapping
+        return mask, mapping
 
     @classmethod
     def prefill_model_config(
