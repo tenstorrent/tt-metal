@@ -89,7 +89,7 @@ def create_from_torch_test_tensors(
 @pytest.mark.parametrize(
     "shape",
     [
-        (32, 32),
+        (4, 4),
     ],
 )
 @pytest.mark.parametrize(

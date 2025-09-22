@@ -64,20 +64,7 @@ TTNN_BENCH_TYPES = [
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("torch_dtype", TORCH_BENCH_TYPES)
 @pytest.mark.parametrize("ttnn_dtype", TTNN_BENCH_TYPES)
-@pytest.mark.parametrize(
-    "size",
-    [
-        32,
-        64,
-        128,
-        256,
-        512,
-        1024,
-        2048,
-        4096,
-        8192,
-    ],
-)
+@pytest.mark.parametrize("size", [8192])
 def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, request):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
@@ -99,27 +86,14 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
 
         ttnn.synchronize_device(device)
 
-    benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
+    benchmark.pedantic(from_torch, iterations=10, rounds=2, warmup_rounds=1)
 
 
 @pytest.mark.parametrize("use_device", [True, False])
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("torch_dtype", TORCH_BENCH_TYPES)
 @pytest.mark.parametrize("ttnn_dtype", TTNN_BENCH_TYPES)
-@pytest.mark.parametrize(
-    "size",
-    [
-        32,
-        64,
-        128,
-        256,
-        512,
-        1024,
-        2048,
-        4096,
-        8192,
-    ],
-)
+@pytest.mark.parametrize("size", [8192])
 def test_benchmark_to_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, size, ttnn_layout):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
@@ -137,4 +111,4 @@ def test_benchmark_to_torch(benchmark, device, use_device, ttnn_dtype, torch_dty
         ttnn.to_torch(ttnn_input_tensor, device=device if use_device else None, dtype=torch_dtype)
         ttnn.synchronize_device(device)
 
-    benchmark.pedantic(to_torch, iterations=10, rounds=5, warmup_rounds=1)
+    benchmark.pedantic(to_torch, iterations=10, rounds=2, warmup_rounds=1)

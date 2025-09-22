@@ -11,8 +11,10 @@
 
 using namespace tt::tt_metal;
 
-#define py_log(...) \
-    std::cout << fmt::format("{}:{} {} {}", __FILE__, __LINE__, __func__, fmt::format(__VA_ARGS__)) << std::endl;
+// #define py_log(...) \
+//     std::cout << fmt::format("{}:{} {} {}", __FILE__, __LINE__, __func__, fmt::format(__VA_ARGS__)) << std::endl;
+
+#define py_log(...)
 
 namespace {
 
@@ -57,7 +59,6 @@ struct TensorPreparedConversion {
     /// Use this layout to construct the initial tensor -- extra conversion might be done
     /// after the tensor has been moved to device.
     Layout construct_with_layout = Layout::TILE;
-    DataType construct_with_data_type = DataType::INVALID;
     DataType host_convert_data_type = DataType::INVALID;
 };
 
@@ -160,7 +161,7 @@ Tensor convert_host_buffer_to_tt_tensor_on_device(
         TensorSpec(
             tensor_spec.logical_shape(),
             TensorLayout(
-                strategy.construct_with_data_type,
+                strategy.host_convert_data_type,
                 PageConfig(strategy.construct_with_layout, tensor_spec.tile()),
                 tensor_spec.memory_config())),
         device,
@@ -179,6 +180,7 @@ Tensor convert_host_buffer_to_tt_tensor_on_device(
     if (output.dtype() != tensor_spec.data_type()) {
         // Need to perform final data conversion on device, typecast requires TILE layout.
         set_layout(Layout::TILE);
+        py_log("typecast to type {}", tensor_spec.data_type());
         output = ttnn::typecast(output, tensor_spec.data_type());
     }
 
@@ -271,14 +273,140 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
     // Mapping
     // `{input_torch_type, expected_ttnn_type, expected_layout}` -> `{on-host_tensor_layout, on-host_tensor_data_type,
     // torch_data_conversion}`
+    using HT = host_buffer_data_type;
     static std::unordered_map<HostBufferConversionInput, TensorPreparedConversion, HostBufferConversionInputHash>
         conversion_map = {
             // clang-format off
 
             // At the moment there are no cases that can be safely implemented with on-device
             // conversion, and bfloat16 cases are to be implemented in a follow-up PR to avoid
-            // breaking too many tests in a scope of a single PR.
+            // breaking too many tests in a scope of a single PR. The conversion mappings below
+            // can be enabled and updated as related bugs with type/layout conversion are fixed
+            // in the other parts of the library
 
+            // The mapping structure is
+            // {<Input-Type>, <Target-Type>, <Target-Layout>} -> {<Layout-To-Construct-On-Host>, <Type-To-Construct-On-Device>}
+
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT16, Layout::ROW_MAJOR},  TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::BFLOAT16,     DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT32 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT16,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT32,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::FLOAT64,      DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::FLOAT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT16,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT32,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT8 }},
+            {HostBufferConversionInput{HT::INT64,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT16,  Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::BFLOAT16 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT16,  Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT4_B, Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::BFLOAT8_B, Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::FLOAT32,   Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::FLOAT32,   Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::INT32,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::INT32,     Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::UINT16,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::UINT16,    Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::UINT32,    Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::UINT32,    Layout::TILE},      TensorPreparedConversion{Layout::ROW_MAJOR, DataType::INT32 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::UINT8,     Layout::ROW_MAJOR}, TensorPreparedConversion{Layout::ROW_MAJOR, DataType::UINT8 }},
+            {HostBufferConversionInput{HT::UINT8,        DataType::UINT8,     Layout::TILE},      TensorPreparedConversion{Layout::TILE,      DataType::UINT8 }},
             // clang-format on
         };
 
@@ -327,6 +455,15 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
         "Number of elements from python tensor {} must match volume of shape {}!",
         get_element_count(host_data),
         tensor_spec.logical_shape().volume());
+
+    if (device != nullptr) {
+        TT_FATAL(
+            strategy.has_value(),
+            "No strategy defined for {} {} {}",
+            host_data_type,
+            tensor_spec.data_type(),
+            tensor_spec.layout());
+    }
 
     if (strategy) {
         py_log("has strategy");

@@ -88,7 +88,8 @@ void pytensor_logger_redirect(const char* file, int line, const char* func, cons
     log_from_cpp(file, line, func, message);
 }
 
-#define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+// #define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+#define py_log(...)
 
 // Virtual base class for list wrapper
 class ListWrapper {
