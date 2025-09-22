@@ -13,6 +13,7 @@ struct SGDFusedConfig {
     float lr{1e-3F};
     float momentum{0.0F};
     float dampening{0.0F};
+    float weight_decay{0.0F};
 };
 
 class SGDFused : public OptimizerBase {

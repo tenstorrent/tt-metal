@@ -37,6 +37,7 @@ struct SGDFusedDeviceOperation {
         float lr,
         float momentum,
         float dampening,
+        float weight_decay,
         const std::optional<ttnn::Tensor>& param_out = std::nullopt,
         const std::optional<ttnn::Tensor>& momentum_in = std::nullopt,
         const std::optional<ttnn::Tensor>& momentum_out = std::nullopt);
