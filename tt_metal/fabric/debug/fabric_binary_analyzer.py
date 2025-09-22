@@ -10,14 +10,13 @@ Usage: python3 fabric_binary_analyzer.py [options]
 """
 
 import argparse
-import os
 import re
 import subprocess
 import sys
 import statistics
 from collections import defaultdict, namedtuple
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 # Data structures
 BinaryInfo = namedtuple(
@@ -66,12 +65,12 @@ class FabricBinaryAnalyzer:
                 if binary_info:
                     self.binaries.append(binary_info)
             except Exception as e:
-                print(f"Error analyzing {elf_path}: {e}")
+                print(f"Warning: Error analyzing {elf_path}: {e}", file=sys.stderr)
 
     def _analyze_binary(self, elf_path: Path) -> Optional[BinaryInfo]:
         """Analyze a single ELF binary and extract size information."""
         # Parse the path to extract metadata
-        # Expected structure: cache/.../kernels/fabric_erisc_router/kernel_hash/processor/processor.elf
+        # Expected structure: cache/.../kernels/fabric_erisc_router/kernel_hash/erisc/erisc.elf
         path_parts = elf_path.parts
 
         try:
@@ -111,7 +110,7 @@ class FabricBinaryAnalyzer:
             )
 
         except Exception as e:
-            print(f"Error parsing path {elf_path}: {e}")
+            print(f"Warning: Error parsing path {elf_path}: {e}", file=sys.stderr)
             return None
 
     def _get_section_sizes(self, elf_path: Path) -> Tuple[int, int]:
@@ -254,7 +253,7 @@ class FabricBinaryAnalyzer:
         # Sort by total size descending, then by kernel hash
         sorted_binaries = sorted(self.binaries, key=lambda x: (-x.total_size, x.kernel_hash))
 
-        print(f"{'Kernel Hash':<20} {'Text Size':<12} {'Data Size':<12} " f"{'Total Size':<12} {'Build Hash':<12}")
+        print(f"{'Kernel Hash':<20} {'Text Size':<12} {'Data Size':<12} {'Total Size':<12} {'Build Hash':<12}")
         print(f"{'-'*90}")
 
         for binary in sorted_binaries:
