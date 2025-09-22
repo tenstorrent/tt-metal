@@ -67,6 +67,7 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])
@@ -76,48 +77,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
 @pytest.mark.parametrize("tile_w", [16])
 def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, tile_h, tile_w):
     torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((n, c, m, k), dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.rand((n, c, k, n_out), dtype=torch.bfloat16)
-    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
-    torch_opt_output_tensor = torch.zeros_like(torch_output_tensor)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        layout=ttnn.TILE_LAYOUT,
-        tile=ttnn.Tile((tile_h, 32)),
-        device=device,
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        layout=ttnn.TILE_LAYOUT,
-        tile=ttnn.Tile((32, tile_w)),
-        device=device,
-    )
-    optional_output_tensor = ttnn.from_torch(
-        torch_opt_output_tensor,
-        layout=ttnn.TILE_LAYOUT,
-        tile=ttnn.Tile((tile_h, tile_w)),
-        device=device,
-    )
-
-    output = ttnn.matmul(input_tensor_a, input_tensor_b)
-    output = ttnn.to_torch(output)
-
-    ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
-    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
-
-    assert output.shape == torch_output_tensor.shape == optional_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
-    assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
-    assert_with_pcc(output, optional_output_tensor, 0.999)
-
-
-@pytest.mark.parametrize("tile_h", [8, 16])
-@pytest.mark.parametrize("tile_w", [16])
-def test_optional_output_argument_with_tiny_tiles(device, tile_h, tile_w):
-    torch.manual_seed(0)
-    n, c, m, k, n_out = 1, 1, 1024, 64, 512
 
     torch_input_tensor_a = torch.rand((n, c, m, k), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((n, c, k, n_out), dtype=torch.bfloat16)

@@ -1219,8 +1219,8 @@ tt::tt_metal::Tile get_output_tile(
     if (output_tile.has_value() or optional_output_tensor_tile.has_value()) {
         TT_FATAL(
             !(optional_output_tensor_tile.has_value() && output_tile.has_value()),
-            "Matmul cannot have both an output_tile and an optional_output_tensor_tile. Remove one of them from the "
-            "matmul arguments.");
+            "Matmul cannot have both an output_tile and an optional_output_tensor. Configure the tile type of the "
+            "output tensor instead if both are required.");
         const auto& override_output_tile =
             output_tile.has_value() ? output_tile.value() : optional_output_tensor_tile.value();
         const auto& out_tile_shape = override_output_tile.get_tile_shape();
