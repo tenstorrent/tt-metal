@@ -161,6 +161,7 @@ class MotifTransformer(Module):
                 num_heads=num_attention_heads,
                 head_dim=attention_head_dim,
                 context_pre_only=i == num_layers - 1,
+                added_head_scaling=True,
                 ff_activation_fn="linear-silu",
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
