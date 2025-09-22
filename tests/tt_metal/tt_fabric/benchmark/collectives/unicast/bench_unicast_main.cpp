@@ -177,6 +177,31 @@ static bool parse_cli_or_usage(
     return true;
 }
 
+void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const PerfStats& stats) {
+    if (run.csv_path.empty()) {
+        return;
+    }
+
+    std::filesystem::create_directories(std::filesystem::path(run.csv_path).parent_path());
+    bool newfile = !std::ifstream(run.csv_path).good();
+
+    std::ofstream ofs(run.csv_path, std::ios::app);
+    if (!ofs) {
+        log_error(tt::LogTest, "Failed to open CSV path for append: {}", run.csv_path);
+        return;
+    }
+    if (newfile) {
+        ofs << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
+               "p50_ms,p95_ms,mean_GB_s,p50_GB_s,p10_GB_s,cv_GB_s_pct\n";
+    }
+    ofs << p.mesh_id << "," << p.src_chip << "," << p.dst_chip << "," << p.sender_core.x << "," << p.sender_core.y
+        << "," << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes << "," << p.page_size << ","
+        << run.iters << "," << run.warmup << "," << stats.p50_ms << "," << stats.p95_ms << "," << stats.mean_GB_s << ","
+        << stats.p50_GB_s << "," << stats.p10_GB_s << "," << stats.cv_GB_s_pct << "\n";
+
+    log_info(tt::LogTest, "Appended CSV row to {}", run.csv_path);
+}
+
 }  // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -226,26 +251,7 @@ int main(int argc, char** argv) {
         stats.cv_GB_s_pct);
 
     // Optional CSV artifact
-    if (!run.csv_path.empty()) {
-        std::filesystem::create_directories(std::filesystem::path(run.csv_path).parent_path());
-        bool newfile = !std::ifstream(run.csv_path).good();
-
-        std::ofstream ofs(run.csv_path, std::ios::app);
-        if (!ofs) {
-            log_error(tt::LogTest, "Failed to open CSV path for append: {}", run.csv_path);
-            return 1;
-        }
-        if (newfile) {
-            ofs << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
-                   "p50_ms,p95_ms,mean_GB_s,p50_GB_s,p10_GB_s,cv_GB_s_pct\n";
-        }
-        ofs << p.mesh_id << "," << p.src_chip << "," << p.dst_chip << "," << p.sender_core.x << "," << p.sender_core.y
-            << "," << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes << "," << p.page_size
-            << "," << run.iters << "," << run.warmup << "," << stats.p50_ms << "," << stats.p95_ms << ","
-            << stats.mean_GB_s << "," << stats.p50_GB_s << "," << stats.p10_GB_s << "," << stats.cv_GB_s_pct << "\n";
-
-        log_info(tt::LogTest, "Appended CSV row to {}", run.csv_path);
-    }
+    append_csv_if_requested(run, p, stats);
 
     log_info(tt::LogTest, "Unicast bench completed successfully.");
     return 0;
