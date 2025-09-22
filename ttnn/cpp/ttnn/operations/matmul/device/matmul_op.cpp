@@ -1231,7 +1231,7 @@ tt::tt_metal::Tile get_output_tile(
         TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
         TT_FATAL(
             out_tile_shape[1] % in1_tile_w == 0,
-            "the override output tile width ({}) be multiple of in1 tile width ({})",
+            "the override output tile width ({}) must be a multiple of in1 tile width ({})",
             out_tile_shape[1],
             in1_tile_w);
         TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
