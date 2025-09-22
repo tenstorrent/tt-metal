@@ -236,18 +236,6 @@ void DevicePool::initialize(
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
-    log_info(tt::LogMetal, "Using single_bh_galaxy_mesh_graph_descriptor");
-    std::map<tt::tt_fabric::FabricNodeId, chip_id_t> physical_chip_ids_mapping;
-    for (int i = 0; i < 8 * 4; i++) {
-        int mesh_id = 0;
-        chip_id_t phys_chip_id = i;
-        int chip_id = i;
-        physical_chip_ids_mapping.insert(
-            {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id}, chip_id), phys_chip_id});
-    }
-    tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.yaml",
-        physical_chip_ids_mapping);
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
 
