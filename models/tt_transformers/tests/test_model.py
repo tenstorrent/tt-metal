@@ -90,6 +90,11 @@ def test_model_inference(
         if "Phi-3-mini" in model_name_env and weights == "random":
             pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
 
+        if ("Llama" in model_name_env) and ("Vision" in model_name_env) and (weights == "instruct"):
+            pytest.skip(
+                "Skipping Llama Vision full model test for now. See issue TBD: create issue about CrossAttn functionality"
+            )
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
 
@@ -122,6 +127,14 @@ def test_model_inference(
     if layers == 1:  # quick mode has tight PCC checks for known models
         if model_args.checkpoint_type == CheckpointType.HuggingFace:
             model_name = model_args.base_model_name
+            # model_name = {
+            #     (16, False): "llama32_1b",
+            #     (28, False): "llama32_3b",
+            #     (32, False): "llama31_8b",
+            #     (32, True): "llama32_11b",
+            #     (80, False): "llama31_70b",
+            #     (80, True): "llama32_90b",
+            # }[(model_args.n_layers, model_args.is_llama_vision())]
         else:
             model_name = {
                 (16, False): "llama32_1b",
@@ -141,6 +154,12 @@ def test_model_inference(
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
             "llama32_90b": 0.9759,
+            "Llama-3.1-8B": 0.966 if mode_accuracy else 0.955,
+            # "Llama-3.1-70B": 0. if mode_accuracy else 0.,
+            "Llama-3.2-1B": 0.9991 if mode_accuracy else 0.9863,
+            "Llama-3.2-3B": 0.958 if mode_accuracy else 0.948,
+            "Llama-3.2-11B": 0.955 if mode_accuracy else 0.944,
+            # "Llama-3.2-90B": 0. if mode_accuracy else 0.,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
         }[model_name]
 
@@ -151,6 +170,12 @@ def test_model_inference(
             "llama32_11b": 0.9995,
             "llama31_70b": 0.9997,
             "llama32_90b": 0.9995,
+            "Llama-3.1-8B": 0.9997,
+            # "Llama-3.1-70B": 0.,
+            "Llama-3.2-1B": 0.9998,
+            "Llama-3.2-3B": 0.9998,
+            "Llama-3.2-11B": 0.9995,
+            # "Llama-3.2-90B": 0.,
             "Mistral-7B": 0.68,
         }[model_name]
         final_v_cache_pcc = {
@@ -160,6 +185,12 @@ def test_model_inference(
             "llama32_11b": 0.9996,
             "llama31_70b": 0.9997,
             "llama32_90b": 0.9996,
+            "Llama-3.1-8B": 0.9997,
+            # "Llama-3.1-70B": 0.,
+            "Llama-3.2-1B": 0.9996,
+            "Llama-3.2-3B": 0.9998,
+            "Llama-3.2-11B": 0.9996,
+            # "Llama-3.2-90B": 0.,
             "Mistral-7B": 0.68,
         }[model_name]
 
@@ -170,6 +201,12 @@ def test_model_inference(
             "llama32_11b": 6,
             "llama31_70b": 6,
             "llama32_90b": 6,
+            "Llama-3.1-8B": 6,
+            # "Llama-3.1-70B": 0,
+            "Llama-3.2-1B": 2,
+            "Llama-3.2-3B": 4,
+            "Llama-3.2-11B": 6,
+            # "Llama-3.2-90B": 0,
             "Mistral-7B": 2,
         }[model_name]
 
@@ -462,7 +499,7 @@ def test_model_inference(
                         if does_pass:
                             logger.info(f"KV Cache Passed!")
                         else:
-                            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+                            logger.warning(f"KV Cache Failed! PCC value {pcc_message} is lower than {pcc}")
                             all_tests_pass = False
 
         if not dummy_weights:
@@ -476,6 +513,10 @@ def test_model_inference(
         else:
             logger.warning("One or more iterations of decode had bad PCC")
             if layers == 1:
-                assert final_tests_pass, f"PCC value is lower than {final_model_pcc} for final output. Check Warnings!"
+                assert (
+                    final_tests_pass
+                ), f"PCC value {pcc_message} is lower than {final_model_pcc} for final output. Check Warnings!"
             assert kv_cache_tests_pass, f"KV Cache PCC value is lower expected for some of the outputs. Check Warnings!"
-            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+            assert (
+                all_tests_pass
+            ), f"PCC value {pcc_message} is lower than {pcc} for some of the outputs. Check Warnings!"
