@@ -277,29 +277,48 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const st
     return true;
 }
 
-CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) {
+// The input coordinates are from noc tracing and therefore
+// will be in whatever coord system is used by the noc for that core type on that arch
+// so translation to the NOC 0 coordinate system must be done accordingly
+// For wormhole, tensix and ethernet coords are TRANSLATED and dram are NOC_0/NOC_1
+// For blackhole, tensix, ethernet, and dram are all TRANSLATED
+tt::umd::CoreCoord translateNocCoordinatesToNoc0(
+    chip_id_t device_id, const CoreCoord& c, KernelProfilerNocEventMetadata::NocType noc_used_for_transfer) {
     bool coord_is_translated = MetalContext::instance().get_cluster().arch() != tt::ARCH::WORMHOLE_B0 ||
                                c.x >= tt::umd::wormhole::tensix_translated_coordinate_start_x ||
                                c.y >= tt::umd::wormhole::tensix_translated_coordinate_start_y ||
                                c.x >= tt::umd::wormhole::eth_translated_coordinate_start_x ||
                                c.y >= tt::umd::wormhole::eth_translated_coordinate_start_y;
-
     try {
+        const metal_SocDescriptor& soc_desc =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         if (MetalContext::instance().hal().is_coordinate_virtualization_enabled() && coord_is_translated) {
-            const metal_SocDescriptor& soc_desc =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            // disable linting here; slicing is __intended__
-            // NOLINTBEGIN
             return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-            // NOLINTEND
         } else {
-            return c;
+            if (noc_used_for_transfer == KernelProfilerNocEventMetadata::NocType::NOC_0) {
+                // Check for noc 0 coord and return
+                return soc_desc.get_coord_at(c, CoordSystem::NOC0);
+            } else {
+                // soc desc is not created with noc1 mapping by default so will have to manually convert to noc0
+                CoreCoord noc0_coord(soc_desc.grid_size.x - 1 - c.x, soc_desc.grid_size.y - 1 - c.y);
+                // Check for noc 0 coord and return
+                return soc_desc.get_coord_at(noc0_coord, CoordSystem::NOC0);
+            }
         }
     } catch (const std::exception& e) {
-        log_error(tt::LogMetal, "Failed to translate virtual coordinate {},{} to physical", c.x, c.y);
-        return c;
+        TT_FATAL(
+            0,
+            "Failed to translate coordinate {},{} used on {} to NOC0 coordinates",
+            c.x,
+            c.y,
+            enchantum::to_string(noc_used_for_transfer));
     }
-    return c;
+    TT_FATAL(
+        0,
+        "Failed to translate coordinate {},{} used on {} to NOC0 coordinates",
+        c.x,
+        c.y,
+        enchantum::to_string(noc_used_for_transfer));
 }
 
 bool isMarkerAZoneEndpoint(const tracy::TTDeviceMarker& marker) {
@@ -456,8 +475,11 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                 CoreCoord local_noc_write_dst_virt = {local_noc_write.dst_x, local_noc_write.dst_y};
                 const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, local_noc_write_dst_virt);
                 if (core_type == HalProgrammableCoreType::TENSIX) {
+                    // disable linting here; slicing is __intended__
+                    // NOLINTBEGIN
                     CoreCoord local_noc_write_dst_phys =
-                        getPhysicalAddressFromVirtual(device_id, local_noc_write_dst_virt);
+                        translateNocCoordinatesToNoc0(device_id, local_noc_write_dst_virt, local_noc_write.noc_type);
+                    // NOLINTEND
                     if (fabric_mux_markers.find(local_noc_write_dst_phys) == fabric_mux_markers.end()) {
                         addFabricMuxEvents(markers, fabric_mux_markers, local_noc_write_dst_phys);
                     }
@@ -559,17 +581,23 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                         // DO NOT emit destination coord; it isn't meaningful
 
                     } else if (local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST) {
-                        auto phys_start_coord = getPhysicalAddressFromVirtual(
-                            device_marker.chip_id, {local_noc_event.dst_x, local_noc_event.dst_y});
+                        auto phys_start_coord = translateNocCoordinatesToNoc0(
+                            device_marker.chip_id,
+                            {local_noc_event.dst_x, local_noc_event.dst_y},
+                            local_noc_event.noc_type);
                         data["mcast_start_x"] = phys_start_coord.x;
                         data["mcast_start_y"] = phys_start_coord.y;
-                        auto phys_end_coord = getPhysicalAddressFromVirtual(
-                            device_marker.chip_id, {local_noc_event.mcast_end_dst_x, local_noc_event.mcast_end_dst_y});
+                        auto phys_end_coord = translateNocCoordinatesToNoc0(
+                            device_marker.chip_id,
+                            {local_noc_event.mcast_end_dst_x, local_noc_event.mcast_end_dst_y},
+                            local_noc_event.noc_type);
                         data["mcast_end_x"] = phys_end_coord.x;
                         data["mcast_end_y"] = phys_end_coord.y;
                     } else {
-                        auto phys_coord = getPhysicalAddressFromVirtual(
-                            device_marker.chip_id, {local_noc_event.dst_x, local_noc_event.dst_y});
+                        auto phys_coord = translateNocCoordinatesToNoc0(
+                            device_marker.chip_id,
+                            {local_noc_event.dst_x, local_noc_event.dst_y},
+                            local_noc_event.noc_type);
                         data["dx"] = phys_coord.x;
                         data["dy"] = phys_coord.y;
                     }
@@ -654,8 +682,10 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                 // and use corresponding write on fabric mux to get eth channel used on src device for the transfer
                 if (fabric_event_markers.fabric_mux_marker.has_value()) {
                     // mux core location is derived from the local noc write event
-                    auto mux_phys_coord = getPhysicalAddressFromVirtual(
-                        local_noc_write_marker.chip_id, {local_noc_write_event.dst_x, local_noc_write_event.dst_y});
+                    auto mux_phys_coord = translateNocCoordinatesToNoc0(
+                        local_noc_write_marker.chip_id,
+                        {local_noc_write_event.dst_x, local_noc_write_event.dst_y},
+                        local_noc_write_event.noc_type);
 
                     auto fabric_mux_marker = fabric_event_markers.fabric_mux_marker.value();
                     auto fabric_mux_event = std::get<EMD::LocalNocEvent>(EMD(fabric_mux_marker.data).getContents());
@@ -665,8 +695,10 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                         {"y", mux_phys_coord.y},
                         {"noc", enchantum::to_string(fabric_mux_event.noc_type)}};
 
-                    CoreCoord eth_router_phys_coord = getPhysicalAddressFromVirtual(
-                        fabric_mux_marker.chip_id, {fabric_mux_event.dst_x, fabric_mux_event.dst_y});
+                    auto eth_router_phys_coord = translateNocCoordinatesToNoc0(
+                        fabric_mux_marker.chip_id,
+                        {fabric_mux_event.dst_x, fabric_mux_event.dst_y},
+                        fabric_mux_event.noc_type);
                     auto eth_chan_opt =
                         routing_lookup.getRouterEthCoreToChannelLookup(device_id, eth_router_phys_coord);
                     if (!eth_chan_opt) {
@@ -687,8 +719,10 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                     fabric_event_json["fabric_send"]["eth_chan"] = eth_chan;
                 } else {
                     // router eth core location is derived from the local noc write event
-                    auto eth_router_phys_coord = getPhysicalAddressFromVirtual(
-                        local_noc_write_marker.chip_id, {local_noc_write_event.dst_x, local_noc_write_event.dst_y});
+                    auto eth_router_phys_coord = translateNocCoordinatesToNoc0(
+                        local_noc_write_marker.chip_id,
+                        {local_noc_write_event.dst_x, local_noc_write_event.dst_y},
+                        local_noc_write_event.noc_type);
                     auto eth_chan_opt =
                         routing_lookup.getRouterEthCoreToChannelLookup(device_id, eth_router_phys_coord);
                     if (!eth_chan_opt) {
@@ -714,11 +748,14 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                     auto fabric_write_marker = fabric_event_markers.fabric_write_markers[0];
                     auto fabric_write_event =
                         std::get<EMD::FabricNoCEvent>(EMD(fabric_write_marker.data).getContents());
-                    auto phys_coord = getPhysicalAddressFromVirtual(
-                        fabric_write_marker.chip_id, {fabric_write_event.dst_x, fabric_write_event.dst_y});
+                    auto phys_coord = translateNocCoordinatesToNoc0(
+                        fabric_write_marker.chip_id,
+                        {fabric_write_event.dst_x, fabric_write_event.dst_y},
+                        fabric_write_event.dst_noc_type);
                     fabric_event_json["dst"] = {
                         {{"dx", phys_coord.x},
                          {"dy", phys_coord.y},
+                         {"noc", enchantum::to_string(fabric_write_event.dst_noc_type)},
                          {"num_bytes", local_noc_write_event.getNumBytes()}}};
                 } else if (KernelProfilerNocEventMetadata::isFabricScatterEventType(noc_xfer_type)) {
                     // add all chunks for scatter write and compute last chunk size
@@ -728,12 +765,14 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                         auto fabric_scatter_write_marker = fabric_event_markers.fabric_write_markers[j];
                         auto fabric_scatter_write =
                             std::get<EMD::FabricNoCScatterEvent>(EMD(fabric_scatter_write_marker.data).getContents());
-                        auto phys_coord = getPhysicalAddressFromVirtual(
+                        auto phys_coord = translateNocCoordinatesToNoc0(
                             fabric_scatter_write_marker.chip_id,
-                            {fabric_scatter_write.dst_x, fabric_scatter_write.dst_y});
+                            {fabric_scatter_write.dst_x, fabric_scatter_write.dst_y},
+                            fabric_scatter_write.dst_noc_type);
                         fabric_event_json["dst"].push_back({
                             {"dx", phys_coord.x},
                             {"dy", phys_coord.y},
+                            {"noc", enchantum::to_string(fabric_scatter_write.dst_noc_type)},
                             {"num_bytes", fabric_scatter_write.chunk_size},
                         });
                         last_chunk_size -= fabric_scatter_write.chunk_size;
@@ -1131,8 +1170,11 @@ void DeviceProfiler::readRiscProfilerResults(
                                 PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     // translate worker core virtual coord to phys coordinates
-    const CoreCoord phys_coord = getPhysicalAddressFromVirtual(device_id, worker_core);
-
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    // disable linting here; slicing is __intended__
+    // NOLINTBEGIN
+    const CoreCoord phys_coord = soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+    // NOLINTEND
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
         return (metadata.has_value()) ? metadata->get_op_name(device_id, runtime_id) : "";
