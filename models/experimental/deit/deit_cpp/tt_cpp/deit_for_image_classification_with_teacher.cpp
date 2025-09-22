@@ -62,7 +62,7 @@ TtDeiTForImageClassificationWithTeacher::TtDeiTForImageClassificationWithTeacher
             );
             
             // Update num_labels based on classifier bias size
-            auto bias_shape = cls_classifier_bias_.get_logical_shape();
+            auto bias_shape = cls_classifier_bias_.logical_shape();
             if (bias_shape.rank() >= 1) {
                 num_labels_ = static_cast<int>(bias_shape[-1]);
             }
@@ -189,7 +189,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> TtDeiTForImageClassificationWithTeacher::g
 
 ttnn::Tensor TtDeiTForImageClassificationWithTeacher::extract_cls_token(const ttnn::Tensor& sequence_output) {
     // Extract the first token (CLS token) from sequence output
-    auto shape = sequence_output.get_logical_shape();
+    auto shape = sequence_output.logical_shape();
     uint32_t rank = shape.rank();
     
     if (rank == 3) {
@@ -228,7 +228,7 @@ ttnn::Tensor TtDeiTForImageClassificationWithTeacher::extract_cls_token(const tt
 
 ttnn::Tensor TtDeiTForImageClassificationWithTeacher::extract_distillation_token(const ttnn::Tensor& sequence_output) {
     // Extract the second token (distillation token) from sequence output
-    auto shape = sequence_output.get_logical_shape();
+    auto shape = sequence_output.logical_shape();
     uint32_t rank = shape.rank();
     
     if (rank == 3) {

@@ -39,7 +39,7 @@ ttnn::Tensor TtDeiTPooler::forward(const ttnn::Tensor& hidden_states) {
     // We want to slice [:, 0, :] to get [batch_size, hidden_size]
     
     // Get tensor shape using correct API
-    auto shape = hidden_states.get_logical_shape();
+    auto shape = hidden_states.logical_shape();
     uint32_t rank = shape.rank();
     
     // Create slice parameters for extracting the first token
@@ -67,7 +67,7 @@ ttnn::Tensor TtDeiTPooler::forward(const ttnn::Tensor& hidden_states) {
     
     // Reshape to remove the sequence dimension (which is now 1)
     // Get the new shape after slicing
-    auto current_shape = first_token_tensor.get_logical_shape();
+    auto current_shape = first_token_tensor.logical_shape();
     std::vector<uint32_t> new_shape_vec;
     
     // Copy dimensions, skipping the sequence dimension that has size 1

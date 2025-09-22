@@ -65,10 +65,10 @@ TtDeiTSelfAttention::TtDeiTSelfAttention(
 
 ttnn::Tensor TtDeiTSelfAttention::transpose_for_scores(ttnn::Tensor& x) {
     // Convert to ROW_MAJOR layout for reshape (matching Python implementation)
-    x = ttnn::to_layout(x, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (ttnn::MeshDevice*)nullptr);
+    x = ttnn::to_layout(x, ttnn::ROW_MAJOR_LAYOUT);
     
     // Get current shape
-    auto current_shape = x.get_logical_shape();
+    auto current_shape = x.logical_shape();
     
     // Create new shape following Python logic: list(x.shape)[1:-1] + [num_attention_heads, attention_head_size]
     // This means we take dimensions from index 1 to second-to-last, then append the attention dimensions
@@ -95,10 +95,10 @@ ttnn::Tensor TtDeiTSelfAttention::transpose_for_scores(ttnn::Tensor& x) {
     auto reshaped = ttnn::reshape(x, new_shape);
     
     // Convert back to TILE layout
-    reshaped = ttnn::to_layout(reshaped, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (ttnn::MeshDevice*)nullptr);
+    reshaped = ttnn::to_layout(reshaped, ttnn::TILE_LAYOUT);
     
     // Debug: Print final tensor shape before permute
-    auto final_shape = reshaped.get_logical_shape();
+    auto final_shape = reshaped.logical_shape();
     
     // Transpose dimensions: should always be 4D following Python logic
     // Python uses: ttnn.permute(x, (0, 2, 1, 3))
@@ -136,7 +136,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTSelfAttention::forwa
     
     // Apply softmax to get attention probabilities
     auto attention_probs = ttnn::softmax(attention_scores, -1);
-    attention_probs = ttnn::to_layout(attention_probs, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (ttnn::MeshDevice*)nullptr);
+    attention_probs = ttnn::to_layout(attention_probs, ttnn::TILE_LAYOUT);
     
     // Apply head mask if provided
     if (head_mask.has_value()) {
@@ -153,13 +153,13 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTSelfAttention::forwa
     context_layer = ttnn::permute(context_layer, transpose_dims);
     
     // Reshape to original hidden size
-    auto padded_shape = context_layer.get_padded_shape();
+    auto padded_shape = context_layer.padded_shape();
     
     // Create new_context_layer_shape similar to Python version: (1,) + padded_shape[:-2] + (all_head_size,)
     // context_layer is [1, 198, 12, 64], we want [1, 198, 768]
     ttnn::Shape new_context_layer_shape({1, padded_shape[1], static_cast<uint32_t>(all_head_size)});
     auto final_context = ttnn::reshape(ttnn::DefaultQueueId, context_layer, new_context_layer_shape);
-    final_context = ttnn::to_layout(final_context, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (ttnn::MeshDevice*)nullptr);
+    final_context = ttnn::to_layout(final_context, ttnn::TILE_LAYOUT);
     
     // Return results
     if (output_attentions) {

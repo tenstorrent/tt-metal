@@ -15,7 +15,6 @@
 // #include "ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include <tt-metalium/small_vector.hpp>
 #include <torch/torch.h>
 
 /**

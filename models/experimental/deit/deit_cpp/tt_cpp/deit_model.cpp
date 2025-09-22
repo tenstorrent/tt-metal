@@ -92,7 +92,7 @@ TtDeiTModel::forward(
         bool actual_return_dict = return_dict;
         
         // Validate input
-        if (pixel_values.get_logical_shape().rank() == 0) {
+        if (pixel_values.logical_shape().rank() == 0) {
             throw std::runtime_error("You have to specify pixel_values");
         }
         
