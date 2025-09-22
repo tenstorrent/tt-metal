@@ -30,7 +30,9 @@ void MAIN {
         cb_reserve_back(out_cb_id, num_single_transfer);
 
         // Copy num_single_transfer tiles from in_cb to DEST
-        copy_block_matmul_partials(in_cb_id, 0, 0, num_single_transfer);
+        for (uint32_t i = 0; i < num_single_transfer; ++i) {
+            copy_block_matmul_partials(in_cb_id, i, i, 1);
+        }
         // Pack num_single_transfer tiles to out_cb
         pack_tile_block(0, out_cb_id, num_single_transfer);
 

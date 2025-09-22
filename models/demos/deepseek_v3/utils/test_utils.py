@@ -306,9 +306,14 @@ def run_reference_with_attention(
             ),
             diagonal=1,
         )
-        input_cache = transformers_cache_from_torch(
-            tuple(torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16) for _ in range(num_layers))
-        )
+        if layer_idx is not None:
+            input_cache = transformers_cache_single_layer_from_torch(
+                torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16), layer_idx
+            )
+        else:
+            input_cache = transformers_cache_from_torch(
+                tuple(torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16) for _ in range(num_layers))
+            )
     else:
         assert mode == "decode"
         position_ids = position_ids_or_seq_lens.unsqueeze(1)

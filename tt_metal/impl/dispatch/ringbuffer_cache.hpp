@@ -40,7 +40,7 @@ public:
     /*! @brief Swap the ringbuffer cache manager.
      *  We provide this functionality to stash away the cache state for the duration of recording a trace.
      */
-    friend void swap(RingbufferCacheManager& a, RingbufferCacheManager& b);
+    friend void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) noexcept;
 
     struct CacheOffset {
         bool is_cached{false};  // true if the program is already cached

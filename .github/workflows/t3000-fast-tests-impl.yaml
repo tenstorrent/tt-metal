@@ -29,7 +29,7 @@ jobs:
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

@@ -127,7 +127,6 @@ Tensor AutoFormat::format_input_tensor(
         } else if (!convert_layout && pad_input) {
             if (formatted_input.layout() == Layout::ROW_MAJOR || formatted_input.layout() == Layout::TILE) {
                 return ttnn::pad(
-                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -148,7 +147,6 @@ Tensor AutoFormat::format_input_tensor(
             } else if (formatted_input.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
-                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),

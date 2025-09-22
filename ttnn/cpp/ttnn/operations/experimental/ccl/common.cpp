@@ -175,15 +175,30 @@ ttnn::Tensor composite_all_gather(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
-
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing
     ttnn::DataType input_dtype = input_tensor.dtype();
+    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
+                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
+
     auto input_memory_config = input_tensor.memory_config();
+    TT_FATAL(
+        !(input_memory_config.is_sharded() && !memory_config.has_value()),
+        "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory "
+        "config to the input sharded memory config will break the op as the input and output shapes are different.");
     auto output_memory_config = memory_config.value_or(input_memory_config);
+
+    if (input_memory_config.is_sharded()) {
+        /*
+         * If sharded to interleaved, convert to the final interleaved memory config.
+         * If sharded to sharded, use DRAM interleaved as the intermediate memory
+         * config for executing the composite.
+         */
+        auto intermediate_memory_config =
+            output_memory_config.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : output_memory_config;
+        input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
+    }
 
     // Convert to row major
     if (is_tiled_and_not_tile_aligned) {
@@ -195,9 +210,11 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, input_memory_config, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+        input_tensor, num_links, input_tensor.memory_config(), ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
 
+    // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
+
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {
         all_gather_output_tensor = ttnn::to_layout(all_gather_output_tensor, ttnn::Layout::TILE);
@@ -208,11 +225,28 @@ ttnn::Tensor composite_all_gather(
         }
     }
 
-    if (input_memory_config.memory_layout() != output_memory_config.memory_layout()) {
+    if (output_memory_config.is_sharded()) {
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
     }
 
     return all_gather_output_tensor;
+}
+
+// same as above but for vector of mesh
+std::vector<ttnn::Tensor> composite_all_gather(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<uint32_t> cluster_axis) {
+    std::vector<ttnn::Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); i++) {
+        output_tensors.push_back(
+            composite_all_gather(input_tensors[i], dim, num_links, memory_config, subdevice_id, cluster_axis));
+    }
+    return output_tensors;
 }
 
 }  // namespace composite_common

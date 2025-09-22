@@ -110,11 +110,11 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    auto arch = t.storage_type() == StorageType::DEVICE
-                    ? t.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    const int num_cores = (arch == ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
-    const int tensix_mul_adds_per_cycle_lofi = (arch == ARCH::WORMHOLE_B0) ? 4096 : 2048;
+    const CoreCoord compute_grid = t.device()->compute_with_storage_grid_size();
+    const int num_cores = compute_grid.x * compute_grid.y;
+    // The Wormhole/Blackhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+    // This is 2*8*16*16 = 4096 muladds in a single cycle.
+    constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling
@@ -1347,7 +1347,9 @@ Matmul create_matmul_struct(
     const Tensor& input_tensor_b,
     const struct Matmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    auto arch = input_tensor_a.device()->arch();
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
+    TT_FATAL(device != nullptr, "Operand to matmul must be on device");
+    auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
     bool are_inputs_low_precision_df =
@@ -1428,7 +1430,6 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
@@ -1441,8 +1442,7 @@ Tensor matmul(
                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor}),
                {input_tensor_a, input_tensor_b},
                optional_input_tensors,
-               {optional_output_tensor},
-               queue_id)
+               {optional_output_tensor})
         .at(0);
 }
 
@@ -1451,7 +1451,6 @@ std::vector<Tensor> matmul_batched_weights(
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
@@ -1467,8 +1466,7 @@ std::vector<Tensor> matmul_batched_weights(
         create_matmul_struct(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}),
         input_tensors,
         optional_input_tensors,
-        {optional_output_tensor},
-        queue_id);
+        {optional_output_tensor});
 }
 
 ttnn::Shape compute_sparse_matmul_output_shape(
@@ -1548,15 +1546,13 @@ Tensor sparse_matmul(
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
     const struct SparseMatmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     return operation::run(
                create_sparse_matmul_struct(
                    input_tensor_a, input_tensor_b, sparsity, parameters, {optional_output_tensor}),
                {input_tensor_a, input_tensor_b, sparsity},
                {},
-               {optional_output_tensor},
-               queue_id)
+               {optional_output_tensor})
         .at(0);
 }
 
@@ -1585,16 +1581,9 @@ void Matmul::validate(
     const auto& b_shape_aligned = input_tensor_b.padded_shape();
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
-
-    if (input_tensor_a.device()->arch() == tt::ARCH::GRAYSKULL) {
-        TT_FATAL(
-            (in0_tile_shape[1] == TILE_WIDTH && in0_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-        TT_FATAL(
-            (in1_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-    }
-
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Operands to matmul need to be on device!");
     TT_FATAL(
         (in0_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_WIDTH),
         "Input tile dims must have inner dim equal to 32 due to llk constraints");
@@ -1681,9 +1670,7 @@ void Matmul::validate(
     }
 
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
-    TT_FATAL(
-        input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
-        "Operands to matmul need to be on device!");
+
     TT_FATAL(
         input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
         "Operands to matmul need to be allocated in buffers on device!");

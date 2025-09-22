@@ -75,6 +75,7 @@ include(protobuf)
 set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.proto
 )
 
 # Collect all generated protobuf files
