@@ -93,13 +93,6 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice
     }
 }
 
-std::shared_ptr<ThreadPool> create_kernel_compilation_thread_pool() {
-    uint32_t num_threads = std::thread::hardware_concurrency();
-    num_threads = std::max(1u, num_threads);
-    log_debug(tt::LogMetal, "Creating kernel compilation thread pool with {} threads", num_threads);
-    return create_boost_thread_pool(num_threads);
-}
-
 // Helper function to verify all devices in the MeshDevice have the same value
 template <typename F>
 decltype(auto) validate_and_get_reference_value(
@@ -306,19 +299,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { dispatch_thread_pool_->enqueue(std::move(f)); }
 
 void MeshDevice::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
-
-void MeshDevice::enqueue_to_kernel_compilation_thread_pool(std::function<void()>&& f) {
-    if (!kernel_compilation_thread_pool_) {
-        kernel_compilation_thread_pool_ = create_kernel_compilation_thread_pool();
-    }
-    kernel_compilation_thread_pool_->enqueue(std::move(f));
-}
-
-void MeshDevice::wait_for_kernel_compilation_thread_pool() {
-    if (kernel_compilation_thread_pool_) {
-        kernel_compilation_thread_pool_->wait();
-    }
-}
 
 std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const std::vector<int>& device_ids,

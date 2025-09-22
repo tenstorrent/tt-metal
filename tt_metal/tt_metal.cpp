@@ -912,6 +912,8 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
     program.impl().compile(device, force_slow_dispatch);
 }
 
+void WaitForKernelCompilationThreadPool() { MetalContext::instance().wait_for_kernel_compilation_thread_pool(); }
+
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {

@@ -124,7 +124,7 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
 
 void MeshWorkloadImpl::compile_in_background(MeshDevice* mesh_device) {
     for (auto& [device_range, _] : programs_) {
-        mesh_device->enqueue_to_kernel_compilation_thread_pool([device_range, mesh_device, this]() {
+        MetalContext::instance().enqueue_to_kernel_compilation_thread_pool([device_range, mesh_device, this]() {
             auto& program = programs_.at(device_range);
             program.impl().compile(mesh_device);
         });

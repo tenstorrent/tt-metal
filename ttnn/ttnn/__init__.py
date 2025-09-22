@@ -423,7 +423,7 @@ class compile_only:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        ttnn._ttnn.device.wait_for_compile_threadpool(self.mesh_device)
+        ttnn._ttnn.device.wait_for_compile_threadpool()
         ttnn._ttnn.graph.disable_compilation_in_no_dispatch()
         self.captured_graph = ttnn.graph.end_graph_capture()
         return False

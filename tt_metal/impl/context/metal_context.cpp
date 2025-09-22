@@ -1263,6 +1263,28 @@ const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stac
     return MetalContext::command_queue_id_stack_for_thread_;
 }
 
+namespace {
+std::shared_ptr<ThreadPool> create_kernel_compilation_thread_pool() {
+    uint32_t num_threads = std::thread::hardware_concurrency();
+    num_threads = std::max(1u, num_threads);
+    log_debug(tt::LogMetal, "Creating kernel compilation thread pool with {} threads", num_threads);
+    return create_boost_thread_pool(num_threads);
+}
+}  // namespace
+
+void MetalContext::enqueue_to_kernel_compilation_thread_pool(std::function<void()>&& f) {
+    if (!kernel_compilation_thread_pool_) {
+        kernel_compilation_thread_pool_ = create_kernel_compilation_thread_pool();
+    }
+    kernel_compilation_thread_pool_->enqueue(std::move(f));
+}
+
+void MetalContext::wait_for_kernel_compilation_thread_pool() {
+    if (kernel_compilation_thread_pool_) {
+        kernel_compilation_thread_pool_->wait();
+    }
+}
+
 uint32_t MetalContext::get_active_erisc_launch_flag_addr() {
     auto core_type_idx = hal_->get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     std::uint32_t launch_erisc_addr = hal_->get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;

@@ -19,6 +19,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
+#include <tt_metal/common/thread_pool.hpp>
 
 #include <array>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -101,6 +102,10 @@ public:
     CommandQueueIdStack& get_command_queue_id_stack_for_thread();
     const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
 
+    // Kernel compilation thread pool management
+    void enqueue_to_kernel_compilation_thread_pool(std::function<void()>&& f);
+    void wait_for_kernel_compilation_thread_pool();
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
@@ -168,6 +173,7 @@ private:
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
+    mutable std::shared_ptr<ThreadPool> kernel_compilation_thread_pool_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
