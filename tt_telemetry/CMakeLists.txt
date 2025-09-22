@@ -77,6 +77,8 @@ target_sources(
         telemetry/arc/arc_telemetry_reader.cpp
         telemetry/arc/arc_metrics.cpp
         telemetry/hal/hal.cpp
+        psd/psd.cpp
+        psd/psd_serialization.cpp
 )
 target_include_directories(
     tt_telemetry_server
@@ -86,6 +88,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
+target_include_directories(tt_telemetry_server SYSTEM PRIVATE ${PROJECT_BINARY_DIR}/tt_metal/fabric)
 target_link_libraries(
     tt_telemetry_server
     PRIVATE
@@ -95,4 +98,9 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
+        yaml-cpp::yaml-cpp
+        protobuf::libprotobuf
 )
+
+# Ensure protobuf files are generated before building tt_telemetry_server
+add_dependencies(tt_telemetry_server fabric)
