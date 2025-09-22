@@ -1,7 +1,6 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
-
-#include <debug/dprint.h>
 
 #include <cmath>
 
@@ -27,17 +26,11 @@ constexpr auto cb_y_idx = tt::CBIndex::c_10;  // Final Y[r, c_block]
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
-// TODO(maciek): Update write_cb_block_to_dram to allign Stas's change.
 // TODO(maciek): Move all write_cb_block to common utils file, and reuse them in other
 // operations.
-// -----------------------------------------------------------------------------
-// Shared utility: DO NOT CHANGE
+template <typename AddrGen>
 inline void write_cb_block_to_dram(
-    uint32_t cb_idx,
-    const InterleavedAddrGenFast</* is dram */ true>& addr_gen,
-    uint32_t start_idx,
-    uint32_t current_block_size,
-    uint32_t tile_bytes) {
+    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t current_block_size, uint32_t tile_bytes) {
     uint32_t l1_read_addr = get_read_ptr(cb_idx);
 
     // Wait for a full block in CB, but only write as many as are valid in the tail
@@ -46,7 +39,6 @@ inline void write_cb_block_to_dram(
         l1_read_addr += tile_bytes;
     }
 }
-// -----------------------------------------------------------------------------
 
 void kernel_main() {
     uint32_t ra = 0;
@@ -55,10 +47,10 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(ra++);
 
     const uint32_t tile_bytes = get_tile_size(cb_y_idx);
-    const DataFormat data_fmt = get_dataformat(cb_y_idx);
 
-    const InterleavedAddrGenFast<true> y_addr_gen = {
-        .bank_base_address = y_addr, .page_size = tile_bytes, .data_format = data_fmt};
+    // Address generator
+    constexpr auto y_args = TensorAccessorArgs<2>();
+    const auto y_address_generator = TensorAccessor(y_args, y_addr, tile_bytes);
 
     const uint32_t end_row = start_row + num_rows_to_process;
 
@@ -78,7 +70,7 @@ void kernel_main() {
             cb_wait_front(cb_y_idx, block_size);
             // Calculate starting tile index for Y. We write Y in row-major order, so the offset equals
             const uint32_t start_tile_idx = (r * Wt) + c_block_start;
-            write_cb_block_to_dram(cb_y_idx, y_addr_gen, start_tile_idx, current_block_size, tile_bytes);
+            write_cb_block_to_dram(cb_y_idx, y_address_generator, start_tile_idx, current_block_size, tile_bytes);
             noc_async_write_barrier();
             cb_pop_front(cb_y_idx, block_size);
         }
