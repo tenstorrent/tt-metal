@@ -1003,7 +1003,7 @@ class TT_CCL:
         )
         seqlen = input_tensor_mesh.shape[-2]
         if "SDPA" in buffer_key:
-            # SDPA input is 8x shorter than the sequence length
+            # SDPA input is 8x (4= ring_size (number of devices in ring), 2 = number of chunks per device) shorter than the sequence length
             seqlen = seqlen * 8
         persistent_buffers = (
             self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
@@ -1029,6 +1029,8 @@ class TT_CCL:
             cluster_axis=cluster_axis,
         )
         if self.mode == "prefill" and buffer_key is not None and dim != 2:
+            # This condition excludes SDPA tensors (which use dim=2) from reshaping
+            # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
             if buffer_key != "LM_HEAD":
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
