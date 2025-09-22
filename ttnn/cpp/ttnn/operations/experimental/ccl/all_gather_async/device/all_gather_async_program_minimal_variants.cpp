@@ -381,10 +381,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
         TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
         uint32_t TILE_WIDTH = 32;
+
         uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
         uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
+        uint32_t input_tensor_C = input_tensor_shape[1];
+
         uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
         uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
+        uint32_t output_tensor_C = output_tensor_shape[1];
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
@@ -500,8 +504,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor.buffer()->address(),                        // output_tensor_address
                     input_tensor_Wt,                                          // width in tiles of the output shard
                     input_tensor_Ht,                                          // height in tiles of the output shard
+                    input_tensor_C,                                           // num input channels
                     output_tensor_Wt,                                         // width in tiles of entire output
                     output_tensor_Ht,                                         // height in tiles of entire output
+                    output_tensor_C,                                          // num output channels
                     dim,                                                      // dim to gather on
                     batch_head_size,                                          // product of the first two dims
                     input_tile_id_start,                                      //
@@ -596,8 +602,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor.buffer()->address(),                           // output_tensor_address
                     input_tensor_Wt,                                             // width in tiles of the output shard
                     input_tensor_Ht,                                             // height in tiles of the output shard
+                    input_tensor_C,                                              // num input channels
                     output_tensor_Wt,                                            // width in tiles of entire output
                     output_tensor_Ht,                                            // height in tiles of entire output
+                    output_tensor_C,                                             // num output channels
                     dim,                                                         // dim to gather on
                     batch_head_size,                                             // product of the first two dims
                     input_tile_id_start,                                         //
