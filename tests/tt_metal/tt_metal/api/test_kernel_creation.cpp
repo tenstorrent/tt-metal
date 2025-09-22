@@ -179,7 +179,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
     auto hash_default = kernels_default.at(kernel_handle_default)->compute_hash();
     auto hash_fp32 = kernels_fp32.at(kernel_handle_fp32)->compute_hash();
 
-    // BUG: These should be different but will be the same due to missing unpack_to_dest_mode in config_hash()
+    // The hashes should be different across two kernels due to the difference in unpack_to_dest_mode
     EXPECT_NE(hash_default, hash_fp32)
         << "Kernels with different unpack_to_dest_mode should have different compute hashes. "
         << "hash_default: " << hash_default << ", hash_fp32: " << hash_fp32 << ". "
