@@ -131,7 +131,11 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
  * and writes the result to tile idx_out0 in the Dst registers.
  */
 inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0));
+    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(
+        ckernel::sfpu::calculate_sfpu_binary<false, ckernel::BinaryOp::ADD, 8, is_fp32_dest_acc_en>,
+        idx_dst0,
+        idx_dst1,
+        idx_out0));
 }
 
 namespace NAMESPACE {
