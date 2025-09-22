@@ -51,7 +51,7 @@ def close_device(device: "ttnn.device.Device"):
 
 
 synchronize_device = ttnn._ttnn.device.synchronize_device
-wait_for_threadpool = ttnn._ttnn.device.wait_for_threadpool
+wait_for_compile_threadpool = ttnn._ttnn.device.wait_for_compile_threadpool
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
 GetPCIeDeviceID = ttnn._ttnn.device.GetPCIeDeviceID
