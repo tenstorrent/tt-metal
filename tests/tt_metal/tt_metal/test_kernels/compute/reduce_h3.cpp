@@ -128,11 +128,11 @@ void MAIN {
         // DPRINT_PACK({ DPRINT << "After reduce_compute" << ENDL(); });
         // DPRINT_UNPACK({ DPRINT << "After reduce_compute" << ENDL(); });
 
+        // tile_regs_wait();
+        acquire_dst();
+
         // Pack and output the reduced result
         cb_reserve_back(cb_out0, onetile);
-
-        tile_regs_wait();  // TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK),
-                           // p_stall::STALL_ON_ZERO);
 
         DPRINT_MATH({ DPRINT << "After tile wait" << ENDL(); });    // does not hang
         DPRINT_PACK({ DPRINT << "After tile wait" << ENDL(); });    // does not hang
@@ -140,29 +140,30 @@ void MAIN {
 
         pack_tile(reduce_dst_idx, cb_out0);
 
-        // DPRINT_PACK({ // - does not hang, prints out garbage data
-        //     DPRINT << "Output tile in cb_out0:" << ENDL();
-        //     for (uint16_t r = 0; r < 32; ++r) {
-        //         DPRINT << (uint)r << " : "
-        //                << TileSlice(
-        //                       cb_out0,
-        //                       0,
-        //                       SliceRange{
-        //                           .h0 = (uint8_t)r,
-        //                           .h1 = (uint8_t)(r + 1),
-        //                           .hs = (uint8_t)1,
-        //                           .w0 = (uint8_t)0,
-        //                           .w1 = (uint8_t)32,
-        //                           .ws = (uint8_t)1},
-        //                       true,
-        //                       false)
-        //                << ENDL();
-        //     }
-        // });
+        DPRINT_PACK({  // - does not hang, prints out garbage data
+            DPRINT << "Output tile in cb_out0:" << ENDL();
+            for (uint16_t r = 0; r < 32; ++r) {
+                DPRINT << (uint)r << " : "
+                       << TileSlice(
+                              cb_out0,
+                              0,
+                              SliceRange{
+                                  .h0 = (uint8_t)r,
+                                  .h1 = (uint8_t)(r + 1),
+                                  .hs = (uint8_t)1,
+                                  .w0 = (uint8_t)0,
+                                  .w1 = (uint8_t)32,
+                                  .ws = (uint8_t)1},
+                              true,
+                              false)
+                       << ENDL();
+            }
+        });
 
-        tile_regs_release();  // Finally release the tile registers
         cb_push_back(cb_out0, onetile);
 
+        // tile_regs_release();  // Finally release the tile registers
+        release_dst();
     }
 
     // =============================================================================

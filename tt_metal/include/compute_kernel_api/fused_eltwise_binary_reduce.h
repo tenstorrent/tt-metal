@@ -92,8 +92,10 @@ ALWI void fused_reduce_init() {
     // MATH initialization - init reduce operation (no unpacker calls)
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
 
-    // PACK initialization - configure reduce mask for the specified dimension
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
+    // PACK initialization - for fused operations, we don't need the reduce mask
+    // since the math operation has already produced the final reduced result
+    // The destination register contains valid data that shouldn't be masked
+    // PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>())); // Disabled for fused ops
 }
 
 // =============================================================================
