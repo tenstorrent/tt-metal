@@ -1,74 +1,4 @@
 {
-  "exact": {
-    "[WH-T3K] Llama-3.1-8B-Instruct": [
-      { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
-      { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" }
-    ],
-    "[WH-T3K] Qwen2.5-VL-72B-Instruct": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "[BH-DB] Llama-3.1-8B-Instruct": { "id": "U08GELBB1AP", "name": "Ambrose Ling" },
-    "[BH-QB] Llama-3.1-8B-Instruct": { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" },
-    "[WH-GLX] Llama-3.3-70B-Instruct": [
-      { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
-      { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" }
-    ],
-    "[WH-GLX] Llama-8B DP=16": [
-      { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
-      { "id": "U08BH66EXAL", "name": "Radoica Draskic" }
-    ],
-    "[WH-T3K] Gemma3-27B": [
-      { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
-      { "id": "U08BH66EXAL", "name": "Radoica Draskic" }
-    ],
-
-    "t3k_mixtral_tests": { "id": "U03PUAKE719", "name": "Harry Zhou" },
-    "t3k llama3_load_checkpoints tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k_falcon40b_tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
-    "t3k_llama3_tests": { "id": "U03PUAKE719", "name": "Miguel Tairum" },
-    "t3k_qwen25_tests": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" },
-    "t3k_llama3_vision_tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
-    "t3k_llama3_90b_vision_tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k_llama3_70b_tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
-    "t3k_falcon7b_tests": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" },
-    "t3k_resnet50_tests": { "id": "U0837MYG788", "name": "Marko Radosavljevic" },
-    "t3k_sentence_bert_tests": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" },
-    "t3k sd35_large tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
-    "t3k_mistral_tests": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" },
-    "t3k_qwen3_tests": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" },
-    "t3k_qwen25_vl_tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k_gemma3_tests": { "id": "U08TJ70UFRT", "name": "Harry Andrews" },
-
-    "t3k ttmetal tests": { "id": "ULMEPM2MA", "name": "Sean Nijjar" },
-    "t3k ttnn tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
-    "t3k tt_metal multiprocess tests": { "id": "U03NG0A5ND7", "name": "Aditya Saigal" },
-    "t3k ttnn multiprocess tests": { "id": "U013121KDH9", "name": "Austin Ho" },
-    "t3k falcon7b tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
-    "t3k falcon40b tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
-    "t3k llama3-small tests": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" },
-    "t3k llama3.2-11b tests": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" },
-    "t3k llama3.2-11b-vision tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
-    "t3k n300 mesh llama3.2-11b-vision tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
-    "t3k llama3.2-90b-vision tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k llama3.2-90b tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k mixtral tests": { "id": "U03PUAKE719", "name": "Harry Zhou" },
-    "t3k grok tests": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" },
-    "t3k unet shallow tests": { "id": "U06ECNVR0EN", "name": "Evan Smal" },
-    "t3k mistral tests": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" },
-    "t3k qwen25_vl tests": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" },
-    "t3k gemma3-small tests": { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
-
-    "Galaxy Fabric tests": { "id": "UJ45FEC7M", "name": "Allan Liu" },
-    "Galaxy Llama3-70b unit tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
-    "Galaxy DRAM Prefetcher unit tests": { "id": "U044T8U8DEF", "name": "Johanna Rock" },
-    "Galaxy distributed ops tests": { "id": "U044T8U8DEF", "name": "Johanna Rock" },
-
-    "Galaxy Llama3 frequent tests": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" },
-    "Galaxy resnet50 frequent tests": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" },
-    "Galaxy unit/distributed frequent tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
-    "Galaxy unit_distributed frequent tests": { "id": "UBHPP2NDP", "name": "Joseph Chu" },
-    "Galaxy SD3.5 frequent tests": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" },
-
-    "profiler tests": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" }
-  },
   "contains": [
     { "needle": "vllm-tests / vllm-tests ([WH-T3K] Llama-3.1-8B-Instruct", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
@@ -220,6 +150,24 @@
     { "needle": "Galaxy SD3.5 frequent tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
 
     { "needle": "profiler-tests / profiler tests", "owner": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" } },
-    { "needle": "profiler tests", "owner": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" } }
+    { "needle": "profiler tests", "owner": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" } },
+
+    { "needle": "galaxy-model-perf-tests / Galaxy CNN model perf tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
+    { "needle": "Galaxy CNN model perf tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
+
+    { "needle": "galaxy-model-perf-tests / Galaxy Llama 70B model perf tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "Galaxy Llama 70B model perf tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "galaxy-model-perf-tests / Llama Galaxy Perf Unit Tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "Llama Galaxy Perf Unit Tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+
+    { "needle": "galaxy-model-perf-tests / Galaxy Llama 70B prefill perf tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "Galaxy Llama 70B prefill perf tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+
+    { "needle": "galaxy-model-perf-tests / Galaxy DiT SD3.5 model perf tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "Galaxy DiT SD3.5 model perf tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
+    { "needle": "galaxy-model-perf-tests / Galaxy Sentence Bert tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
+    { "needle": "Galaxy Sentence Bert tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } }
   ]
 }
