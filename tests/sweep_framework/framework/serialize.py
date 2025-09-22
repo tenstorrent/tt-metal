@@ -7,6 +7,7 @@ import json
 from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatus
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 from ttnn._ttnn.tensor import DataType, Layout  # make eval("DataType.*"/"Layout.*") resolvable
+from ttnn._ttnn.types import BcastOpMath, BcastOpDim
 
 
 def convert_enum_values_to_strings(data):

@@ -57,60 +57,57 @@ def run(
     *,
     device,
 ) -> list:
-    try:
-        input_shape_2 = [input_shape[-4], input_shape[-3], input_shape[-2], input_shape[-1]]
+    input_shape_2 = [input_shape[-4], input_shape[-3], input_shape[-2], input_shape[-1]]
 
-        if axis == ttnn.BcastOpDim.H or axis == ttnn.BcastOpDim.HW:
-            input_shape_2[-2] = 1
+    if axis == ttnn.BcastOpDim.H or axis == ttnn.BcastOpDim.HW:
+        input_shape_2[-2] = 1
 
-        if axis == ttnn.BcastOpDim.W or axis == ttnn.BcastOpDim.HW:
-            input_shape_2[-1] = 1
+    if axis == ttnn.BcastOpDim.W or axis == ttnn.BcastOpDim.HW:
+        input_shape_2[-1] = 1
 
-        torch_input_tensor_a = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-        )(input_shape)
-        torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-        )(input_shape_2)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape_2)
 
-        if op == ttnn.BcastOpMath.ADD:
-            torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
-        elif op == ttnn.BcastOpMath.SUB:
-            torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
-        else:
-            torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
+    if op == ttnn.BcastOpMath.ADD:
+        torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+    elif op == ttnn.BcastOpMath.SUB:
+        torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
+    else:
+        torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
 
-        if axis == ttnn.BcastOpDim.H:
-            torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 32, 1)
-        elif axis == ttnn.BcastOpDim.W:
-            torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 1, 32)
-        else:
-            torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 32, 32)
+    if axis == ttnn.BcastOpDim.H:
+        torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 32, 1)
+    elif axis == ttnn.BcastOpDim.W:
+        torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 1, 32)
+    else:
+        torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 32, 32)
 
-        input_tensor_a = ttnn.from_torch(
-            torch_input_tensor_a,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
 
-        input_tensor_b = ttnn.from_torch(
-            torch_input_tensor_b,
-            dtype=input_b_dtype,
-            layout=input_b_layout,
-            device=device,
-            memory_config=input_b_memory_config,
-        )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=input_b_dtype,
+        layout=input_b_layout,
+        device=device,
+        memory_config=input_b_memory_config,
+    )
 
-        start_time = start_measuring_time()
-        output_tensor = ttnn.bcast(input_tensor_a, input_tensor_b, op, axis)
-        output_tensor = ttnn.to_torch(output_tensor)
+    start_time = start_measuring_time()
+    output_tensor = ttnn.bcast(input_tensor_a, input_tensor_b, op, axis)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-        e2e_perf = stop_measuring_time(start_time)
-        pcc_res = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    except e:
-        print(e)
+    e2e_perf = stop_measuring_time(start_time)
+    pcc_res = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     # print(f"e2e_perf {e2e_perf / 1000000}ms")
     # print(f"pcc_res {pcc_res}")
