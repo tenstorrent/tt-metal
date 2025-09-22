@@ -1111,7 +1111,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
     std::vector<GlobalNodeId> instances =
         std::vector<GlobalNodeId>(instance.sub_instances.begin(), instance.sub_instances.end());
 
-    for (int i = 0; i < instances.size(); ++i) {
+    for (size_t i = 0; i < instances.size(); ++i) {
         const auto src_instance = instances[i];
         const auto dst_instance = instances[(i + 1) % instances.size()];
 
