@@ -1229,8 +1229,10 @@ async function run() {
       stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
     }
 
-    // Do not include alerts section inside the report; Slack message will carry it
-    const finalReport = [mainReport, regressionsSection, stayedFailingSection]
+    const alertSection = (alertAll && alertAllMessage)
+      ? ['## Alerts', alertAllMessage, ''].join('\n')
+      : '';
+    const finalReport = [alertSection, mainReport, regressionsSection, stayedFailingSection]
       .filter(Boolean)
       .join('\n');
 
