@@ -33,15 +33,13 @@ static std::string get_mobo_name() {
     return motherboard;
 }
 
-static bool using_mock_cluster_desc() { return tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(); }
-
-static TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
+static TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 
-    if (using_mock_cluster_desc() || mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
+    if (using_mock_cluster_desc || mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -52,18 +50,18 @@ static TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_na
     return TrayID{tray_id};
 }
 
-static std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
+static std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id, bool using_mock_cluster_desc) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
         TT_FATAL(
-            using_mock_cluster_desc() || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
+            using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
-        auto tray_id = get_tray_id_for_chip(chip_id, get_mobo_name());
+        auto tray_id = get_tray_id_for_chip(chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
         if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
@@ -97,7 +95,7 @@ struct EthEndpoint {
 
 }  // namespace
 
-PSD::PSD(bool run_discovery) {
+PSD::PSD(bool run_discovery, bool using_mock_cluster_desc) : using_mock_cluster_desc_(using_mock_cluster_desc) {
     if (run_discovery) {
         this->run_discovery();
     }
@@ -202,7 +200,7 @@ void PSD::run_local_discovery() {
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
-        auto [tray_id, asic_location] = get_asic_position(src);
+        auto [tray_id, asic_location] = get_asic_position(src, using_mock_cluster_desc_);
         asic_descriptors_[src_unique_id] =
             ASICDescriptor{TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src), src_unique_id, hostname};
 

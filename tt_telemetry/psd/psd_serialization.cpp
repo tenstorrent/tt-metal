@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// TODO: should using_mock_cluster_desc always be set to false since we are deserializing? Would we ever deserialize
+// something generated w/ a mock cluster?
+//  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
-// SPDX-License-Identifier: Apache-2.0
+//  SPDX-License-Identifier: Apache-2.0
 
 #include "psd/psd_serialization.hpp"
 #include "psd/psd.hpp"
@@ -190,8 +192,9 @@ void physical_system_descriptor_to_proto(const PSD& descriptor, tt::fabric::prot
 }
 
 // Convert protobuf to PSD
-std::unique_ptr<PSD> proto_to_physical_system_descriptor(const tt::fabric::proto::PSD& proto_desc) {
-    auto descriptor = std::make_unique<PSD>(false);  // Don't run discovery
+std::unique_ptr<PSD> proto_to_physical_system_descriptor(
+    const tt::fabric::proto::PSD& proto_desc, bool using_mock_cluster_desc) {
+    auto descriptor = std::make_unique<PSD>(false, using_mock_cluster_desc);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -285,13 +288,13 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PSD& de
     return result;
 }
 
-PSD deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data) {
+PSD deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data, bool using_mock_cluster_desc) {
     tt::fabric::proto::PSD proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PSD from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return std::move(*proto_to_physical_system_descriptor(proto_desc, using_mock_cluster_desc));
 }
 
 }  // namespace tt::tt_metal

@@ -18,6 +18,7 @@ void emit_physical_system_descriptor_to_text_proto(const PSD& descriptor, const 
 std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PSD& descriptor);
 
 // Deserialize from protobuf binary format to PSD (byte vector)
-PSD deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data);
+PSD deserialize_physical_system_descriptor_from_bytes(
+    const std::vector<uint8_t>& data, bool using_mock_cluster_desc = false);
 
 }  // namespace tt::tt_metal

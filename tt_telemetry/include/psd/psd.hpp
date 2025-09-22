@@ -119,7 +119,7 @@ struct PhysicalConnectivityGraph {
 
 class PSD {
 public:
-    PSD(bool run_discovery = true);
+    PSD(bool run_discovery = true, bool use_mock_cluster_desc = false);
     void run_discovery(bool run_global_discovery = true);
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
@@ -171,6 +171,7 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
+    bool using_mock_cluster_desc_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
