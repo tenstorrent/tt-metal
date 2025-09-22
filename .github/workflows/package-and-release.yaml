@@ -100,7 +100,7 @@ jobs:
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
     runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/')) || inputs.dry-run }}
+    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-rc'))) || inputs.dry-run }}
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
@@ -191,7 +191,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/')) || inputs.dry-run }}
+    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-rc'))) || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
