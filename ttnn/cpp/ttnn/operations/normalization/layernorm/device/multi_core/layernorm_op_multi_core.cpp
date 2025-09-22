@@ -1081,6 +1081,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         reader_mcast_sender_compile_time_args.push_back(num_combine_tiles_needed);
         reader_mcast_sender_compile_time_args.push_back(tt::constants::TILE_HEIGHT);
         reader_mcast_sender_compile_time_args.push_back(tt::constants::TILE_WIDTH);
+        reader_mcast_sender_compile_time_args.push_back(tt::constants::FACE_HEIGHT);
+        reader_mcast_sender_compile_time_args.push_back(tt::constants::FACE_WIDTH);
     }
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
