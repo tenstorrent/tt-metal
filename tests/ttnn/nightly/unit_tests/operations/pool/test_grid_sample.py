@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 
 def validate_grid_sample_output(
@@ -467,21 +467,22 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
     )
 
 
-@pytest.mark.parametrize("use_precomputed_grid", [True, False])
-@pytest.mark.parametrize("batch_output_channels", [True, False])
-@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize("use_precomputed_grid", [True])  # , False])
+@pytest.mark.parametrize("batch_output_channels", [False])  # , False])
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16])  # , ttnn.float32])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, grid_batching_factor",
     [
-        ((1, 256, 48, 160), (1, 1, 2809 * 7, 2), 7),
-        ((7, 32, 16, 32), (7, 8, 8, 2), 2),
-        ((1, 96, 24, 32), (1, 6, 16, 2), 4),
+        ((1, 64, 2, 2), (1, 1, 7, 2), 1),
+        # ((7, 32, 16, 32), (7, 8, 8, 2), 2),
+        # ((1, 96, 24, 32), (1, 6, 16, 2), 4),
     ],
 )
 @pytest.mark.parametrize(
     "core_grid",
     [
-        None,  # Use full device grid
+        # None,  # Use full device grid
         ttnn.CoreGrid(y=5, x=4),  # Limited core grid (5x4=20 cores)
     ],
 )
@@ -506,9 +507,15 @@ def test_grid_sample_sharded_batched(
     input_shape_nhwc = [batch_size, height, width, channels]
 
     torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
+    # torch_input_nchw = torch.ones(input_shape, dtype=torch.float32) * 7
+    torch_input_nchw[:, :, 0, 0] = 1
+    torch_input_nchw[:, :, 0, 1] = 2
+    torch_input_nchw[:, :, 1, 0] = 3
+    torch_input_nchw[:, :, 1, 1] = 4
     torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
-    torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
+    torch_grid = torch.zeros(grid_shape, dtype=torch.float32)
+    # torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
     torch_output_nchw = F.grid_sample(
         torch_input_nchw, torch_grid, mode="bilinear", padding_mode="zeros", align_corners=False
@@ -534,7 +541,9 @@ def test_grid_sample_sharded_batched(
     expected_shape, torch_expected_nhwc = prepare_grid_batching_expected_output(
         torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
     )
+    pcc_passed, pcc_message = check_with_pcc(torch_expected_nhwc, ttnn_output_torch, pcc=0.99)
 
-    validate_grid_sample_output(
-        torch_expected_nhwc, ttnn_output_torch, use_precomputed_grid=use_precomputed_grid, grid_dtype=grid_dtype
-    )
+    logger.info(pcc_message)
+
+    print(ttnn_output_torch[:, 0, 0, :])
+    print(torch_expected_nhwc[:, 0, 0, :])

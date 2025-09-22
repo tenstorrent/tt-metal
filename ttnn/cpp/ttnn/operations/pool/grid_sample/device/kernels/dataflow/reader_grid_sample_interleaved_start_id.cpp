@@ -53,6 +53,7 @@ void kernel_main() {
     */
 
     zero_out_tiles<input_cb_index>();
+    zero_out_tiles<scalar_cb_index>();
 
     // Calculate starting batch from starting spatial position (avoid division in loop)
     uint32_t curr_batch = start_page_id / output_hw_size;

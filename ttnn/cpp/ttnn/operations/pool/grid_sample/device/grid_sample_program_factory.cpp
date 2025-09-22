@@ -171,6 +171,11 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     }
 
     const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
+    // Create tilized input CB for separate tilization step
+    const uint32_t tilized_input_cb_page_size = tt::constants::TILE_HW * input_tensor.element_size();
+    const auto [tilized_input_cb_index, tilized_input_cb_handle] = tt::tt_metal::create_cb(
+        cb_idx++, program, all_cores, tilized_input_cb_page_size, BUFFERING_FACTOR * in_ntiles_c, input_cb_data_format);
+
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * output_tensor.element_size();
     const uint32_t output_cb_pages =
         is_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
@@ -283,7 +288,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             DUMMY_CB_ID,                       // ct_arg[10]: unused
             scalar_cb_index_0,                 // ct_arg[11]: scalar_cb_index_0
             scalar_cb_index_1,                 // ct_arg[12]: scalar_cb_index_1
-            DUMMY_CB_ID,                       // ct_arg[13]: unused
+            tilized_input_cb_index,            // ct_arg[13]: tilized_input_cb_index
             DUMMY_CB_ID,                       // ct_arg[14]: unused
             output_cb_index,                   // ct_arg[15]: output_cb_index
             DUMMY_CB_ID,                       // ct_arg[16]: unused
@@ -296,7 +301,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
         return tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
+            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/compute/compute_grid_sample.cpp",
             cores,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,

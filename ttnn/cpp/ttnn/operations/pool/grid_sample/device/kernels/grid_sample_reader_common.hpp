@@ -27,6 +27,21 @@ ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     ptr[0] = (val | (val1 << 16));
     ptr[1] = (val2 | (val3 << 16));
+    ptr[128] = (val | (val1 << 16));
+    ptr[129] = (val2 | (val3 << 16));
+}
+
+ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
+    // simplest impl:
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
+    uint32_t value = val | (val << 16);
+    if (ptr[0] != value || unconditionally) {
+        for (uint32_t i = 0; i < n / 2; ++i) {
+            ptr[i] = (value);
+        }
+    }
+
+    return true;
 }
 
 ALWI uint16_t float_to_bfloat16(float value) {
@@ -253,6 +268,7 @@ ALWI void process_grid_point(
     // Reserve CB space for 4 corner input sticks for this grid point
     cb_reserve_back(input_cb_index, 1);
     const uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
+    // fill_with_val(get_write_ptr(input_cb_index), 1024 * 3, 0);
 
     // Read 4 corner input sticks
     read_four_corner_inputs(
@@ -270,9 +286,11 @@ ALWI void process_grid_point(
     // Store bilinear interpolation weights for this grid point
     cb_reserve_back(scalar_cb_index, 1);
     const uint32_t l1_write_scalar_addr = get_write_ptr(scalar_cb_index);
+    // fill_with_val(get_write_ptr(scalar_cb_index), 1024, 0);
     fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
     cb_push_back(scalar_cb_index, 1);
 
     noc_async_read_barrier();
+    // fill_with_val(get_write_ptr(input_cb_index), 1024, 0x3f80);
     cb_push_back(input_cb_index, 1);
 }
