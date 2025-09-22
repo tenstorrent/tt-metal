@@ -330,6 +330,8 @@ Tensor set_tensor_id(const Tensor& tensor);
 
 }  // namespace tt
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
+
 namespace ttnn {
 
 using Tensor = tt::tt_metal::Tensor;

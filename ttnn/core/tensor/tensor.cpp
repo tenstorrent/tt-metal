@@ -807,4 +807,9 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
+    tt::stl::reflection::operator<<(os, tensor);
+    return os;
+}
+
 }  // namespace tt::tt_metal
