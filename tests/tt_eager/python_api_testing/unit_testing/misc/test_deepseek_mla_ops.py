@@ -24,7 +24,7 @@ import pytest
 from models.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.tt.mla_1d import MLA1D
+from models.demos.deepseek_v3.tt.mla import MLA
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
 from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
@@ -598,7 +598,7 @@ def run_update_cache_impl(
     input_torch = torch.randn(shape).float()
     current_pos = torch.randint(0, max_seq_len, (bsz,))
 
-    paged_config = MLA1D.get_valid_paged_config(decode_cfg.args.max_seq_len, bsz, dp_factor=1)
+    paged_config = MLA.get_valid_paged_config(decode_cfg.args.max_seq_len, bsz, dp_factor=1)
     page_table = page_table_setup(bsz, paged_config)
 
     #################
@@ -698,7 +698,7 @@ def run_fill_cache_impl(
     batch_idx = torch.randint(0, prefill_cfg.max_batch_size_per_device, (1,)).item()  # Randomly select a batch index
     logger.debug(f"Selected batch index: {batch_idx}")
 
-    paged_config = MLA1D.get_valid_paged_config(
+    paged_config = MLA.get_valid_paged_config(
         prefill_cfg.args.max_seq_len, prefill_cfg.max_batch_size_per_device, dp_factor=1
     )
     page_table = page_table_setup(prefill_cfg.max_batch_size_per_device, paged_config)

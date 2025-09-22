@@ -5,7 +5,7 @@
 import ttnn
 
 
-class CCL1D:
+class CCL:
     """
     A class to handle all CCL (Collective Communication Library) operations
     """

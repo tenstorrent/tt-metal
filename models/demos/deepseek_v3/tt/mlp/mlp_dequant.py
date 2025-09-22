@@ -8,12 +8,12 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.mlp.mlp_1d import MLP1D
+from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.utils.config_helpers import dequantize, get_state_dicts, save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
 
-class MLP1DDequant(MLP1D):
+class MLPDequant(MLP):
     """
     Base class for MLP modules in DeepSeek V3.
     """
