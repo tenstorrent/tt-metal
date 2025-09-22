@@ -24,11 +24,13 @@ runs:
           echo "payload={\"text\":\"Failed to parse regression list\"}" >> "$GITHUB_OUTPUT"
           exit 0
         fi
+
+        # This part is unchanged: it generates the main regression text
         TEXT=$(jq -r '
           if (type=="array" and length==0) then
-            "No new regressions."
+            "✅ No new regressions."
           elif (type=="array") then
-            "Regressions (Pass → Fail):\n" + (map(
+            "❌ *Regressions (Pass → Fail):*\n" + (map(
               "- " + .name
               + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
               + (if .run_url then " — <" + .run_url + "|run>" else "" end)
@@ -38,18 +40,36 @@ runs:
           else
             "Malformed regressions payload"
           end' "$tmp_file")
-        AGG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+        # MINIMAL CHANGE: Define message parts and build a Block Kit payload
+        # 1. Define the components of the message as separate variables
+        HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
         ALERT_RAW='${{ inputs.alert_all_message }}'
-        # Convert any literal \n sequences into real newlines
-        ALERT=$(printf '%b' "$ALERT_RAW")
-        ALERT_SECTION=""
-        if [ -n "$ALERT" ]; then
-          ALERT_SECTION="\n\n$ALERT"
-        fi
-        FULL_TEXT="Aggregate Workflow Data run: <${AGG_URL}|this run> ${TEXT}${ALERT_SECTION}"
-        # Ensure Slack interprets markdown/newlines
-        PAYLOAD=$(jq -cn --arg text "$FULL_TEXT" '{text:$text, mrkdwn:true}')
+        ALERT=$(printf '%b' "$ALERT_RAW") # Safely interprets newlines like \n
+
+        # 2. Build the payload using blocks for guaranteed line breaks, with text fallback
+        PAYLOAD=$(jq -cn \
+          --arg header "$HEADER" \
+          --arg body "$TEXT" \
+          --arg alert "$ALERT" \
+          '
+          (
+            [
+              { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
+              { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
+            ]
+            + (if ($alert | length > 0) then
+                 [ { "type": "divider" }, { "type": "section", "text": { "type": "mrkdwn", "text": $alert } } ]
+               else [] end)
+          ) as $blocks
+          | {
+              text: ($header + "\n" + $body + (if $alert == "" then "" else "\n\n" + $alert end)),
+              blocks: $blocks
+            }
+        ')
+
         echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
+
     - name: Report Github Pipeline Status Slack Action
       uses: slackapi/slack-github-action@v1.26.0
       with:
