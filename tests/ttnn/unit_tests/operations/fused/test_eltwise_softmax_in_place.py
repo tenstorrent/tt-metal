@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,13 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     ref_value = torch.softmax(x_ref, -1)
 
     tt_result = ttnn_ops.eltwise_softmax_in_place(
-        x=x, device=device, dtype=[dtype], layout=[dlayout], input_mem_config=[in_mem_config], output_mem_config=None
+        x=x,
+        device=device,
+        dtype=[dtype],
+        layout=[dlayout],
+        input_mem_config=[in_mem_config],
+        output_mem_config=None,
+        numeric_stable=True,
     )
 
     # compare tt and golden outputs
