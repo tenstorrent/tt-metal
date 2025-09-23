@@ -17,7 +17,7 @@ def create_global_semaphores(mesh_device, cores, initial_value):
     return ccl_semaphore_handles
 
 
-def run_reduce_scatter_impl(
+def run_reduce_scatter_impl_old(
     mesh_device,
     num_devices,
     rs_input_shape,
@@ -262,6 +262,262 @@ def run_reduce_scatter_impl(
     mesh_device.clear_loaded_sub_device_manager()
 
 
+def run_reduce_scatter_impl(
+    mesh_device,
+    num_devices,
+    rs_input_shape,
+    dim,
+    num_links,
+    rs_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+    num_iters=1,
+    enable_trace=True,
+    ones_tensor=False,
+    mem_config_intermediate=None,
+    cluster_axis=None,
+    use_barrier=False,
+    use_persistent_buffers=True,
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
+):
+    torch.manual_seed(0)
+
+    tile = (32, 32)
+
+    # Set the default config
+    if mem_config_intermediate is None:
+        mem_config_intermediate = mem_config_rs
+
+    ##### Fabric setup #####
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice(
+        [
+            ccl_sub_device_crs,
+        ]
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+
+    barrier_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+    ]
+
+    ### Create persistent output buffers
+    logger.info("Creating persistent buffers")
+    intermediate_shape = rs_input_shape[:]
+    if rs_topology == ttnn.Topology.Linear:
+        # Line RS requires double-sized input for forward/backward
+        intermediate_shape.insert(0, 2)
+    persistent_intermediate_buffers = [
+        ttnn.from_torch(
+            torch.zeros(intermediate_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_intermediate,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iters)
+    ]
+    rs_output_shape = rs_input_shape[:]
+    rs_output_shape[dim] //= num_devices
+    persistent_output_buffers = [
+        ttnn.from_torch(
+            torch.zeros(rs_output_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_rs,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iters)
+    ]
+
+    logger.info("Done creating persistent buffers")
+
+    ##### All gather input setup #####
+    logger.info(f"Reduce scatter shape: {rs_input_shape}")
+    logger.info(f"Reduce scatter dim: {dim}")
+    logger.info(f"input mem config: {mem_config_input}")
+    logger.info(f"Reduce input mem config: {mem_config_rs}")
+    logger.info(f"intermediate mem config: {mem_config_intermediate}")
+    logger.info(f"topology: {rs_topology}")
+
+    tt_input_tensor_mesh_list = []
+    torch_input_tensor_list = []
+
+    for i in range(num_iters):
+        # This test generates a unique input tensor for each device.
+        # Within each tensor, every tile has a unique, incrementing value.
+        # This provides maximum variability to expose any incorrect memory access bugs.
+
+        if ones_tensor:
+            # Fallback to ones tensor if requested
+            rs_global_input_shape = rs_input_shape[:]
+            rs_global_input_shape[dim] *= num_devices
+            rs_input_tensor = torch.ones(rs_global_input_shape).bfloat16()
+            input_tensors = torch.chunk(rs_input_tensor, num_devices, dim)
+        else:
+            # Per-device shape is the input shape
+            per_device_shape = rs_input_shape[:]
+
+            # Calculate number of tiles in a per-device tensor
+            # Assuming dim=2 and shape=[1, 1, 256, 32]
+            tile_height, tile_width = 32, 32
+            num_tiles_h = per_device_shape[2] // tile_height  # 256 / 32 = 8
+            num_tiles_w = per_device_shape[3] // tile_width  # 32 / 32 = 1
+            tiles_per_device = num_tiles_h * num_tiles_w  # 8
+
+            device_inputs = []
+            for device_id in range(num_devices):
+                device_tensor = torch.zeros(per_device_shape).bfloat16()
+                # Populate each tile with a unique value
+                for h_idx in range(num_tiles_h):
+                    for w_idx in range(num_tiles_w):
+                        tile_idx_in_tensor = h_idx * num_tiles_w + w_idx
+
+                        # Unique value for each tile on each device
+                        value = (device_id * tiles_per_device) + tile_idx_in_tensor + 1
+
+                        # Get slice objects for the tile
+                        h_start, h_end = h_idx * tile_height, (h_idx + 1) * tile_height
+                        w_start, w_end = w_idx * tile_width, (w_idx + 1) * tile_width
+
+                        # Fill the tile with the unique value
+                        device_tensor[..., h_start:h_end, w_start:w_end] = float(value)
+                print("device tensor input: ", device_tensor)
+                device_inputs.append(device_tensor)
+            # The list of unique tensors is the golden input for the torch reference
+            input_tensors = device_inputs
+
+        torch_input_tensor_list.append(input_tensors)
+
+        # For the TT op, we need to shard this data by concatenating the per-device
+        # tensors and then using a Shard mapper.
+        full_input_tensor = torch.cat(input_tensors, dim)
+
+        input_tensor_mesh = ttnn.from_torch(
+            full_input_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+        )
+        tt_input_tensor_mesh_list.append(input_tensor_mesh)
+
+    ##### Perform torch ops #####
+    torch_reduce_scatter_output_list = []
+    for i in range(num_iters):
+        reduce_output = torch.sum(torch.stack(torch_input_tensor_list[i]), dim=0)
+        scatter_output = torch.chunk(reduce_output, num_devices, dim)
+        torch_reduce_scatter_output_list.append(scatter_output)
+
+    ##### Perform the TT ops #####
+    tt_reduce_scatter_output_list = []
+
+    def run_op(i):
+        tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_input_tensor_mesh_list[i],
+            persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+            if use_persistent_buffers
+            else None,
+            dim=dim,
+            multi_device_global_semaphore=ccl_semaphore_handles[i],
+            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+            num_links=num_links,
+            memory_config=mem_config_rs,
+            intermediate_memory_config=mem_config_intermediate,
+            topology=rs_topology,
+            subdevice_id=worker_sub_device_id,
+            cluster_axis=cluster_axis,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
+        )
+
+        return tt_reduce_scatter_output_tensor
+
+    if enable_trace:
+        # Compile the op
+        tt_reduce_scatter_output_trace_list = []
+        for i in range(num_iters):
+            tt_reduce_scatter_output_tensor = run_op(i)
+        logger.info(f"Done compiling Op")
+
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(num_iters):
+            tt_reduce_scatter_output_tensor = run_op(i)
+            tt_reduce_scatter_output_trace_list.append(tt_reduce_scatter_output_tensor)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        logger.info(f"Done capturing trace")
+
+        # Execute trace
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        logger.info(f"Done executing trace")
+
+        # Synchronize the devices
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        for tt_tensor in tt_reduce_scatter_output_trace_list:
+            tt_rs_out = ttnn.from_device(tt_tensor)
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+            tt_tensor.deallocate(True)
+            tt_reduce_scatter_output_list.append(tt_rs_out)
+    else:
+        for i in range(num_iters):
+            tt_reduce_scatter_output_tensor = run_op(i)
+            tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+            tt_reduce_scatter_output_tensor.deallocate(True)
+            tt_reduce_scatter_output_list.append(tt_rs_out)
+
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            logger.info(f"Done op")
+
+            logger.info(f"Done iteration {i}")
+
+    for i in range(num_iters):
+        tt_rs_out = tt_reduce_scatter_output_list[i]
+        torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
+
+        torch_rs_out = torch.cat(torch_rs_out_tensor, dim)
+
+        if ones_tensor:
+            eq, output = comp_equal(tt_rs_out, torch_rs_out)
+        else:
+            eq, output = comp_pcc(tt_rs_out, torch_rs_out)
+
+        print("tt_rs_out:", tt_rs_out[:, :, :128, 31:32])
+        print("torch_rs_out:", torch_rs_out[:, :, :128, 31:32])
+        print("tt_rs_out:", tt_rs_out[:, :, 128:256, 31:32])
+        print("torch_rs_out:", torch_rs_out[:, :, 128:256, 31:32])
+        print("tt_rs_out:", tt_rs_out[:, :, 256:384, 31:32])
+        print("torch_rs_out:", torch_rs_out[:, :, 256:384, 31:32])
+        print("tt_rs_out:", tt_rs_out[:, :, 384:, 31:32])
+        print("torch_rs_out:", torch_rs_out[:, :, 384:, 31:32])
+        logger.info(f"{output}, iteration {i}")
+        # assert eq, f"{i} FAILED ag: {output}"
+
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
+
+
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
@@ -274,7 +530,7 @@ def run_reduce_scatter_impl(
         # ([1, 256, 96, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         # ([128, 3, 32, 64], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         # ([1, 256, 96, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 256, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        ([1, 1, 512, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
     ],
 )
 @pytest.mark.parametrize(

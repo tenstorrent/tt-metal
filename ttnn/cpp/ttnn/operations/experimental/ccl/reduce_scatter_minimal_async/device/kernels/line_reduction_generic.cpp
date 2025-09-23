@@ -7,6 +7,27 @@
 
 constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "===" << tile_id << "===" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 namespace NAMESPACE {
 void MAIN {
     // Define all compile-time arguments at the beginning
@@ -45,19 +66,13 @@ void MAIN {
                 cb_reserve_back(output_cb, tile_granularity);
                 acquire_dst();
                 for (uint32_t tile_id = 0; tile_id < tile_granularity; tile_id++) {
-                    if constexpr (dim == 3) {
-                        add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
-                    } else {
-                        uint32_t global_tile_index = tiles_read + packet_id * tile_granularity + tile_id;
-                        uint32_t batch_tile_index = global_tile_index - running_batch_tile_offset;
-                        uint32_t pages_per_slice_per_device = 1;
-                        if (num_pages_per_slice > ring_size) {
-                            pages_per_slice_per_device = num_pages_per_slice / ring_size;
-                        }
-                        uint32_t tile_index_in_slice = batch_tile_index % pages_per_slice_per_device;
-
-                        add_tiles(input_cb_id, intermediate_cb, tile_id, tile_index_in_slice, tile_id);
-                    }
+                    // Use the simplest indexing for all dimensions.
+                    // print input tile
+                    DPRINT << "input tile with id: " << (uint32_t)(tile_id) << "\n";
+                    print_full_tile(input_cb_id, tile_id);
+                    DPRINT << "intermediate tile with id: " << (uint32_t)(tile_id) << "\n";
+                    print_full_tile(intermediate_cb, tile_id);
+                    add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
                     pack_tile(tile_id, output_cb);
                 }
                 release_dst();
