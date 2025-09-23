@@ -7,10 +7,22 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_grayskull
+from models.common.utility_functions import is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from .test_utils import round_up
 import math
+
+
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint8:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
 
 
 def run_slice_rm_sharded(device, n, c, h, w):
@@ -565,12 +577,13 @@ def test_run_slice_test(
 
 # slice alternate elements in a given tensor
 @pytest.mark.parametrize("dim", [4, 12, 20, 68])
-def test_stride_slice_single_dim_skip_2(dim, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_single_dim_skip_2(dim, dtype, device):
     torch.manual_seed(2005)
-    torch_input = torch.rand(dim)
+    torch_input = random_torch_tensor(dtype, (dim,))
     torch_output = torch_input[::2]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype)
     ttnn_output = ttnn_input[::2]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -583,12 +596,13 @@ def test_stride_slice_single_dim_skip_2(dim, device):
 @pytest.mark.parametrize("begins_w", [2])
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
-def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
-    torch_input = torch.rand(h, w)
+    torch_input = random_torch_tensor(dtype, (h, w))
     torch_output = torch_input[begins_h:h:stride_h, begins_w:w:stride_w]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype)
     ttnn_output = ttnn_input[begins_h::stride_h, begins_w::stride_w]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -604,12 +618,13 @@ def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, devi
 @pytest.mark.parametrize("stride_c", [2])
 @pytest.mark.parametrize("stride_h", [1])
 @pytest.mark.parametrize("stride_w", [1])
-def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c, stride_h, stride_w, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
-    torch_input = torch.rand(c, h, w)
+    torch_input = random_torch_tensor(dtype, (c, h, w))
     torch_output = torch_input[begins_c:c:stride_c, begins_h:h:stride_h, begins_w:w:stride_w]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype)
     ttnn_output = ttnn_input[begins_c:c:stride_c, begins_h:h:stride_h, begins_w:w:stride_w]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -621,16 +636,20 @@ def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c,
 @pytest.mark.parametrize("ends", [[18, 16, 16, 18]])
 @pytest.mark.parametrize("strides", [[2, 2, 2, 2]])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_stride_slice_four_dim(dims, begins, ends, strides, layout, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, device):
+    # Skip if tiled and uint8/16
+    if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
+        pytest.skip("Skipping test for tiled layout with uint8/16 dtype")
     torch.manual_seed(2005)
-    torch_input = torch.rand(dims)
+    torch_input = random_torch_tensor(dtype, dims)
     slices = []
     for i in range(len(dims)):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
     ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -641,17 +660,20 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, device):
 @pytest.mark.parametrize("begins", [[0, 0, 0, 0], [0, 0, 0, 90]])
 @pytest.mark.parametrize("ends", [[1, -1, 56, 96], [1, 56, 56, 95], [-1, 1, -1, -1]])
 @pytest.mark.parametrize("strides", [[1, 2, 1, 1]])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype, device):
+    if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
+        pytest.skip("Skipping test for tiled layout with uint8/16 dtype")
     torch.manual_seed(2005)
-    torch_input = torch.rand(dims)
+    torch_input = random_torch_tensor(dtype, dims)
     slices = []
     for i in range(len(dims)):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
     ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -1225,9 +1247,16 @@ def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, m
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype):
+@pytest.mark.parametrize("pad_value", [16, 32])
+def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
+
+    if pad_value == 16 and is_blackhole():
+        pytest.skip("Blackhole has DRAM Alignment of 64 bytes, or 32 elements for bfloat16.")
+
+    if pad_value == 16 and layout == ttnn.TILE_LAYOUT:
+        pytest.skip("Tile layout has alignment of 32.")
 
     orientation = ttnn.ShardOrientation.ROW_MAJOR
     core_grid = device.compute_with_storage_grid_size()
@@ -1250,7 +1279,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=orientation
     )
-    padded_channels = round_up(dims[-1], 32)
+    padded_channels = round_up(dims[-1], pad_value)
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
     torch.set_printoptions(sci_mode=False, precision=2)
     for i in range(num_slices):
@@ -1260,7 +1289,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         ends[slice_dim] = (i + 1) * slice_size
         this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
         output_shape = this_torch_output.shape
-        output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
+        output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], pad_value)]
 
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1

@@ -221,7 +221,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
 void PrefetchKernel::GenerateDependentConfigs() {
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
-        TT_ASSERT(upstream_kernels_.size() == 0);
+        TT_ASSERT(upstream_kernels_.empty());
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
 
@@ -268,7 +268,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         dependent_config_.num_hops = 0;
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, just host so no dispatch core
-        TT_ASSERT(upstream_kernels_.size() == 0);
+        TT_ASSERT(upstream_kernels_.empty());
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
         // May be overwritten below
