@@ -13,6 +13,7 @@
 #include <limits>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/host_to_router_comm_helpers.hpp"
 
 namespace tt::tt_fabric {
 
@@ -67,6 +68,12 @@ public:
 
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
+    size_t get_control_channel_num_buffer_slots() const;
+    size_t get_control_channel_buffer_base_address() const;
+    size_t get_control_channel_remote_write_counter_address() const;
+    size_t get_control_channel_remote_read_counter_address() const;
+    RouterCommContext& get_router_comm_context(FabricNodeId& node_id, chan_id_t eth_chan_id);
+
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
     tt::tt_fabric::Topology get_topology() const;
@@ -110,6 +117,12 @@ private:
     // Use vector instead of unordered_map to be thread safe
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
+
+    size_t control_channel_num_buffer_slots_ = 0;
+    size_t control_channel_buffer_base_address_ = 0;
+    size_t control_channel_remote_write_counter_address_ = 0;
+    size_t control_channel_remote_read_counter_address_ = 0;
+    std::unordered_map<FabricNodeId, std::unordered_map<chan_id_t, RouterCommContext>> router_comm_contexts_;
 };
 
 }  // namespace tt::tt_fabric
