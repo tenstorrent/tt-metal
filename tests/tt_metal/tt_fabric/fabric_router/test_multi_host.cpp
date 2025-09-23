@@ -202,11 +202,9 @@ TEST(MultiHost, TestDual2x4Fabric1DSanity) {
 }
 
 TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        log_critical(
-            tt::LogTest,
-            "This test is type {}",
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type());
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::N300_2x2) {
+        log_info(tt::LogTest, "This test is only for N300 2x2");
         return;
     }
 
@@ -241,6 +239,12 @@ TEST(MultiHost, TestSplit2x2Fabric2DSanity) {
 }
 
 TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::N300_2x2) {
+        log_info(tt::LogTest, "This test is only for N300 2x2");
+        return;
+    }
+
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -277,8 +281,9 @@ TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
 }
 
 TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        log_info(tt::LogTest, "This test is only for T3K");
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::N300_2x2) {
+        log_info(tt::LogTest, "This test is only for N300 2x2");
         return;
     }
 
