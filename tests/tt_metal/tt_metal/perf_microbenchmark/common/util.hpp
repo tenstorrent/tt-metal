@@ -38,7 +38,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
     std::vector<uint64_t> print_buffer_addrs;
     print_buffer_addrs.reserve(num_processors);
     for (int i = 0; i < num_processors; i++) {
-        print_buffer_addrs.push_back(reinterpret_cast<uint64_t>(dprint_msg_addr + i * sizeof(DebugPrintMemLayout)));
+        print_buffer_addrs.push_back(dprint_msg_addr + i * sizeof(DebugPrintMemLayout));
     }
     for (const auto& worker_core : worker_cores_used_in_program) {
         for (const auto& buffer_addr : print_buffer_addrs) {
