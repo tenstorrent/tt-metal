@@ -7,6 +7,7 @@
 #include "modules/grouped_query_attention.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/rope_op.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
@@ -19,9 +20,12 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate
         const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
         hidden_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
     }
-    m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
-    m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
-    m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
+    m_w1 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
+    m_w3 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
+    m_w2 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
+    // m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
+    // m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
+    // m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
     m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
 
     create_name("llama_mlp");
@@ -32,10 +36,16 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate
 }
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
-    auto swished = ops::silu((*m_w1)(input));
-    auto gate = (*m_w3)(input);
-    auto gated = ops::mul(swished, gate);
-    auto x = (*m_w2)(gated);
+    // std::cerr << "Input shape: " << input->get_shape() << std::endl;
+    // std::cerr << "W1 shape: " << m_w1->get_weight()->get_shape() << std::endl;
+    // std::cerr << "W2 shape: " << m_w2->get_weight()->get_shape() << std::endl;
+    // std::cerr << "W3 shape: " << m_w3->get_weight()->get_shape() << std::endl;
+
+    auto x = ops::swiglu(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight());
+    // auto swished = ops::silu((*m_w1)(input));
+    // auto gate = (*m_w3)(input);
+    // auto gated = ops::mul(swished, gate);
+    // auto x = (*m_w2)(gated);
     x = (*m_dropout)(x);
     return x;
 }
