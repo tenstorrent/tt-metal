@@ -323,6 +323,14 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{1}, MeshHostRankId(0)),
         MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+
+    // Check that the number of intra-mesh connections match the number of connections in the graph
+    EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].begin()->second.connected_chip_ids.size(), 2);
+    EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].size(), 2);
+
+    // Check that the number of intermesh connections match the number of connections in the graph
+    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
+    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
 }
 
 TEST(MeshGraphValidation, TestGetHostRankForChip) {

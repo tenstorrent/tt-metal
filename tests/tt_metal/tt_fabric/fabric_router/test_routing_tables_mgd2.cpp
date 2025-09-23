@@ -267,6 +267,9 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
         mesh_graph.get_host_rank_for_chip(tt::tt_fabric::MeshId{4}, 0),
         mesh_graph2.get_host_rank_for_chip(tt::tt_fabric::MeshId{4}, 0),
         4);
+
+    mesh_graph.print_connectivity();
+    mesh_graph2.print_connectivity();
 }
 
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInitMGD2) {
@@ -422,6 +425,14 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraphMGD2) {
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{1}, MeshHostRankId(0)),
         MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+
+    // Check that the number of intra-mesh connections match the number of connections in the graph
+    EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].begin()->second.connected_chip_ids.size(), 2);
+    EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].size(), 2);
+
+    // Check that the number of intermesh connections match the number of connections in the graph
+    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
+    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
 }
 
 TEST(MeshGraphValidation, TestGetHostRankForChipMGD2) {

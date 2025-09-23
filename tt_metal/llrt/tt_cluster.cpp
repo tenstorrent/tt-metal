@@ -168,6 +168,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             cluster_type = tt::tt_metal::ClusterType::P300;
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
+        } else if (board_type == BoardType::UBB_BLACKHOLE) {
+            cluster_type = tt::tt_metal::ClusterType::GALAXY;
         }
     }
     return cluster_type;

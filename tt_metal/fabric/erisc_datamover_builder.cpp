@@ -176,7 +176,7 @@ static void update_sender_channel_servicing(
 
 static size_t get_num_riscv_cores() {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
-        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         if (nriscs > 1) {
             log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
@@ -255,10 +255,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
 
+    // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        this->receiver_txq_id = 1;
-    }
+    // if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    //     this->receiver_txq_id = 1;
+    // }
     this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
@@ -273,22 +274,23 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     }
 
     if (this->sender_txq_id != this->receiver_txq_id) {
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            this->to_sender_channel_remote_ack_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            this->to_sender_channel_remote_completion_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            this->receiver_channel_remote_ack_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            this->receiver_channel_remote_completion_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
+        // counters are packed contiguously in memory, This can lead to resends of values but
+        // this is safe for free running counters, which are enabled in this mode.
+        size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
+
+        next_l1_addr = tt::align(next_l1_addr, field_size);
+
+        this->to_sender_channel_remote_ack_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
+
+        this->to_sender_channel_remote_completion_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
+
+        this->receiver_channel_remote_ack_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
+
+        this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
     }
 
     this->edm_channel_ack_addr = next_l1_addr;
@@ -703,9 +705,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
-    this->sender_txq_id = 0;
-    this->receiver_txq_id = 0;
-
     // Update sender channel servicing based on fabric tensix configuration
     if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
         // Use default direction (EAST) for the constructor case since direction isn't available here
@@ -1449,18 +1448,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
     if (multi_txq_enabled) {
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            ct_args.push_back(config.to_sender_channel_remote_ack_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            ct_args.push_back(config.to_sender_channel_remote_completion_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            ct_args.push_back(config.receiver_channel_remote_ack_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            ct_args.push_back(config.receiver_channel_remote_completion_counter_addrs[i]);
-        }
+        ct_args.push_back(config.to_sender_channel_remote_ack_counters_base_addr);
+        ct_args.push_back(config.to_sender_channel_remote_completion_counters_base_addr);
+        ct_args.push_back(config.receiver_channel_remote_ack_counters_base_addr);
+        ct_args.push_back(config.receiver_channel_remote_completion_counters_base_addr);
     }
 
     ct_args.push_back(0x30c0ffee);
