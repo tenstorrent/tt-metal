@@ -20,7 +20,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
     SavedWeight,
 )
@@ -300,11 +300,9 @@ class MLA(AbstractModule):
         # Set up CCLs
 
         # Q
-        wq_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_device.shape),
+        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -566,11 +564,9 @@ class MLA(AbstractModule):
         # Set up CCLs
 
         # Q
-        wq_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -590,11 +586,9 @@ class MLA(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        wq_a2a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a2a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -617,11 +611,9 @@ class MLA(AbstractModule):
                 packer_l1_acc=True,
             ),
         }
-        wkv_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wkv_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -634,11 +626,9 @@ class MLA(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        flash_mla_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        flash_mla_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -786,12 +776,13 @@ class MLA(AbstractModule):
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
-            "from_remote_multi_device_global_semaphore": ccl.get_from_sem(axis=axis),
-            "to_remote_multi_device_global_semaphore": ccl.get_to_sem(axis=axis),
+            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         get_ag_params = lambda axis: {
             "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         ccl_states_prefill = {
@@ -859,8 +850,7 @@ class MLA(AbstractModule):
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_decode"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_decode"])
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
@@ -901,7 +891,7 @@ class MLA(AbstractModule):
             tt_q, **cfg["wq_a2a_ag_decode"]
         )  # [1, num_heads, bsz_local, kv_lora_rank + qk_rope_head_dim]
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a2a_rs_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a2a_rs_decode"])
         tt_q = tt_q * scale  # Scale the input tensor
 
         # KVPE Stuff
@@ -942,7 +932,7 @@ class MLA(AbstractModule):
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
-        tt_kvpe = ttnn.experimental.reduce_scatter_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
+        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
 
@@ -977,7 +967,7 @@ class MLA(AbstractModule):
             attn_out, **cfg["flash_mla_ag_decode"]
         )  # [1, bsz, num_heads, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
-        attn_out = ttnn.experimental.reduce_scatter_async(
+        attn_out = ttnn.experimental.reduce_scatter_minimal_async(
             attn_out, **cfg["flash_mla_rs_decode"]
         )  # [1, num_heads_local, bsz, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, bsz, num_heads_local, kv_lora_rank]
@@ -1037,7 +1027,7 @@ class MLA(AbstractModule):
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs_prefill"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_prefill"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_prefill"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
