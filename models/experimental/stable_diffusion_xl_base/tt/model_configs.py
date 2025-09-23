@@ -891,7 +891,7 @@ class ModelOptimisations:
             # UP BLOCK 2
             elif "decoder.up_blocks.2.resnet" in conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_BS"]
-            elif "decoder.up_blocks.1.upsamplers" in conv_path:
+            elif "decoder.up_blocks.2.upsamplers" in conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_BS"]
             # UP BLOCK 3
             elif "decoder.up_blocks.3.resnet" in conv_path:

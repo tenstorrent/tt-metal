@@ -11,7 +11,11 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_gn_mask,
     prepare_linear_params,
 )
-from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config, get_DRAM_GN_config
+from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import (
+    get_DRAM_conv_config,
+    get_DRAM_GN_config,
+    get_DRAM_GN_shape,
+)
 
 
 class TtResnetBlock2D(LightweightModule):
@@ -66,6 +70,16 @@ class TtResnetBlock2D(LightweightModule):
                 return_mask=True,
             )
 
+            N, C, H, W = get_DRAM_GN_shape(module_path, 1)
+            torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, self.norm_groups, self.norm_core_grid_1)
+            self.reciprocals_tensor_1 = ttnn.from_torch(
+                torch_reciprocals,
+                dtype=ttnn.DataType.FLOAT32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
         self.is_sharded_gn2 = self.norm_blocks_2 == -1
         self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
@@ -84,6 +98,16 @@ class TtResnetBlock2D(LightweightModule):
                 device,
                 core_grid=self.norm_core_grid_2,
                 return_mask=True,
+            )
+
+            N, C, H, W = get_DRAM_GN_shape(module_path, 2)
+            torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, self.norm_groups, self.norm_core_grid_2)
+            self.reciprocals_tensor_2 = ttnn.from_torch(
+                torch_reciprocals,
+                dtype=ttnn.DataType.FLOAT32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
@@ -150,6 +174,13 @@ class TtResnetBlock2D(LightweightModule):
             if self.conv1_slice_config is not None:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:
+            sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=self.reciprocals_tensor_1.shape,
+                core_grid=self.norm_core_grid_1,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_1, sharded_mem_config)
             hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.group_norm(
                 hidden_states,
@@ -162,7 +193,10 @@ class TtResnetBlock2D(LightweightModule):
                 epsilon=self.norm_eps,
                 inplace=False,
                 num_out_blocks=self.norm_blocks_1,
+                use_welford=True,
+                reciprocals=reciprocals_tensor,
             )
+            ttnn.deallocate(reciprocals_tensor)
 
         hidden_states = ttnn.silu(hidden_states)
 
@@ -217,6 +251,13 @@ class TtResnetBlock2D(LightweightModule):
             if self.conv2_slice_config is not None:
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:
+            sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=self.reciprocals_tensor_2.shape,
+                core_grid=self.norm_core_grid_2,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_2, sharded_mem_config)
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.group_norm(
                 hidden_states,
@@ -229,7 +270,10 @@ class TtResnetBlock2D(LightweightModule):
                 epsilon=self.norm_eps,
                 inplace=False,
                 num_out_blocks=self.norm_blocks_2,
+                use_welford=True,
+                reciprocals=reciprocals_tensor,
             )
+            ttnn.deallocate(reciprocals_tensor)
 
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 
