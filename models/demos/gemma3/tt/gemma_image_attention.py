@@ -307,7 +307,15 @@ class TtGemmaImageAttention(LightweightModule):
             program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
 
-        q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
+        q_heads_1QSD = ttnn.transpose(
+            ttnn.reshape(
+                q_heads_1QSD,
+                (batch_size, seq_len, self.n_local_heads, -1),
+                recreate_mapping_tensor=ttnn.TileReshapeMapMode.RECREATE,
+            ),
+            1,
+            2,
+        )
 
         k_heads_1KSD = ttnn.linear(
             x_11SH,

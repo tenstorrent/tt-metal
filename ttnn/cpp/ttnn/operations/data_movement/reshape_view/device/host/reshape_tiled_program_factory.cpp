@@ -292,6 +292,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const auto& input_shape = input_tensor.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
 
+    std::cout << "RESHAPE PF: " << input_shape << " -> " << output_shape << std::endl;
+
     TT_FATAL(input_shape.volume() == output_shape.volume(), "Requested shapes are not of equal volume");
 
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
@@ -449,8 +451,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
                                      .to_device(input_tensor.device());
             }
 
-            const auto input_buffer_addr = input_tensor.buffer()->address();
-            const auto output_buffer_addr = output_tensor.buffer()->address();
+            const auto input_buffer_addr = input_tensors.at(0).buffer()->address();
+            const auto output_buffer_addr = output_tensors.at(0).buffer()->address();
 
             for (const auto& core : utilized_cores) {
                 auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
