@@ -515,7 +515,7 @@ void syncAllDevices(chip_id_t host_connected_device) {
             uint64_t senderBase = 0;
             uint64_t receiverBase = 0;
 
-            if (timePairs.size() > 0) {
+            if (!timePairs.empty()) {
                 senderBase = timePairs[0].first;
                 receiverBase = timePairs[0].second;
             }
