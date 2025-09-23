@@ -180,15 +180,12 @@ Tensor from_flatbuffer(
     if (const auto* fb_topology = fb_tensor->tensor_topology()) {
         topology = from_flatbuffer(fb_topology);
     } else {
-        const auto& distribution_shape = ttnn_mesh_shape;
-        tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
-        placements.reserve(distribution_shape.dims());
-        for (std::size_t i = 0; i < distribution_shape.dims(); ++i) {
-            placements.emplace_back(tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
-        }
+        const auto& distribution_shape = tt::tt_metal::distributed::MeshShape(ttnn_mesh_shape.mesh_size());
+        tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
+            tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
         std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
-        coords.reserve(distribution_shape.mesh_size());
-        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(distribution_shape)) {
+        coords.reserve(ttnn_mesh_shape.mesh_size());
+        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(ttnn_mesh_shape)) {
             coords.push_back(coord);
         }
         topology = tt::tt_metal::TensorTopology(distribution_shape, placements, coords);
