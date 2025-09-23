@@ -11,7 +11,7 @@ These utilities abstract away architecture-specific details and provide a clean
 interface for the main dumper script.
 """
 
-from erisc_debug_constants import (
+from fabric_erisc_constants import (
     STREAM_REGISTER_INDICES,
     FABRIC_STREAM_GROUPS,
     ARCHITECTURE_MAPPING,

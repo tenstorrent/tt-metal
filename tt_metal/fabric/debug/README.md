@@ -2,7 +2,7 @@
 
 This directory contains debugging utilities for the fabric EDM (Ethernet Data Movement) system on Tenstorrent devices. The tools help analyze fabric router binaries, inspect ERISC core registers, and debug fabric flow control issues.
 
-## dump_erisc_values.py
+## fabric_erisc_dumper.py
 
 A comprehensive tool for reading and monitoring values from ERISC (Ethernet RISC) cores across Tenstorrent devices. Designed specifically for debugging fabric EDM flow control and routing issues.
 
@@ -27,22 +27,22 @@ A comprehensive tool for reading and monitoring values from ERISC (Ethernet RISC
 
 ```bash
 # Basic snapshot of default ERISC registers (reset status, wall clocks)
-python3 tt_metal/fabric/debug/dump_erisc_values.py
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py
 
 # Monitor fabric stream registers for flow control debugging
-python3 tt_metal/fabric/debug/dump_erisc_values.py --fabric-streams --poll --duration 10
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --poll --duration 10
 
 # Check specific addresses on device 0, cores (0,5) and (0,7)
-python3 tt_metal/fabric/debug/dump_erisc_values.py --addresses 0xFFB121B0,0xFFB121F0 --devices 0 --cores 0,5,0,7
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --addresses 0xFFB121B0,0xFFB121F0 --devices 0 --cores 0,5,0,7
 
 # Continuous monitoring with CSV export for analysis
-python3 tt_metal/fabric/debug/dump_erisc_values.py --poll --csv --output fabric_debug.csv --duration 30 --interval 0.5
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --poll --csv --output fabric_debug.csv --duration 30 --interval 0.5
 
 # Analyze buffer contents (useful for EDM circular buffers)
-python3 tt_metal/fabric/debug/dump_erisc_values.py --buffer-mode --addresses 0x12345678 --num-elements 4 --slot-size 64
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --buffer-mode --addresses 0x12345678 --num-elements 4 --slot-size 64
 
 # Monitor only sender channels with changes-only output
-python3 tt_metal/fabric/debug/dump_erisc_values.py --fabric-streams --stream-group sender_free_slots --poll --changes-only
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-group sender_free_slots --poll --changes-only
 ```
 
 ### Fabric Stream Register Modes
@@ -158,55 +158,6 @@ Build Hash: 1a6f17ff97 (100 binaries, 100 unique configs, avg: 8.9 KB)
 - Data section: combined `.data` and `.bss` sections
 - Statistics: min/max/mean/median/95th percentile across all binaries
 - Each kernel hash represents a unique router configuration
-
-## erisc_debug_constants.py
-
-Hardware constants and configuration data for ERISC debugging, including:
-
-- **ERISC Register Addresses**: Common registers for core status and wall clocks
-- **Stream Register Constants**: Architecture-specific indices and masking
-- **Fabric Stream Groups**: Logical groupings of fabric flow control registers
-- **Architecture Mapping**: Device architecture detection and normalization
-
-### Key Constants
-
-```python
-# Default ERISC registers for basic core health checks
-DEFAULT_ADDRESSES = [
-    0xFFB121B0,  # ETH_RISC_RESET - Check if core is out of reset
-    0xFFB121F0,  # ETH_RISC_WALL_CLOCK_0 - Monitor core activity
-    0xFFB121F4,  # ETH_RISC_WALL_CLOCK_1 - High bits of wall clock
-]
-
-# Fabric stream groups for flow control debugging
-FABRIC_STREAM_GROUPS = {
-    "sender_free_slots": {"stream_ids": [17, 18, 19, 20, 21], ...},
-    "receiver_free_slots": {"stream_ids": [12, 13, 14, 15, 16], ...},
-    "all_fabric_free_slots": {"stream_ids": [12, 13, 14, 15, 16, 17, 18, 19, 20, 21], ...},
-}
-```
-
-## erisc_debug_utils.py
-
-Utility functions providing a clean interface for ERISC debugging operations:
-
-- **`get_stream_reg_address()`**: Calculate physical addresses for stream registers
-- **`normalize_architecture()`**: Device architecture detection and normalization
-- **`get_fabric_stream_addresses()`**: Get all addresses for a fabric register group
-- **`detect_device_architecture()`**: Auto-detect device architecture from ttexalens
-- **`parse_core_key()`**: Parse core coordinate strings
-
-### Usage Example
-
-```python
-from erisc_debug_utils import get_fabric_stream_addresses, detect_device_architecture
-
-# Get all fabric sender channel addresses for wormhole
-addresses = get_fabric_stream_addresses("sender_free_slots", "BUF_SPACE_AVAILABLE", "wormhole")
-
-# Auto-detect device architecture
-arch = detect_device_architecture(device)
-```
 
 ## Troubleshooting
 
