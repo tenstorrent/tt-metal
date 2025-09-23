@@ -17,35 +17,13 @@
 #include <ttnn/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <ttnn/distributed/api.hpp>
 
 #include "../tt_cpp/deit_config.h"
 #include "../tt_cpp/deit_self_attention.h"
 #include "../helper_funcs.h"
 
 namespace {
-
-/**
- * Compute Pearson Correlation Coefficient (PCC) between two tensors
- * @param tensor1 First tensor
- * @param tensor2 Second tensor
- * @return PCC value
- */
-double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
-    auto flat1 = tensor1.flatten().to(torch::kFloat32);
-    auto flat2 = tensor2.flatten().to(torch::kFloat32);
-    
-    auto mean1 = flat1.mean();
-    auto mean2 = flat2.mean();
-    
-    auto centered1 = flat1 - mean1;
-    auto centered2 = flat2 - mean2;
-    
-    auto numerator = (centered1 * centered2).sum();
-    auto denominator = torch::sqrt((centered1 * centered1).sum() * (centered2 * centered2).sum());
-    
-    return numerator.item<double>() / denominator.item<double>();
-}
-
 
 /**
  * Test DeiT Self Attention inference
@@ -122,14 +100,12 @@ void test_deit_self_attention_inference(const std::string& model_path) {
         return;
     }
 
-
     // Create input tensor: [batch_size=1, seq_len=198, hidden_size=768]
     // DeiT uses 196 patches + 1 CLS token + 1 distillation token = 198 tokens
     torch::Tensor input_tensor = torch::randn({1, 1, 198, 768}, torch::kFloat32);
     // Prepare input for self-attention module
     auto hidden_states = input_tensor.squeeze(0); // Remove batch dimension: [198, 768]
     torch::Tensor torch_head_mask; // None equivalent
-    bool torch_output_attentions = false;
     
     // Call self-attention module forward
     // Traced模型的forward方法只接受2个参数：self和hidden_states
@@ -141,7 +117,6 @@ void test_deit_self_attention_inference(const std::string& model_path) {
     // Traced模型的forward方法直接返回Tensor，而不是Tuple
     auto torch_output = output.toTensor();
 
-    
     // Create DeiT config
     DeiTConfig config;
     // Setup TT model
@@ -167,7 +142,7 @@ void test_deit_self_attention_inference(const std::string& model_path) {
     tt_output_torch = tt_output_torch.squeeze(0); // Remove batch dimension
     
     // Compute PCC between PyTorch and TT outputs
-    double pcc = compute_pcc(torch_output, tt_output_torch);
+    double pcc = helper_funcs::compute_pcc(torch_output, tt_output_torch);
     
     // Log results
     std::cout << "PCC between PyTorch and TT outputs: " << pcc << std::endl;
@@ -181,6 +156,8 @@ void test_deit_self_attention_inference(const std::string& model_path) {
         std::cout << "FAILED: PCC (" << pcc << ") is below threshold (" << pcc_threshold << ")" << std::endl;
     }
 
+    // Clean up device resources
+    ttnn::distributed::close_mesh_device(device);
 }
 
 } // anonymous namespace

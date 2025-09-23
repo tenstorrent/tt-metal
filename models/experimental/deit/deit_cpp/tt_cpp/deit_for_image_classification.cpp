@@ -142,9 +142,6 @@ ttnn::Tensor TtDeiTForImageClassification::apply_classifier(const ttnn::Tensor& 
             throw std::runtime_error("Expected sequence_output to have at least 3 dimensions");
         }
         
-        uint32_t batch_size = output_shape[0];
-        uint32_t hidden_size = output_shape[2];
-        
         // For now, we'll use a simplified approach
         // In practice, you'd need to properly slice the tensor to get the CLS token
         // This is a placeholder implementation
