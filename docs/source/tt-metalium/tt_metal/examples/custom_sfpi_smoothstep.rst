@@ -165,7 +165,7 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     #ifdef TRISC_MATH
 
     // Low-level function operating on a tile face
-    inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
+    void my_smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
         constexpr size_t vectors_per_face = 8;
         for (size_t i = 0; i < vectors_per_face; i++) {
             vFloat x = dst_reg[i];
@@ -177,25 +177,18 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
             dst_reg[i] = result;
         }
     }
+    #endif // TRISC_MATH
 
-    // LLK wrapper
-    inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1) {
-        // passes parameters to the SFPI kernel
-        _llk_math_eltwise_unary_sfpu_params_<false>(
+    // High-level API function
+    // Accepts `edge0`, `edge1` and `inv_delta` as parameters
+    inline void my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
+        MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
             smoothstep_tile_face,
             idx_dst0,
             VectorMode::RC, // Apply on all 4 faces of the tile
             edge0,
             edge1,
-            inv_delta);
-    }
-
-    #endif // TRISC_MATH
-
-    // High-level API function
-    // Accepts `edge0`, `edge1` and `inv_delta` as parameters
-    inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-        MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1, inv_delta));
+            inv_delta));
     }
 
 Parameter Passing
@@ -206,13 +199,10 @@ The `smoothstep` function needs two scalar parameters: ``edge0`` and ``edge1``. 
 .. code-block:: cpp
 
     // Passes edge0 and edge1 as arguments to the SFPI kernel
-    my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
-    // ↓
-    // Passes the parameters to the low-level function
-    my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
+    my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta);
     // ↓
     // Use the parameters for all elements in the tile face
-    smoothstep_tile_face(float edge0, float edge1, float inv_delta);
+    my_smoothstep_tile_face(float edge0, float edge1, float inv_delta);
 
 The helper function is a template that takes the low-level face function as its first argument, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.
 

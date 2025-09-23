@@ -30,31 +30,15 @@
 inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
     constexpr size_t vectors_per_face = 8;
     for (size_t i = 0; i < vectors_per_face; i++) {
-        vFloat x = dst_reg[0];
+        vFloat x = dst_reg[i];
         vFloat t = (x - edge0) * inv_delta;
         v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
         v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
         v_endif;
-        vFloat result = t * t * (vConstFloatPrgm0 - vConstFloatPrgm1 * t);
-        dst_reg[0] = result;
-        dst_reg++;
+        vFloat result = t * t * (3.0f - 2.0f * t);
+        dst_reg[i] = result;
     }
 }
-
-/**
- * SFPU Kernel Wrapper Function (Smoothstep)
- *
- * Bridges the high-level kernel API and the low-level smoothstep SFPU function.
- * Calls smoothstep_tile_face for each face in the tile (typically 4 faces per tile).
- * Only compiled for the MATH core (TRISC_MATH context).
- */
-inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-    vConstFloatPrgm0 = 3.0;
-    vConstFloatPrgm1 = 2.0;
-    _llk_math_eltwise_unary_sfpu_params_<false>(
-        smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta);
-}
-
 #endif
 
 /**
@@ -72,7 +56,8 @@ inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float ed
  *   - Results written to specified Dst register
  */
 inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-    MATH(my_smoothstep_tile_internal(idx_dst0, edge0, edge1, inv_delta));
+    MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
+        smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
 }
 
 namespace NAMESPACE {

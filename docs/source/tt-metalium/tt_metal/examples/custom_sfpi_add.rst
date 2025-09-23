@@ -153,15 +153,15 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
     #ifdef TRISC_MATH
 
     // Low-level function operating on a tile face
-    sfpi_inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
-        constexpr uint32_t n_vector_in_face = 32;
+    void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
+        constexpr uint32_t n_vector_in_tile = 32;
 
         // Calculate base indices for each tile in the Dst register array.
-        // Each tile occupies 32 consecutive Dst registers (n_vector_in_face) in WH and BH
+        // Each tile occupies 32 consecutive Dst registers (n_vector_in_tile) in WH and BH
         // For example: tile 0 uses dst_reg[0-31], tile 1 uses dst_reg[32-63], etc.
-        const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_face;
-        const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_face;
-        const uint32_t out_base_idx = dst_index_out * n_vector_in_face;
+        const uint32_t in0_base_idx = dst_index_in0 * n_vector_in_tile;
+        const uint32_t in1_base_idx = dst_index_in1 * n_vector_in_tile;
+        const uint32_t out_base_idx = dst_index_out * n_vector_in_tile;
 
         // Process one face of the tile (8 SIMD operations covering 256 elements).
         // Each iteration processes 32 elements, so 8 iterations = 256 elements = one 16x16 face.
@@ -171,27 +171,19 @@ The core of this example is the custom SFPI function ``my_add_tiles``. It's impl
             dst_reg[out_base_idx + i] = a + b;
         }
     }
-
-    // LLK wrapper
-    sfpi_inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0);
-    }
-
     #endif // TRISC_MATH
 
     // High-level API function
-    void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-        MATH(my_add_tile_internal(idx_dst0, idx_dst1, idx_out0));
+    void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
+        MATH(_llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0));
     }
 
 
-Here's a breakdown of the layers. The functions ``add_tile_face`` and ``my_add_tile_internal`` must be inside a ``#ifdef TRISC_MATH`` block, since they use math-thread-specific code that will not compile for other RISC-V cores.
+Here's a breakdown of the layers. The ``add_tile_face`` must be inside a ``#ifdef TRISC_MATH`` block, since they use math-thread-specific code that will not compile for other RISC-V cores.
 
-1.  **`my_add_tiles`**: This is the main function called by the compute kernel. It wraps the internal function with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core.
+1.  **`my_add_tiles`**: This is the main function called by the compute kernel. It wraps the internal function with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core.  ``_llk_math_eltwise_binary_sfpu_params_`` is an internal helper that sets up the SFPU, iterates over all faces of a tile, calls ``add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
 
-2.  **`my_add_tile_internal`**: This function is a wrapper around the low-level kernel API. ``_llk_math_eltwise_binary_sfpu_params_`` is an internal helper that sets up the SFPU, iterates over all faces of a tile, calls ``add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
-
-3.  **`add_tile_face`**: This is the most basic function, performing the actual addition on a single tile face. A 32x32 tile is divided into four 16x16 faces, and this function is called for each face. It uses the ``dst_reg`` array, which represents the SFPU's destination registers. The number of available ``dst_reg`` registers can be found in the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
+2.  **`add_tile_face`**: This is the most basic function, performing the actual addition on a single tile face. A 32x32 tile is divided into four 16x16 faces, and this function is called for each face. It uses the ``dst_reg`` array, which represents the SFPU's destination registers. The number of available ``dst_reg`` registers can be found in the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
 
     The function calculates base indices (``in0_base_idx``, ``in1_base_idx``, ``out_base_idx``) to map tile indices to register addresses within ``dst_reg``. Each tile occupies 32 registers; the base index is calculated by multiplying the tile index by 32 (refer to :ref:`Internal structure of a Tile<internal_structure_of_a_tile>` for more information on tile structure). For example, processing tiles at indices 0, 1, and 0 results in base indices of 0, 32, and 0, respectively. This means the first input tile starts at ``dst_reg[0]``, the second at ``dst_reg[32]``, and the output overwrites the first input tile at ``dst_reg[0]``.
 

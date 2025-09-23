@@ -28,7 +28,7 @@
  * @param dst_index_in1  Index of the second input tile in Dst registers (not CB index!)
  * @param dst_index_out  Index of the output tile in Dst registers (not CB index!)
  */
-inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
+inline void my_add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
     // SFPU Tile Organization:
     // Each tile in Dst registers is divided into four 16x16 faces.
     // n_vector_in_tile = 32 as there are 32 SIMD lanes per tile
@@ -63,14 +63,13 @@ inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index
         // Load 32-element SIMD vectors from Dst registers.
         // vFloat represents 32 parallel floating-point values.
         // This is the SFPU's native SIMD data type.
-        vFloat a = dst_reg[in0_base_idx];
-        vFloat b = dst_reg[in1_base_idx];
+        vFloat a = dst_reg[in0_base_idx + i];
+        vFloat b = dst_reg[in1_base_idx + i];
 
         // Perform SIMD addition: all 32 elements are added in parallel.
         // This is where the actual computation happens on the vector engine.
         // For FP32 accuracy, ensure the host sets fp32_dest_acc_en=true.
-        dst_reg[out_base_idx] = a + b;
-        dst_reg++;
+        dst_reg[out_base_idx + i] = a + b;
 
         // The above program can be shortened to a single line:
         // However, the expanded form is clearer for educational purposes.
@@ -78,33 +77,9 @@ inline void add_tile_face(const uint32_t dst_index_in0, const uint32_t dst_index
     }
 
     // Note: This function only processes ONE FACE of a tile.
-    // The _llk_math_eltwise_binary_sfpu_params_ wrapper (used in my_add_tile_internal)
-    // will call this function for each face in the tile (typically 4 times for a 32x32 tile).
+    // The _llk_math_eltwise_binary_sfpu_params_ wrapper  will call this function
+    // for each face in the tile (typically 4 times for a 32x32 tile).
 }
-
-/**
- * SFPU Kernel Wrapper Function
- *
- * This function bridges between the high-level kernel API and the low-level SFPU function.
- * It demonstrates the typical SFPU programming pattern:
- *
- * 1. The custom SFPU function (add_tile_face) operates on individual tile faces
- * 2. The LLK (Low-Level Kernel) wrapper handles the face iteration automatically
- * 3. The _llk_math_eltwise_binary_sfpu_params_ template:
- *    - Takes our custom function as a parameter
- *    - Calls it for each face in the tiles (typically 4 times per tile)
- *
- * Template parameter <false> indicates this is a non-approximated operation. Which might
- * be consumed by downstream functions to trade off accuracy for performance.
- *
- * This function is only compiled for the MATH core (TRISC_MATH context).
- */
-inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    // LLK wrapper that calls add_tile_face for each face in the tiles.
-    // Parameters: (custom_function, input1_dst_idx, input2_dst_idx, output_dst_idx)
-    _llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0);
-}
-
 #endif
 
 /**
@@ -115,8 +90,7 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
  *
  * Abstraction Layers (from low to high):
  * 1. add_tile_face()         - Low-level SFPU function (operates on tile faces)
- * 2. my_add_tile_internal()  - LLK wrapper (invokes add_tile_face for each face)
- * 3. my_add_tiles()          - High-level API (easier to use in kernel code)
+ * 2. my_add_tile()          - High-level API (easier to use in kernel code)
  *
  * The MATH() macro is crucial - it ensures this function only executes on cores
  * that is designated to the SFPU (vector engine). This is part of TT-Metal's
@@ -130,8 +104,8 @@ inline void my_add_tile_internal(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t 
  * This function takes tile idx_dst0 and idx_dst1 as inputs, adds them,
  * and writes the result to tile idx_out0 in the Dst registers.
  */
-inline void my_add_tiles(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
-    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(add_tile_face, idx_dst0, idx_dst1, idx_out0));
+inline void my_add_tile(uint32_t idx_dst0, uint32_t idx_dst1, uint32_t idx_out0) {
+    MATH(_llk_math_eltwise_binary_sfpu_params_<false>(my_add_tile_face, idx_dst0, idx_dst1, idx_out0));
 }
 
 namespace NAMESPACE {
@@ -160,7 +134,7 @@ void MAIN {
         // Copy the tiles from the circular buffers into Dst registers
         copy_tile(cb_in0, 0, 0);
         copy_tile(cb_in1, 0, 1);
-        my_add_tiles(0, 1, 0);  // <-- The custom SFPU addition happens here
+        my_add_tile(0, 1, 0);  // <-- The custom SFPU addition happens here
         // Finished the computation, transfer register ownership to the unpacker
         tile_regs_commit();
         tile_regs_wait();
