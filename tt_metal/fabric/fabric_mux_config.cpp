@@ -178,6 +178,32 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
     const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
     TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
     TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
+    log_info(
+        tt::LogOp,
+        "  num_full_size_channels_: {}, num_buffers_full_size_channel_: {}, buffer_size_bytes_full_size_channel_: {}, "
+        "num_header_only_channels_: {}, num_buffers_header_only_channel_: {}, status_address: {}, "
+        "termination_signal_address: {}, connection_info_base_address: {}, connection_handshake_base_address: {}, "
+        "flow_control_base_address: {}, full_size_channels_base_address: {}, local_fabric_router_status_address: {}, "
+        "fabric_router_edm_status_address: {}, fabric_router_sender_num_buffers: {}, num_full_size_channel_iters_: {}, "
+        "num_iters_between_teardown_checks_: {}, core_type_index_: {}",
+        num_full_size_channels_,
+        num_buffers_full_size_channel_,
+        buffer_size_bytes_full_size_channel_,
+        num_header_only_channels_,
+        num_buffers_header_only_channel_,
+        status_region_.get_address(),
+        termination_signal_region_.get_address(),
+        connection_info_region_.get_address(),
+        connection_handshake_region_.get_address(),
+        flow_control_region_.get_address(),
+        full_size_channels_region_.get_address(),
+        local_fabric_router_status_region_.get_address(),
+        fabric_router_config.edm_status_address,
+        fabric_router_config.sender_channels_num_buffers[0],
+        num_full_size_channel_iters_,
+        num_iters_between_teardown_checks_,
+        core_type_index_);
+
     return std::vector<uint32_t>{
         num_full_size_channels_,
         num_buffers_full_size_channel_,
