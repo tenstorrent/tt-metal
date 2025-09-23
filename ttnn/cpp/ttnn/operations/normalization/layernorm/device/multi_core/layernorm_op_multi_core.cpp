@@ -1215,7 +1215,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (b) {
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
-    if (rms_norm) {
+    if (rms_norm && !use_welford) {
         compute_defines["RMSNORM"] = "1";
     }
     // compute kernel compile time args
