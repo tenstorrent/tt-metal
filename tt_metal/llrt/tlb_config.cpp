@@ -162,23 +162,10 @@ void configure_static_tlbs(
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
     }
 
-    std::cout << "LOGICAL\n";
-    auto dram_logical = sdesc.get_cores(CoreType::DRAM, tt::umd::CoordSystem::LOGICAL);
-    for (auto& i : dram_logical) {
-        std::cout << i.str() << "\n";
-    }
-    std::cout << "VIRTUAL\n";
-    auto dram_virtual = sdesc.get_cores(CoreType::DRAM, tt::umd::CoordSystem::VIRTUAL);
-    for (auto& i : dram_virtual) {
-        std::cout << i.str() << "\n";
-    }
-
     std::int32_t address = 0;
     // Setup static TLBs for all worker cores
-    std::cout << "tlb_index part 1\n";
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::LOGICAL)) {
         auto tlb_index = get_static_tlb_index(core);
-        std::cout << "tlb_index: " << tlb_index << "\n";
         // TODO
         // Note: see issue #10107
         // Strict is less performant than Posted, however, metal doesn't presently
@@ -188,10 +175,8 @@ void configure_static_tlbs(
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
     // Setup static TLBs for all eth cores
-    std::cout << "tlb_index part 2\n";
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::ETH, tt::umd::CoordSystem::LOGICAL)) {
         auto tlb_index = get_static_tlb_index(core);
-        std::cout << "tlb_index: " << tlb_index << "\n";
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
 
