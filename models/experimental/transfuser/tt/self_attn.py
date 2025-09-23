@@ -7,28 +7,28 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TTSelfAttention(LightweightModule):
-    def __init__(self, device, parameters, n_embed, n_head, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG):
+    def __init__(self, device, parameters, n_head, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG):
         self.parameters = parameters
         self.device = device
-        self.n_embed = n_embed
-        self.out_features = n_embed
-        self.dtype = dtype
-        self.memory_config = ttnn.DRAM_MEMORY_CONFIG
+        self.n_head = n_head
+        self.dtype = ttnn.bfloat16
+        self.memory_config = memory_config
 
     def forward(self, x):
-        key_weight = self.parameters["key"]["weight"]
-        key_bias = self.parameters["key"]["bias"]
-        query_weight = self.parameters["query"]["weight"]
-        query_bias = self.parameters["query"]["bias"]
-        value_weight = self.parameters["value"]["weight"]
-        value_bias = self.parameters["value"]["bias"]
-        proj_weight = self.parameters["proj"]["weight"]
-        proj_bias = self.parameters["proj"]["bias"]
+        B, T, C = x.shape
 
+        query = ttnn.linear(
+            x,
+            self.parameters["query"]["weight"],
+            bias=self.parameters["query"]["bias"],
+            memory_config=self.memory_config,
+            core_grid=ttnn.CoreGrid(x=8, y=8),
+            dtype=self.dtype,
+        )
         key = ttnn.linear(
             x,
-            key_weight,
-            bias=key_bias,
+            self.parameters["key"]["weight"],
+            bias=self.parameters["key"]["bias"],
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
@@ -36,43 +36,67 @@ class TTSelfAttention(LightweightModule):
             core_grid=ttnn.CoreGrid(x=8, y=8),
             dtype=self.dtype,
         )
-        key = ttnn.reshape(key, (1, 174, 4, 18))
-        key = ttnn.permute(key, (0, 2, 1, 3))
-        query = ttnn.linear(
-            x,
-            query_weight,
-            bias=query_bias,
-            memory_config=self.memory_config,
-            core_grid=ttnn.CoreGrid(x=8, y=8),
-            dtype=self.dtype,
-        )
-        query = ttnn.reshape(query, (1, 174, 4, 18))
-        query = ttnn.permute(query, (0, 2, 1, 3))
         value = ttnn.linear(
             x,
-            value_weight,
-            bias=value_bias,
+            self.parameters["value"]["weight"],
+            bias=self.parameters["value"]["bias"],
             memory_config=self.memory_config,
             core_grid=ttnn.CoreGrid(x=8, y=8),
             dtype=self.dtype,
         )
-        value = ttnn.reshape(value, (1, 174, 4, 18))
-        value = ttnn.permute(value, (0, 2, 1, 3))
-        # TODO: Add program_config and compute_kernel_config
-        sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=[8, 7],
-            q_chunk_size=512,
-            k_chunk_size=512,
-            exp_approx_mode=False,
-        )
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
+        head_dim = C // self.n_head
+        query = ttnn.reshape(query, (B, T, self.n_head, head_dim))
+        query = ttnn.transpose(query, 1, 2)  # (B, self.n_head, T, head_dim)
+
+        key = ttnn.reshape(key, (B, T, self.n_head, head_dim))
+        key = ttnn.transpose(key, 1, 2)  # (B, self.n_head, T, head_dim)
+        key = ttnn.transpose(key, -2, -1)  # (B, self.n_head, head_dim, T)
+
+        att = ttnn.matmul(
             query,
             key,
-            value,
-            is_causal=False,
-            scale=1.0 / math.sqrt(key.shape[-1]),  # Your scaling factor
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # program_config=program_config,
-            # compute_kernel_config=compute_kernel_config
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+            memory_config=self.memory_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=self.dtype,
         )
-        return attn_output
+        value = ttnn.reshape(value, (B, T, self.n_head, head_dim))
+        value = ttnn.transpose(value, 1, 2)
+        dim_size = float(key.shape[-1])
+        sqrt_dim = math.sqrt(dim_size)
+        scale = 1.0 / sqrt_dim
+        att = ttnn.multiply(att, scale, memory_config=self.memory_config, dtype=self.dtype)
+        att = ttnn.softmax(att, dim=-1, memory_config=self.memory_config)
+        print("tt")
+        print(att.shape, value.shape)
+        y = ttnn.matmul(
+            att,
+            value,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+            memory_config=self.memory_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=self.dtype,
+        )
+
+        y = ttnn.transpose(y, 1, 2)
+        y = ttnn.reshape(y, (B, T, C))
+
+        # Convert to tile layout for linear operation
+        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
+        # Output projection
+        y = ttnn.linear(
+            y,
+            self.parameters["proj"]["weight"],
+            bias=self.parameters["proj"]["bias"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+            memory_config=self.memory_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=self.dtype,
+        )
+        return y
