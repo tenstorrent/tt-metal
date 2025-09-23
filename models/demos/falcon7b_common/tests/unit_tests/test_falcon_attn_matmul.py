@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_pcc, tt2torch_tensor
+from models.common.utility_functions import comp_pcc, tt2torch_tensor
 
 
 def run_falcon_attn_matmul_test(

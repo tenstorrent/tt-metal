@@ -12,9 +12,9 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
-from models.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import is_blackhole_p100, resnet50
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
@@ -264,12 +264,15 @@ class ResNet50TestInfra:
         if self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
-            if is_grayskull() or is_blackhole():
+            if is_blackhole():
                 core_grid = ttnn.CoreGrid(y=8, x=10)
             elif is_wormhole_b0():
                 core_grid = ttnn.CoreGrid(y=5, x=6)  # untested due to unsupported batch20 on WH
         elif self.batch_size == 32:
             core_grid = ttnn.CoreGrid(y=10, x=13)
+            if is_blackhole_p100(device):
+                core_grid = ttnn.CoreGrid(y=8, x=8)
+
         # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
@@ -329,23 +332,9 @@ class ResNet50TestInfra:
 
         batch_size = output_tensor.shape[0]
 
-        valid_pcc = 1.0
-        if self.batch_size >= 8:
-            valid_pcc = golden_pcc[self.device.arch()][self.batch_size][
-                (self.math_fidelity, self.weight_dtype, self.act_dtype)
-            ]
-        else:
-            if self.act_dtype == ttnn.bfloat8_b:
-                if self.math_fidelity == ttnn.MathFidelity.LoFi:
-                    valid_pcc = 0.87
-                else:
-                    valid_pcc = 0.94
-            else:
-                if self.math_fidelity == ttnn.MathFidelity.LoFi:
-                    valid_pcc = 0.93
-                else:
-                    valid_pcc = 0.982
+        valid_pcc = 0.98
         self.pcc_passed, self.pcc_message = check_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
+        assert self.pcc_passed, self.pcc_message
 
         logger.info(
             f"ResNet50 batch_size={batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, math_fidelity={self.math_fidelity}, PCC={self.pcc_message}"

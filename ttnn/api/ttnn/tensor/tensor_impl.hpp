@@ -44,9 +44,9 @@ std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_
     std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back(datum.to_float());
+            converted_data.push_back(static_cast<float>(datum));
         } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back((uint32_t)datum.to_uint16());
+            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
         } else {
             converted_data.push_back(static_cast<OutputDataType>(datum));
         }
@@ -180,21 +180,24 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
 void copy_to_host(
-    const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+    const Tensor& device_tensor,
+    Tensor& host_tensor,
+    bool blocking = true,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
-    QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 // ======================================================================================
 //                                  .to_layout()

@@ -10,6 +10,5 @@ namespace ttnn::operations::core {
 
 namespace py = pybind11;
 void py_module_types(py::module& module);
-;
 void py_module(py::module& module);
 }  // namespace ttnn::operations::core

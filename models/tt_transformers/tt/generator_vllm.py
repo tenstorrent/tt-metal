@@ -7,6 +7,7 @@ from typing import List, Mapping, Optional, Sequence, Union
 
 import torch
 from llama_models.llama3.api.chat_format import create_vision_mask
+from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
 from transformers import BatchFeature
@@ -26,10 +27,10 @@ from vllm.multimodal.processing import BaseMultiModalProcessor, EncDecMultiModal
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.utility_functions import is_wormhole_b0, nearest_32
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -480,8 +481,21 @@ class MultiModalProcessor(BaseMultiModalProcessor):
         mm_processor_kwargs = getattr(self.info.ctx.model_config, "mm_processor_kwargs", None) or {}
         input_processor = self.info.get_hf_processor(**mm_processor_kwargs)
 
+        # WORKAROUND
+        # When using /v1/chat/completions endpoint prompt is already tokenized
+        # Processor requires text, so we decode tokens back to text
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], int):
+            # Use the processor's tokenizer to decode tokens back to text
+            tokenizer = (
+                getattr(input_processor, "tokenizer") if hasattr(input_processor, "tokenizer") else input_processor
+            )
+            text_prompt = tokenizer.decode(prompt, skip_special_tokens=False)
+            logger.warning(f"Applied workaround: decoded {len(prompt)} tokens back to text for processor compatibility")
+        else:
+            text_prompt = prompt
+
         processed_inputs = input_processor(
-            text=prompt,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
+            text=text_prompt,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
             images=mm_data["image"] if mm_data else None,
             videos=None,  # [INFO] videos are not supported yet
             return_tensors="pt",

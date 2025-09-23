@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.yolov4.common import (
     YOLOV4_BOXES_PCC,
     YOLOV4_BOXES_PCC_BLACKHOLE,
@@ -22,7 +23,6 @@ from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.runner.runner import YOLOv4Runner
 from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
 from models.demos.yolov4.tt.weight_parameter_update import update_weight_parameters
-from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

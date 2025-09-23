@@ -9,10 +9,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE
 from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_yolov8s(
@@ -50,7 +50,6 @@ def run_yolov8s(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV8S_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
