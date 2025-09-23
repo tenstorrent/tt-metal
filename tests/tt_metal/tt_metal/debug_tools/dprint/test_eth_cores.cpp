@@ -104,7 +104,7 @@ TEST_F(DPrintMeshFixture, ActiveEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
         auto device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
-        if (device->get_active_ethernet_cores(true).size() == 0) {
+        if (device->get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
@@ -130,7 +130,7 @@ TEST_F(DPrintMeshFixture, IdleEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
         auto device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
-        if (device->get_inactive_ethernet_cores().size() == 0) {
+        if (device->get_inactive_ethernet_cores().empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }

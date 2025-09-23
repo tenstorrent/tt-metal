@@ -203,7 +203,7 @@ TEST(Cluster, ReportIntermeshLinks) {
     size_t total_chips = 0;
     size_t total_links = 0;
     for (const auto& [chip_id, links] : all_intermesh_links) {
-        if (links.size() > 0) {
+        if (!links.empty()) {
             total_chips++;
             total_links += links.size();
         }

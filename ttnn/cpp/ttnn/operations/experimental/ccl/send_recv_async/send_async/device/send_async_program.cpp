@@ -152,7 +152,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(
-        link_indices.size() > 0,
+        !link_indices.empty(),
         "No link indices found {} {} {} {}",
         sender_fabric_node_id.mesh_id,
         sender_fabric_node_id.chip_id,

@@ -67,7 +67,7 @@ static void test_sems_across_core_types(
             active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
 
         std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
-        if (eth_cores.size() > 0) {
+        if (!eth_cores.empty()) {
             distributed::MeshWorkload workload;
             auto zero_coord = distributed::MeshCoordinate(0, 0);
             auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -143,7 +143,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
 
     std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
-    if (eth_cores.size() > 0) {
+    if (!eth_cores.empty()) {
         CoreCoord eth_core = *eth_cores.begin();
         CreateKernel(
             program,
@@ -205,7 +205,7 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     const auto& eth_cores =
         this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
-    if (eth_cores.size() > 0) {
+    if (!eth_cores.empty()) {
         CoreCoord eth_core = *eth_cores.begin();
         CreateKernel(
             program,

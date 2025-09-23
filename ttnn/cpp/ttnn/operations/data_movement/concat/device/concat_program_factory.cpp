@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 namespace {
 
 uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint32_t alignment) {
-    TT_FATAL(stick_sizes.size() > 0, "Need at least one stick size to find page size");
+    TT_FATAL(!stick_sizes.empty(), "Need at least one stick size to find page size");
     uint32_t page_size = tt::align(stick_sizes[0], alignment);
     for (size_t idx = 1; idx < stick_sizes.size(); idx++) {
         const uint32_t padded_stick_size = tt::align(stick_sizes[idx], alignment);

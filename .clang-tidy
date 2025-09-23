@@ -166,7 +166,6 @@ Checks: >
   -readability-braces-around-statements,
   -readability-container-contains,
   -readability-container-data-pointer,
-  -readability-container-size-empty,
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
   -readability-enum-initial-value,
