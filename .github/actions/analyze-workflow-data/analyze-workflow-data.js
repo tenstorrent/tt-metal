@@ -61,15 +61,33 @@ function normalizeOwners(value) {
   return undefined;
 }
 
+function extractSignificantTokens(str) {
+  if (typeof str !== 'string') return [];
+  return str
+    .split(/\s+/)
+    .map(token => token.replace(/^[^A-Za-z0-9_\-]+|[^A-Za-z0-9_\-]+$/g, ''))
+    .filter(token => token.length > 1);
+}
+
+function getNeedleTail(needle) {
+  const tokens = extractSignificantTokens(needle);
+  return tokens.length ? tokens[tokens.length - 1] : undefined;
+}
+
 function findOwnerForLabel(label) {
   try {
     const mapping = loadOwnersMapping();
     if (!mapping) return undefined;
     const lbl = typeof label === 'string' ? label : '';
+    const labelTokens = extractSignificantTokens(lbl);
     // Prefer exact keys (label may contain the key as a substring)
     if (mapping.exact && typeof mapping.exact === 'object') {
       for (const key of Object.keys(mapping.exact)) {
         if (lbl.includes(key)) return normalizeOwners(mapping.exact[key]);
+        const tail = getNeedleTail(key);
+        if (tail && labelTokens.includes(tail)) {
+          return normalizeOwners(mapping.exact[key]);
+        }
       }
     }
     // Fallback to contains list
@@ -77,6 +95,12 @@ function findOwnerForLabel(label) {
       for (const entry of mapping.contains) {
         if (entry && typeof entry.needle === 'string' && lbl.includes(entry.needle)) {
           return normalizeOwners(entry.owner);
+        }
+        if (entry && typeof entry.needle === 'string') {
+          const tail = getNeedleTail(entry.needle);
+          if (tail && labelTokens.includes(tail)) {
+            return normalizeOwners(entry.owner);
+          }
         }
       }
     }
