@@ -100,3 +100,6 @@ add_deit_test(test_deit_model test_deit_model.cpp ${MODEL_SOURCES})
 add_deit_test(test_deit_for_image_classification test_deit_for_image_classification.cpp ${MODEL_SOURCES})
 add_deit_test(test_deit_for_image_classification_with_teacher test_deit_for_image_classification_with_teacher.cpp 
     ${TT_CPP_DIR}/deit_for_image_classification_with_teacher.cpp ${MODEL_SOURCES})
+
+# Add simple device test
+add_deit_test(test_device test_device.cpp)
