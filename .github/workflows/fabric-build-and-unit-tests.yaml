@@ -38,7 +38,7 @@ jobs:
           {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
         ]
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
-    runs-on: ${{ github.event.pull_request.head.repo.fork == true || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
