@@ -63,6 +63,8 @@ def test_all_to_all_dispatch_no_trace(
     device_params,
 ):
     topology = ttnn.Topology.Linear
+    num_devices = 4
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
@@ -149,6 +151,9 @@ def test_all_to_all_dispatch_trace(
     output_memory_config,
     device_params,
 ):
+    topology = ttnn.Topology.Linear
+    num_devices = 4
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
