@@ -193,4 +193,5 @@ void kernel_main() {
         }
     };
     global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2);
+    noc_async_atomic_barrier();
 }
