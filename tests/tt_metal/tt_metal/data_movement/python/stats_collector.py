@@ -256,8 +256,8 @@ class StatsCollector:
         run_host_id = valid_run_host_ids[0]
 
         test_case = aggregate_stats[risc][run_host_id]
-        for i in range(len(test_case["all_bandwidths"])):
-            result[test_case["all_cores"][i]] = test_case["all_bandwidths"][i]
+        for core, bandwidth in zip(test_case["all_cores"], test_case["all_bandwidths"]):
+            result[core] = bandwidth
         attrs = test_case["attributes"]
         attrs["Risc"] = 0 if risc == "riscv_0" else 1
         return result, attrs

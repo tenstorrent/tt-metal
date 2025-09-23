@@ -63,7 +63,11 @@ if __name__ == "__main__":
 
     # Fill in bandwidth per core
     matrix = np.zeros((height_cores, width_cores))
-    for (x, y), bw in result.items():
+    for core, bw in result.items():
+        if isinstance(core, tuple) and len(core) == 2:
+            x, y = core
+        else:
+            raise ValueError(f"Unexpected core type {type(core)} for core {core}")
         matrix[y][x] = bw
         if bw > NOC_WIDTHS.get(arch, 64):
             logger.warning(f"Warning: Bandwidth {bw}b/c on core ({x}, {y}) exceeds maximum for {arch}")
@@ -83,10 +87,10 @@ if __name__ == "__main__":
     fig, (ax1, ax2) = plt.subplots(1, 2)
     fig.set_size_inches(DEFAULT_PLOT_WIDTH * 2.5, DEFAULT_PLOT_HEIGHT * 1.5)
 
-    im1 = ax1.imshow(matrix, cmap=bw_cmap, vmin=0, vmax=64)
+    im1 = ax1.imshow(matrix, cmap=bw_cmap, vmin=0, vmax=NOC_WIDTHS.get(arch, 64))
     im2 = ax2.imshow(matrix, cmap="hot")
-    fig.colorbar(im1)
-    fig.colorbar(im2)
+    cbar1 = fig.colorbar(im1, ax=ax1)
+    cbar2 = fig.colorbar(im2, ax=ax2)
 
     for i in range(height_cores):
         for j in range(width_cores):
