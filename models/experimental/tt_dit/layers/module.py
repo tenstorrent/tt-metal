@@ -116,25 +116,25 @@ class Module:
 
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
-    def save_to_cache(self, path_prefix: str) -> None:
+    def save(self, path_prefix: str, /) -> None:
         if path_prefix and path_prefix[-1] not in [".", "/"]:
             path_prefix += "/"
 
         for name, child in self.named_children():
-            child.save_to_cache(f"{path_prefix}{name}.")
+            child.save(f"{path_prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            ttnn.dump_tensor(f"{path_prefix}{name}.tensorbin", parameter.data)
+            parameter.save(f"{path_prefix}{name}.tensorbin")
 
-    def load_from_cache(self, path_prefix: str) -> None:
+    def load(self, path_prefix: str, /) -> None:
         if path_prefix and path_prefix[-1] not in [".", "/"]:
             path_prefix += "/"
 
         for name, child in self.named_children():
-            child.load_from_cache(f"{path_prefix}{name}.")
+            child.load(f"{path_prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            parameter.data = ttnn.load_tensor(f"{path_prefix}{name}.tensorbin")
+            parameter.load(f"{path_prefix}{name}.tensorbin")
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -213,6 +213,12 @@ class Parameter:
                 ttnn.MeshMapperConfig(self.mesh_placements),
             ),
         )
+
+    def save(self, path: str, /) -> None:
+        ttnn.dump_tensor(path, self.data)
+
+    def load(self, path: str, /) -> None:
+        self.data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
 
 
 def _mesh_placements_from_mapping(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tempfile import TemporaryDirectory
+
 import pytest
 import torch
 import ttnn
@@ -12,10 +14,10 @@ class TinyLinear(Module):
         super().__init__()
 
         self.weight = Parameter(shape=[in_dim, out_dim], device=device)
-        self.bias = Parameter(shape=[in_dim, out_dim], device=device)
+        self.bias = Parameter(shape=[out_dim], device=device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return x @ self.weight.data + self.bias.data
+        return ttnn.linear(x, self.weight.data, bias=self.bias.data)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -36,14 +38,43 @@ class TinyFeedForward(Module):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_module(mesh_device: ttnn.MeshDevice) -> None:
+def test_load_torch_state(mesh_device: ttnn.MeshDevice) -> None:
     model = TinyFeedForward(10, 20, 30, device=mesh_device)
 
     state_dict = {
+        "linear1.weight": torch.randn([20, 10]),
+        "linear1.bias": torch.randn([20]),
+        "linear2.weight": torch.randn([30, 20]),
         "something.unexpected": torch.randn([1]),
     }
 
     missing, unexpected = model.load_torch_state_dict(state_dict, strict=False)
 
-    assert missing == ["linear1.weight", "linear1.bias", "linear2.weight", "linear2.bias"]
+    assert missing == ["linear2.bias"]
     assert unexpected == ["something.unexpected"]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_save_and_load(mesh_device: ttnn.MeshDevice) -> None:
+    model1 = TinyFeedForward(10, 20, 30, device=mesh_device)
+    model2 = TinyFeedForward(10, 20, 30, device=mesh_device)
+
+    state_dict = {
+        "linear1.weight": torch.randn([20, 10]),
+        "linear1.bias": torch.randn([20]),
+        "linear2.weight": torch.randn([30, 20]),
+        "linear2.bias": torch.randn([30]),
+    }
+
+    model1.load_torch_state_dict(state_dict)
+
+    with TemporaryDirectory() as dirname:
+        model1.save(dirname)
+        model2.load(dirname)
+
+    x = ttnn.from_torch(torch.randn([10]), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    y1 = ttnn.to_torch(model1.forward(x))
+    y2 = ttnn.to_torch(model2.forward(x))
+
+    assert torch.equal(y1, y2)
