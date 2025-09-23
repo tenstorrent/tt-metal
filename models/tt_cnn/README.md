@@ -1,6 +1,8 @@
 # TT-CNN
 
-The TT-CNN library comprises several modules with reusable functions designed to facilitate the development of high-performance vision models in TT-NN. The goal of the library is to minimize code duplication and enhance maintainability, enabling quicker model deployment with superior initial performance. One of these modules is the Pipeline API.
+The TT-CNN library comprises several modules with reusable functions designed to facilitate the development of high-performance vision models in TT-NN. The goal of the library is to minimize code duplication and enhance maintainability, as well as enabling quicker model development with superior initial model performance.
+
+The following sections will document usage for each of these modules.
 
 ## Pipeline
 
@@ -57,7 +59,7 @@ pipeline.cleanup()
 
 ### User Guide
 
-The TT-CNN Pipeline API provides advanced performance optimization techniques to improve throughput and lower latency for CNN models. This guide helps you understand and configure these optimizations effectively.
+The TT-CNN Pipeline API provides end-to-end performance optimization techniques to improve throughput and lower latency for CNN models. This guide helps you understand and configure these optimizations effectively.
 
 ### Performance Optimization Techniques
 
@@ -153,6 +155,14 @@ dram_memory_config = get_memory_config_for_persistent_dram_tensor(
 
 The L1 memory configs are also required by the Pipeline API and are typically model-specific. The pipeline automatically reshards tensors from DRAM to L1 using these configurations before passing them to your model function.
 
+#### Preallocating Host Memory for Output Tensors
+
+Some workloads can become bottlenecked by host memory allocations. To pre-allocate host memory for output tensors, configure your pipeline with the following call:
+
+```python
+pipe.preallocate_output_tensors_on_host(number_of_inputs)
+```
+
 ### Troubleshooting
 
 #### Common Issues
@@ -164,6 +174,6 @@ The L1 memory configs are also required by the Pipeline API and are typically mo
 
 See the following model implementations for examples of real-world usage:
 
-- **[YOLOv8x](models/demos/yolov8x/tests/perf/test_e2e_performant.py)** - Object detection with trace+2CQ
-- **[ResNet50](models/demos/ttnn_resnet/tests/perf_e2e_resnet50.py)** - Image classification pipeline
-- **[YOLOv4](models/demos/yolov4/demo.py)** - Demo with pipeline integration
+- **[YOLOv8x](../demos/yolov8x/tests/perf/test_e2e_performant.py)** - Object detection with trace+2CQ
+- **[ResNet50](../demos/ttnn_resnet/tests/perf_e2e_resnet50.py)** - Image classification pipeline
+- **[YOLOv4](../demos/yolov4/demo.py)** - Demo with pipeline integration

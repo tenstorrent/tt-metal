@@ -4,14 +4,14 @@ on:
   workflow_call:
     inputs:
       version:
-        required: true
+        required: false
         type: string
       os:
-        required: true
+        required: false
         type: string
         default: ubuntu-22.04
       tag-latest:
-        required: true
+        required: false
         type: boolean
         default: false
       timeout:
@@ -32,7 +32,8 @@ jobs:
       packages: write
     strategy:
       matrix:
-        os: ${{ inputs.os }}
+        os:
+          - ${{ inputs.os }}
         image: [release, release-models]
     runs-on: ubuntu-latest
     outputs:
@@ -78,7 +79,8 @@ jobs:
     needs: create-docker-release-image
     strategy:
       matrix:
-        os: ${{ inputs.os }}
+        os:
+          - ${{ inputs.os }}
         image: [release, release-models]
         test_group:
           [
@@ -134,7 +136,8 @@ jobs:
     needs: [smoke-test-docker-image, create-docker-release-image]
     strategy:
       matrix:
-        os: ${{ inputs.os }}
+        os:
+          - ${{ inputs.os }}
         image: [release, release-models]
     runs-on:
       - ubuntu-latest
