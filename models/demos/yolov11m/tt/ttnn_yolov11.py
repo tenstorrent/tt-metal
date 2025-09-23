@@ -44,10 +44,18 @@ class TtnnYoloV11:
         )
         self.obb = TtnnOBB(device, parameters.model_args.model[23], parameters.model[23])
 
-    def __call__(self, input, min_channels=8):
+    def __call__(self, input, min_channels=16):
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
-        x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        
+        # Only pad if we need more channels
+        if channel_padding_needed > 0:
+            # Use list format instead of tuples for ttnn.pad API compatibility
+            x = ttnn.pad(input, [[0, 0], [0, channel_padding_needed], [0, 0], [0, 0]], value=0.0)
+        else:
+            # No padding needed, use input as is
+            x = input
+            min_channels = c  # Update min_channels to actual channels
         ttnn.deallocate(input)
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
