@@ -463,9 +463,9 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
         }
 
         graph_descriptors: {
-          name: "G1"
-          type: "fabric"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            name: "G1"
+            type: "fabric"
+            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
@@ -473,10 +473,10 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr(
-                "Graph descriptor must have either graph_topology or connections defined (Graph: G1)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"))));
 }
 
 TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneConnection) {
@@ -490,9 +490,9 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneConnection) {
         }
 
         graph_descriptors: {
-          name: "G0"
-          type: "fabric"
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            name: "G0"
+            type: "fabric"
+            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
@@ -500,10 +500,10 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneConnection) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-            ::testing::HasSubstr(
-                "Graph descriptor must have either graph_topology or connections defined (Graph: G0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, TestInstanceCreation) {

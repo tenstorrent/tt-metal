@@ -234,15 +234,15 @@ protected:
 };
 
 class DeviceSingleCardFastSlowDispatchFixture : public DeviceSingleCardFixture {
-protected:
-    bool validate_dispatch_mode() override {
-        this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            this->slow_dispatch_ = false;
-        }
-        return true;
-    }
+   protected:
+       bool validate_dispatch_mode() override {
+           this->slow_dispatch_ = true;
+           auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+           if (!slow_dispatch) {
+               this->slow_dispatch_ = false;
+           }
+           return true;
+       }
 };
 
 }  // namespace tt::tt_metal

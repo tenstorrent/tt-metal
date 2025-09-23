@@ -26,10 +26,10 @@ namespace ckernel {
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
  * | slope          | slope used in elu calculation                                              | uint32_t | Greater than 0                                        | True     |
  */
-// clang-format on
+ // clang-format on
 ALWI void elu_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_elu<APPROX>(idst, param0))); }
 
 /**

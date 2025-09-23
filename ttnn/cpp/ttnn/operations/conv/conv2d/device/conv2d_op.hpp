@@ -291,7 +291,7 @@ struct OptimizedConvNew {
         enable_weights_double_buffer(enable_weights_double_buffer),
         full_inner_dim(full_inner_dim),
         enable_activation_reuse(enable_activation_reuse),
-        config_tensors_in_dram(config_tensors_in_dram) {};
+        config_tensors_in_dram(config_tensors_in_dram){};
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;

@@ -35,7 +35,8 @@ void get_device_expert_indices(
         noc_async_read_barrier();
 
         if (mapping_ptr[DeviceIdx] == 1u) {
-            *(output_ptr++) = expert_idx;
+            *(output_ptr++)=expert_idx;
+
         }
     }
 }

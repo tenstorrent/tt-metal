@@ -606,8 +606,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 continue;
             }
             auto host_rank_id = this->get_local_host_rank_id_binding();
-            const auto& mesh_container =
-                this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+            const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
 
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

@@ -128,13 +128,12 @@ void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
         &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr);
 }
 
-void write_launch_msg_to_core(
-    chip_id_t chip, const CoreCoord core, launch_msg_t* msg, go_msg_t* go_msg, uint64_t base_addr, bool send_go) {
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
+
     msg->kernel_config.mode = DISPATCH_MODE_HOST;
 
     uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
-    // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr
-    // from the hal.
+    // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr from the hal.
     uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
 
     tt::tt_metal::MetalContext::instance().get_cluster().write_core_immediate(

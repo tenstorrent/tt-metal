@@ -232,13 +232,7 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
-            RunTest(
-                fixture,
-                mesh_device,
-                params.core_type,
-                params.processor_class,
-                params.processor_id,
-                params.assert_type);
+            RunTest(fixture, mesh_device, params.core_type, params.processor_class, params.processor_id, params.assert_type);
         },
         this->devices_[0]);
 }

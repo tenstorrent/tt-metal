@@ -137,12 +137,10 @@ public:
     }
     const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
-        TT_FATAL(
-            it != connections_by_source_device_id_.end(),
-            "No connections found for source device id {}",
-            source_device_id);
+        TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id {}", source_device_id);
         return it->second;
     }
+
 
 private:
     bool backwards_compatible_;

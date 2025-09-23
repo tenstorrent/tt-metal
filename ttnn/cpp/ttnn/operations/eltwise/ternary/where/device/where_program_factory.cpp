@@ -346,8 +346,8 @@ void set_or_update_runtime_arguments(
             // Calculate freq and counter like binary_ng for column broadcast
             uint32_t start_t = start_tile_id % (output_Ht * output_Wt);
             uint32_t start_tw = start_t % output_Wt;
-            uint32_t freq = output_Wt;    // Column broadcast frequency
-            uint32_t counter = start_tw;  // Column broadcast counter
+            uint32_t freq = output_Wt;              // Column broadcast frequency
+            uint32_t counter = start_tw;            // Column broadcast counter
 
             std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
 

@@ -256,12 +256,7 @@ struct WorkerToFabricEdmSenderImpl {
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, EDM_TO_DOWNSTREAM_NOC);
         noc_sem_addr_ = noc_sem_addr;
         noc_inline_dw_write_set_state<true, true>(
-            noc_sem_addr,
-            (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC,
-            0xF,
-            this->sync_noc_cmd_buf,
-            EDM_TO_DOWNSTREAM_NOC,
-            EDM_TO_DOWNSTREAM_NOC_VC);
+            noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {

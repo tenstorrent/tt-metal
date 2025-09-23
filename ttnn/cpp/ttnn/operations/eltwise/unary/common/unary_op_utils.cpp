@@ -711,8 +711,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
-            op_init_and_name = {
-                "alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
+            op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
             break;
         case UnaryOpType::HARDSIGMOID:
             op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};

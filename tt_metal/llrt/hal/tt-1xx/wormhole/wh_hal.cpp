@@ -59,7 +59,7 @@ namespace wormhole {
 // Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
 #include "core_config.h"  // ProgrammableCoreType
 
-}  // namespace wormhole
+}
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:

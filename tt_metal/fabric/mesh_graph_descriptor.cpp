@@ -224,6 +224,8 @@ void MeshGraphDescriptor::populate_top_level_instance() {
     top_level_id_ = populate_instance(proto_->top_level_instance(), hierarchy);
 }
 
+
+
 void MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors) {
     if (proto.mesh_descriptors_size() == 0) {
         errors.push_back("There must be at least one mesh descriptor");
@@ -526,8 +528,12 @@ void MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::M
     for (const auto& graph : proto.graph_descriptors()) {
         // Check that there is a graph topology or connections for each graph descriptor
         if (!graph.has_graph_topology() && graph.connections_size() == 0) {
-            error_messages.push_back(fmt::format(
-                "Graph descriptor must have either graph_topology or connections defined (Graph: {})", graph.name()));
+            error_messages.push_back(
+                fmt::format(
+                    "Graph descriptor must have either graph_topology or connections defined (Graph: {})",
+                    graph.name()
+                )
+            );
             continue;
         }
 
@@ -570,15 +576,19 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
 
     // Check that there is only a CLUSTER level graphs
     if (proto.graph_descriptors_size() != 1) {
-        error_messages.push_back(fmt::format(
-            "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})",
-            proto.graph_descriptors(0).name()));
+        error_messages.push_back(
+            fmt::format(
+                "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})", proto.graph_descriptors(0).name()
+            )
+        );
     }
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.type() != "FABRIC") {
-            error_messages.push_back(fmt::format(
-                "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})",
-                graph.name()));
+            error_messages.push_back(
+                fmt::format(
+                    "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})", graph.name()
+                )
+            );
         }
     }
 

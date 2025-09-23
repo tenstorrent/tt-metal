@@ -192,6 +192,7 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
     set_routing_mode(mode);
 }
 
+
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,

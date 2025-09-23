@@ -44,9 +44,7 @@ public:
         }
     }
     void WriteBuffer(
-        tt::tt_metal::IDevice* device,
-        std::shared_ptr<tt::tt_metal::Buffer> in_buffer,
-        std::vector<uint32_t>& src_vec) {
+        tt::tt_metal::IDevice* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t>& src_vec) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {

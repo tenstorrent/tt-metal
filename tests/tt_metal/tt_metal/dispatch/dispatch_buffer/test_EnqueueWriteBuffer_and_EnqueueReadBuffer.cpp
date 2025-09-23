@@ -300,6 +300,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     distributed::MeshCommandQueue& cq,
     const TestBufferConfig& config) {
+
     auto device = mesh_device->get_devices()[0];
     // Clear out command queue
     uint16_t channel =
@@ -383,9 +384,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
 
 template <bool blocking>
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
-    distributed::MeshCommandQueue& cq,
-    const BufferStressTestConfig& config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshCommandQueue& cq, const BufferStressTestConfig& config) {
     srand(config.seed);
     bool pass = true;
     uint32_t num_pages_left = config.num_pages_total;
@@ -607,9 +606,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 }
 
 bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
-    vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs,
-    const TestBufferConfig& config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs, const TestBufferConfig& config) {
     bool pass = true;
     for (const bool use_void_star_api : {true, false}) {
         size_t buf_size = config.num_pages * config.page_size;

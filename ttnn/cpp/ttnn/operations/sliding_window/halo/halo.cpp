@@ -19,14 +19,6 @@ Tensor HaloOperation::invoke(
     bool in_place,
     bool config_tensors_in_dram) {
     return halo_op(
-        input_tensor,
-        config,
-        pad_val,
-        remote_read,
-        transpose_mcast,
-        output_memory_config,
-        is_out_tiled,
-        in_place,
-        config_tensors_in_dram);
+        input_tensor, config, pad_val, remote_read, transpose_mcast, output_memory_config, is_out_tiled, in_place, config_tensors_in_dram);
 }
 };  // namespace ttnn::operations::sliding_window::halo
