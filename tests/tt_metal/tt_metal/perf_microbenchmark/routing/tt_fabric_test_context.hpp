@@ -33,7 +33,7 @@ const std::string output_dir = "generated/fabric";
 const std::string bandwidth_csv_dir = output_dir + "/bandwidth_results";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
 // CI will always check the following folder for artifacts to upload
-const std::string ci_artifacts_dir = "/work/generated/test_reports";
+const std::string ci_artifacts_dir = "generated/test_reports";
 const std::string ci_bandwidth_results_dir = ci_artifacts_dir + "/fabric_bandwidth_results";
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
@@ -408,24 +408,26 @@ public:
 
     void initialize_csv_file() {
         // Create output directory
-        std::filesystem::path bandwidth_results_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / bandwidth_csv_dir;
+        std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+        std::filesystem::path bandwidth_results_path = tt_metal_home / bandwidth_csv_dir;
 
         if (!std::filesystem::exists(bandwidth_results_path)) {
             std::filesystem::create_directories(bandwidth_results_path);
         }
 
         // Create a symlink to the bandwidth results directory for CI to upload CSV files
-        // Edge case: CI artifacts directory wasn't created
-        // We may not have permission to create it, so skip the symlink in that case
-        if (!std::filesystem::exists(ci_artifacts_dir)) {
-            // std::filesystem::create_directories(ci_artifacts_dir);
-            log_warning(tt::LogTest, "CI artifacts directory {} not found, skipping symlink creation to bandwidth results directory", ci_artifacts_dir);
+        std::filesystem::path ci_artifacts_path = tt_metal_home / ci_artifacts_dir;
+        std::filesystem::path ci_symlink_path = tt_metal_home / ci_bandwidth_results_dir;
+        if (!std::filesystem::exists(ci_artifacts_path)) {
+            std::filesystem::create_directories(ci_artifacts_path);
         }
-        else {
-            std::filesystem::create_directory_symlink(bandwidth_results_path, ci_bandwidth_results_dir);
-            log_info(tt::LogTest, "Created symlink to bandwidth results directory: {}", ci_bandwidth_results_dir);
+        // Edge case: Symlink already exists
+        if (std::filesystem::exists(ci_symlink_path)) {
+            std::filesystem::remove(ci_symlink_path);
+            log_info(tt::LogTest, "Removed existing symlink to bandwidth results directory: {}", ci_symlink_path);
         }
+        std::filesystem::create_directory_symlink(bandwidth_results_path, ci_symlink_path);
+        log_info(tt::LogTest, "Created symlink to bandwidth results directory: {}", ci_symlink_path);
         
         auto arch_name = tt::tt_metal::hal::get_arch_name();
 
