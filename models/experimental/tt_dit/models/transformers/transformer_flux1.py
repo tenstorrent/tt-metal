@@ -14,7 +14,7 @@ from ...layers.feedforward import ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import substate
-from .attention_flux1 import Flux1Attention, all_gather
+from .attention_flux1 import Flux1Attention
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -153,6 +153,8 @@ class Flux1SingleTransformerBlock:
             time_embed: Tensor with shape [batch_size, 1, query_dim].
             rope: Tuple of two tensors with shape [sequence_length / sp_factor, head_dim].
         """
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
         if not skip_time_embed_activation:
             time_embed = ttnn.silu(time_embed)
         time = self.time_embed(time_embed)
@@ -166,15 +168,11 @@ class Flux1SingleTransformerBlock:
         norm_spatial = spatial_normed * (1 + scale_msa) + shift_msa
         norm_prompt = prompt_normed * (1 + scale_msa) + shift_msa
 
-        # norm_combined = all_gather(
-        #     norm_combined, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
+        # norm_combined = self.ccl_manager.all_gather(
+        #     norm_combined, dim=2, mesh_axis=tp_axis
         # )
-        norm_spatial = all_gather(
-            norm_spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
-        norm_prompt = all_gather(
-            norm_prompt, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        norm_spatial = self.ccl_manager.all_gather(norm_spatial, dim=2, mesh_axis=tp_axis)
+        norm_prompt = self.ccl_manager.all_gather(norm_prompt, dim=2, mesh_axis=tp_axis)
 
         # call `unsqueeze` since RowParallelLinear currently requires rank 4 tensors
         # mlp_combined = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_combined, 0)), 0)
@@ -398,6 +396,8 @@ class Flux1TransformerBlock:
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
         """
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
         if not skip_time_embed_activation:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -436,12 +436,8 @@ class Flux1TransformerBlock:
         prompt_normed = prompt_normed * (1 + prompt_scale_attn) + prompt_shift_attn
 
         # Gather spatial, prompt before attention
-        spatial_normed = all_gather(
-            spatial_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
-        prompt_normed = all_gather(
-            prompt_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
+        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
 
         spatial_attn, prompt_attn = self.attn.forward(
             spatial=spatial_normed,
@@ -459,9 +455,7 @@ class Flux1TransformerBlock:
         spatial_normed = ttnn.squeeze(self.norm2(ttnn.unsqueeze(spatial, 0)), 0)
         spatial_normed = spatial_normed * (1 + spatial_scale_ff) + spatial_shift_ff
 
-        spatial_normed = all_gather(
-            spatial_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
 
         spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0), core_grid=self.core_grid), 0)
         spatial_ff = spatial_ff * spatial_gate_ff
@@ -476,9 +470,7 @@ class Flux1TransformerBlock:
         prompt_normed = ttnn.squeeze(self.norm2_context(ttnn.unsqueeze(prompt, 0)), 0)
         prompt_normed = prompt_normed * (1 + prompt_scale_ff) + prompt_shift_ff
 
-        prompt_normed = all_gather(
-            prompt_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
 
         prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0), core_grid=self.core_grid), 0)
         prompt_ff = prompt_ff * prompt_gate_ff
@@ -661,6 +653,8 @@ class Flux1Transformer:
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
         """
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
         time_embed = self.time_text_embed(timestep=timestep, guidance=guidance, pooled_projection=pooled)
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
@@ -712,9 +706,7 @@ class Flux1Transformer:
         spatial_time = self.time_embed_out(time_embed)
         [scale, shift] = _chunk_time3d(spatial_time, 2)
 
-        spatial = all_gather(
-            spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
 
         spatial = spatial * (1 + scale) + shift
 

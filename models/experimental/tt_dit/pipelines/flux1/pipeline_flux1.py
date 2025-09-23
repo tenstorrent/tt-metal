@@ -19,7 +19,6 @@ from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokeniz
 
 from ...encoders.clip.model_clip import CLIPConfig, CLIPEncoder
 from ...encoders.t5.model_t5 import T5Config, T5Encoder
-from ...models.transformers.attention_flux1 import all_gather
 from ...models.transformers.transformer_flux1 import Flux1Transformer
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -346,6 +345,8 @@ class Flux1Pipeline:
         timer = self.timing_collector
         prompt_count = len(prompt_1)
 
+        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
+
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
 
@@ -474,7 +475,7 @@ class Flux1Pipeline:
                 )
 
                 shard_latents_dims = [None, None]
-                shard_latents_dims[self._parallel_config.sequence_parallel.mesh_axis] = 1  # height of latents
+                shard_latents_dims[sp_axis] = 1  # height of latents
                 tt_initial_latents = ttnn.from_torch(
                     latents,
                     layout=ttnn.TILE_LAYOUT,
@@ -502,7 +503,7 @@ class Flux1Pipeline:
                 )
 
                 shard_rope_dims = [None, None]
-                shard_rope_dims[self._parallel_config.sequence_parallel.mesh_axis] = 0
+                shard_rope_dims[sp_axis] = 0
                 rope_mesh_mapper = ttnn.ShardTensor2dMesh(
                     submesh_device,
                     tuple(submesh_device.shape),
@@ -631,11 +632,8 @@ class Flux1Pipeline:
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
-                tt_latents = all_gather(
-                    tt_latents_step_list[self.vae_submesh_idx],
-                    dim=1,
-                    parallel_factor=self._parallel_config.sequence_parallel,
-                    ccl_manager=self._ccl_managers[self.vae_submesh_idx],
+                tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather(
+                    tt_latents_step_list[self.vae_submesh_idx], dim=1, mesh_axis=sp_axis
                 )
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
