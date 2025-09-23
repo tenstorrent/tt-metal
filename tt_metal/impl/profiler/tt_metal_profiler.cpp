@@ -33,7 +33,6 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
-#include "dev_msgs.h"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "impl/context/metal_context.hpp"
@@ -129,8 +128,13 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    auto* profiler_msg = reinterpret_cast<profiler_msg_t*>(device->get_dev_addr(core, HalL1MemAddrType::PROFILER));
-    uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
+    const auto& hal = MetalContext::instance().hal();
+    HalProgrammableCoreType core_type = device->get_programmable_core_type(core);
+    auto dev_msgs_factory = hal.get_dev_msgs_factory(core_type);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr control_vector_addr = profiler_msg_addr + dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(
+                                                             dev_msgs::profiler_msg_t::Field::control_vector);
+    DeviceAddr control_addr = control_vector_addr + kernel_profiler::FW_RESET_L * sizeof(uint32_t);
     for (int i = 0; i < sampleCount; i++) {
         ZoneScopedC(tracy::Color::Tomato2);
         std::this_thread::sleep_for(std::chrono::milliseconds(millisecond_wait));
@@ -154,8 +158,9 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         profiler_state_manager->smallest_host_time.at(device_id) = hostStartTime;
     }
 
-    constexpr uint32_t briscIndex = 0;
-    uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
+    uint64_t addr = profiler_msg_addr +
+                    dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(dev_msgs::profiler_msg_t::Field::buffer) +
+                    kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t);
 
     std::vector<std::uint32_t> sync_times = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
@@ -510,7 +515,7 @@ void syncAllDevices(chip_id_t host_connected_device) {
             uint64_t senderBase = 0;
             uint64_t receiverBase = 0;
 
-            if (timePairs.size() > 0) {
+            if (!timePairs.empty()) {
                 senderBase = timePairs[0].first;
                 receiverBase = timePairs[0].second;
             }
@@ -666,8 +671,9 @@ void InitDeviceProfiler(IDevice* device) {
         auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
         const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
-        const uint32_t bank_size_bytes =
-            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * num_cores_per_dram_bank;
+        const uint32_t bank_size_bytes = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC *
+                                         MetalContext::instance().hal().get_max_processors_per_core() *
+                                         num_cores_per_dram_bank;
         TT_ASSERT(bank_size_bytes <= MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::PROFILER));
 
         const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
@@ -750,14 +756,14 @@ void ReadDeviceProfilerResults(
 
                 const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), core);
 
-                profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+                DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+                DeviceAddr control_vector_addr =
+                    profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
+                                            dev_msgs::profiler_msg_t::Field::control_vector);
                 for (int i = 0; i < maxLoopCount; i++) {
                     const std::vector<std::uint32_t> control_buffer =
                         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                            device->id(),
-                            core,
-                            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+                            device->id(), core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                     if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
                         is_core_done = true;
                         break;

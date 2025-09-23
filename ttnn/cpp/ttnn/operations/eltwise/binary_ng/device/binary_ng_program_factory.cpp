@@ -556,8 +556,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     auto op_type = operation_attributes.binary_op_type;
 
-    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>)
-                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>);
+    // TODO: when handling mixed types, we must identify the appropriate dtype and pass it here to define the respective
+    // LLK APIs
+    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
+                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 

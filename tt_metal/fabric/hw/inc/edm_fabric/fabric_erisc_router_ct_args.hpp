@@ -262,7 +262,9 @@ static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NU
 // channel updates the packet header before sending it over Ethernet.
 constexpr bool UPDATE_PKT_HDR_ON_RX_CH = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 17) != 0;
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 18;
+constexpr bool FORCE_ALL_PATHS_TO_USE_SAME_NOC = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 18) != 0;
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 19;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -324,53 +326,32 @@ static_assert(
 
 constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
-    conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
+constexpr size_t to_sender_remote_ack_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX>();
 
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_completion_counter_addrs =
-    conditional_get_next_n_args<
-        multi_txq_enabled,
-        size_t,
-        TO_SENDER_CREDIT_COUNTERS_START_IDX + NUM_SENDER_CHANNELS,
-        NUM_SENDER_CHANNELS>();
+constexpr size_t to_sender_remote_completion_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 1>();
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_ack_counter_ptrs = conditional_get_next_n_args<
-    multi_txq_enabled,
-    size_t,
-    TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS,
-    NUM_RECEIVER_CHANNELS>();
+constexpr size_t local_receiver_ack_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 2>();
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_completion_counter_ptrs =
-    conditional_get_next_n_args<
-        multi_txq_enabled,
-        size_t,
-        TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS,
-        NUM_RECEIVER_CHANNELS>();
+constexpr size_t local_receiver_completion_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 3>();
 
-template <typename T>
-constexpr bool counter_credit_addresses_are_valid(const T& counter_addresses) {
-    for (size_t i = 0; i < counter_addresses.size(); i++) {
-        if (counter_addresses[i] == 0) {
-            return false;
-        }
-    }
-    return true;
-}
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_ack_counter_addrs),
-    "to_sender_remote_ack_counter_addrs must be valid");
+    !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
+    "to_sender_remote_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_completion_counter_addrs),
-    "to_sender_remote_completion_counter_addrs must be valid");
+    !multi_txq_enabled || to_sender_remote_completion_counters_base_address != 0,
+    "to_sender_remote_completion_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_ack_counter_ptrs),
-    "local_receiver_ack_counter_ptrs must be valid");
+    !multi_txq_enabled || local_receiver_ack_counters_base_address != 0,
+    "local_receiver_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_completion_counter_ptrs),
-    "local_receiver_completion_counter_ptrs must be valid");
+    !multi_txq_enabled || local_receiver_completion_counters_base_address != 0,
+    "local_receiver_completion_counters_base_address must be valid");
 
-constexpr size_t SPECIAL_MARKER_3_IDX =
-    TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
+constexpr size_t SPECIAL_MARKER_3_IDX = TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 4 : 0);
 constexpr size_t SPECIAL_MARKER_3 = 0x30c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_3_IDX) == SPECIAL_MARKER_3,

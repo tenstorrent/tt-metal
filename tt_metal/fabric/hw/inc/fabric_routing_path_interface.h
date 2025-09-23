@@ -29,24 +29,6 @@ inline bool routing_path_t<1, false>::decode_route_to_buffer(
     return true;
 }
 
-// Helper function to pack 4-bit commands into bytes
-inline void pack_command_into_buffer(
-    volatile uint8_t* route_buffer,
-    uint8_t& byte_index,
-    bool& is_first_nibble,
-    uint8_t& current_packed_byte,
-    uint8_t command) {
-    if (is_first_nibble) {
-        current_packed_byte = command & 0x0F;  // Lower 4 bits
-        is_first_nibble = false;
-    } else {
-        current_packed_byte |= (command & 0x0F) << 4;  // Upper 4 bits
-        route_buffer[byte_index++] = current_packed_byte;
-        current_packed_byte = 0;
-        is_first_nibble = true;
-    }
-}
-
 // Device-side compressed decoder function for 2D routing
 template <>
 inline bool routing_path_t<2, true>::decode_route_to_buffer(
@@ -73,11 +55,8 @@ inline bool routing_path_t<2, true>::decode_route_to_buffer(
         return false;
     }
 
-    // Reconstruct 2D routing commands
+    // Reconstruct 2D routing commands (1 command per byte)
     uint8_t byte_index = 0;
-    uint8_t current_packed_byte = 0;
-    bool is_first_nibble = true;
-
     // Construct route to match fabric_set_unicast_route encoding:
     // - Final hop uses the opposite-direction bit (no forward) to indicate write
     // - If both NS and EW exist: emit (ns_hops - 1) NS forwards, then ew_hops EW forwards, then 1 EW write (opposite)
@@ -94,40 +73,29 @@ inline bool routing_path_t<2, true>::decode_route_to_buffer(
     if (ns_hops > 0 && ew_hops > 0) {
         // NS forwards for ns_hops - 1
         for (uint8_t i = 0; i < ns_hops - 1; ++i) {
-            pack_command_into_buffer(
-                out_route_buffer, byte_index, is_first_nibble, current_packed_byte, ns_forward_cmd);
+            out_route_buffer[byte_index++] = ns_forward_cmd;
         }
         // EW forwards for ew_hops
         for (uint8_t i = 0; i < ew_hops; ++i) {
-            pack_command_into_buffer(
-                out_route_buffer, byte_index, is_first_nibble, current_packed_byte, ew_forward_cmd);
+            out_route_buffer[byte_index++] = ew_forward_cmd;
         }
         // Final write in EW with opposite direction bit
-        pack_command_into_buffer(
-            out_route_buffer, byte_index, is_first_nibble, current_packed_byte, ew_write_cmd_opposite);
+        out_route_buffer[byte_index++] = ew_write_cmd_opposite;
     } else if (ns_hops > 0) {
         // Only NS path: (ns_hops - 1) forwards + 1 write(opposite)
         for (uint8_t i = 0; i < ns_hops - 1; ++i) {
-            pack_command_into_buffer(
-                out_route_buffer, byte_index, is_first_nibble, current_packed_byte, ns_forward_cmd);
+            out_route_buffer[byte_index++] = ns_forward_cmd;
         }
-        pack_command_into_buffer(
-            out_route_buffer, byte_index, is_first_nibble, current_packed_byte, ns_write_cmd_opposite);
+        out_route_buffer[byte_index++] = ns_write_cmd_opposite;
     } else if (ew_hops > 0) {
         // Only EW path: (ew_hops - 1) forwards + 1 write(opposite)
         for (uint8_t i = 0; i < ew_hops - 1; ++i) {
-            pack_command_into_buffer(
-                out_route_buffer, byte_index, is_first_nibble, current_packed_byte, ew_forward_cmd);
+            out_route_buffer[byte_index++] = ew_forward_cmd;
         }
-        pack_command_into_buffer(
-            out_route_buffer, byte_index, is_first_nibble, current_packed_byte, ew_write_cmd_opposite);
+        out_route_buffer[byte_index++] = ew_write_cmd_opposite;
     }
 
-    // If we have an odd number of nibbles, pack the last command with NOOP in upper 4 bits
-    if (!is_first_nibble) {
-        current_packed_byte |= (NOOP & 0x0F) << 4;  // Upper 4 bits as NOOP
-        out_route_buffer[byte_index++] = current_packed_byte;
-    }
+    out_route_buffer[byte_index] = NOOP;
 
     return true;
 }
