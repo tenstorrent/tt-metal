@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * telemetry/telemetry_provider.hpp
+ * telemetry/telemetry_collector.hpp
  *
  * Polls telemetry data on a periodic loop and sends to subscribers.
  */
