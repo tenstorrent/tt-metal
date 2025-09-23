@@ -69,4 +69,5 @@ def test_vae_decoder(device, input_shape, pcc, is_ci_env, reset_seeds):
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")
