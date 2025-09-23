@@ -544,6 +544,28 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
             enable_split_reader ? act_block_h_datums_split_last : 0);
 
+    for (int j = 0; j < conv_sharded_input_top_left_indices.size(); j++) {
+        log_info(tt::LogOp, "j: {}", j);
+        for (int i = 0; i < conv_sharded_input_top_left_indices[0].size(); i += 4) {
+            if ((i / 4) % 2 == 0) {
+                log_info(
+                    tt::LogOp,
+                    "FIRST: {} {} {} {}",
+                    conv_sharded_input_top_left_indices[j][i],
+                    conv_sharded_input_top_left_indices[j][i + 1],
+                    conv_sharded_input_top_left_indices[j][i + 2],
+                    conv_sharded_input_top_left_indices[j][i + 3]);
+            } else {
+                log_info(
+                    tt::LogOp,
+                    "SECOND: {} {} {} {}",
+                    conv_sharded_input_top_left_indices[j][i],
+                    conv_sharded_input_top_left_indices[j][i + 1],
+                    conv_sharded_input_top_left_indices[j][i + 2],
+                    conv_sharded_input_top_left_indices[j][i + 3]);
+            }
+        }
+    }
     // create sharded ttnn config tensors
     sliding_window::ParallelConfig input_parallel_config = {
         .grid = a.memory_config().shard_spec().value().grid,
@@ -670,8 +692,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         input_channels_padded);
 
     if (config_tensors_in_dram) {
-        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
-        // maximum possible size.
+        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as
+        // the maximum possible size.
         TT_FATAL(
             access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
                 conv_reader_indices_storage.get_buffer()->page_size(),
@@ -886,7 +908,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     std::vector<uint32_t> split_reader_args;
     if (enable_split_reader) {
         split_reader_args = {
-            (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
+            (uint32_t)act_block_num_tiles_split_last,
             (uint32_t)conv_act_c_read_bytes,
             (uint32_t)filter_w,                       // weight_size_w
             (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
