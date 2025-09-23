@@ -146,8 +146,8 @@ TEST_F(ReshapeOpTraceRuntime, Reshape) {
         ttnn::reshape,
         device,
         input_spec,
-        output_spec.logical_shape(),
-        output_spec.tensor_layout().get_memory_config());
+        output_specDRAM.logical_shape(),
+        output_specDRAM.tensor_layout().get_memory_config());
     auto constraintsL1 = ttnn::graph::query_op_constraints(
         ttnn::reshape,
         device,
