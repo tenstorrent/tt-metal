@@ -212,7 +212,7 @@ std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange
 
 inline void SetRuntimeArgsImpl(
     const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_runtime_args(c, runtime_args);
     }
 }
@@ -222,7 +222,7 @@ inline void SetRuntimeArgsImpl(
     KernelHandle kernel_id,
     const CoreRange& core_range,
     stl::Span<const uint32_t> runtime_args) {
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
@@ -237,7 +237,7 @@ inline void SetRuntimeArgsImpl(
     KernelHandle kernel_id,
     const CoreRangeSet& core_range_set,
     stl::Span<const uint32_t> runtime_args) {
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (const auto& core_range : core_range_set.ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -795,7 +795,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
-                if (cbs_on_core.size()) {
+                if (!cbs_on_core.empty()) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
                         program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
@@ -868,7 +868,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                 kernel->get_kernel_processor_class(),
                                 kernel->get_kernel_processor_type(0));
                             auto rta_offset = kernel_config.rta_offset()[processor_index];
-                            if (rt_args.size() > 0) {
+                            if (!rt_args.empty()) {
                                 auto rt_args_addr = kernel_config_base + rta_offset.rta_offset();
                                 log_trace(
                                     tt::LogMetal,
@@ -885,7 +885,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             }
 
                             const auto& common_rt_args = kernel->common_runtime_args();
-                            if (common_rt_args.size() > 0) {
+                            if (!common_rt_args.empty()) {
                                 auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
                                 log_trace(
                                     tt::LogMetal,
@@ -1064,13 +1064,13 @@ KernelHandle CreateEthernetKernel(
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <
-            MetalContext::instance().hal().get_processor_classes_count(eth_core_type),
+            MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
         enchantum::to_string(config.processor),
-        MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
+        MetalContext::instance().hal().get_num_risc_processors(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
         "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
@@ -1195,7 +1195,7 @@ uint32_t CreateSemaphore(
         },
         core_spec);
     std::optional<uint32_t> semaphore_id;
-    TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
     for (const auto& core_range : crs.ranges()) {
         std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
         if (!semaphore_id.has_value()) {
@@ -1309,7 +1309,7 @@ void SetRuntimeArgs(
 
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
 }

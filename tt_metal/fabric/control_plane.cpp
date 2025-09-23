@@ -114,7 +114,7 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
         if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
             continue;
         }
-        if (eth_ports.size() > 0) {
+        if (!eth_ports.empty()) {
             // Special case for TG not to include MMIO devices in adjacency map because they are control chips
             if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG &&
                 mmio_chip_ids.contains(connected_chip_id)) {
@@ -237,7 +237,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         }
         if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
             this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
-            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).size() > 0) {
+            !this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).empty()) {
             this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
         }
     };
@@ -355,7 +355,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
                 host_ranks.size());
             local_mesh_ids.push_back(mesh_id);
         }
-        TT_FATAL(local_mesh_ids.size() > 0, "No local meshes found.");
+        TT_FATAL(!local_mesh_ids.empty(), "No local meshes found.");
         return LocalMeshBinding{.mesh_ids = std::move(local_mesh_ids), .host_rank = MeshHostRankId{0}};
     }
 
@@ -1977,7 +1977,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
         }
         // WH has a special case where mmio chips with remote connections must always have certain channels active
         if (cluster.arch() == tt::ARCH::WORMHOLE_B0 && cluster_desc->is_chip_mmio_capable(chip_id) &&
-            cluster.get_tunnels_from_mmio_device(chip_id).size() > 0) {
+            !cluster.get_tunnels_from_mmio_device(chip_id).empty()) {
             // UMD routing FW uses these cores for base routing
             // channel 15 is used by syseng tools
             std::unordered_set<int> channels_to_skip = {};
