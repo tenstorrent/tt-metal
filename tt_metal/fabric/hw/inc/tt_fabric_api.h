@@ -24,10 +24,10 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
-            routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
+            routing_table->intra_mesh_routing_direction_table.get_original_direction(dst_dev_id));
     } else {
         return static_cast<eth_chan_directions>(
-            routing_table->inter_mesh_routing_table.get_original_direction(dst_mesh_id));
+            routing_table->inter_mesh_routing_direction_table.get_original_direction(dst_mesh_id));
     }
 }
 
@@ -233,8 +233,8 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 
 // Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
 bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
-    tt_l1_ptr routing_path_t<2, true>* routing_info =
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    tt_l1_ptr routing_path_table_t<2, true>* routing_info =
+        reinterpret_cast<tt_l1_ptr routing_path_table_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
     packet_header->routing_fields.hop_index = 0;
@@ -269,8 +269,8 @@ bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatency
             return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
         }
     } else {
-        tt_l1_ptr routing_path_t<1, compressed>* routing_info =
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+        tt_l1_ptr routing_path_table_t<1, compressed>* routing_info =
+            reinterpret_cast<tt_l1_ptr routing_path_table_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
         if constexpr (target_as_dev) {
             tt_l1_ptr tensix_routing_l1_info_t* routing_table =
                 reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
