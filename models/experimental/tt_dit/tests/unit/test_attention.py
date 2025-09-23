@@ -12,7 +12,7 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
-from ...utils.tensor import bf16_tensor
+from ...utils.tensor import bf16_tensor, to_torch
 
 
 @pytest.mark.parametrize(
@@ -166,20 +166,9 @@ def test_attention_flux(
         spatial_sequence_length=spatial_seq_len,
     )
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 1, 2
-    tt_spatial_torch = ttnn.to_torch(
-        tt_spatial_out,
-        mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )
+    tt_spatial_torch = to_torch(tt_spatial_out, device=mesh_device, mesh_mapping={sp_axis: 1, tp_axis: 2})
     assert_quality(torch_spatial, tt_spatial_torch, pcc=0.995, relative_rmse=0.12)
 
     if torch_prompt is not None:
-        shard_dims = [None, None]
-        shard_dims[sp_axis], shard_dims[tp_axis] = 0, 2
-        tt_prompt_torch = ttnn.to_torch(
-            tt_prompt_out,
-            mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(shard_dims)),
-        )[:batch_size]
-
+        tt_prompt_torch = to_torch(tt_prompt_out, device=mesh_device, mesh_mapping={tp_axis: 2})
         assert_quality(torch_prompt, tt_prompt_torch, pcc=0.9957, relative_rmse=0.12)

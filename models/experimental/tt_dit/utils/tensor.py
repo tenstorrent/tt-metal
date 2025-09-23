@@ -2,8 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import ttnn
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    import torch
 
 
 def bf16_tensor(
@@ -62,3 +70,27 @@ def bf16_tensor_2dshard(x: torch.Tensor, device: ttnn.Device, shard_mapping: dic
         device=device,
         mesh_mapper=mesh_mapper,
     )
+
+
+def to_torch(
+    x: ttnn.Tensor, /, *, device: ttnn.MeshDevice, mesh_mapping: Mapping[int, int] | None = None
+) -> torch.Tensor:
+    first_size = x.shape[0]
+    mesh_composer = _composer_from_mapping(mesh_mapping or {}, device=device)
+
+    torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer)
+    return torch_x[:first_size]
+
+
+def _composer_from_mapping(mapping: Mapping[int, int], /, *, device: ttnn.MeshDevice) -> ttnn.CppMeshToTensor:
+    mesh_rank = len(list(device.shape))
+
+    placements = [0] * mesh_rank
+
+    for k, v in mapping.items():
+        if k is None:
+            continue
+        assert k < mesh_rank, f"mesh mapping keys should be smaller than {mesh_rank}, got {k}"
+        placements[k] = v
+
+    return ttnn.create_mesh_composer(device, ttnn.MeshComposerConfig(placements))

@@ -14,7 +14,7 @@ from ...parallel.manager import CCLManager
 from ...reference.motif_image.modeling_dit import MotifDiTBlock as MotifDiTBlockReference
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, to_torch
 
 
 @pytest.mark.parametrize(
@@ -120,20 +120,10 @@ def test_flux(
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
     )
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 1, 2
-    tt_spatial_torch = ttnn.to_torch(
-        tt_spatial_out,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )
+    tt_spatial_torch = to_torch(tt_spatial_out, device=submesh_device, mesh_mapping={sp_axis: 1, tp_axis: 2})
     assert_quality(torch_spatial, tt_spatial_torch, pcc=0.99998, relative_rmse=0.006)
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 0, 2
-    tt_prompt_torch = ttnn.to_torch(
-        tt_prompt_out,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )[:batch_size]
+    tt_prompt_torch = to_torch(tt_prompt_out, device=submesh_device, mesh_mapping={tp_axis: 2})
     assert_quality(torch_prompt, tt_prompt_torch, pcc=0.99998, relative_rmse=0.006)
 
 
@@ -248,22 +238,12 @@ def test_motif(
         spatial_sequence_length=spatial_seq_len,
     )
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 1, 2
-    tt_spatial_torch = ttnn.to_torch(
-        tt_spatial_out,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )
+    tt_spatial_torch = to_torch(tt_spatial_out, device=submesh_device, mesh_mapping={sp_axis: 1, tp_axis: 2})
     assert_quality(torch_spatial, tt_spatial_torch, pcc=0.99998, relative_rmse=0.006)
 
     if is_last_block:
         assert tt_prompt_out is None
         return
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 0, 2
-    tt_prompt_torch = ttnn.to_torch(
-        tt_prompt_out,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )[:batch_size]
+    tt_prompt_torch = to_torch(tt_prompt_out, device=submesh_device, mesh_mapping={tp_axis: 2})
     assert_quality(torch_prompt, tt_prompt_torch, pcc=0.99998, relative_rmse=0.006)

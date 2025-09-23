@@ -14,7 +14,7 @@ from ...reference.motif_image import configuration_motifimage, modeling_dit
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
 from ...utils.substate import substate
-from ...utils.tensor import bf16_tensor
+from ...utils.tensor import bf16_tensor, to_torch
 
 
 @pytest.mark.parametrize(
@@ -174,13 +174,7 @@ def test_transformer_motif(
         timestep=tt_timestep,
     )
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 1, 0
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )[:batch_size].permute(0, 3, 1, 2)
-
+    tt_output_torch = to_torch(tt_output, device=submesh_device, mesh_mapping={sp_axis: 1}).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_output_torch, pcc=0.9986, relative_rmse=5.6)
 
 
