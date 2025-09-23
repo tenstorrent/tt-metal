@@ -15,8 +15,8 @@ void kernel_main() {
     constexpr uint32_t block_ht = get_compile_time_arg_val(3);
     constexpr uint32_t block_ht_size_bytes = get_compile_time_arg_val(4);
     constexpr bool row_major = (bool)get_compile_time_arg_val(5);
-    constexpr uint32_t num_cores_x = get_compile_time_arg_val(6);
-    constexpr uint32_t num_cores_y = get_compile_time_arg_val(7);
+    constexpr uint32_t num_cores_x_mcast = get_compile_time_arg_val(6);
+    constexpr uint32_t num_cores_y_mcast = get_compile_time_arg_val(7);
     constexpr uint32_t num_bytes_copy_to_combine = get_compile_time_arg_val(8);
     constexpr uint32_t num_combine_tiles_needed = get_compile_time_arg_val(9);
     constexpr uint32_t tile_height = get_compile_time_arg_val(10);
@@ -50,19 +50,19 @@ void kernel_main() {
         remote_noc_addrs[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
         if constexpr (row_major) {
             ++x;
-            if (x == num_cores_x) {
+            if (x == num_cores_x_mcast) {
                 x = 0;
                 ++y;
-                if (y == num_cores_y) {
+                if (y == num_cores_y_mcast) {
                     y = 0;
                 }
             }
         } else {
             ++y;
-            if (y == num_cores_y) {
+            if (y == num_cores_y_mcast) {
                 y = 0;
                 ++x;
-                if (x == num_cores_x) {
+                if (x == num_cores_x_mcast) {
                     x = 0;
                 }
             }

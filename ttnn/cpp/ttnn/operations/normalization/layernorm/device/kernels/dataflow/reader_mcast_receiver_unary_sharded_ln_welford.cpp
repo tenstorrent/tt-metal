@@ -11,18 +11,10 @@ void kernel_main() {
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    const bool is_all_to_all_worker = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t num_all_to_all_workers = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(7);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(3);
     constexpr bool row_major = (bool)get_compile_time_arg_val(8);
-    constexpr uint32_t num_x = get_compile_time_arg_val(9);
-    constexpr uint32_t num_y = get_compile_time_arg_val(10);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(11);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-    uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    constexpr uint32_t num_cores_x_mcast = get_compile_time_arg_val(9);
+    constexpr uint32_t num_cores_y_mcast = get_compile_time_arg_val(10);
     constexpr uint32_t num_bytes_copy_to_combine = get_compile_time_arg_val(15);
     constexpr uint32_t num_combine_tiles_needed = get_compile_time_arg_val(16);
 
@@ -33,8 +25,6 @@ void kernel_main() {
     const uint32_t start_y = get_arg_val<uint32_t>(4);
     volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5));
     volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
-
-    const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;     // E[x] partial result
     constexpr uint32_t cb_ex_combine = tt::CBIndex::c_9;     // E[x] buffer for global combine
@@ -122,8 +112,8 @@ void kernel_main() {
         remote_noc_addrs_second_stage[0] | reduce_second_stage_semaphore_addr;
 
     // wait for local partial data ready
-    cb_wait_front(cb_ex_partial, block_h);
-    cb_wait_front(cb_varx_partial, block_h);
+    cb_wait_front(cb_ex_partial, block_ht);
+    cb_wait_front(cb_varx_partial, block_ht);
 
     // Sync with sender
     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
@@ -153,8 +143,8 @@ void kernel_main() {
     // cb_push_back(cb_ex_combine, num_combine_tiles_needed);
     // cb_push_back(cb_varx_combine, num_combine_tiles_needed);
 
-    cb_pop_front(cb_ex_partial, block_h);
-    cb_pop_front(cb_varx_partial, block_h);
+    cb_pop_front(cb_ex_partial, block_ht);
+    cb_pop_front(cb_varx_partial, block_ht);
 
     // Signal to sender that combine buffers are ready
     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
@@ -162,12 +152,12 @@ void kernel_main() {
     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
     // Make space for the global results
-    cb_reserve_back(cb_ex_global, num_tiles_to_read);
-    cb_reserve_back(cb_varx_global, num_tiles_to_read);
+    cb_reserve_back(cb_ex_global, block_ht);
+    cb_reserve_back(cb_varx_global, block_ht);
 
     // Read the global combine results from sender when sender
     // signals that it is ready
     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-    cb_push_back(cb_ex_global, num_tiles_to_read);
-    cb_push_back(cb_varx_global, num_tiles_to_read);
+    cb_push_back(cb_ex_global, block_ht);
+    cb_push_back(cb_varx_global, block_ht);
 }
