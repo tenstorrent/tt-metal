@@ -97,7 +97,7 @@ def calculate_initialization_parameters(
     btm_left_bc_tt = ttnn.reshape(btm_left_bc_tt, [batch_size, grid_h, 1, grid_w * btm_left_bc_tt.shape[-1]])
 
     visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    area_tt = ttnn.from_torch(area_nhwc * visible_nhwc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     return (
         [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
         visible_tt,
@@ -179,7 +179,8 @@ class OFT:
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        top_left = ttnn.permute(top_left, (0, 2, 1, 3))
+        # top_left = ttnn.permute(top_left, (0, 2, 1, 3))
+        top_left = ttnn.reshape(top_left, [top_left.shape[0], top_left.shape[2], top_left.shape[1], top_left.shape[3]])
         top_left = ttnn.to_layout(top_left, ttnn.TILE_LAYOUT)
         btm_right = ttnn.grid_sample(
             integral_image,
@@ -187,7 +188,10 @@ class OFT:
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        btm_right = ttnn.permute(btm_right, (0, 2, 1, 3))
+        # btm_right = ttnn.permute(btm_right, (0, 2, 1, 3))
+        btm_right = ttnn.reshape(
+            btm_right, [btm_right.shape[0], btm_right.shape[2], btm_right.shape[1], btm_right.shape[3]]
+        )
         btm_right = ttnn.to_layout(btm_right, ttnn.TILE_LAYOUT)
         top_right = ttnn.grid_sample(
             integral_image,
@@ -195,7 +199,10 @@ class OFT:
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        top_right = ttnn.permute(top_right, (0, 2, 1, 3))
+        # top_right = ttnn.permute(top_right, (0, 2, 1, 3))
+        top_right = ttnn.reshape(
+            top_right, [top_right.shape[0], top_right.shape[2], top_right.shape[1], top_right.shape[3]]
+        )
         top_right = ttnn.to_layout(top_right, ttnn.TILE_LAYOUT)
         btm_left = ttnn.grid_sample(
             integral_image,
@@ -203,10 +210,11 @@ class OFT:
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        btm_left = ttnn.permute(btm_left, (0, 2, 1, 3))
+        # btm_left = ttnn.permute(btm_left, (0, 2, 1, 3))
+        btm_left = ttnn.reshape(btm_left, [btm_left.shape[0], btm_left.shape[2], btm_left.shape[1], btm_left.shape[3]])
         btm_left = ttnn.to_layout(btm_left, ttnn.TILE_LAYOUT)
 
-        vox_feats = (top_left - top_right + btm_right - btm_left) * self.area * self.visible
+        vox_feats = (top_left - top_right + btm_right - btm_left) * self.area
 
         n, h, w, c = vox_feats.shape
         logger.debug(f"TTNN: {n=}, {h=}, {w=}, {c=}")
@@ -218,10 +226,11 @@ class OFT:
             self.linear_weight,
             bias=self.linear_bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            activation="relu",
             dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(vox_feats)
-        ortho_feats = ttnn.relu(ortho_feats, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         if use_signpost:
             signpost(header="OFT block ended")
         # return ortho_feats
