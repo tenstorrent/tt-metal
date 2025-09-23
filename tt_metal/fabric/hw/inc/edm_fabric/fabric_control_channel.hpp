@@ -461,16 +461,25 @@ public:
 
     void init() { static_cast<Derived*>(this)->init(); }
 
-    void process() { static_cast<Derived*>(this)->process(); }
+    void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+        static_cast<Derived*>(this)->process(packet_header, staging_packet_address);
+    }
 
     bool is_active() const { return static_cast<Derived*>(this)->is_active(); }
+
+    FORCE_INLINE bool has_outbound_packet() const { return has_outbound_packet_; }
+
+    FORCE_INLINE void clear_outbound_packet() { has_outbound_packet_ = false; }
+
+protected:
+    bool has_outbound_packet_ = false;
 };
 
 class HeartbeatFSMContext : public BaseFSMContext<HeartbeatFSMContext> {
 public:
     FORCE_INLINE void init() { state_ = State::INIT; }
 
-    FORCE_INLINE void process(ControlPacketHeader* packet_header) {
+    FORCE_INLINE void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         // drop any non-heartbeat packets
         if (packet_header->type != ControlPacketType::HEARTBEAT) {
             return;
@@ -478,27 +487,30 @@ public:
 
         switch (state_) {
             case State::INIT:
-                // based on the sub_type, we can determine if we are a sender or a receiver
                 if (packet_header->sub_type == ControlPacketSubType::INIT) {
-                    // TODO: stage the packet in the local buffer
+                    prepare_request_packet(packet_header, staging_packet_address);
                     state_ = State::WAITING_FOR_HEARTBEAT;
                 } else if (packet_header->sub_type == ControlPacketSubType::ACK_REQUEST) {
-                    // TODO: send the ack response
+                    prepare_response_packet(packet_header, staging_packet_address);
                     state_ = State::COMPLETED;
-                } else {
-                    // Drop any other packets
-                    return;
-                }
+                }  // Drop any other packets
+
                 break;
             case State::WAITING_FOR_HEARTBEAT:
                 // Drop any non-ack response packets
                 if (packet_header->sub_type != ControlPacketSubType::ACK_RESPONSE) {
-                    return;
+                    break;
                 }
 
-                state_ = State::COMPLETED;
+                pending_heartbeat_mask_ &= ~(1 << packet_header->src_channel_id);
+                if (pending_heartbeat_mask_ == 0) {
+                    state_ = State::COMPLETED;
+                }
+
                 break;
-            default: __builtin_unreachable();
+            default:
+                // do nothing, silently drop the packet
+                break;
         }
     }
 
@@ -511,18 +523,40 @@ private:
         COMPLETED,
     };
 
-    FORCE_INLINE void prepare_request_packet(ControlPacketHeader* packet_header) {}
+    FORCE_INLINE void prepare_request_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+        auto* request_packet = reinterpret_cast<tt_l1_ptr ControlPacketHeader*>(staging_packet_address);
+        request_packet->type = ControlPacketType::HEARTBEAT;
+        request_packet->sub_type = ControlPacketSubType::ACK_REQUEST;
+        request_packet->src_node_id = packet_header->dst_node_id;
+        request_packet->dst_node_id = packet_header->context.heartbeat_packet_context.target_node_id;
+        request_packet->src_channel_id = packet_header->dst_channel_id;
+        request_packet->dst_channel_id = packet_header->context.heartbeat_packet_context.target_channel_id;
 
-    FORCE_INLINE void prepare_response_packet(ControlPacketHeader* packet_header) {}
+        pending_heartbeat_mask_ = 1 << packet_header->context.heartbeat_packet_context.target_channel_id;
+        has_outbound_packet_ = true;
+    }
+
+    FORCE_INLINE void prepare_response_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+        auto* response_packet = reinterpret_cast<tt_l1_ptr ControlPacketHeader*>(staging_packet_address);
+        response_packet->type = ControlPacketType::HEARTBEAT;
+        response_packet->sub_type = ControlPacketSubType::ACK_RESPONSE;
+        response_packet->src_node_id = packet_header->dst_node_id;
+        response_packet->dst_node_id = packet_header->src_node_id;
+        response_packet->src_channel_id = packet_header->dst_channel_id;
+        response_packet->dst_channel_id = packet_header->src_channel_id;
+
+        has_outbound_packet_ = true;
+    }
 
     State state_;
+    uint32_t pending_heartbeat_mask_ = 0;
 };
 
 class RerouteFSMContext : public BaseFSMContext<RerouteFSMContext> {
 public:
     FORCE_INLINE void init() { state_ = 0; }
 
-    FORCE_INLINE void process(ControlPacketHeader* packet_header) { state_++; }
+    FORCE_INLINE void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) { state_++; }
 
     FORCE_INLINE bool is_active() const { return state_ != 0; }
 
@@ -565,13 +599,35 @@ public:
 
     FORCE_INLINE void process(ControlPacketHeader* packet_header) {
         switch (active_fsm_type_) {
-            case ActiveFSMType::HEARTBEAT: heartbeat_fsm_context_.process(packet_header); break;
-            case ActiveFSMType::REROUTE: reroute_fsm_context_.process(packet_header); break;
+            case ActiveFSMType::HEARTBEAT:
+                heartbeat_fsm_context_.process(packet_header, staging_packet_address_);
+                break;
+            case ActiveFSMType::REROUTE: reroute_fsm_context_.process(packet_header, staging_packet_address_); break;
             default: __builtin_unreachable();
         }
     }
 
+    FORCE_INLINE bool has_outbound_packet() const {
+        switch (active_fsm_type_) {
+            case ActiveFSMType::HEARTBEAT: return heartbeat_fsm_context_.has_outbound_packet();
+            case ActiveFSMType::REROUTE: return reroute_fsm_context_.has_outbound_packet();
+            default: __builtin_unreachable();
+        }
+    }
+
+    FORCE_INLINE void clear_outbound_packet() {
+        switch (active_fsm_type_) {
+            case ActiveFSMType::HEARTBEAT: heartbeat_fsm_context_.clear_outbound_packet(); break;
+            case ActiveFSMType::REROUTE: reroute_fsm_context_.clear_outbound_packet(); break;
+            default: __builtin_unreachable();
+        }
+    }
+
+    FORCE_INLINE uint32_t get_outbound_packet_address() const { return staging_packet_address_; }
+
 private:
+    static constexpr uint32_t staging_packet_address_ = control_channel_staging_packet_buffer_address;
+
     ActiveFSMType active_fsm_type_ = ActiveFSMType::NONE;
     HeartbeatFSMContext heartbeat_fsm_context_;
     RerouteFSMContext reroute_fsm_context_;
@@ -590,24 +646,19 @@ public:
 
         eth_outbound_interface_.init();
         local_outbound_interface_.init();
+
+        next_inbound_interface_to_process_ = InterfaceType::HOST;
     }
 
     void local_handshake() {
         // local handshake with all local routers to ensure that the inbound and outbound interfaces are ready
     }
 
+    // In a single step, we handle 1 outbound packet (if any)and 1 inbound packet
     void run_control_channel_step() {
-        // TODO: need to check if we care about the return value here
-        host_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
-            return this->process_control_packet_from_host(packet_header);
-        });
-        eth_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
-            return this->process_control_packet_from_eth(packet_header);
-        });
+        handle_outbound_packet();
 
-        local_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
-            return this->process_control_packet_from_local(packet_header);
-        });
+        process_next_inbound_interface();
     }
 
     void teardown(uint32_t dummy_addr) {
@@ -621,6 +672,19 @@ public:
     }
 
 private:
+    static constexpr uint32_t MY_ETH_CHANNEL_MASK = 1 << MY_ETH_CHANNEL;
+
+    enum class InterfaceType : uint8_t {
+        HOST = 0,
+        ETH = 1,
+        LOCAL = 2,
+        NONE = 3,
+    };
+
+    // tracks the next inbound interface to process
+    InterfaceType next_inbound_interface_to_process_ = InterfaceType::NONE;
+
+    // Finite State Machine Manager
     FSMManager fsm_manager_;
 
     // Buffer consumer interfaces
@@ -633,8 +697,6 @@ private:
     EthProducerInterface<control_channel_num_eth_buffer_slots> eth_outbound_interface_;
     LocalProducerInterface<control_channel_max_num_eth_cores, control_channel_num_local_buffer_slots>
         local_outbound_interface_;
-
-    // TODO: may potentially need an address for local staging of the outbound packets
 
     FORCE_INLINE void clear_flow_control_counters() {
         *reinterpret_cast<tt_l1_ptr uint32_t*>(control_channel_host_buffer_remote_write_counter_address) = 0;
@@ -655,22 +717,82 @@ private:
         }
     }
 
-    FORCE_INLINE void forward_control_packet_via_eth_interface(ControlPacketHeader* packet_header) {
+    FORCE_INLINE void handle_outbound_packet() {
+        if (!fsm_manager_.has_outbound_packet()) {
+            return;
+        }
+
+        auto packet_address = fsm_manager_.get_outbound_packet_address();
+        bool success = forward_control_packet(reinterpret_cast<ControlPacketHeader*>(packet_address));
+        if (success) {
+            fsm_manager_.clear_outbound_packet();
+        }
+    }
+
+    bool process_control_packet_from_host(ControlPacketHeader* packet_header) {
+        // the is multi-step only to see if we need to capture info about the source
+        // we can remove this if we dont need to capture info about the source
+        forward_control_packet(packet_header);
+        return true;
+    }
+
+    bool process_control_packet_from_eth(ControlPacketHeader* packet_header) {
+        // the is multi-step only to see if we need to capture info about the source
+        // we can remove this if we dont need to capture info about the source
+        forward_control_packet(packet_header);
+        return true;
+    }
+
+    bool process_control_packet_from_local(ControlPacketHeader* packet_header) {
+        // the is multi-step only to see if we need to capture info about the source
+        // we can remove this if we dont need to capture info about the source
+        forward_control_packet(packet_header);
+        return true;
+    }
+
+    FORCE_INLINE void process_next_inbound_interface() {
+        switch (next_inbound_interface_to_process_) {
+            case InterfaceType::HOST:
+                host_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
+                    return this->process_control_packet_from_host(packet_header);
+                });
+                next_inbound_interface_to_process_ = InterfaceType::ETH;
+                break;
+            case InterfaceType::ETH:
+                eth_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
+                    return this->process_control_packet_from_eth(packet_header);
+                });
+                next_inbound_interface_to_process_ = InterfaceType::LOCAL;
+                break;
+            case InterfaceType::LOCAL:
+                local_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
+                    return this->process_control_packet_from_local(packet_header);
+                });
+                next_inbound_interface_to_process_ = InterfaceType::HOST;
+                break;
+            default: __builtin_unreachable();
+        }
+    }
+
+    FORCE_INLINE bool forward_packet_via_eth_interface(ControlPacketHeader* packet_header) {
         if (!eth_outbound_interface_.remote_has_space_for_packet()) {
-            return;
+            return false;
         }
+
         eth_outbound_interface_.forward_packet(reinterpret_cast<uint32_t>(packet_header));
+        return true;
     }
 
-    FORCE_INLINE void forward_control_packet_via_local_interface(
-        ControlPacketHeader* packet_header, uint32_t channel_mask) {
+    FORCE_INLINE bool forward_packet_via_local_interface(ControlPacketHeader* packet_header, uint32_t channel_mask) {
         if (!local_outbound_interface_.remote_has_space_for_packet(channel_mask)) {
-            return;
+            return false;
         }
+
         local_outbound_interface_.forward_packet(reinterpret_cast<uint32_t>(packet_header), channel_mask);
+        return true;
     }
 
-    FORCE_INLINE void process_local_control_packet(ControlPacketHeader* packet_header) {
+    FORCE_INLINE void consume_local_control_packet(ControlPacketHeader* packet_header) {
         if (!fsm_manager_.is_any_fsm_active()) {
             // need to peel the packet type to initialize the appropriate FSM?
             fsm_manager_.activate_fsm(packet_header->type);
@@ -679,19 +801,16 @@ private:
         fsm_manager_.process(packet_header);
     }
 
-    FORCE_INLINE void process_control_packet(ControlPacketHeader* packet_header) {
-        // process the control packet based on its type and source
+    FORCE_INLINE InterfaceType get_outbound_interface_type(ControlPacketHeader* packet_header) {
+        InterfaceType outbound_interface_type = InterfaceType::NONE;
+        uint8_t downstream_channel_id = INVALID_DIRECTION;
 
-        // step 1: check if the packet is local or not
         const auto dst_chip_id = packet_header->dst_node_id.chip_id;
         const auto dst_mesh_id = packet_header->dst_node_id.mesh_id;
         const auto dst_channel_id = packet_header->dst_channel_id;
 
         const tt_l1_ptr fabric_router_l1_config_t* routing_table =
             reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-
-        bool is_local_packet = false;
-        uint8_t downstream_channel_id;
 
         if (dst_mesh_id != routing_table->my_mesh_id) {
             // inter-mesh routing
@@ -702,43 +821,34 @@ private:
         } else if (dst_channel_id != MY_ETH_CHANNEL) {
             // local routing
             downstream_channel_id = dst_channel_id;
-        } else {
-            is_local_packet = true;
+        }  // else the packet is destined for the same router
+
+        if (downstream_channel_id == MY_ETH_CHANNEL) {
+            outbound_interface_type = InterfaceType::ETH;
+        } else if (downstream_channel_id != INVALID_DIRECTION) {
+            outbound_interface_type = InterfaceType::LOCAL;
         }
 
-        if (is_local_packet) {
-            process_local_control_packet(packet_header);
-        } else {
-            if (downstream_channel_id == MY_ETH_CHANNEL) {
-                forward_control_packet_via_eth_interface(packet_header);
-            } else {
-                ASSERT(downstream_channel_id != INVALID_DIRECTION);
+        return outbound_interface_type;
+    }
+
+    FORCE_INLINE bool forward_control_packet(ControlPacketHeader* packet_header) {
+        const auto outbound_interface_type = get_outbound_interface_type(packet_header);
+        bool success = true;
+
+        switch (outbound_interface_type) {
+            case InterfaceType::NONE: consume_local_control_packet(packet_header); break;
+            case InterfaceType::ETH: success = forward_packet_via_eth_interface(packet_header); break;
+            case InterfaceType::LOCAL: {
                 // since the dst_channel is specified, the mask will contain only one entry
-                const uint32_t channel_mask = 1 << downstream_channel_id;
-                forward_control_packet_via_local_interface(packet_header, channel_mask);
+                const uint32_t channel_mask = 1 << packet_header->dst_channel_id;
+                success = forward_packet_via_local_interface(packet_header, channel_mask);
+                break;
             }
+            default: __builtin_unreachable();
         }
-    }
 
-    bool process_control_packet_from_host(ControlPacketHeader* packet_header) {
-        // the is multi-step only to see if we need to capture info about the source
-        // we can remove this if we dont need to capture info about the source
-        process_control_packet(packet_header);
-        return true;
-    }
-
-    bool process_control_packet_from_eth(ControlPacketHeader* packet_header) {
-        // the is multi-step only to see if we need to capture info about the source
-        // we can remove this if we dont need to capture info about the source
-        process_control_packet(packet_header);
-        return true;
-    }
-
-    bool process_control_packet_from_local(ControlPacketHeader* packet_header) {
-        // the is multi-step only to see if we need to capture info about the source
-        // we can remove this if we dont need to capture info about the source
-        process_control_packet(packet_header);
-        return true;
+        return success;
     }
 };
 

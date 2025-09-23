@@ -255,6 +255,9 @@ struct FabricControlChannelConfig {
     std::size_t local_buffer_remote_write_counter_base_address = 0;
     std::size_t local_buffer_remote_read_counter_base_address = 0;
 
+    // staging packet address
+    std::size_t staging_packet_buffer_address = 0;
+
     FabricControlChannelConfig();
 
     std::size_t setup_addresses(std::size_t l1_start_address);

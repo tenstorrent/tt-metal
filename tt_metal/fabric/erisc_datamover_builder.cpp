@@ -280,6 +280,9 @@ std::size_t FabricControlChannelConfig::setup_addresses(std::size_t l1_start_add
     this->local_buffer_remote_read_counter_base_address = next_l1_addr;
     next_l1_addr += this->max_num_eth_cores * FabricControlChannelConfig::field_size;
 
+    this->staging_packet_buffer_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::buffer_slot_size;
+
     return next_l1_addr;
 }
 
@@ -299,7 +302,8 @@ void FabricControlChannelConfig::get_compile_time_args(std::vector<uint32_t>& ct
         this->eth_buffer_local_write_counter_address,
         this->eth_buffer_local_read_counter_address,
         this->local_buffer_remote_write_counter_base_address,
-        this->local_buffer_remote_read_counter_base_address};
+        this->local_buffer_remote_read_counter_base_address,
+        this->staging_packet_buffer_address};
     ct_args.insert(ct_args.end(), control_channel_args.begin(), control_channel_args.end());
 }
 

@@ -641,7 +641,8 @@ union NodeId {
 
 struct HeartbeatPacketContext {
     NodeId target_node_id;
-    uint32_t target_channel_mask;
+    uint8_t target_channel_id;
+    uint8_t reserved[3];
 };
 
 struct ReroutePacketContext {
