@@ -283,7 +283,16 @@ class TtnnRepcsp:
         ttnn.deallocate(cv1_out)
 
         cv2_out = self.cv2(x)
-        concat_out = concat(-1, True, m_out, cv2_out)
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                m_out.memory_config().shard_spec.shape[0],
+                2 * m_out.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=m_out.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        concat_out = ttnn.concat([m_out, cv2_out], dim=-1, memory_config=output_sharded_memory_config)
 
         ttnn.deallocate(m_out)
         ttnn.deallocate(cv2_out)
@@ -364,7 +373,22 @@ class TtnnRepncspelan4:
         cv5_out = self.k4(cv4_out)
         ttnn.deallocate(cv4_out)
 
-        x = concat(-1, True, y1, y2, cv3_out, cv5_out)
+        if cv5_out.memory_config() != y1.memory_config():
+            y1 = ttnn.to_memory_config(y1, memory_config=cv5_out.memory_config())
+
+        if cv5_out.memory_config() != y2.memory_config():
+            y2 = ttnn.to_memory_config(y2, memory_config=cv5_out.memory_config())
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                cv5_out.memory_config().shard_spec.shape[0],
+                4 * cv5_out.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=cv5_out.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        x = ttnn.concat([y1, y2, cv3_out, cv5_out], dim=-1, memory_config=output_sharded_memory_config)
 
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
@@ -985,8 +1009,20 @@ class YoloV9:
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 13
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        x = concat(-1, True, x, x4)  # 14
-        # x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        x = ttnn.to_memory_config(x, x4.memory_config())
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                x.memory_config().shard_spec.shape[0],
+                2 * x.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=x.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.concat([x, x4], dim=-1, memory_config=output_sharded_memory_config)  # 14
         ttnn.deallocate(x4)
 
         # x = interleaved_to_sharded(x)
