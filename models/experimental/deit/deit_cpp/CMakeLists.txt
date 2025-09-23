@@ -7,6 +7,7 @@ CPMAddPackage(
     URL
         https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
     DOWNLOAD_ONLY ON
+    PATCHES ${CMAKE_CURRENT_SOURCE_DIR}/aten.patch
 )
 
 set(TORCH_LIBRARIES
