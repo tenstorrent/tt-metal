@@ -38,7 +38,7 @@ class Attention(Module):
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
         use_spatial_weights_for_prompt: bool = False,
-        added_head_scaling: bool = False,
+        context_head_scaling: bool = False,
     ) -> None:
         super().__init__()
 
@@ -92,9 +92,9 @@ class Attention(Module):
             self.norm_added_k = None
             self.to_add_out = None
 
-        self.added_head_factors = (
+        self.context_head_factors = (
             Parameter(shape=[self.padded_heads, 1, 1], device=mesh_device, mesh_mapping={tp_axis: 0})
-            if added_head_scaling and self.add_qkv_proj is not None
+            if context_head_scaling and self.add_qkv_proj is not None
             else None
         )
 
@@ -132,12 +132,12 @@ class Attention(Module):
                 weight = state["to_add_out.weight"]
                 state["to_add_out.weight"] = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
 
-        if "added_head_factors" in state:
-            factors = state["added_head_factors"]
+        if "context_head_factors" in state:
+            factors = state["context_head_factors"]
             if self.padding_config is not None:
                 pad = (0, self.padding_config.head_padding)
                 factors = torch.nn.functional.pad(factors, pad)
-            state["added_head_factors"] = factors.reshape([-1, 1, 1])
+            state["context_head_factors"] = factors.reshape([-1, 1, 1])
 
     def _reshape_and_merge_qkv(
         self,
@@ -233,8 +233,8 @@ class Attention(Module):
                 add_q = _apply_rope(add_q, prompt_rope)
                 add_k = _apply_rope(add_k, prompt_rope)
 
-            if self.added_head_factors is not None:
-                add_q = add_q * self.added_head_factors.data
+            if self.context_head_factors is not None:
+                add_q = add_q * self.context_head_factors.data
         else:
             shape = [1, self.n_local_heads, 0, self.head_dim]
             add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)

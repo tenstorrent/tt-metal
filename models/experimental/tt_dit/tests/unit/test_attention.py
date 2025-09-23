@@ -38,7 +38,7 @@ from ...utils.tensor import bf16_tensor
         "out_dim",
         "context_pre_only",
         "pre_only",
-        "added_head_scaling",
+        "context_head_scaling",
         # inputs
         "batch_size",
         "spatial_seq_len",
@@ -66,7 +66,7 @@ def test_attention_flux(
     out_dim: int,
     context_pre_only: bool,
     pre_only: bool,
-    added_head_scaling: bool,
+    context_head_scaling: bool,
     batch_size: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
@@ -124,7 +124,7 @@ def test_attention_flux(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        # added_head_scaling=added_head_scaling, # TODO
+        # context_head_scaling=context_head_scaling, # TODO
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 

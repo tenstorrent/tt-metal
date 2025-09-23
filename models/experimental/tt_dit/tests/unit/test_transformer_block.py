@@ -219,7 +219,7 @@ def test_motif(
         head_dim=head_dim,
         modulation_dim=modulation_dim,
         context_pre_only=is_last_block,
-        added_head_scaling=True,
+        context_head_scaling=True,
         mesh_device=submesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
