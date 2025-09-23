@@ -47,20 +47,20 @@ tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @dam
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/lite_fabric/ @nhuang-tt @abhullar-tt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt @tenstorrent/metalium-codeowners-large-changes
-tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @tenstorrent/metalium-codeowners-large-changes # this should go away
-tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @tenstorrent/metalium-codeowners-large-changes
-tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @kstevensTT @tenstorrent/metalium-codeowners-large-changes # this should go away
+tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/inc/accessor @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-codeowners-large-changes
-tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @nathan-TT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/context/ @jbaumanTT @aliuTT @cfjchu @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes
-tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @tt-vjovanovic @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
@@ -72,9 +72,9 @@ tt_metal/impl/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeow
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
-tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @tenstorrent/metalium-codeowners-large-changes
-tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @tenstorrent/metalium-codeowners-large-changes
-tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/kernels/ @abhullar-tt @tenstorrent/metalium-codeowners-large-changes # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
@@ -99,7 +99,7 @@ tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @aliuTT @ayero
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 
-tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @tenstorrent/metalium-codeowners-large-changes
+tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/metalium-codeowners-large-changes
 
 # metal tests
@@ -214,6 +214,7 @@ tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dch
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @yugi957 @llongTT @jvegaTT @nardoTT @amorrisonTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/fused/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/normalization/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/matmul/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @aczajkowskiTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweep_utils/adaptive_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
@@ -297,7 +298,7 @@ models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorren
 models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
-models/experimental/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
+models/demos/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 
@@ -317,7 +318,7 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstor
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @tenstorrent/metalium-codeowners-large-changes
 
 # tt-telemetry
-tt_telemetry/** @btrzynadlowski-tt @tenstorrent/metalium-codeowners-large-changes
+tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @tenstorrent/metalium-codeowners-large-changes
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes

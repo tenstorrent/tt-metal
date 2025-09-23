@@ -11,7 +11,6 @@
 // #include <tt-metalium/host_api.hpp>
 // #include <tt-metalium/tt_metal.hpp>
 // #include <circular_buffer_constants.h>
-// #include <tt-metalium/kernel.hpp>
 // #include <tt-metalium/tt_backend_api_types.hpp>
 // #include <tt-metalium/lightmetal_replay.hpp>
 // #include "command_queue_fixture.hpp"
