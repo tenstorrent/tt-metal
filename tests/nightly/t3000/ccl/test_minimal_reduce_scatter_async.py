@@ -867,7 +867,7 @@ def test_reduce_scatter_async_sharded_to_interleaved(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 3),
     ],
     ids=["check"],
 )

@@ -770,7 +770,7 @@ def test_all_gather_async_interleaved_to_sharded(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 3),
     ],
     ids=["check"],
 )
