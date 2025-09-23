@@ -671,6 +671,38 @@ Basic architecture of a 1D line virtual channel is shown in the following diagra
 
 ```
 
+#### 3.1.1.1 Dataflow between two fabric routers over Ethernet <a id="ethflow"></a>
+The following diagram shows data flow between two devices over ethernet. Sender Channel 0 is used by local worker on a device to send data. Sender Channel 1 is used for pass through tarffic that is hopping through
+current device. Packes in the receiver channel on each router can either be written to local device or forwarded to next fabric router if meant for another device. In case of an mcast packet, data is both forwarded as well as consumed locally.
+```
+                 1D LINE VIRTUAL CHANNEL                                                        1D LINE VIRTUAL CHANNEL (MIRRORED)
+                  ┌─────────────────────────────────────┐                                       ┌─────────────────────────────────────┐
+                  │  SENDER CHANNELS (2)                │                                       │                SENDER CHANNELS (2)  │
+                  │  ┌───────────────────────────────┐  │                                       │  ┌───────────────────────────────┐  │
+                  │  │ Sender Channel 0 (8 slots)    │  │                                       │  │    Sender Channel 0 (8 slots) │  │
+                  │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │                                       │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │
+   From Local  ═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶═══════╗                          ╔═══════◀┤     │ 7│ 6│ 5│ 4│ 3│ 2│ 1│ 0│ ├◀═════ From Local
+   Sender         │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │      ║                          ║     │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │    Sender
+                  │  └───────────────────────────────┘  │      ║                          ║     │  └───────────────────────────────┘  │
+                  │  ┌───────────────────────────────┐  │      ║                          ║     │  ┌───────────────────────────────┐  │
+                  │  │ Sender Channel 1 (8 slots)    │  │      ║                          ║     │  │    Sender Channel 1 (8 slots) │  │
+                  │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║                          ║     │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │
+   Passthrough ═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶═══════╩═════▶●┬──────────┬○◀═════╩═══════◀┤     │ 7│ 6│ 5│ 4│ 3│ 2│ 1│ 0│ ├◀═════ Passthrough
+                  │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │              │ ETHERNET │             │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │
+                  │  └───────────────────────────────┘  │      ╔════◀═○┴──────────┴●═▶════╗     │  └───────────────────────────────┘  │
+                  ├─────────────────────────────────────┤      ║                          ║     ├─────────────────────────────────────┤
+                  │  RECEIVER CHANNEL (1)               │      ║                          ║     │               RECEIVER CHANNEL (1)  │
+                  │  ┌───────────────────────────────┐  │      ║                          ║     │  ┌───────────────────────────────┐  │
+                  │  │ Receiver Channel 0 (16 slots) │  │      ║                          ║     │  │ Receiver Channel 0 (16 slots) │  │
+                  │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║                          ║     │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │
+   Local Or    ◀═════┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15│     ├◀════════╝                          ╚═══════▶┤     │15│14│ ┅│ ┅│ ┅│ 2│ 1│ 0│ ├═════▶ Local Or
+   Passthrough    │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │                                       │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │    Passthrough
+                  │  └───────────────────────────────┘  │                                       │  └───────────────────────────────┘  │
+                  └─────────────────────────────────────┘                                       └─────────────────────────────────────┘
+```
+
+
+
 ### 3.1.2 2D Mesh Virtual Channel <a id="2dmvc"></a>
 Basic architecture of a 2D mesh virtual channel is shown in the following diagram. In a 2D mesh, the outgoing traffic on a router is either passthrough packets from three of the fabric node's neighbors or the traffic originating from node's worker. Hence the router requires 4 Sender Channels. Fabric router iterates over the channels and processes the packets similar to 1D topology.
 
