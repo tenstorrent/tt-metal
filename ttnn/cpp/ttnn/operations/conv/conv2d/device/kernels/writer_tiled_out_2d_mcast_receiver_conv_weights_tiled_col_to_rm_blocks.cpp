@@ -105,6 +105,9 @@ void kernel_main() {
         get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
 
 #ifdef SPLIT_READER
+#ifdef CONFIG_TENSOR_IN_DRAM
+    cb_wait_front(cb_reader_indices, 1);
+#endif
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_second_reader>();
     }
