@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 import torch.nn as nn
-from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d, infer_ttnn_module_args
-from models.experimental.yolov5x.reference.yolov5x import YOLOv5, Conv
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
+
+import ttnn
+from models.demos.yolov5x.reference.yolov5x import Conv, YOLOv5
 
 
 def make_anchors(device, feats, strides, grid_cell_offset=0.5):
