@@ -42,10 +42,10 @@ template <typename T>
 static void test_single_core_reshard(
     const InputOutputBufferParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
     MemoryConfig input_mem_config = params.input_shard_spec
-                                        ? MemoryConfig(params.input_buffer_type, *params.input_shard_spec)
+                                        ? MemoryConfig(params.input_buffer_type, params.input_shard_spec)
                                         : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.input_buffer_type);
     MemoryConfig output_mem_config = params.output_shard_spec
-                                         ? MemoryConfig(params.output_buffer_type, *params.output_shard_spec)
+                                         ? MemoryConfig(params.output_buffer_type, params.output_shard_spec)
                                          : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.output_buffer_type);
 
     TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
