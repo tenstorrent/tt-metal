@@ -35,7 +35,7 @@ inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
         v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
         v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
         v_endif;
-        vFloat result = t * t * (3.0f - 2.0f * t);
+        vFloat result = t * t * (vConstFloatPrgm0 - vConstFloatPrgm1 * t);
         dst_reg[0] = result;
         dst_reg++;
     }
@@ -49,6 +49,8 @@ inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
  * Only compiled for the MATH core (TRISC_MATH context).
  */
 inline void my_smoothstep_tile_internal(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
+    vConstFloatPrgm0 = 3.0;
+    vConstFloatPrgm1 = 2.0;
     _llk_math_eltwise_unary_sfpu_params_<false>(
         smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta);
 }
