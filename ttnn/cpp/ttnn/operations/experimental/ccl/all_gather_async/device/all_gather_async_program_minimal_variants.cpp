@@ -235,17 +235,25 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
-    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
+    log_info(
+        tt::LogOp,
+        "[{}]: num_workers_per_direction: {} num_cores_per_link: {}",
+        ring_index,
+        num_workers_per_direction,
+        num_cores_per_link);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
-    log_trace(
+    log_info(
         tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device_coord,
+        "[{}]: is_first_chip: {}, is_last_chip: {} sender_device: {} forward_device: {} backward_device: {}",
+        ring_index,
         is_first_chip,
-        is_last_chip);
+        is_last_chip,
+        sender_device->id(),
+        forward_device.has_value() ? forward_device.value()->id() : -1,
+        backward_device.has_value() ? backward_device.value()->id() : -1);
 
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
@@ -323,6 +331,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    log_info(
+        tt::LogOp,
+        "[{}]: l1_scratch_cb_page_size_bytes: {}, packet_size_bytes: {}",
+        ring_index,
+        l1_scratch_cb_page_size_bytes,
+        packet_size_bytes);
+    log_info(
+        tt::LogOp,
+        "[{}]: max_target_noc_addresses_per_packet: {}, num_pages_per_packet: {}, cb_num_pages: {}",
+        ring_index,
+        max_target_noc_addresses_per_packet,
+        num_pages_per_packet,
+        cb_num_pages);
 
     // CBs for transferring data between sender_reader and sender_writer
     uint32_t sender_cb_index = tt::CB::c_in0;
@@ -362,11 +383,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    log_info(
+        tt::LogOp,
+        "[{}]: l1_unreserved_base_address: {}",
+        ring_index, l1_unreserved_base_address);
+        
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
         uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+        log_info(
+            tt::LogOp,
+            "[{}]: input_tensor_num_pages: {}, batch_head_size: {}, single_batch_head_num_pages: {}",
+            ring_index,
+            input_tensor_num_pages,
+            batch_head_size,
+            single_batch_head_num_pages);
+
         TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
         TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
         uint32_t TILE_WIDTH = 32;
@@ -378,7 +412,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
         uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
         uint32_t output_tensor_C = output_tensor_shape[1];
-
+        log_info(
+            tt::LogOp,
+            "[{}]: sender_device->id(): {}, buffer_size_bytes_full_size_channel: {}",
+            ring_index,
+            sender_device->id(),
+            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes());
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
             uint32_t mux_core_offset = (link * num_cores_per_link) +
@@ -398,7 +437,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
             const bool mux_connection_valid =
                 (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+
             if (mux_connection_valid) {
+                log_info(
+                    tt::LogOp,
+                    "[{}]: num_full_size_channels: {}, num_header_only_channels: {}, num_buffers_full_size_channels: "
+                    "{}, buffer_size_bytes_full_size_channel: {}",
+                    ring_index,
+                    num_full_size_channels,
+                    num_header_only_channels,
+                    num_buffers_full_size_channels,
+                    buffer_size_bytes_full_size_channel);
                 auto mux_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -419,7 +468,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
+
+                log_info(
+                    tt::LogOp,
+                    "[{}]: dir: {}, link: {}, src: {}, dst: {}, mux_logical_core: ({}, {})",
+                    ring_index,
+                    dir,
+                    link,
+                    sender_device->id(),
+                    dir ? backward_device.value()->id() : forward_device.value()->id(),
+                    mux_logical_core.x,
+                    mux_logical_core.y);
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            } else {
+                log_info(
+                    tt::LogOp,
+                    "[{}]: Skipping mux kernel creation for link {} dir {} backward_device: {} forward_device: {}",
+                    ring_index,
+                    link,
+                    dir,
+                    backward_device.has_value(),
+                    forward_device.has_value());
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
@@ -440,6 +509,29 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 uint32_t input_tile_id_end =
                     ((global_worker_id + 1) * base_pages_per_worker) + std::min(global_worker_id + 1, remainder);
 
+                log_info(
+                    tt::LogOp,
+                    "[{}]: core: {} {} virtual_core: {} {} / supplemental_core: {} {} opposite_core_coord: {} {}",
+                    ring_index,
+                    core.x,
+                    core.y,
+                    virtual_core.x,
+                    virtual_core.y,
+                    supplemental_core.x,
+                    supplemental_core.y,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y);
+                log_info(
+                    tt::LogOp,
+                    "[{}]: global_worker_id: {}/{} base_pages_per_worker: {} remainder: {} input_tile_id_start: {} "
+                    "input_tile_id_end: {}",
+                    ring_index,
+                    global_worker_id,
+                    global_worker_count,
+                    base_pages_per_worker,
+                    remainder,
+                    input_tile_id_start,
+                    input_tile_id_end);
                 // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
                 // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
                 // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
@@ -447,7 +539,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
                     std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
                     HEURISTIC_MAX_CHUNKS_PER_SYNC));
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+                log_info(tt::LogOp, "[{}]: DEBUG: chunks_per_sync_val: {}", ring_index, chunks_per_sync_val);
 
                 uint32_t self_write_done_semaphore;
                 if (fuse_op) {
@@ -468,6 +560,23 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     chunks_per_sync_val,
                     reverse_order,
                 };
+                log_info(
+                    tt::LogOp,
+                    "[{}]: reader: ring_index: {}, sender_cb_index: {}, num_tiles_to_write_per_packet: {}, page_size: "
+                    "{}, num_targets_forward: {}, num_targets_backward: {}, topology: {}, direction: {}, fuse_op: {}, "
+                    "chunks_per_sync_val: {}",
+                    ring_index,
+                    ring_index,
+                    sender_cb_index,
+                    num_tiles_to_write_per_packet,
+                    page_size,
+                    num_targets_forward,
+                    num_targets_backward,
+                    static_cast<uint32_t>(topology),
+                    dir,
+                    fuse_op,
+                    chunks_per_sync_val);
+
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
                 } else {
@@ -504,6 +613,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
                     input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
                 };
+                log_info(
+                    tt::LogOp,
+                    "[{}]: reader: input_tensor_address: {}, output_tensor_address: {}, input_tensor_Wt: {}, "
+                    "input_tensor_Ht: {}, output_tensor_Wt: {}, output_tensor_Ht: {}, dim: {}, batch_head_size: {}, "
+                    "input_tile_id_start: {}, input_tile_id_end: {}, ring_size: {}, semaphore_forward_address: {}, "
+                    "start_pages_read_in_row: {}, start_row_offset: {}",
+                    ring_index,
+                    input_tensor.buffer()->address(),
+                    output_tensor.buffer()->address(),
+                    input_tensor_Wt,
+                    input_tensor_Ht,
+                    output_tensor_Wt,
+                    output_tensor_Ht,
+                    dim,
+                    batch_head_size,
+                    input_tile_id_start,
+                    input_tile_id_end,
+                    ring_size,
+                    semaphore.at(dir).address(),
+                    input_tile_id_start % input_tensor_Wt,
+                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt);
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
                 }
@@ -548,6 +678,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     chunks_per_sync_val,
                     reverse_order,
                 };
+                log_info(
+                    tt::LogOp,
+                    "[{}]: writer: ring_index: {}, reserved_packet_header_CB_index: {}, num_packet_headers_storable: "
+                    "{}, sender_cb_index: {}, num_tiles_to_write_per_packet: {}, page_size: {}, num_targets_forward: "
+                    "{}, num_targets_backward: {}, fuse_op: {}, topology: {}, direction: {}, chunks_per_sync_val: {}",
+                    ring_index,
+                    ring_index,
+                    reserved_packet_header_CB_index,
+                    num_packet_headers_storable,
+                    sender_cb_index,
+                    num_tiles_to_write_per_packet,
+                    page_size,
+                    num_targets_forward,
+                    num_targets_backward,
+                    fuse_op,
+                    static_cast<uint32_t>(topology),
+                    dir,
+                    chunks_per_sync_val);
                 fabric_mux_connection_ct_args(
                     worker == 0,
                     mux_virtual_core,
@@ -607,6 +755,34 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                         : 0,
                     opposite_core_coord.x,
                     opposite_core_coord.y};
+                log_info(
+                    tt::LogOp,
+                    "[{}]: writer: output_tensor_address: {}, input_tensor_Wt: {}, input_tensor_Ht: {}, "
+                    "output_tensor_Wt: {}, output_tensor_Ht: {}, dim: {}, batch_head_size: {}, input_tile_id_start: "
+                    "{}, input_tile_id_end: {}, virtual_core.x: {}, virtual_core.y: {}, ring_size: {}, "
+                    "semaphore_forward_address: {}, start_pages_read_in_row: {}, start_row_offset: {}, "
+                    "use_barrier_semaphore: {}, barrier_semaphore_address: {}, opposite_core_coord.x: {}, "
+                    "opposite_core_coord.y: {}",
+                    ring_index,
+                    output_tensor.buffer()->address(),
+                    input_tensor_Wt,
+                    input_tensor_Ht,
+                    output_tensor_Wt,
+                    output_tensor_Ht,
+                    dim,
+                    batch_head_size,
+                    input_tile_id_start,
+                    input_tile_id_end,
+                    virtual_core.x,
+                    virtual_core.y,
+                    ring_size,
+                    semaphore.at(dir).address(),
+                    input_tile_id_start % input_tensor_Wt,
+                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt,
+                    barrier_semaphore.has_value() && !using_persistent_buffers,
+                    barrier_semaphore.has_value() ? barrier_semaphore.value().address() : 0,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y);
                 fabric_mux_connection_rt_args(
                     mux_connection_valid,
                     core,

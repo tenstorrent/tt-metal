@@ -5,7 +5,8 @@
 import pytest
 import ttnn
 
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl as run_all_gather_minimal
+from tests.nightly.t3000.ccl.test_new_all_gather import run_all_gather_impl as run_all_gather_cp
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
@@ -80,8 +81,10 @@ def test_all_gather_async(
     else:
         submesh_shape = (num_devices, 1)
         cluster_axis = 0
+    submesh_shape = (num_devices, 1)
+    cluster_axis = 0
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
-    run_all_gather_impl(
+    run_all_gather_minimal(
         submesh_device,
         num_devices,
         ag_output_shape,
@@ -431,6 +434,96 @@ def test_all_gather_async_quad_host_mesh(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        cluster_axis=cluster_axis,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+@skip_for_blackhole("This test is for wormhole")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        (8, [1, 8, 1024, 1024], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "sd35_prompt",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 1),
+    ],
+    ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("chunks_per_sync", [160])
+@pytest.mark.parametrize("num_workers_per_link", [1])
+@pytest.mark.parametrize("num_buffers_per_channel", [8])
+@pytest.mark.parametrize(
+    "all_gather_function",
+    [ttnn.experimental.all_gather_async, ttnn.experimental.all_gather_async_reversed],
+    ids=["normal", "reversed"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
+def test_all_gather_cp(
+    mesh_device,
+    num_devices,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+    all_gather_function,
+    function_level_defaults,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    cluster_axis = 0
+    run_all_gather_cp(
+        submesh_device,
+        num_devices,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        function_level_defaults,
+        all_gather_topology=all_gather_topology,
+        num_iters=num_iters,
+        trace_mode=enable_trace,
+        rand_tensor=True,
+        mem_config=mem_config_input,
+        input_shard_shape=None,
+        input_shard_grid=None,
+        output_shard_shape=None,
+        output_shard_grid=None,
+        tensor_mem_layout=None,
+        use_cluster_axis_api=True,
         cluster_axis=cluster_axis,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

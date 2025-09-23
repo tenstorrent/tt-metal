@@ -318,7 +318,7 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
                     const tracy::MarkerDetails marker_details = device_profiler.getMarkerDetails(marker.marker_id);
                     if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                             tracy::MarkerDetails::MarkerNameKeyword::SYNC_ZONE)]) {
-                        ZoneScopedN("Adding_device_sync_marker");
+                        // ZoneScopedN("Adding_device_sync_marker");
                         auto ret = device_profiler.device_sync_markers.insert(marker);
                         if (ret.second) {
                             device_profiler.device_sync_new_markers.insert(marker);

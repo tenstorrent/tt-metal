@@ -16,13 +16,14 @@
 #include <array>
 // clang-format on
 
-constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
-constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
-constexpr size_t BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL = get_compile_time_arg_val(2);
-constexpr size_t NUM_HEADER_ONLY_CHANNELS = get_compile_time_arg_val(3);
-constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
+constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);               // 2
+constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);       // 2
+constexpr size_t BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL = get_compile_time_arg_val(2);  // 4400
+constexpr size_t NUM_HEADER_ONLY_CHANNELS = get_compile_time_arg_val(3);             // 0
+constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);     // 0
 // header only buffer slot size is the same as the edm packet header size
 
+// l1_unreserved_base
 constexpr size_t status_address = get_compile_time_arg_val(5);
 constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
 constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);

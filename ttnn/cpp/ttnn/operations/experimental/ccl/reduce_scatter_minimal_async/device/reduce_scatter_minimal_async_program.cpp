@@ -966,15 +966,18 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             ring_size,
             num_directions_per_link,
             num_mux_cores_per_direction_per_link));
-    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
+    log_info(tt::LogOp, "[{}] DEBUG: num_workers_per_direction: {}", ring_index, num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
-    log_trace(
+    log_info(
         tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device_coord,
+        "[{}]DEBUG: device: {}, is_first_chip: {}, is_last_chip: {} forward={} bacward={}",
+        ring_index,
+        sender_device->id(),
         is_first_chip,
-        is_last_chip);
+        is_last_chip,
+        forward_device.has_value() ? forward_device.value()->id() : -1,
+        backward_device.has_value() ? backward_device.value()->id() : -1);
 
     bool fuse_op = fused_op_signaler.has_value();
 
@@ -1097,6 +1100,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
     }
 
+    log_info(tt::LogOp, "[{}] input_tensor_shape: {}, num_pages: {}, batch_slice_num_pages: {}", ring_index, input_tensor_shape, input_tensor_num_pages, batch_slice_num_pages);
+
     // KERNEL CREATION
     // Reader
     std::vector<KernelHandle> reader_kernel_ids;
@@ -1136,6 +1141,15 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             const bool mux_connection_valid =
                 (dir && forward_coord.has_value()) || (!dir && backward_coord.has_value());
             if (mux_connection_valid) {
+                log_info(
+                    tt::LogOp,
+                    "[{}]: num_full_size_channels: {}, num_header_only_channels: {}, num_buffers_full_size_channels: "
+                    "{}, buffer_size_bytes_full_size_channel: {}",
+                    ring_index,
+                    num_full_size_channels,
+                    num_header_only_channels,
+                    num_buffers_full_size_channels,
+                    buffer_size_bytes_full_size_channel);
                 auto mux_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -1157,7 +1171,26 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
+                log_info(
+                    tt::LogOp,
+                    "[{}]: dir: {}, link: {}, src: {}, dst: {}, mux_logical_core: ({}, {})",
+                    ring_index,
+                    dir,
+                    link,
+                    sender_device->id(),
+                    dir ? forward_device.value()->id() : backward_device.value()->id(),
+                    mux_logical_core.x,
+                    mux_logical_core.y);
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            } else {
+                log_info(
+                    tt::LogOp,
+                    "[{}]: Skipping mux kernel creation for link {} dir {} backward_device: {} forward_device: {}",
+                    ring_index,
+                    link,
+                    dir,
+                    backward_device.has_value(),
+                    forward_device.has_value());
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
@@ -1198,6 +1231,44 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
                         topology, tiles_to_read, tiles_read, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+
+                log_info(
+                    tt::LogOp,
+                    "[{}]: core: {} {} virtual_core: {} {} / supplemental_core: {} {} opposite_core_coord: {} {}",
+                    ring_index,
+                    core.x,
+                    core.y,
+                    virtual_core.x,
+                    virtual_core.y,
+                    opposite_core.x,
+                    opposite_core.y,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y);
+                log_info(
+                    tt::LogOp,
+                    "[{}]: input_cb_index: {}, intermediate_cb_index: {}, reader_output_cb_index: {}, "
+                    "tile_granularity: {}, page_size: {}, input_tensor_Wt: {}, batch_slice_num_pages: {}, "
+                    "ring_size: {}, num_batches: {}, is_forward: {}, is_first_device_in_direction: {}, "
+                    "num_targets_in_direction: {}, num_intermediate_reduction_steps: {}, do_final_reduction: {}, "
+                    "num_total_reduction_steps: {}, tiles_to_write_per_packet: {}, chunks_per_sync_val: {}",
+                    ring_index,
+                    input_cb_index,
+                    intermediate_cb_index,
+                    reader_output_cb_index,
+                    tile_granularity,
+                    page_size,
+                    input_tensor_Wt,
+                    batch_slice_num_pages,
+                    ring_size,
+                    num_batches,
+                    is_forward,
+                    is_first_device_in_direction,
+                    num_targets_in_direction,
+                    num_intermediate_reduction_steps,
+                    do_final_reduction,
+                    num_total_reduction_steps,
+                    tiles_to_write_per_packet,
+                    chunks_per_sync_val);
 
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {

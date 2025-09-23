@@ -122,13 +122,13 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                 uint32_t tile_id = output_tile_id_start + tiles_read;
                 uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
-                noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                // noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
                 l1_write_addr += input_tensor_page_size;
                 tiles_read++;
             }
 
-            noc_async_read_barrier();
+            // noc_async_read_barrier();
             cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
         }
         tiles_read = input_tile_id_start;
@@ -228,7 +228,7 @@ void kernel_main() {
                     for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                         uint32_t tile_id = output_tile_id_start + row_offset + pages_read_in_row;
                         uint64_t noc_read_addr = get_noc_addr(tile_id, output_tensor_addrgen);
-                        noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                        // noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
                         l1_write_addr += input_tensor_page_size;
                         tiles_read++;
@@ -240,7 +240,7 @@ void kernel_main() {
                         }
                     }
 
-                    noc_async_read_barrier();
+                    // noc_async_read_barrier();
                     cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
                 }
                 num_channels_processed_in_current_batch++;

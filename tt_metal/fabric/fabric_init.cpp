@@ -457,6 +457,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     // Compile all fabric tensix builders
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        log_info(tt::LogMetal, "Compiling fabric tensix builders");
         for (auto& [eth_chan, tensix_builder] : tensix_builders) {
             tensix_builder.create_and_compile(device, *fabric_program_ptr);
         }
@@ -514,7 +515,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }
 
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Building fabric router -> device (phys): {}, (logical): {}, channel: {}, num_local_fabric_routers: {}",
             device->id(),

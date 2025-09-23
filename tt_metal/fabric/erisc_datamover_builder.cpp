@@ -829,10 +829,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         is_dateline,
         is_dateline_upstream,
         is_dateline_upstream_adj_dev);
-    log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
+    log_info(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
+    log_info(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
+    log_info(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
+    log_info(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
@@ -427,6 +428,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     devices.reserve(chip_seq.size());
     for (const auto& chip_id : chip_seq) {
         devices.push_back(fixture->get_device(chip_id));
+        log_info(LogTest, "Using chip_seq: {}, device: {}", chip_id, devices.back()->id());
     }
 
     const bool is_2d_fabric =
@@ -532,6 +534,8 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     };
 
     for (auto i = 0; i < devices.size(); i++) {
+        log_info(tt::LogOp, "[{}]: from {} to {}", i, devices[i]->id(), devices[get_dest_device_idx(i, 1)]->id());
+        
         program_handles[i] = tt_metal::CreateProgram();
 
         // use logical core (0,0) for the mux kernel
@@ -556,6 +560,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
 
         // for mux we always specify the dest device as 1 hop away since its only used for setting up the
         // connection with the fabric routers
+        log_info(tt::LogOp, "[{}]: Creating mux kernel", i);
         create_mux_kernel(
             mux_kernel_config, mux_logical_core, devices[i], devices[get_dest_device_idx(i, 1)], program_handles[i]);
 
@@ -575,6 +580,13 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
                 .dest_device = dest_device,
                 .kernel_src = sender_kernel_src,
                 .termination_master_logical_core = termination_master_logical_core};
+            log_info(tt::LogOp, "[{}]: Creating sender id {} core ({}, {}) hops {} to device {}",
+                     i,
+                     sender_id,
+                     sender_logical_core.x,
+                     sender_logical_core.y,
+                     num_hops,
+                     dest_device->id());
             create_worker_kernel(
                 test_config, sender_config, mux_kernel_config, mux_virtual_core, devices[i], program_handles[i]);
             sender_id++;
@@ -594,6 +606,13 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
                 .dest_device = dest_device,
                 .kernel_src = receiver_kernel_src,
                 .termination_master_logical_core = termination_master_logical_core};
+            log_info(tt::LogOp, "[{}]: Creating receiver id {} core ({}, {}) hops {} from device {}",
+                     i,
+                     receiver_id,
+                     receiver_logical_core.x,
+                     receiver_logical_core.y,
+                     num_hops,
+                     dest_device->id());
             create_worker_kernel(
                 test_config, receiver_config, mux_kernel_config, mux_virtual_core, devices[i], program_handles[i]);
             receiver_id++;

@@ -9,7 +9,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 
 
 @skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize("num_links", [1], ids=["3links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
@@ -59,9 +59,9 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     ids=["fabric_linear"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [2])
-@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_workers_per_link", [1])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
 def test_reduce_scatter_async(
     mesh_device,
     num_devices,

@@ -269,7 +269,7 @@ void kernel_main() {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
+            // cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
             size_t l1_read_addr = get_read_ptr(cb_output_id);
 
             uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
@@ -468,7 +468,7 @@ void kernel_main() {
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
+                // cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                 uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;

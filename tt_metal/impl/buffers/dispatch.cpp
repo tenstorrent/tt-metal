@@ -586,7 +586,7 @@ void issue_buffer_dispatch_command_sequence(
     T& dispatch_params,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
-    ZoneScoped;
+    // ZoneScoped;
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
     tt::tt_metal::DeviceCommandCalculator calculator;
@@ -673,7 +673,7 @@ void write_sharded_buffer_to_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
-    ZoneScoped;
+    // ZoneScoped;
     // Skip writing the padded pages along the bottom
     // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
     // Alternative write each page row into separate commands, or have a strided linear write

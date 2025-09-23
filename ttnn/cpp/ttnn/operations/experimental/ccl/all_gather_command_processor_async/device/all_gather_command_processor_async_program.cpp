@@ -97,7 +97,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands =
         ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
-
+    log_info(
+        tt::LogOp,
+        "all_gather_command_processor_async_multi_core_with_workers: device {}, ring_size {}, ring_index {}, dim {}, "
+        "topology {}, lower_command_stream_to_noc_commands {}",
+        sender_device->id(),
+        ring_size,
+        ring_index,
+        dim,
+        static_cast<int>(topology),
+        lower_command_stream_to_noc_commands);
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -157,7 +166,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
             sender_worker_core_range,
             tt::tt_metal::ReaderDataMovementConfig{},
             1,  // num_command_streams
-            sender_device->id());
+            ring_index);
 
     tt::tt_metal::KernelHandle worker_sender_writer_kernel_id =
         ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
@@ -167,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
             sender_worker_core_range,
             tt::tt_metal::WriterDataMovementConfig{},
             1,  // num_command_streams
-            sender_device->id());
+            ring_index);
     size_t num_targets_forward = 0;
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
