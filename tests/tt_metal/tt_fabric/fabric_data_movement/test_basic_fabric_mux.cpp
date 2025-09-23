@@ -273,7 +273,7 @@ void create_mux_kernel(
         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dest_device->get_devices()[0]->id());
     const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
     TT_FATAL(
-        available_links.size() > 0,
+        !available_links.empty(),
         "Couldnt find any forwarding routing planes from: {} to: {}",
         device->id(),
         dest_device->id());

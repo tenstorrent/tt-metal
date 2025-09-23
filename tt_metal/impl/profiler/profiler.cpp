@@ -483,7 +483,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                     if (fabric_mux_markers.find(local_noc_write_dst_phys) == fabric_mux_markers.end()) {
                         addFabricMuxEvents(markers, fabric_mux_markers, local_noc_write_dst_phys);
                     }
-                    if (fabric_mux_markers[local_noc_write_dst_phys].size() == 0) {
+                    if (fabric_mux_markers[local_noc_write_dst_phys].empty()) {
                         log_warning(
                             tt::LogMetal,
                             "[profiler noc tracing] Failed to coalesce fabric noc trace events in op '{}': "
@@ -1558,7 +1558,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                     std::string new_marker_name = current_dispatch_meta_data.cmd_type;
                     if (marker.risc == tracy::RiscType::BRISC) {
-                        if (current_dispatch_meta_data.cmd_subtype != "") {
+                        if (!current_dispatch_meta_data.cmd_subtype.empty()) {
                             new_marker_name = fmt::format(
                                 "{}:{}",
                                 current_dispatch_meta_data.worker_runtime_id,
