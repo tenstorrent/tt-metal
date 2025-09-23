@@ -89,27 +89,28 @@ DataMovementConfigStatus CheckDataMovementConfig(
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
-    auto set_global_and_local_noc_usage =
-        [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
-            int noc_value;
-            switch (programmable_core) {
-                case HalProgrammableCoreType::TENSIX:
-                    noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
-                    break;
-                case HalProgrammableCoreType::ACTIVE_ETH:
-                case HalProgrammableCoreType::IDLE_ETH:
-                    noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
-                    break;
-                default:
-                    TT_THROW(
-                        "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                        enchantum::to_string(programmable_core));
-            }
-            local_noc0_usage = noc_value == 0;
-            local_noc1_usage = noc_value == 1;
-            data_movement_config_status.noc0_in_use = local_noc0_usage;
-            data_movement_config_status.noc1_in_use = local_noc1_usage;
-        };
+    auto set_global_and_local_noc_usage = [&](const std::shared_ptr<Kernel>& kernel,
+                                              bool& local_noc0_usage,
+                                              bool& local_noc1_usage) {
+        int noc_value;
+        switch (programmable_core) {
+            case HalProgrammableCoreType::TENSIX:
+                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
+                break;
+            case HalProgrammableCoreType::ACTIVE_ETH:
+            case HalProgrammableCoreType::IDLE_ETH:
+                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
+                break;
+            default:
+                TT_THROW(
+                    "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
+                    enchantum::to_string(programmable_core));
+        }
+        local_noc0_usage = noc_value == 0;
+        local_noc1_usage = noc_value == 1;
+        data_movement_config_status.noc0_in_use = local_noc0_usage;
+        data_movement_config_status.noc1_in_use = local_noc1_usage;
+    };
 
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
