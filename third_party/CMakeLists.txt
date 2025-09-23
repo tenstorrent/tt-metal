@@ -10,9 +10,6 @@ set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 # NUMA
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
-if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
-endif()
 
 ############################################################################################################################
 # Boost

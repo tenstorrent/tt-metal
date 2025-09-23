@@ -44,4 +44,5 @@ target_link_libraries(
         yaml-cpp::yaml-cpp
         Boost::asio
         tt-logger::tt-logger
+        numa
 )
