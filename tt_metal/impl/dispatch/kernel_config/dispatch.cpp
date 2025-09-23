@@ -223,7 +223,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
         } else {
             // If no dispatch_s, no downstream
-            TT_ASSERT(downstream_kernels_.size() == 0);
+            TT_ASSERT(downstream_kernels_.empty());
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         }
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;  // Unused

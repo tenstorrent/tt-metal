@@ -202,7 +202,7 @@ static void RunTest(
     std::string exception = "";
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
-    } while (exception == "");
+    } while (exception.empty());
     EXPECT_EQ(expected, MetalContext::instance().watcher_server()->exception_message());
 }
 }

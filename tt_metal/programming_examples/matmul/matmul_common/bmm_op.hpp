@@ -37,7 +37,7 @@ std::vector<uint32_t> get_prime_factors(uint32_t n) {
 }
 
 std::vector<uint32_t> get_possible_products(const std::vector<uint32_t>& factors) {
-    if (factors.size() == 0) {
+    if (factors.empty()) {
         return {1};
     }
 

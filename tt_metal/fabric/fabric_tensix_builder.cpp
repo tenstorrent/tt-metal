@@ -27,7 +27,7 @@ static bool device_has_dispatch_tunnel(chip_id_t device_id) {
     auto tunnels_from_mmio =
         tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
     // results are inclusive of the mmio_device_id so they will never be zero
-    TT_FATAL(tunnels_from_mmio.size() > 0, "must have at least one mmio device");
+    TT_FATAL(!tunnels_from_mmio.empty(), "must have at least one mmio device");
     return (tunnels_from_mmio.size() - 1) > 0;
 }
 

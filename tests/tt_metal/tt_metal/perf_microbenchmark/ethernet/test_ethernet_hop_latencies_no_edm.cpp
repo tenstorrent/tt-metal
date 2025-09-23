@@ -213,9 +213,9 @@ void build_and_run_roundtrip_latency_test(
     std::vector<KernelHandle>& sender_kernel_ids) {
     TT_ASSERT(hop_eth_sockets.size() == mesh_devices.size());
     TT_ASSERT(n_hops == mesh_devices.size());
-    TT_ASSERT(programs.size() == 0);
-    TT_ASSERT(receiver_kernel_ids.size() == 0);
-    TT_ASSERT(sender_kernel_ids.size() == 0);
+    TT_ASSERT(programs.empty());
+    TT_ASSERT(receiver_kernel_ids.empty());
+    TT_ASSERT(sender_kernel_ids.empty());
     programs.reserve(n_hops);
     receiver_kernel_ids.reserve(n_hops);
     sender_kernel_ids.reserve(n_hops);

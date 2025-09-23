@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
             test_context.set_telemetry_enabled(test_config.benchmark_mode);
 
             for (auto& built_test : built_tests) {
-                log_info(tt::LogTest, "Running Test: {}", built_test.name);
+                log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
 
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");
@@ -177,13 +177,14 @@ int main(int argc, char** argv) {
                 log_info(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
 
+                log_info(tt::LogTest, "Waiting for programs");
                 test_context.wait_for_programs();
-                log_info(tt::LogTest, "Test {} Finished.", built_test.name);
+                log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);
 
                 test_context.validate_results();
-                log_info(tt::LogTest, "Test {} Results validated.", built_test.name);
+                log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
 
                 if (test_context.get_benchmark_mode()) {
                     test_context.profile_results(built_test);

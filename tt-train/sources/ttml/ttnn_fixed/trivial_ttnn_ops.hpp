@@ -21,6 +21,12 @@ tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 
+tt::tt_metal::Tensor sample(
+    const tt::tt_metal::Tensor& t,
+    float temperature,
+    uint32_t seed,
+    std::optional<tt::tt_metal::Tensor> logits_padding_mask = std::nullopt);
+
 tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t);
 tt::tt_metal::Tensor to_dram_interleaved(const tt::tt_metal::Tensor& t);
 

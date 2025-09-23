@@ -322,7 +322,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
-    if (core_range.ranges().size() > 0) {
+    if (!core_range.ranges().empty()) {
         CreateKernel(
             program,
             compute_kernel,
@@ -330,7 +330,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
     }
-    if (core_range_cliff.ranges().size() > 0) {
+    if (!core_range_cliff.ranges().empty()) {
         CreateKernel(
             program,
             compute_kernel,
@@ -486,7 +486,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         row_size_bytes = input_shape[-1] * a.element_size();
     }
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
 
@@ -589,7 +589,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         use_pack_kernel = false;
     }
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         CreateKernel(
             program,
             use_pack_kernel
@@ -1084,7 +1084,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    if (full_compute_core_range.ranges().size() > 0) {
+    if (!full_compute_core_range.ranges().empty()) {
         std::vector<uint32_t> compute_compile_time_args = {
             (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
         untilize_kernel_id = CreateKernel(
@@ -1100,7 +1100,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Compute Cliff compile_time args and kernel
     // Note: This condition is always false for sharded input (sharded input will never have a cliff core)
     KernelHandle untilize_cliff_kernel_id = 0;
-    if (cliff_compute_core_range.ranges().size() > 0) {
+    if (!cliff_compute_core_range.ranges().empty()) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
             (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
         untilize_cliff_kernel_id = CreateKernel(
@@ -1198,7 +1198,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Run-time args (cliff core)
     // Note: Only applicable if input is interleaved (sharded input will never have a cliff core)
     std::vector<CoreCoord> cliff_cores = corerange_to_cores(cliff_compute_core_range, std::nullopt, is_row_major);
-    if (cliff_cores.size() > 0) {
+    if (!cliff_cores.empty()) {
         // There should only ever be 0 or 1 cliff cores
         CoreCoord cliff_core = cliff_cores[0];
         uint32_t height_wise_input_block_start_index = full_cores.size() * num_input_blocks_per_full_core;

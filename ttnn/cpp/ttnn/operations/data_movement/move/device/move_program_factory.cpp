@@ -25,7 +25,7 @@ namespace ttnn::operations::data_movement {
 
 std::vector<CoreRange> get_multicast_regions(
     const IDevice* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
-    TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
+    TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
 

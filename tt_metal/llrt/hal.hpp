@@ -150,13 +150,22 @@ public:
     HalCoreInfoType(
         HalProgrammableCoreType programmable_core_type,
         CoreType core_type,
-        const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
-        const std::vector<DeviceAddr>& mem_map_bases,
-        const std::vector<uint32_t>& mem_map_sizes,
-        const std::vector<uint32_t>& eth_fw_mailbox_msgs,
+        std::vector<std::vector<HalJitBuildConfig>> processor_classes,
+        std::vector<DeviceAddr> mem_map_bases,
+        std::vector<uint32_t> mem_map_sizes,
+        std::vector<uint32_t> eth_fw_mailbox_msgs,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds,
-        dev_msgs::Factory dev_msgs_factory);
+        dev_msgs::Factory dev_msgs_factory) :
+        programmable_core_type_(programmable_core_type),
+        core_type_(core_type),
+        processor_classes_(std::move(processor_classes)),
+        mem_map_bases_(std::move(mem_map_bases)),
+        mem_map_sizes_(std::move(mem_map_sizes)),
+        eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
+        supports_cbs_(supports_cbs),
+        supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
+        dev_msgs_factory_(dev_msgs_factory) {}
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
@@ -257,6 +266,9 @@ private:
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
     uint32_t max_processors_per_core_{};
+    // Architecture-defined PCIe address range
+    uint64_t pcie_addr_lower_bound_{};
+    uint64_t pcie_addr_upper_bound_{};
     uint32_t num_nocs_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
@@ -285,6 +297,7 @@ private:
 
     void initialize_wh(bool is_base_routing_fw_enabled);
     void initialize_bh();
+    void initialize_qa();
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -464,6 +477,11 @@ public:
                 launch_msg, programmable_core_type, processor_class, processor_type_idx, iram_text_size);
         }
     }
+
+    // Returns the supported PCIe address range for the current architecture
+    uint64_t get_pcie_addr_lower_bound() const;
+    // Inclusive upper bound
+    uint64_t get_pcie_addr_upper_bound() const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

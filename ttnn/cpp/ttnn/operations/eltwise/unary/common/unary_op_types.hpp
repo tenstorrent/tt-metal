@@ -205,7 +205,7 @@ struct BasicUnaryWithParam<T> {
 
     UnaryOpType type() const noexcept { return op_type; }
 
-    bool has_parameter() const noexcept { return params.size() > 0; }
+    bool has_parameter() const noexcept { return !params.empty(); }
 
     bool empty() const noexcept { return params.empty(); }
 

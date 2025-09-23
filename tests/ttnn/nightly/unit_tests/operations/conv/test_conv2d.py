@@ -895,7 +895,6 @@ def test_conv_ws(
     enable_act_double_buffer,
     enable_weights_double_buffer,
 ):
-    print("Device Core Grid:", device.core_grid)
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 

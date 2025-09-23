@@ -341,6 +341,11 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->nan_ = NAN_WHB0;
     this->inf_ = INF_WHB0;
 
+    // PCIe address range for Wormhole. Includes the mapping through the outbound iATU. See
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/PCIExpressTile for more details.
+    this->pcie_addr_lower_bound_ = 0x8'0000'0000ULL;
+    this->pcie_addr_upper_bound_ = 0x8'FFFE'0000ULL - 1ULL;
+
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),

@@ -24,7 +24,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -37,6 +36,7 @@
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -258,7 +258,7 @@ void verify_results(
         }
 
         // Verify common RT Args (same for all cores) if they exist.
-        if (common_rt_args.size() > 0) {
+        if (!common_rt_args.empty()) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
                 device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
                 kernel->get_kernel_processor_class(),

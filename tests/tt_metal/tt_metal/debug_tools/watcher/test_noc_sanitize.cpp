@@ -389,7 +389,7 @@ void RunTestOnCore(
     std::string exception = "";
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
-    } while (exception == "");
+    } while (exception.empty());
     log_info(LogTest, "Reported error: {}", exception);
     EXPECT_EQ(MetalContext::instance().watcher_server()->exception_message(), expected);
 }
