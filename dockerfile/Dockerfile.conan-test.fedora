@@ -1,0 +1,54 @@
+# TT-Metalium Dockerfile for Fedora
+
+#############################################################
+
+ARG FEDORA_VERSION=39
+FROM fedora:${FEDORA_VERSION} AS base
+
+# Install runtime deps
+COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+RUN dnf update -y && dnf install -y \
+    acl \
+    gdb \
+    less \
+    mpfr-devel \
+    mesa-libGL \
+    ipmitool \
+    git \
+    gcc gcc-c++ make \
+    pkg-config \
+    xz \
+    python3-pip python3-devel \
+    wget \
+    curl \
+    clang \
+    python3-virtualenv python3-devel python3 python3-pip \
+    clang clang-tools-extra \
+    llvm llvm-devel \
+    which patch \
+    && dnf clean all
+
+# Set up virtual environment and TT_METAL_HOME
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+
+RUN git config --global --add safe.directory /workspace
+
+ENV VIRTUAL_ENV=/root/tt-metal-virtualenv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+RUN python3 -m venv $VIRTUAL_ENV
+
+RUN pip3 install conan
+RUN conan profile detect --force
+COPY conan_profile_clang_17.txt /tmp/profile
+RUN cp /tmp/profile $(conan profile path default)
+RUN conan profile show
+
+WORKDIR /tt-metal
+COPY . /tt-metal
+RUN conan install . --build=missing
+
+# # Build tt-metal and venv, then clear cache
+# RUN /bin/bash -c "./build_metal.sh"
