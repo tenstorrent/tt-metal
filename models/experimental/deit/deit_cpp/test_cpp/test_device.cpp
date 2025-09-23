@@ -4,7 +4,7 @@
 #include <tt-metalium/device.hpp>
 
 int main() {
-    auto device = ttnn::MeshDevice::create_unit_mesh(0, 
+    auto device = ttnn::MeshDevice::create_unit_mesh(0,
         /*l1_small_size=*/24576,
         /*trace_region_size=*/6434816,
         /*num_command_queues=*/2,

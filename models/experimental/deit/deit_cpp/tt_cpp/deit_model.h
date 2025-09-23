@@ -24,7 +24,7 @@
 /**
  * TtDeiTModel class - C++ implementation of DeiT model
  * Equivalent to the Python TtDeiTModel class
- * 
+ *
  * This class implements the core DeiT transformer model with:
  * - Patch embeddings for converting images to token sequences
  * - Position embeddings and optional mask token
@@ -36,7 +36,7 @@ class TtDeiTModel {
 public:
     /**
      * Constructor
-     * 
+     *
      * @param config DeiT configuration
      * @param state_dict PyTorch state dictionary containing model weights
      * @param base_address Base address for weight loading
@@ -55,7 +55,7 @@ public:
 
     /**
      * Forward pass through the DeiT model
-     * 
+     *
      * @param pixel_values Input image tensor [batch_size, channels, height, width]
      * @param bool_masked_pos Optional boolean mask for masked positions
      * @param head_mask Optional attention head mask
@@ -75,7 +75,7 @@ public:
 
     /**
      * Get head mask for attention layers
-     * 
+     *
      * @param head_mask Input head mask (can be nullptr)
      * @param num_hidden_layers Number of hidden layers
      * @return Processed head mask
@@ -95,12 +95,12 @@ private:
     DeiTConfig config_;
     std::shared_ptr<ttnn::MeshDevice> device_;
     bool add_pooling_layer_;
-    
+
     // Model components
     std::unique_ptr<TtDeiTEmbeddings> embeddings_;
     std::unique_ptr<TtDeiTEncoder> encoder_;
     std::unique_ptr<TtDeiTPooler> pooler_;
-    
+
     // Layer normalization parameters
     ttnn::Tensor layernorm_weight_;
     ttnn::Tensor layernorm_bias_;
@@ -108,7 +108,7 @@ private:
 
 /**
  * Factory function to create TtDeiTModel from pretrained model
- * 
+ *
  * @param device TTNN device
  * @param model_path Path to pretrained model (optional, uses default if empty)
  * @param add_pooling_layer Whether to add pooling layer

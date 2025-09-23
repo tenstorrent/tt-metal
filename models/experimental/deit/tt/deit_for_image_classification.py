@@ -42,7 +42,6 @@ class TtDeiTForImageClassification(nn.Module):
             TtLinear(config.hidden_size, config.num_labels, self.weight, self.bias) if config.num_labels > 0 else None
         )
 
-        pass
 
         # Initialize weights and apply final processing
 
@@ -82,7 +81,9 @@ def _deit_for_image_classification(device, config, state_dict, base_address="") 
 
 
 def deit_for_image_classification(device) -> TtDeiTForImageClassification:
-    torch_model = DeiTForImageClassification.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
+    torch_model = DeiTForImageClassification.from_pretrained(
+        "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1"
+    )
     config = torch_model.config
     state_dict = torch_model.state_dict()
     tt_model = _deit_for_image_classification(device=device, config=config, state_dict=state_dict)

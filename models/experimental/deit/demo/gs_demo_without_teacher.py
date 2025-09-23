@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor_tile
+from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_tile
 from models.experimental.deit.tt.deit_for_image_classification import deit_for_image_classification
 
 
@@ -20,9 +20,7 @@ def test_gs_demo(hf_cat_image_sample_input, device):
     torch_model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
     torch_model.eval()
 
-    tt_inputs = torch_to_tt_tensor_tile(
-        inputs["pixel_values"], device
-    )
+    tt_inputs = torch_to_tt_tensor_tile(inputs["pixel_values"], device)
     tt_model = deit_for_image_classification(device)
 
     with torch.no_grad():

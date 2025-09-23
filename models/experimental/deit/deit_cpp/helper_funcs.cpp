@@ -23,18 +23,18 @@ ttnn::Tensor linear_transform(
 ) {
     // Transpose weight for matrix multiplication
     auto weight_transposed = ttnn::transpose(weight, -2, -1);
-    
+
     // // Perform matrix multiplication
     // auto output = ttnn::matmul(input, weight_transposed);
-    
+
     // Add bias if provided
     if (bias.has_value() && bias->layout() != ttnn::TILE_LAYOUT) {
         bias = ttnn::to_layout(bias.value(), ttnn::TILE_LAYOUT, std::nullopt, std::nullopt);
     }
-    
+
     // Perform linear transformation
     auto output = ttnn::linear(input, weight_transposed, bias, false, false, output_mem_config);
-    
+
     return output;
 }
 
@@ -51,25 +51,25 @@ ttnn::Tensor torch_to_tt_tensor_tile(
         // Convert at::IntArrayRef to std::vector<int64_t>
         auto tensor_sizes = tensor.sizes();
         target_shape = std::vector<int64_t>(tensor_sizes.begin(), tensor_sizes.end());
-        
+
         // Ensure at least 4 dimensions by padding with 1s at the beginning
         while (target_shape.size() < 4) {
             target_shape.insert(target_shape.begin(), 1);
         }
     }
-    
+
     // Reshape tensor to target shape
     at::Tensor reshaped_tensor = tensor.reshape(target_shape);
-    
+
     // Ensure tensor is contiguous
     at::Tensor contiguous_tensor = reshaped_tensor.contiguous();
-    
+
     // Create logical shape for ttnn
     ttnn::Shape logical_shape(std::vector<uint32_t>{target_shape.begin(), target_shape.end()});
-    
+
     ttnn::Tensor tt_tensor = from_torch(contiguous_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
     tt_tensor = tt_tensor.to_device(device.get());
-    
+
     // Move tensor to device - use the same approach as from_torch function
     return tt_tensor;
 }
@@ -171,7 +171,7 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
 }
 
 ttnn::Tensor from_torch(const at::Tensor& tensor,
-    std::optional<ttnn::DataType> dtype,    
+    std::optional<ttnn::DataType> dtype,
     std::optional<ttnn::Layout> layout) {
     auto torch_dtype = tensor.scalar_type();
     auto torch_shape = tensor.sizes();
@@ -202,7 +202,7 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
     if (data_type == ttnn::DataType::BFLOAT8_B || data_type == ttnn::DataType::BFLOAT4_B) {
         throw std::runtime_error("from_torch: bfloat8_b/bfloat4_b unsupported!");
     }
-    
+
     torch::Tensor contiguous_tensor = tensor.contiguous();
     auto maybe_convert_tensor_dtype = [&torch_dtype, &contiguous_tensor](c10::ScalarType target_py_dtype) {
         if (torch_dtype != target_py_dtype) {
@@ -210,7 +210,7 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
         }
     };
 
-    auto tensor_spec = tt::tt_metal::TensorSpec(logical_shape, 
+    auto tensor_spec = tt::tt_metal::TensorSpec(logical_shape,
                                 tt::tt_metal::TensorLayout(data_type, tt::tt_metal::PageConfig(layout.value_or(ttnn::Layout::ROW_MAJOR)),
                                                             ttnn::MemoryConfig{})
                                 );
@@ -238,7 +238,7 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
         case ttnn::DataType::BFLOAT16: {
             maybe_convert_tensor_dtype(at::kBFloat16);
             return create_concrete<bfloat16>(contiguous_tensor, tensor_spec);
-        }        
+        }
         case ttnn::DataType::BFLOAT8_B:
         case ttnn::DataType::BFLOAT4_B: {
             maybe_convert_tensor_dtype(at::kFloat);
@@ -324,7 +324,7 @@ ttnn::Tensor apply_layernorm(
 /**
  * Load and preprocess image for DeiT model inference
  * Mimics the functionality of AutoImageProcessor from transformers
- * 
+ *
  * @param image_path Path to the input image file
  * @param device Target mesh device for tensor operations
  * @return Preprocessed image tensor [1, 3, 224, 224] ready for DeiT inference
@@ -337,38 +337,38 @@ torch::Tensor load_and_preprocess_image(
     if (image.empty()) {
         throw std::runtime_error("Failed to load image from path: " + image_path);
     }
-    
+
     // Convert BGR to RGB (OpenCV loads as BGR by default)
     cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
-    
+
     // Resize to 224x224 (DeiT input size)
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(224, 224), 0, 0, cv::INTER_LINEAR);
-    
+
     // Convert to float and normalize to [0, 1]
     cv::Mat float_image;
     resized_image.convertTo(float_image, CV_32F, 1.0/255.0);
-    
+
     // Create torch tensor from OpenCV Mat
     // Shape: [H, W, C] -> [C, H, W]
     torch::Tensor tensor = torch::from_blob(
-        float_image.data, 
-        {224, 224, 3}, 
+        float_image.data,
+        {224, 224, 3},
         torch::kFloat32
     ).clone();
-    
+
     // Permute dimensions from HWC to CHW
     tensor = tensor.permute({2, 0, 1});
-    
+
     // Apply ImageNet normalization
     // Mean: [0.485, 0.456, 0.406], Std: [0.229, 0.224, 0.225]
     torch::Tensor mean = torch::tensor({0.485, 0.456, 0.406}).view({3, 1, 1});
     torch::Tensor std = torch::tensor({0.229, 0.224, 0.225}).view({3, 1, 1});
     tensor = (tensor - mean) / std;
-    
+
     // Add batch dimension: [C, H, W] -> [1, C, H, W]
     tensor = tensor.unsqueeze(0);
-    
+
     // Return torch tensor directly
     return tensor;
 }
@@ -382,16 +382,16 @@ torch::Tensor load_and_preprocess_image(
 double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
     auto flat1 = tensor1.flatten().to(torch::kFloat32);
     auto flat2 = tensor2.flatten().to(torch::kFloat32);
-    
+
     auto mean1 = flat1.mean();
     auto mean2 = flat2.mean();
-    
+
     auto centered1 = flat1 - mean1;
     auto centered2 = flat2 - mean2;
-    
+
     auto numerator = (centered1 * centered2).sum();
     auto denominator = torch::sqrt((centered1 * centered1).sum() * (centered2 * centered2).sum());
-    
+
     return numerator.item<double>() / denominator.item<double>();
 }
 

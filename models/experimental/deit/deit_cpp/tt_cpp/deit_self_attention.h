@@ -64,12 +64,12 @@ private:
     // Configuration and device
     DeiTConfig config;
     std::shared_ptr<ttnn::MeshDevice> device;
-    
+
     // Attention parameters
     int num_attention_heads;
     int attention_head_size;
     int all_head_size;
-    
+
     // Linear layer weights and biases
     ttnn::Tensor query_weight;
     std::optional<ttnn::Tensor> query_bias;

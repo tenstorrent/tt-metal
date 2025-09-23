@@ -12,7 +12,7 @@
  }
 
 -} // namespace detail
-+} // namespace disp_detail 
++} // namespace disp_detail
 
  // The AT_DISPATCH_* family of macros provides the ability to
  // conveniently generate specializations of a kernel over all of the

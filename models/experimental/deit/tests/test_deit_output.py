@@ -7,7 +7,6 @@ from loguru import logger
 from transformers import DeiTModel
 
 
-
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_output import TtDeiTOutput
 from models.utility_functions import (
@@ -16,6 +15,7 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
 )
+
 
 def test_deit_output_inference(device, pcc=0.99):
     # setup pytorch model

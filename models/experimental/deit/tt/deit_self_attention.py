@@ -40,13 +40,13 @@ class TtDeiTSelfAttention(nn.Module):
         self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
     def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_layout(x,ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         new_x_shape = list(x.shape)[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
         ]
         x = fallback_ops.reshape(x, *new_x_shape)
-        x = ttnn.to_layout(x,ttnn.TILE_LAYOUT)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.permute(x, (0, 2, 1, 3))
         return x
 
@@ -69,7 +69,9 @@ class TtDeiTSelfAttention(nn.Module):
 
         attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = ttnn.full(attention_scores.shape, self.attention_head_size,layout=ttnn.TILE_LAYOUT,device=self.device)
+        attention_head_size_tt = ttnn.full(
+            attention_scores.shape, self.attention_head_size, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
         attention_head_size_tt = ttnn.sqrt(attention_head_size_tt)
         attention_head_size_tt = ttnn.reciprocal(attention_head_size_tt)
 
@@ -77,7 +79,7 @@ class TtDeiTSelfAttention(nn.Module):
 
         # Normalize the attention scores to probabilities.
         attention_probs = fallback_ops.softmax(attention_scores, dim=-1)
-        attention_probs = ttnn.to_layout(attention_probs,ttnn.TILE_LAYOUT)
+        attention_probs = ttnn.to_layout(attention_probs, ttnn.TILE_LAYOUT)
 
         # Mask heads if we want to
         if head_mask is not None:
@@ -87,7 +89,7 @@ class TtDeiTSelfAttention(nn.Module):
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
         new_context_layer_shape = (1,) + tuple(context_layer.padded_shape)[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
-        context_layer = ttnn.to_layout(context_layer,ttnn.TILE_LAYOUT)
+        context_layer = ttnn.to_layout(context_layer, ttnn.TILE_LAYOUT)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 

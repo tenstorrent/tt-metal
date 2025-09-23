@@ -49,16 +49,16 @@ private:
     // Configuration
     int hidden_size_;
     bool use_mask_token_;
-    
+
     // Components
     std::unique_ptr<TtDeiTPatchEmbeddings> patch_embeddings_;
-    
+
     // Torch tensors for tokens and embeddings
     torch::Tensor cls_token_;
     torch::Tensor distillation_token_;
     torch::Tensor mask_token_;  // Only used if use_mask_token_ is true
     torch::Tensor position_embeddings_;
-    
+
     // Helper functions
     torch::Tensor expand_token(const torch::Tensor& token, int64_t batch_size, int64_t seq_length = 1) const;
     torch::Tensor apply_mask(const torch::Tensor& embeddings, const torch::Tensor& bool_masked_pos) const;

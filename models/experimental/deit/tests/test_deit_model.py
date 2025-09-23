@@ -15,6 +15,7 @@ from models.utility_functions import (
     comp_allclose_and_pcc,
 )
 
+
 def test_deit_model_inference(device, hf_cat_image_sample_input, pcc=0.95):
     head_mask = None
     output_attentions = None
