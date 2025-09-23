@@ -148,20 +148,17 @@ class CombinedTimestepGuidanceTextProjEmbeddings:
         pooled_projection_dim: int,
         mesh_device: ttnn.MeshDevice | None = None,
         with_guidance: bool = True,
-        init: bool = False,
     ) -> None:
         self.embedding_dim = embedding_dim
         self.pooled_projection_dim = pooled_projection_dim
         self.mesh_device = mesh_device
         self.with_guidance = with_guidance
 
-        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device, init=init)
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
         self.guidance_embedder = (
-            TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device, init=init) if with_guidance else None
+            TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device) if with_guidance else None
         )
-        self.text_embedder = PixartAlphaTextProjection(
-            pooled_projection_dim, embedding_dim, mesh_device=mesh_device, init=init
-        )
+        self.text_embedder = PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
 
         self.time_proj_factor = self._create_time_proj_factor(256)
 

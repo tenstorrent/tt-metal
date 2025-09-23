@@ -36,7 +36,6 @@ class Flux1SingleTransformerBlock:
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        init: bool = False,
     ) -> None:
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
@@ -56,7 +55,6 @@ class Flux1SingleTransformerBlock:
             parallel_config=parallel_config,
             padding_config=padding_config,
             use_spatial_weights_for_prompt=True,
-            init=init,
         )
 
         self.norm = DistributedLayerNorm(
@@ -67,7 +65,6 @@ class Flux1SingleTransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         # Shard output, since size of input dimension << size of output dimension.
@@ -76,7 +73,6 @@ class Flux1SingleTransformerBlock:
             3 * dim,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # Shard output, since size of input dimension << size of output dimension.
@@ -85,7 +81,6 @@ class Flux1SingleTransformerBlock:
             mlp_hidden_dim,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # Shard input, since size of input dimension >> size of output dimension.
@@ -95,7 +90,6 @@ class Flux1SingleTransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
@@ -235,7 +229,6 @@ class Flux1TransformerBlock:
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        init: bool = False,
     ):
         self.dim = dim
         self.num_heads = num_heads
@@ -252,7 +245,6 @@ class Flux1TransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
         self.norm1_norm = DistributedLayerNorm(
             dim,
@@ -262,7 +254,6 @@ class Flux1TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
@@ -272,7 +263,6 @@ class Flux1TransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
@@ -282,7 +272,6 @@ class Flux1TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.attn = Flux1Attention(
@@ -294,7 +283,6 @@ class Flux1TransformerBlock:
             context_pre_only=context_pre_only,
             eps=1e-6,
             mesh_device=mesh_device,
-            init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
@@ -308,7 +296,6 @@ class Flux1TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.ff = ParallelFeedForward(
@@ -318,7 +305,6 @@ class Flux1TransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.norm2_context = None
@@ -333,7 +319,6 @@ class Flux1TransformerBlock:
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
-                init=init,
             )
             self.ff_context = ParallelFeedForward(
                 dim=dim,
@@ -342,7 +327,6 @@ class Flux1TransformerBlock:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                init=init,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -556,7 +540,6 @@ class Flux1Transformer:
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        init: bool = False,
     ) -> None:
         super().__init__()
 
@@ -574,7 +557,6 @@ class Flux1Transformer:
             pooled_projection_dim=pooled_projection_dim,
             with_guidance=with_guidance_embeds,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.context_embedder = ColParallelLinear(
@@ -582,7 +564,6 @@ class Flux1Transformer:
             inner_dim,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # Shard output, since size of input dimension << size of output dimension.
@@ -591,7 +572,6 @@ class Flux1Transformer:
             inner_dim,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         self.transformer_blocks = [
@@ -604,7 +584,6 @@ class Flux1Transformer:
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                init=init,
             )
             for i in range(num_layers)
         ]
@@ -618,7 +597,6 @@ class Flux1Transformer:
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                init=init,
             )
             for i in range(num_single_layers)
         ]
@@ -627,7 +605,6 @@ class Flux1Transformer:
             inner_dim,
             2 * inner_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.norm_out = DistributedLayerNorm(
@@ -637,14 +614,12 @@ class Flux1Transformer:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.proj_out = Linear(
             inner_dim,
             patch_size * patch_size * out_channels,
             mesh_device=mesh_device,
-            init=init,
         )
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
