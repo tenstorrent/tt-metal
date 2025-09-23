@@ -23,8 +23,8 @@ import enlighten
 from faster_fifo import Queue
 
 # tt
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
+from tracy.common import PROFILER_LOGS_DIR
+from tracy.process_ops_logs import get_device_data_generate_report
 from framework.device_fixtures import default_device
 from framework.elastic_config import *
 from framework.statuses import VectorValidity, TestStatus
