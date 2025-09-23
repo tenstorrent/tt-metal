@@ -410,7 +410,15 @@ class TtnnRepncspelan4:
 
 
 class TtnnADown:
-    def __init__(self, device, conv_parameter, parameters, conv_pt, use_1d_systolic_array=True):
+    def __init__(
+        self,
+        device,
+        conv_parameter,
+        parameters,
+        conv_pt,
+        use_1d_systolic_array=True,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ):
         self.conv_parameter = conv_parameter
         self.cv1 = TtYOLOv9cConv2D(
             device=device,
@@ -420,6 +428,7 @@ class TtnnADown:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=use_1d_systolic_array,
             core_count=64,
+            shard_layout=shard_layout,
         )
         self.cv2 = TtYOLOv9cConv2D(
             device=device,
@@ -966,13 +975,16 @@ class YoloV9:
             "model.3",
         )  # 3
         self.repncspelan4_2 = TtnnRepncspelan4(device, parameters.conv_args[4], parameters, "model.4")  # 4
-        self.adown_2 = TtnnADown(device, parameters.conv_args[5], parameters, "model.5")  # 5
+        self.adown_2 = TtnnADown(
+            device, parameters.conv_args[5], parameters, "model.5", shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )  # 5
         self.repncspelan4_3 = TtnnRepncspelan4(
             device,
             parameters.conv_args[6],
             parameters,
             "model.6",
             shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 6
         self.adown_3 = TtnnADown(device, parameters.conv_args[7], parameters, "model.7")  # 7
         self.repncspelan4_4 = TtnnRepncspelan4(
@@ -981,6 +993,7 @@ class YoloV9:
             parameters,
             "model.8",
             shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 8
         self.ttnn_sppelan = TtnnSPPELAN(device, parameters.conv_args[9], parameters, "model.9")  # 9
         self.repncspelan4_5 = TtnnRepncspelan4(
@@ -989,6 +1002,7 @@ class YoloV9:
             parameters,
             "model.12",
             shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 12
         self.repncspelan4_6 = TtnnRepncspelan4(device, parameters.conv_args[15], parameters, "model.15")  # 15
         self.adown_6 = TtnnADown(device, parameters.conv_args[16], parameters, "model.16")  # 16
@@ -998,6 +1012,7 @@ class YoloV9:
             parameters,
             "model.18",
             shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 18
         self.adown_7 = TtnnADown(device, parameters.conv_args[19], parameters, "model.19")  # 19
         self.repncspelan4_8 = TtnnRepncspelan4(
