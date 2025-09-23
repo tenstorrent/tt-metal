@@ -129,13 +129,6 @@ def run_ring_joint_sdpa(
         exp_approx_mode=False,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
     Q = fa_rand(b, nh, seq_len, d)
     K = fa_rand(b, nh, seq_len, d)
     V = fa_rand(b, nh, seq_len, d)
@@ -220,7 +213,6 @@ def run_ring_joint_sdpa(
                 joint_strategy="rear",
                 logical_n=seq_len,
                 program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
