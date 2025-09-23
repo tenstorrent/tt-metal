@@ -20,7 +20,9 @@ real_data = True
 seed = 1337
 device = "cuda"  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = (
-    "bfloat16" if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else "float16"
+    "bfloat16"
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    else "float16"
 )  # 'float32' or 'bfloat16' or 'float16'
 compile = True  # use PyTorch 2.0 to compile the model to be faster
 profile = False  # use pytorch profiler, or just simple benchmarking?
@@ -37,20 +39,35 @@ ptdtype = {
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
 }[dtype]
-ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+ctx = (
+    nullcontext()
+    if device_type == "cpu"
+    else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+)
 
 # data loading init
 if real_data:
     dataset = "openwebtext"
     data_dir = os.path.join("data", dataset)
-    train_data = np.memmap(os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r")
+    train_data = np.memmap(
+        os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
+    )
 
     def get_batch(split):
         data = train_data  # note ignore split in benchmarking script
         ix = torch.randint(len(data) - block_size, (batch_size,))
-        x = torch.stack([torch.from_numpy((data[i : i + block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i + 1 : i + 1 + block_size]).astype(np.int64)) for i in ix])
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+        x = torch.stack(
+            [torch.from_numpy((data[i : i + block_size]).astype(np.int64)) for i in ix]
+        )
+        y = torch.stack(
+            [
+                torch.from_numpy((data[i + 1 : i + 1 + block_size]).astype(np.int64))
+                for i in ix
+            ]
+        )
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(
+            device, non_blocking=True
+        )
         return x, y
 
 else:
@@ -90,7 +107,9 @@ if profile:
             torch.profiler.ProfilerActivity.CPU,
             torch.profiler.ProfilerActivity.CUDA,
         ],
-        schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=1),
+        schedule=torch.profiler.schedule(
+            wait=wait, warmup=warmup, active=active, repeat=1
+        ),
         on_trace_ready=torch.profiler.tensorboard_trace_handler("./bench_log"),
         record_shapes=False,
         profile_memory=False,

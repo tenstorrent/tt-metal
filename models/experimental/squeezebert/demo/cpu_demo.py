@@ -11,7 +11,9 @@ from transformers import SqueezeBertForQuestionAnswering, AutoTokenizer
 
 def test_cpu_demo():
     tokenizer = AutoTokenizer.from_pretrained("squeezebert/squeezebert-uncased")
-    HF_model = SqueezeBertForQuestionAnswering.from_pretrained("squeezebert/squeezebert-uncased")
+    HF_model = SqueezeBertForQuestionAnswering.from_pretrained(
+        "squeezebert/squeezebert-uncased"
+    )
 
     question, context = (
         "Where do I live?",
