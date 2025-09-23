@@ -755,14 +755,18 @@ def get_decode_mask(args, mesh_device, paged_attention_config=None):
         max_seq_len = args.max_seq_len
     mask = torch.triu(
         torch.full(
-            (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len), -float("inf")
+            (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+            -float("inf"),
+            dtype=torch.bfloat16,
         ),
         diagonal=1,
     )
     if args.sliding_window > 0:
         mask += torch.tril(
             torch.full(
-                (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len), -float("inf")
+                (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+                -float("inf"),
+                dtype=torch.bfloat16,
             ),
             diagonal=-args.sliding_window,
         )
