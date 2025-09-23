@@ -50,7 +50,7 @@ void validate_inputs(const Tensor& elements, const Tensor& test_elements) {
 
 uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_elements) {
     const auto l1_size_per_core = elements.device()->l1_size_per_core();
-    const auto confidence_margin = 0.8f;
+    const auto confidence_margin = 0.75f;
     const auto elements_datum_size = elements.element_size();
     const auto test_elements_datum_size = test_elements.element_size();
     const auto output_datum_size = elements_datum_size;

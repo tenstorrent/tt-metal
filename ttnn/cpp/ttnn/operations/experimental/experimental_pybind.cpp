@@ -51,8 +51,6 @@
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
 #include "ttnn/operations/experimental/isin/isin_pybind.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {

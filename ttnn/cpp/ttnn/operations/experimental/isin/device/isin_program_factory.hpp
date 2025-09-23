@@ -20,9 +20,9 @@ using namespace tt::tt_metal;
 
 struct IsInProgramFactory {
     struct shared_variables_t {
-        KernelHandle reader_kernel_id;
-        KernelHandle writer_kernel_id;
-        std::vector<CoreCoord> cores;
+        KernelHandle reader_kernel_id{};
+        KernelHandle writer_kernel_id{};
+        std::vector<CoreCoord> cores{};
     };
 
     using cached_program_t = CachedProgram<shared_variables_t>;

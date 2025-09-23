@@ -47,7 +47,7 @@ void IsInDeviceOperation::validate_on_program_cache_miss(
 // this method creates an `uint8` tensor serving as a boolean mask, which is "semi-compliant" to Torch's behavior
 // although Torch returns a strict `bool` tensor, the `uint8` available in ttnn usually carries the same meaning
 // e.g. check out https://docs.pytorch.org/docs/stable/generated/torch.any.html
-IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_specs(
+spec_return_value_t IsInDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return {
         Shape{tensor_args.elements_tensor.logical_volume()},
@@ -55,7 +55,7 @@ IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_spe
     };
 }
 
-IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_tensors(
+tensor_return_value_t IsInDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_out) {
         TT_FATAL(
