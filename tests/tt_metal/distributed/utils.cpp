@@ -214,7 +214,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         // Create Semaphores
         for (uint32_t j = 0; j < NUM_SEMS; j++) {
             CreateSemaphore(program, cr_set, j + 1);
-            if (active_eth_cores.size()) {
+            if (!active_eth_cores.empty()) {
                 auto active_eth_core = active_eth_cores.begin();
                 for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
                      ++i, ++active_eth_core) {
@@ -394,7 +394,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
                 TT_THROW("Invalid");
             }
         }
-        if (active_eth_cores.size()) {
+        if (!active_eth_cores.empty()) {
             auto active_eth_core = active_eth_cores.begin();
             for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end(); ++i, ++active_eth_core) {
                 auto dummy_erisc_kernel = CreateKernel(
