@@ -38,7 +38,7 @@ struct DistributionConfig {
 };
 
 std::shared_ptr<distributed::MeshBuffer> MakeShardedL1MeshBufferBFP16(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     size_t size,
     const DistributionConfig& config,
     const ShardSpecBuffer& shard_config) {

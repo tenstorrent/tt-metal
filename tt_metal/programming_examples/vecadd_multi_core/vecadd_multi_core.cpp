@@ -26,7 +26,7 @@ using namespace tt::tt_metal;
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 std::shared_ptr<distributed::MeshBuffer> MakeMeshBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t size, uint32_t page_size, bool sram) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t page_size, bool sram) {
     distributed::DeviceLocalBufferConfig local_config{
         .page_size = page_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
     distributed::ReplicatedBufferConfig buffer_config{.size = size};
@@ -41,7 +41,7 @@ std::shared_ptr<distributed::MeshBuffer> MakeMeshBuffer(
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on
 // DRAM.
 std::shared_ptr<distributed::MeshBuffer> MakeMeshBufferBFP16(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t n_tiles, bool sram) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;

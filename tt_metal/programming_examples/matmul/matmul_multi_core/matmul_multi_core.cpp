@@ -93,7 +93,7 @@ void matmul_multi_core(
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Check if the configuration is valid - matrices must be divisible by tile dimensions
     TT_ASSERT(
         (M * N) % TILE_HW == 0,

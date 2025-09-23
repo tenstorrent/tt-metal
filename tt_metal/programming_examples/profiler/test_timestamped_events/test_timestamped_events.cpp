@@ -16,7 +16,8 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-void RunFillUpAllBuffers(std::shared_ptr<distributed::MeshDevice> mesh_device, int loop_count, bool fast_dispatch) {
+void RunFillUpAllBuffers(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
     IDevice* device = mesh_device->get_devices()[0];
 
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();

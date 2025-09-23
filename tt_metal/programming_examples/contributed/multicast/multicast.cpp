@@ -38,7 +38,7 @@ using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 #endif
 
 std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t n_tiles, bool sram) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     const uint32_t page_tiles = sram ? n_tiles : 1;
     const distributed::DeviceLocalBufferConfig device_local_config{

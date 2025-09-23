@@ -67,7 +67,7 @@ void matmul_multicore_reuse(
     uint32_t N,
     uint32_t K,
     uint32_t B,
-    std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     /*
      * Set up Mesh API constructs: command queue, workload, device range, and program.
      * We'll distribute work across multiple cores using the device's compute grid.
