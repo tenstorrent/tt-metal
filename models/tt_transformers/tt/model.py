@@ -384,7 +384,7 @@ class Transformer(LightweightModule):
 
         ttnn.plus_one(rot_mat_idxs)
 
-    def update_attention_masks_pre_trace(self, current_pos):
+    def update_attention_masks(self, current_pos):
         torch_mask = torch.concat(
             [
                 self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(0)
