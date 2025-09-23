@@ -141,7 +141,7 @@ def test_transformer_motif(
     logger.info("loading state dict into TT-NN model...")
     converted_state_dict = dict(state_dict)
     convert_motif_transformer_state(converted_state_dict, num_layers=num_layers)
-    tt_model.load_torch_state_dict(converted_state_dict, strict=False)
+    tt_model.load_torch_state_dict(converted_state_dict)
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, in_channels, height // vae_scale_factor, width // vae_scale_factor])
