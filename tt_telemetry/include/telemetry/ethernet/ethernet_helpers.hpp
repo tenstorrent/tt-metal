@@ -21,6 +21,8 @@ std::map<
     tt::umd::chip_id_t,
     std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
 get_ordered_ethernet_connections(const std::unique_ptr<tt::umd::Cluster>& cluster);
+std::map<tt::umd::chip_id_t, std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
+get_ordered_ethernet_connections_to_remote_devices(const std::unique_ptr<tt::umd::Cluster>& cluster);
 bool is_ethernet_endpoint_up(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const EthernetEndpoint& endpoint,
