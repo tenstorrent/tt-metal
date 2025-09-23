@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# ##In Progresss
+
 import torch
 import ttnn
 import pytest
@@ -37,8 +39,10 @@ def test_nms_free_coder(device):
 
     output = ttnn_model.decode(input_torch)
 
+    print("torch_output shapes")
     for i in torch_output[0].keys():
         print(torch_output[0][i].shape)
 
+    print("ttnn_output shapes")
     for i in output[0].keys():
         print(output[0][i].shape)
