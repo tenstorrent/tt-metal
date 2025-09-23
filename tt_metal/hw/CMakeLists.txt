@@ -2,6 +2,7 @@
 set(ARCHS
     wormhole
     blackhole
+    quasar
 )
 set(PROCS
     brisc
@@ -12,6 +13,7 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    dm=0
 )
 set(TYPES
     firmware
@@ -185,7 +187,6 @@ foreach(ARCH IN LISTS ARCHS)
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
-        "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c"
     )
     set(ARCH_ALIAS ${ARCH})
 
@@ -197,6 +198,12 @@ foreach(ARCH IN LISTS ARCHS)
             "wh-iram-start.o:tt_metal/hw/toolchain/wh-iram-start.S"
             "wh-iram-trampoline.o:tt_metal/hw/toolchain/wh-iram-trampoline.S"
         )
+    endif()
+
+    if(ARCH STREQUAL "quasar")
+        list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-2xx/noc.c")
+    else()
+        list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c")
     endif()
 
     # Set GPP_FLAGS based on ARCH
@@ -220,6 +227,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
     )
 
     # Architecture specific include paths
