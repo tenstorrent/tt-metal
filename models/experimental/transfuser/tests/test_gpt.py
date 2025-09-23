@@ -36,7 +36,36 @@ def generate_token_embeddings(image_tensor, lidar_tensor, seq_len, n_embd):
 
     token_embeddings = torch.cat((image_tensor, lidar_tensor), dim=1)
 
-    return token_embeddings
+    return token_embeddings, bz, seq_len, img_h, img_w, lidar_h, lidar_w
+
+
+def post_process_output(
+    x,
+    bz,
+    seq_len,
+    img_vert_anchors,
+    img_horz_anchors,
+    lidar_vert_anchors,
+    lidar_horz_anchors,
+    n_embed,
+    img_h,
+    img_w,
+    lidar_h,
+    lidar_w,
+):
+    x = x.view(
+        bz,
+        seq_len * img_vert_anchors * img_horz_anchors + seq_len * lidar_vert_anchors * lidar_horz_anchors,
+        n_embed,
+    )
+
+    image_tensor_out = (
+        x[:, : seq_len * img_vert_anchors * img_horz_anchors, :].contiguous().view(bz * seq_len, -1, img_h, img_w)
+    )
+    lidar_tensor_out = (
+        x[:, seq_len * img_vert_anchors * img_horz_anchors :, :].contiguous().view(bz * seq_len, -1, lidar_h, lidar_w)
+    )
+    return image_tensor_out, lidar_tensor_out
 
 
 def create_gpt_preprocessor(device, n_layer, weight_dtype=ttnn.bfloat16):
@@ -106,9 +135,11 @@ def test_gpt(
         use_velocity=use_velocity,
     ).eval()
 
-    ref_output = ref_layer(image_input, lidar_input, velocity_input)
+    ref_image_output, ref_lidar_output = ref_layer(image_input, lidar_input, velocity_input)
 
-    token_embeddings = generate_token_embeddings(image_input, lidar_input, seq_len, n_embed)
+    token_embeddings, bz, seq_len, img_h, img_w, lidar_h, lidar_w = generate_token_embeddings(
+        image_input, lidar_input, seq_len, n_embed
+    )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: ref_layer,
@@ -138,13 +169,31 @@ def test_gpt(
     )
     tt_output = tt_layer(token_embeddings, tt_velocity_input)
     tt_torch_output = tt2torch_tensor(tt_output)
-    does_pass, pcc_message = check_with_pcc(ref_output, tt_torch_output, 0.95)
+    tt_image_output, tt_lidar_output = post_process_output(
+        tt_torch_output,
+        bz,
+        seq_len,
+        img_vert_anchors,
+        img_horz_anchors,
+        lidar_vert_anchors,
+        lidar_horz_anchors,
+        n_embed,
+        img_h,
+        img_w,
+        lidar_h,
+        lidar_w,
+    )
+    does_pass, image_out_pcc_message = check_with_pcc(ref_image_output, tt_image_output, 0.95)
 
-    logger.info(f"PCC: {pcc_message}")
+    logger.info(f"Image Output PCC: {image_out_pcc_message}")
+    assert does_pass, f"PCC check failed: {image_out_pcc_message}"
+
+    does_pass, lidar_out_pcc_message = check_with_pcc(ref_lidar_output, tt_lidar_output, 0.95)
+    assert does_pass, f"PCC check failed: {lidar_out_pcc_message}"
+
+    logger.info(f"Lidar Output PCC: {lidar_out_pcc_message}")
 
     if does_pass:
         logger.info("GPT Passed!")
     else:
         logger.warning("GPT Failed!")
-
-    assert does_pass, f"PCC check failed: {pcc_message}"

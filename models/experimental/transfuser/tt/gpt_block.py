@@ -9,8 +9,6 @@ from models.experimental.transfuser.tt.self_attn import TTSelfAttention
 class TTMlp(LightweightModule):
     def __init__(self, device, parameters=None, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG):
         self.device = device
-        print(self.device)
-        print("@@@@")
         self.dtype = dtype
         self.memory_config = memory_config
         self.parameters = parameters
@@ -56,7 +54,6 @@ class TTGptBlock(LightweightModule):
         x = ttnn.add(x, self.attn(ln1), memory_config=self.memory_config)
         ln2 = ttnn.layer_norm(x, weight=self.parameters["ln2_weight"], bias=self.parameters["ln2_bias"])
         x = ttnn.add(x, ln2, memory_config=self.memory_config)
-        print(x.storage_type())
         mlp = self.mlp(x)
         x = ttnn.add(x, mlp, memory_config=self.memory_config)
         return x

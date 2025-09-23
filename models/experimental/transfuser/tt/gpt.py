@@ -58,11 +58,7 @@ class TTGpt(LightweightModule):
             x, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=self.dtype, memory_config=self.memory_config
         )
         for i in range(self.n_layer):
-            print(f"Before block {i}: x.storage_type() = {x.storage_type()}")
             x = self.tt_blocks[i](x)
-            print(f"After block {i}: x.storage_type() = {x.storage_type()}")
-            if x.storage_type() != ttnn.StorageType.DEVICE:
-                print(f"ERROR: Block {i} returned HOST tensor!")
-                break
 
+        x = ttnn.layer_norm(x, weight=self.parameters["ln_f_weight"], bias=self.parameters["ln_f_bias"])
         return x
