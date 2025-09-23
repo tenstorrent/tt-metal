@@ -3,7 +3,7 @@
 
 import torch
 import torch.nn as nn
-from models.experimental.transfuser.tests.reference.gpt_block import Block
+from models.experimental.transfuser.reference.gpt_block import Block
 
 
 class GPT(nn.Module):

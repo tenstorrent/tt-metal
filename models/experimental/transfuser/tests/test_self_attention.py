@@ -8,7 +8,7 @@ import ttnn
 
 from loguru import logger
 
-from models.experimental.transfuser.tests.reference.self_attention import SelfAttention
+from models.experimental.transfuser.reference.self_attention import SelfAttention
 
 # from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_bias, preprocess_linear_weight
 from models.utility_functions import (
@@ -51,10 +51,11 @@ def test_self_attn(device, n_embed, n_head, attn_pdrop, resid_pdrop, input_shape
         n_head=n_head,
         attn_pdrop=attn_pdrop,
         resid_pdrop=resid_pdrop,
-    )
+    ).eval()
 
+    print(ref_layer)
     ref_output = ref_layer(x)
-    print(ref_output)
+
     pytest.skip("Skipping self attention test")
     # parameters = preprocess_model_parameters(
     #     initialize_model=lambda: ref_layer,

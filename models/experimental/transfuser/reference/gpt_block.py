@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-from models.experimental.transfuser.tests.reference.self_attention import SelfAttention
+from models.experimental.transfuser.reference.self_attention import SelfAttention
 
 
 class Block(nn.Module):
