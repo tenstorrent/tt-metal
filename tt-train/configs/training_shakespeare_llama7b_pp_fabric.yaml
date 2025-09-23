@@ -27,15 +27,16 @@ training_config:
 
 multihost_config:
   enabled: true
-  num_workers: 4
+  num_workers: 5
   socket_type: fabric
   pipeline_parallel_config:
     num_blocks: 32
     blocks_per_rank:
-      - 0: 8
-      - 1: 8
-      - 2: 8
-      - 3: 8
+      0: 6
+      1: 7
+      2: 7
+      3: 7
+      4: 5
 
 eval_config:
   repetition_penalty: 1.0
