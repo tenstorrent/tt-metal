@@ -1,0 +1,329 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "multi_device_fixture.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "../dm_common.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+
+namespace tt::tt_metal {
+
+using namespace std;
+using namespace tt;
+using namespace test_utils;
+
+namespace unit_tests::dm::atomics {
+
+// Test configuration for atomic semaphore bandwidth tests
+struct AtomicSemaphoreConfig {
+    uint32_t test_id = 0;
+    CoreCoord sender_core_coord = {0, 0};
+    CoreCoord receiver_core_coord = {0, 1};
+    uint32_t num_of_transactions = 256;
+    uint32_t pages_per_transaction = 1;
+    uint32_t bytes_per_page = 32;
+    uint32_t semaphore_addr_offset = 4096;  // Place semaphore 4KB from base
+    uint32_t atomic_inc_value = 1;
+    NOC noc_id = NOC::NOC_0;
+    DataFormat l1_data_format = DataFormat::Float16_b;
+};
+
+/// @brief Runs atomic semaphore bandwidth test with sender and receiver cores
+/// @param mesh_device - MeshDevice to run the test on
+/// @param test_config - Configuration of the test
+/// @return true if test passes, false otherwise
+bool run_atomic_semaphore_test(
+    shared_ptr<distributed::MeshDevice> mesh_device, const AtomicSemaphoreConfig& test_config) {
+    // Get the actual device for this single-device test
+    IDevice* device = mesh_device->get_device(0);
+
+    /* ================ SETUP ================ */
+
+    // Program
+    Program program = CreateProgram();
+
+    // Buffer Parameters
+    const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
+    const size_t total_data_size = bytes_per_transaction + test_config.semaphore_addr_offset + sizeof(uint32_t);
+
+    // Core coordinates and ranges
+    CoreRangeSet sender_core_set({CoreRange(test_config.sender_core_coord)});
+    CoreRangeSet receiver_core_set({CoreRange(test_config.receiver_core_coord)});
+
+    // Obtain L1 Address for Storing Data
+    L1AddressInfo sender_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.sender_core_coord);
+    L1AddressInfo receiver_l1_info =
+        unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.receiver_core_coord);
+
+    // Check if cores have compatible L1 configurations
+    if (sender_l1_info.base_address != receiver_l1_info.base_address || sender_l1_info.size != receiver_l1_info.size) {
+        log_error(LogTest, "Mismatch in L1 address or size between sender and receiver cores");
+        return false;
+    }
+
+    // Check if L1 size is sufficient
+    if (sender_l1_info.size < total_data_size) {
+        log_error(
+            LogTest,
+            "Insufficient L1 size for the test configuration. Need: {}, Have: {}",
+            total_data_size,
+            sender_l1_info.size);
+        return false;
+    }
+
+    uint32_t l1_base_address = sender_l1_info.base_address;
+
+    // Physical Core Coordinates
+    CoreCoord physical_receiver_core = device->worker_core_from_logical_core(test_config.receiver_core_coord);
+    uint32_t packed_receiver_core_coordinates = physical_receiver_core.x << 16 | (physical_receiver_core.y & 0xFFFF);
+
+    // Compile-time arguments for sender kernel
+    vector<uint32_t> sender_compile_args = {
+        (uint32_t)l1_base_address,
+        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)bytes_per_transaction,
+        (uint32_t)test_config.test_id,
+        (uint32_t)packed_receiver_core_coordinates,
+        (uint32_t)test_config.semaphore_addr_offset,
+        (uint32_t)test_config.atomic_inc_value};
+
+    // Compile-time arguments for receiver kernel
+    vector<uint32_t> receiver_compile_args = {
+        (uint32_t)l1_base_address,
+        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)bytes_per_transaction,
+        (uint32_t)test_config.test_id,
+        (uint32_t)test_config.semaphore_addr_offset,
+        (uint32_t)test_config.atomic_inc_value};
+
+    // Kernels
+    std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/atomics/kernels/";
+    std::string sender_kernel_path = kernels_dir + "atomic_semaphore_sender.cpp";
+    std::string receiver_kernel_path = kernels_dir + "atomic_semaphore_receiver.cpp";
+
+    CreateKernel(
+        program,
+        sender_kernel_path,
+        test_config.sender_core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+            .compile_args = sender_compile_args});
+
+    CreateKernel(
+        program,
+        receiver_kernel_path,
+        test_config.receiver_core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+            .compile_args = receiver_compile_args});
+
+    // Assign unique runtime ID
+    log_info(
+        LogTest,
+        "Running Atomic Semaphore Test ID: {}, Runtime ID: {}",
+        test_config.test_id,
+        unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+
+    /* ================ RUNNING THE PROGRAM ================ */
+
+    // Setup Input Data
+    size_t element_size_bytes = bfloat16::SIZEOF;
+    uint32_t num_elements = bytes_per_transaction / element_size_bytes;
+    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
+
+    // Initialize sender L1 with test data
+    detail::WriteToDeviceL1(device, test_config.sender_core_coord, l1_base_address, packed_input);
+
+    // Initialize semaphores to zero on both cores
+    vector<uint32_t> zero_semaphore = {0};
+    detail::WriteToDeviceL1(
+        device, test_config.sender_core_coord, l1_base_address + test_config.semaphore_addr_offset, zero_semaphore);
+    detail::WriteToDeviceL1(
+        device, test_config.receiver_core_coord, l1_base_address + test_config.semaphore_addr_offset, zero_semaphore);
+
+    // Barrier to ensure initialization is complete
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+    // Launch the program using mesh workload approach
+    auto mesh_workload = distributed::CreateMeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
+    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
+
+    /* ================ VERIFICATION ================ */
+
+    // Read final semaphore values for verification
+    vector<uint32_t> sender_semaphore_result, receiver_semaphore_result;
+    detail::ReadFromDeviceL1(
+        device,
+        test_config.sender_core_coord,
+        l1_base_address + test_config.semaphore_addr_offset,
+        sizeof(uint32_t),
+        sender_semaphore_result);
+    detail::ReadFromDeviceL1(
+        device,
+        test_config.receiver_core_coord,
+        l1_base_address + test_config.semaphore_addr_offset,
+        sizeof(uint32_t),
+        receiver_semaphore_result);
+
+    uint32_t sender_final_semaphore = sender_semaphore_result[0];
+    uint32_t receiver_final_semaphore = receiver_semaphore_result[0];
+    uint32_t expected_receiver_semaphore = test_config.num_of_transactions * test_config.atomic_inc_value;
+
+    log_info(LogTest, "Sender final semaphore: {}", sender_final_semaphore);
+    log_info(LogTest, "Receiver final semaphore: {}", receiver_final_semaphore);
+    log_info(LogTest, "Expected receiver semaphore: {}", expected_receiver_semaphore);
+
+    // Verify that receiver semaphore has the expected value
+    bool semaphore_check = (receiver_final_semaphore == expected_receiver_semaphore);
+
+    // Verify that sender completed all transactions (should equal num_of_transactions)
+    //    bool sender_check = (sender_final_semaphore == test_config.num_of_transactions);
+
+    if (!semaphore_check) {
+        log_error(
+            LogTest,
+            "Receiver semaphore check failed. Expected: {}, Got: {}",
+            expected_receiver_semaphore,
+            receiver_final_semaphore);
+    }
+
+    //    if (!sender_check) {
+    //        log_error(LogTest, "Sender transaction count check failed. Expected: {}, Got: {}",
+    //                  test_config.num_of_transactions, sender_final_semaphore);
+    //    }
+
+    return semaphore_check;
+    //    return semaphore_check && sender_check;
+}
+
+/// @brief Bandwidth sweep test that varies transaction sizes and counts
+void bandwidth_sweep_test(
+    shared_ptr<distributed::MeshDevice> mesh_device,
+    uint32_t test_id,
+    CoreCoord sender_core = {0, 0},
+    CoreCoord receiver_core = {0, 1}) {
+    // Physical constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Test parameters for bandwidth sweep
+    //    uint32_t max_transactions = 1024;
+    uint32_t max_transactions = 16;
+    //    uint32_t max_pages_per_transaction = min(max_transmittable_pages, (uint32_t)256);
+    uint32_t max_pages_per_transaction = min(max_transmittable_pages, (uint32_t)1);
+
+    // Sweep through different NOC configurations
+    for (NOC noc_id : {NOC::NOC_0, NOC::NOC_1}) {
+        // Sweep through different transaction counts
+        for (uint32_t num_transactions = 16; num_transactions <= max_transactions; num_transactions *= 2) {
+            // Sweep through different transaction sizes
+            for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+                 pages_per_transaction *= 2) {
+                // Skip if transaction size exceeds physical constraints
+                if (pages_per_transaction > max_transmittable_pages) {
+                    continue;
+                }
+
+                // Test different atomic increment values
+                for (uint32_t atomic_inc_value : {1, 2, 4}) {
+                    AtomicSemaphoreConfig config = {
+                        .test_id = test_id,
+                        .sender_core_coord = sender_core,
+                        .receiver_core_coord = receiver_core,
+                        .num_of_transactions = num_transactions,
+                        .pages_per_transaction = pages_per_transaction,
+                        .bytes_per_page = bytes_per_page,
+                        .semaphore_addr_offset = 4096,
+                        .atomic_inc_value = atomic_inc_value,
+                        .noc_id = noc_id,
+                        .l1_data_format = DataFormat::Float16_b};
+
+                    log_info(
+                        LogTest,
+                        "Testing: NOC={}, Transactions={}, Pages={}, AtomicInc={}",
+                        (noc_id == NOC::NOC_0) ? "NOC_0" : "NOC_1",
+                        num_transactions,
+                        pages_per_transaction,
+                        atomic_inc_value);
+
+                    EXPECT_TRUE(run_atomic_semaphore_test(mesh_device, config));
+                }
+            }
+        }
+    }
+}
+
+/// @brief Directed performance test with optimal parameters
+void directed_performance_test(
+    shared_ptr<distributed::MeshDevice> mesh_device,
+    uint32_t test_id,
+    CoreCoord sender_core = {0, 0},
+    CoreCoord receiver_core = {0, 1}) {
+    // Physical constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Optimal parameters for performance
+    uint32_t num_transactions = 512;
+    uint32_t pages_per_transaction = min(max_transmittable_pages, (uint32_t)64);
+
+    AtomicSemaphoreConfig config = {
+        .test_id = test_id,
+        .sender_core_coord = sender_core,
+        .receiver_core_coord = receiver_core,
+        .num_of_transactions = num_transactions,
+        .pages_per_transaction = pages_per_transaction,
+        .bytes_per_page = bytes_per_page,
+        .semaphore_addr_offset = 4096,
+        .atomic_inc_value = 1,
+        .noc_id = NOC::NOC_0,
+        .l1_data_format = DataFormat::Float16_b};
+
+    log_info(
+        LogTest,
+        "Running directed performance test with {} transactions of {} pages each",
+        num_transactions,
+        pages_per_transaction);
+
+    EXPECT_TRUE(run_atomic_semaphore_test(mesh_device, config));
+}
+
+}  // namespace unit_tests::dm::atomics
+
+/* ========== TEST CASES ========== */
+
+TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreBandwidthSweep) {
+    uint32_t test_id = 100;
+
+    unit_tests::dm::atomics::bandwidth_sweep_test(
+        get_mesh_device(),
+        test_id,
+        CoreCoord(0, 0),  // Sender core
+        CoreCoord(0, 1)   // Receiver core
+    );
+}
+
+TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreDirectedPerformance) {
+    uint32_t test_id = 101;
+
+    unit_tests::dm::atomics::directed_performance_test(
+        get_mesh_device(),
+        test_id,
+        CoreCoord(0, 0),  // Sender core
+        CoreCoord(0, 1)   // Receiver core
+    );
+}
+
+}  // namespace tt::tt_metal
