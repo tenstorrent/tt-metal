@@ -35,11 +35,18 @@ def test_ttnn_semseg(device, model_location_generator):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:
-        # Use CI v2 model location generator
-        complete_weights_path = (
-            model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-            / "model_final_bd324a.pkl"
+        # Check if weights already exist in CI v2 cache first
+        cached_weights_path = (
+            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
         )
+        if os.path.exists(cached_weights_path):
+            complete_weights_path = cached_weights_path
+        else:
+            # Use CI v2 model location generator to download
+            complete_weights_path = (
+                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+                / "model_final_bd324a.pkl"
+            )
 
     # Model configuration
     batch_size = 1

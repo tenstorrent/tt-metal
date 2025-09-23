@@ -99,11 +99,18 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:
-        # Use CI v2 model location generator
-        complete_weights_path = (
-            model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-            / "model_final_bd324a.pkl"
+        # Check if weights already exist in CI v2 cache first
+        cached_weights_path = (
+            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
         )
+        if os.path.exists(cached_weights_path):
+            complete_weights_path = cached_weights_path
+        else:
+            # Use CI v2 model location generator to download
+            complete_weights_path = (
+                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+                / "model_final_bd324a.pkl"
+            )
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
@@ -150,11 +157,18 @@ def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_s
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:
-        # Use CI v2 model location generator
-        complete_weights_path = (
-            model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-            / "model_final_bd324a.pkl"
+        # Check if weights already exist in CI v2 cache first
+        cached_weights_path = (
+            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
         )
+        if os.path.exists(cached_weights_path):
+            complete_weights_path = cached_weights_path
+        else:
+            # Use CI v2 model location generator to download
+            complete_weights_path = (
+                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+                / "model_final_bd324a.pkl"
+            )
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
@@ -234,11 +248,18 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:
-        # Use CI v2 model location generator
-        complete_weights_path = (
-            model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-            / "model_final_bd324a.pkl"
+        # Check if weights already exist in CI v2 cache first
+        cached_weights_path = (
+            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
         )
+        if os.path.exists(cached_weights_path):
+            complete_weights_path = cached_weights_path
+        else:
+            # Use CI v2 model location generator to download
+            complete_weights_path = (
+                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+                / "model_final_bd324a.pkl"
+            )
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
