@@ -170,7 +170,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
         // direction 0 means pad left (top), 1 means pad right (bottom)
         for (uint32_t direction = 0; direction < num_directions; direction++) {
             CoreCoord core = {link * num_directions + direction, 0};
+            CoreCoord opposite_core = {link * num_directions + (1 - direction), 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
+            CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
             if (core_group_1.contains(core)) {
                 link_dims_to_read = dims_per_core_group_1;
             } else {
@@ -246,8 +248,11 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 virtual_core.y,                                            // out_ready_sem_noc0_y
                 final_semaphore.address(),                                 // out_ready_sem_bank_addr (absolute address)
                 true,                                                      // use_barrier_semaphore
+                virtual_opposite_core.x,                                   // barrier_sem_noc0_x
+                virtual_opposite_core.y,                                   // barrier_sem_noc0_y
                 barrier_semaphore.address(),
-                direction ? backward_device_offset : forward_device_offset};
+                direction ? backward_device_offset : forward_device_offset,
+                direction ? forward_device_offset : backward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
                 writer_rt_args.push_back(backward_device.has_value());
@@ -261,6 +266,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 }
             } else {
                 writer_rt_args.push_back(forward_device.has_value());
+
                 if (forward_device.has_value()) {
                     const auto src_fabric_node_id =
                         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
@@ -311,7 +317,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                     worker_writer_runtime_args[0] = input.buffer()->address();
                     worker_writer_runtime_args[1] = output.buffer()->address();
                     worker_writer_runtime_args[13] = out_ready_semaphore.address();
-                    worker_writer_runtime_args[15] = barrier_semaphore.address();
+                    worker_writer_runtime_args[17] = barrier_semaphore.address();
 
                     core_idx++;
                 }
