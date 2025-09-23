@@ -2,16 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_topology_flatbuffer.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <flatbuffers/flatbuffers.h>
-
-#include <cstdint>
-#include <unordered_map>
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -22,11 +20,12 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "mesh_shape_generated.h"
-#include "tensor_topology_flatbuffer.hpp"
 #include <tt-metalium/serialized_descriptors/mesh_coordinate_generated.h>
 #include "tensor_generated.h"
 
 #include <vector>
+#include <cstdint>
+#include <unordered_map>
 
 namespace ttnn {
 namespace {
