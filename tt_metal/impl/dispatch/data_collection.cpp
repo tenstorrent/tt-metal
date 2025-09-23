@@ -86,7 +86,7 @@ public:
 
     void DumpStats(std::ofstream& outfile) const {
         // Only dump if this has data
-        if (data.size() == 0) {
+        if (data.empty()) {
             return;
         }
         outfile << fmt::format("\t{} stats:\n", type);
