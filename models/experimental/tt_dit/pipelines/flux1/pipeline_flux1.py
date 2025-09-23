@@ -29,6 +29,127 @@ if TYPE_CHECKING:
     from PIL import Image
 
 
+def create_pipeline(
+    mesh_device,
+    batch_size=1,
+    image_w=1024,
+    image_h=1024,
+    guidance_scale=3.5,
+    num_images_per_prompt=1,
+    num_inference_steps=28,
+    cfg_config=None,
+    sp_config=None,
+    tp_config=None,
+    num_links=None,
+    topology=None,
+    model_variant="schnell",
+    checkpoint_name=None,
+    enable_t5_text_encoder=True,
+    use_torch_t5_text_encoder=False,
+    use_torch_clip_text_encoder=False,
+):
+    """
+    Create a Flux1 pipeline with default configurations based on mesh shape.
+
+    Args:
+        mesh_device: The mesh device to use
+        batch_size: Batch size for generation (default: 1)
+        image_w: Image width (default: 1024)
+        image_h: Image height (default: 1024)
+        guidance_scale: Guidance scale (default: 3.5)
+        num_images_per_prompt: Number of images per prompt (default: 1)
+        num_inference_steps: Number of inference steps (default: 28)
+        cfg_config: CFG parallel configuration as (factor, axis) tuple
+        sp_config: Sequence parallel configuration as (factor, axis) tuple
+        tp_config: Tensor parallel configuration as (factor, axis) tuple
+        num_links: Number of links for topology
+        topology: Topology type (default: Linear)
+        model_variant: Model variant - "dev" or "schnell" (default: "schnell")
+        checkpoint_name: Custom checkpoint name (overrides model_variant)
+        enable_t5_text_encoder: Whether to enable T5 text encoder (default: True)
+        use_torch_t5_text_encoder: Whether to use torch T5 encoder (default: False)
+        use_torch_clip_text_encoder: Whether to use torch CLIP encoder (default: False)
+
+    Returns:
+        Configured Flux1Pipeline instance
+    """
+    # Default config per mesh shape - based on flux1_api_server.py hard-coded values
+    default_config = {
+        (2, 4): {
+            "cfg_config": (1, 0),  # CFG factor 1 (no CFG for Flux1)
+            "sp_config": (2, 0),  # sequence parallel factor 2, axis 0
+            "tp_config": (4, 1),  # tensor parallel factor 4, axis 1
+            "num_links": 1,
+            "topology": ttnn.Topology.Linear,
+        },
+        (4, 8): {
+            "cfg_config": (1, 0),  # CFG factor 1 (no CFG for Flux1)
+            "sp_config": (4, 0),  # sequence parallel factor 4, axis 0
+            "tp_config": (8, 1),  # tensor parallel factor 8, axis 1
+            "num_links": 4,
+            "topology": ttnn.Topology.Linear,
+        },
+        (1, 8): {
+            "cfg_config": (1, 0),  # CFG factor 1 (no CFG for Flux1)
+            "sp_config": (2, 0),  # sequence parallel factor 2, axis 0
+            "tp_config": (4, 1),  # tensor parallel factor 4, axis 1
+            "num_links": 1,
+            "topology": ttnn.Topology.Linear,
+        },
+    }
+
+    # Get config from user or default if not provided
+    mesh_shape_tuple = tuple(mesh_device.shape)
+    if mesh_shape_tuple not in default_config:
+        raise ValueError(f"Unsupported mesh shape: {mesh_shape_tuple}. Supported shapes: {list(default_config.keys())}")
+
+    cfg_factor, cfg_axis = cfg_config or default_config[mesh_shape_tuple]["cfg_config"]
+    sp_factor, sp_axis = sp_config or default_config[mesh_shape_tuple]["sp_config"]
+    tp_factor, tp_axis = tp_config or default_config[mesh_shape_tuple]["tp_config"]
+    num_links = num_links or default_config[mesh_shape_tuple]["num_links"]
+    topology = topology or default_config[mesh_shape_tuple]["topology"]
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    # Determine checkpoint name - based on flux1_api_server.py logic
+    if checkpoint_name is None:
+        checkpoint_name = f"black-forest-labs/FLUX.1-{model_variant}"
+
+    # Enable T5 based on device configuration
+    # T5 is disabled if mesh needs reshaping for CLIP encoder
+    submesh_shape = list(mesh_device.shape)
+    submesh_shape[cfg_axis] //= cfg_factor
+
+    # For Flux1, T5 can be enabled if submesh doesn't need reshaping or if using torch T5
+    if not use_torch_t5_text_encoder:
+        enable_t5_text_encoder = enable_t5_text_encoder and (submesh_shape[1] == 4)
+
+    logger.info(f"Mesh device shape: {mesh_device.shape}")
+    logger.info(f"Submesh shape: {submesh_shape}")
+    logger.info(f"Parallel config: {parallel_config}")
+    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+    logger.info(f"Model variant: {model_variant}")
+    logger.info(f"Checkpoint: {checkpoint_name}")
+
+    # Create pipeline
+    pipeline = Flux1Pipeline(
+        checkpoint_name=checkpoint_name,
+        mesh_device=mesh_device,
+        enable_t5_text_encoder=enable_t5_text_encoder,
+        use_torch_t5_text_encoder=use_torch_t5_text_encoder,
+        use_torch_clip_text_encoder=use_torch_clip_text_encoder,
+        parallel_config=parallel_config,
+        topology=topology,
+        num_links=num_links,
+    )
+
+    return pipeline
+
+
 @dataclass
 class PipelineTrace:
     tid: int
