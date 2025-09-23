@@ -400,6 +400,8 @@ TT-Fabric topology can be an exact match of the physical connection topology, or
 
 The following diagrams show the supported 1D and 2D TT-Fabric topologies.
 
+Only a single routing lane is shown in the following diagrams. Fabric network gets replicated on all the available routing planes in the system.
+
 **8x4 Galaxy with TT-Fabric in 1D Line Topology**
 ```
                 █  : Fabric Router
@@ -650,13 +652,13 @@ Basic architecture of a 1D line virtual channel is shown in the following diagra
                                         │  ┌───────────────────────────────┐  │
                                         │  │ Sender Channel 0 (8 slots)    │  │
                                         │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │
-                                    ╔═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶═════════════╗
+                                    ╔═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶═══════╗
                                     ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │      ║
                                     ║   │  └───────────────────────────────┘  │      ║
                                     ║   │  ┌───────────────────────────────┐  │      ║
                                     ║   │  │ Sender Channel 1 (8 slots)    │  │      ║
             ┌───────────────────┐   ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║
-            │  Network-On-Chip  ├═▶═╩═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶═════════════╩══════▶┌──────────────────┐
+            │  Network-On-Chip  ├═▶═╩═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶═══════╩══════▶┌──────────────────┐
             └───────────────┬───┘       │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │              │  E T H E R N E T │◀═══▶
                             ▲           │  └───────────────────────────────┘  │      ╔═════◀═└──────────────────┘
                             ║           ├─────────────────────────────────────┤      ║
@@ -664,7 +666,7 @@ Basic architecture of a 1D line virtual channel is shown in the following diagra
                             ║           │  ┌───────────────────────────────┐  │      ║
                             ║           │  │ Receiver Channel 0 (16 slots) │  │      ║
                             ║           │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║
-                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════╝
+                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15│     ├◀════════╝
                                         │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
                                         │  └───────────────────────────────┘  │
                                         └─────────────────────────────────────┘
@@ -675,7 +677,6 @@ Basic architecture of a 1D line virtual channel is shown in the following diagra
 The following diagram shows data flow between two devices over ethernet. Sender Channel 0 is used by local worker on a device to send data. Sender Channel 1 is used for pass through tarffic that is hopping through
 current device. Packes in the receiver channel on each router can either be written to local device or forwarded to next fabric router if meant for another device. In case of an mcast packet, data is both forwarded as well as consumed locally.
 ```
-                 1D LINE VIRTUAL CHANNEL                                                        1D LINE VIRTUAL CHANNEL (MIRRORED)
                   ┌─────────────────────────────────────┐                                       ┌─────────────────────────────────────┐
                   │  SENDER CHANNELS (2)                │                                       │                SENDER CHANNELS (2)  │
                   │  ┌───────────────────────────────┐  │                                       │  ┌───────────────────────────────┐  │
@@ -701,6 +702,44 @@ current device. Packes in the receiver channel on each router can either be writ
                   └─────────────────────────────────────┘                                       └─────────────────────────────────────┘
 ```
 
+#### 3.1.1.2 Dataflow between two fabric routers over NOC <a id="nocflow"></a>
+The following diagram shows data flow between two fabric routers over NOC representing an intra-device fabric hop. Sender Channel 0 is used by local worker on a device to send data. Sender Channel 1 is used for pass through tarffic that is hopping through
+current device. Packes in the receiver channel on each router can either be written to local device or forwarded to next fabric router if meant for another device. In case of an mcast packet, data is both forwarded as well as consumed locally.
+The fabric router that a worker connects to depends on the target fabric node that the worker is sending data to. 
+```
+                                                                          ┌──────────────────┐
+                                                                          │   Local Worker   │
+                                                                          └─────────┬────────┘
+                                                                                    ║
+                                      ┌─────────────────────────────────────┐       ║      ┌─────────────────────────────────────┐
+                                      │                SENDER CHANNELS (2)  │       ║      │  SENDER CHANNELS (2)                │
+                                      │  ┌───────────────────────────────┐  │       ║      │  ┌───────────────────────────────┐  │
+                                      │  │    Sender Channel 0 (8 slots) │  │  ┌┄┄┄┄║┄┄┐   │  │ Sender Channel 0 (8 slots)    │  │
+                                      │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │  ┆    ║  ┆   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │
+                                ╔═══════◀┤     │ 7│ 6│ 5│ 4│ 3│ 2│ 1│ 0│ ├◀═════════╩════════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶═══════╗
+                                ║     │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │  ┆       ┆   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │      ║
+                                ║     │  └───────────────────────────────┘  │  ┆Network┆   │  └───────────────────────────────┘  │      ║
+                                ║     │  ┌───────────────────────────────┐  │  ┆   On  ┆   │  ┌───────────────────────────────┐  │      ║
+                                ║     │  │    Sender Channel 1 (8 slots) │  │  ┆  Chip ┆   │  │ Sender Channel 1 (8 slots)    │  │      ║
+                                ║     │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │  ┆ (NOC) ┆   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║
+                   ┌────────┐◀══╩═══════◀┤     │ 7│ 6│ 5│ 4│ 3│ 2│ 1│ 0│ ├◀══════╗ ╔═════════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶═══════╩══▶┌────────┐
+              ◀═══▶│ETHERNET│         │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │  ┆ ║ ║   ┆   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │          │ETHERNET│◀═══▶
+                   └────────┘═▶═╗     │  └───────────────────────────────┘  │  ┆ ║ ║   ┆   │  └───────────────────────────────┘  │      ╔═◀═└────────┘
+                                ║     ├─────────────────────────────────────┤  ┆ ╚═══╗ ┆   ├─────────────────────────────────────┤      ║
+                                ║     │               RECEIVER CHANNEL (1)  │  ┆   ║ ║ ┆   │  RECEIVER CHANNEL (1)               │      ║  
+                                ║     │  ┌───────────────────────────────┐  │  ┆   ║ ║ ┆   │  ┌───────────────────────────────┐  │      ║  
+                                ║     │  │ Receiver Channel 0 (16 slots) │  │  ┆   ║ ║ ┆   │  │ Receiver Channel 0 (16 slots) │  │      ║  
+                                ║     │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │  ┆   ║ ║ ┆   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║  
+                                ╚═══════▶┤     │15│14│ ┅│ ┅│ ┅│ 2│ 1│ 0│ ├▶══════╦═╝ ╠═══════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15│     ├◀════════╝  
+                                      │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │  ┆ ║   ║ ┆   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
+                                      │  └───────────────────────────────┘  │  └┄║┄┄┄║┄┘   │  └───────────────────────────────┘  │
+                                      └─────────────────────────────────────┘    ║   ║     └─────────────────────────────────────┘
+                                                                                 ║   ║
+                                                                                 ▼   ▼
+                                                                          To Local Destinations 
+                                                                          in current device
+```
+
 
 
 ### 3.1.2 2D Mesh Virtual Channel <a id="2dmvc"></a>
@@ -714,25 +753,25 @@ Basic architecture of a 2D mesh virtual channel is shown in the following diagra
                                         │  ┌───────────────────────────────┐  │
                                         │  │ Sender Channel 0 (8 slots)    │  │
                                         │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │
-                                    ╔═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╗
+                                    ╔═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶════════╗
                                     ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │       ║
                                     ║   │  └───────────────────────────────┘  │       ║
                                     ║   │  ┌───────────────────────────────┐  │       ║
                                     ║   │  │ Sender Channel 1 (8 slots)    │  │       ║
                                     ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │       ║
-                                    ╠═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╣
+                                    ╠═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶════════╣
                                     ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │       ║
             ┌───────────────────┐   ║   │  └───────────────────────────────┘  │       ╠══════▶┌──────────────────┐
             │  Network-On-Chip  ├═▶═╣   │  ┌───────────────────────────────┐  │       ║       │  E T H E R N E T │◀═══▶
             └───────────────┬───┘   ║   │  │ Sender Channel 2 (8 slots)    │  │       ║  ╔══◀═└──────────────────┘
                             ▲       ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │       ║  ║
-                            ║       ╠═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╣  ║
+                            ║       ╠═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶════════╣  ║
                             ║       ║   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │       ║  ║
                             ║       ║   │  └───────────────────────────────┘  │       ║  ║
                             ║       ║   │  ┌───────────────────────────────┐  │       ║  ║
                             ║       ║   │  │ Sender Channel 3 (8 slots)    │  │       ║  ║
                             ║       ║   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │       ║  ║
-                            ║       ╚═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7├═▶══════════════╝  ║
+                            ║       ╚═════▶┤ │ 0│ 1│ 2│ 3│ 4│ 5│ 6│ 7│     ├═▶════════╝  ║
                             ║           │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │          ║
                             ║           │  └───────────────────────────────┘  │          ║
                             ║           ├─────────────────────────────────────┤          ║
@@ -740,7 +779,7 @@ Basic architecture of a 2D mesh virtual channel is shown in the following diagra
                             ║           │  ┌───────────────────────────────┐  │          ║
                             ║           │  │ Receiver Channel 0 (16 slots) │  │          ║
                             ║           │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │          ║
-                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15├◀══════════════════╝
+                            ╚═════════════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15│     ├◀════════════╝
                                         │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
                                         │  └───────────────────────────────┘  │
                                         └─────────────────────────────────────┘
