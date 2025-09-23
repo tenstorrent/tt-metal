@@ -424,6 +424,7 @@ public:
         }
         else {
             std::filesystem::create_directory_symlink(bandwidth_results_path, ci_bandwidth_results_dir);
+            log_info(tt::LogTest, "Created symlink to bandwidth results directory: {}", ci_bandwidth_results_dir);
         }
         
         auto arch_name = tt::tt_metal::hal::get_arch_name();
