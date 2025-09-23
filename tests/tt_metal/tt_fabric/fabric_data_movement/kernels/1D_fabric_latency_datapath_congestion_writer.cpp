@@ -47,7 +47,7 @@ void kernel_main() {
     if constexpr (use_mcast_mode) {
         packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(message_num_hops)});
     } else {
-        fabric_set_unicast_route<false>(message_num_hops, packet_header);
+        fabric_set_unicast_route<false>(packet_header, message_num_hops);
     }
 
     auto noc0_dest_addr =
@@ -55,7 +55,7 @@ void kernel_main() {
     packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
 
     // Setup ready signal packet header
-    fabric_set_unicast_route<false>(hops_to_latency_writer, ready_packet_header);
+    fabric_set_unicast_route<false>(ready_packet_header, hops_to_latency_writer);
     auto ready_sem_noc_addr =
         safe_get_noc_addr(latency_writer_noc_x, latency_writer_noc_y, latency_writer_ready_sem, 0);
     ready_packet_header->to_noc_unicast_atomic_inc(

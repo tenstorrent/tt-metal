@@ -90,8 +90,8 @@ void kernel_main() {
         payload_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
         sem_inc_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
     } else {
-        fabric_set_unicast_route<false>(num_hops_to_receiver, payload_packet_header);
-        fabric_set_unicast_route<false>(num_hops_to_receiver, sem_inc_packet_header);
+        fabric_set_unicast_route<false>(payload_packet_header, num_hops_to_receiver);
+        fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_to_receiver);
     }
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
@@ -185,7 +185,7 @@ void kernel_main() {
                                      uint64_t teardown_noc_addr,
                                      size_t num_hops_on_fabric) {
         // Now that we are done, we need to notify all other congestion writers to teardown
-        fabric_set_unicast_route<false>(num_hops_on_fabric, packet_header);
+        fabric_set_unicast_route<false>(packet_header, num_hops_on_fabric);
         packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             teardown_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
 

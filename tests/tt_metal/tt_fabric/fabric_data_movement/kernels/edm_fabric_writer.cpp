@@ -68,7 +68,7 @@ static FORCE_INLINE void setup_packet_header(
     volatile PACKET_HEADER_TYPE* pkt_hdr, size_t num_hops, tt::tt_fabric::ChipSendType chip_send_type) {
     if (num_hops > 0) {
         if (chip_send_type == tt::tt_fabric::CHIP_UNICAST) {
-            fabric_set_unicast_route<false>(num_hops, pkt_hdr);
+            fabric_set_unicast_route<false>(pkt_hdr, num_hops);
         } else {
             pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_hops)});
         }

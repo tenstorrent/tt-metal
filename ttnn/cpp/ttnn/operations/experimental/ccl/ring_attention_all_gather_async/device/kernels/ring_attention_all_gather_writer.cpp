@@ -78,7 +78,7 @@ void kernel_main() {
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    fabric_set_unicast_route<false>(1, pkt_hdr);
+    fabric_set_unicast_route<false>(pkt_hdr, 1);
 
     fabric_connection.open();
 
@@ -199,7 +199,7 @@ void kernel_main() {
     // Write the unicast packet
     if constexpr (num_targets_in_direction) {
         fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_set_unicast_route<false>(1, pkt_hdr_sem_inc);
+        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
@@ -306,7 +306,7 @@ void kernel_main() {
 
         // 2. unicast output ready semaphore forward
         fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_set_unicast_route<false>(1, pkt_hdr_sem_inc);
+        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
 

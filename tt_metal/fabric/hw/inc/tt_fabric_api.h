@@ -261,7 +261,7 @@ bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatency
 // Overload: For 1D LowLatencyPacketHeader
 // 1D need to choose between target_as_dev true/false and compressed true/false
 template <bool target_as_dev = true, bool compressed = true>
-bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatencyPacketHeader* packet_header) {
+bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, uint16_t target_num) {
     if constexpr (compressed) {
         if constexpr (target_as_dev) {
             return decode_route_to_buffer_by_dev(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);

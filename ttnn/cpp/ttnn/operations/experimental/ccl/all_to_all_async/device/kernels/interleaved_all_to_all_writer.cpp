@@ -121,7 +121,7 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender& cur_connection =
             cur_is_forward ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
         cur_pkt_header = cur_is_forward ? pkt_hdr_forward : pkt_hdr_backward;
-        fabric_set_unicast_route<false>(cur_hops, cur_pkt_header);
+        fabric_set_unicast_route<false>(cur_pkt_header, cur_hops);
 
         const uint32_t my_relative_ring_id = (my_ring_id < dst_ring_id) ? my_ring_id : my_ring_id - 1;
         uint32_t packet_id = 0;
@@ -179,7 +179,7 @@ void kernel_main() {
 
         // Handle final incomplete chunk
         if (packet_id % chunk_granularity != 0) {
-            fabric_set_unicast_route<false>(cur_hops, pkt_hdr_seminc);
+            fabric_set_unicast_route<false>(pkt_hdr_seminc, cur_hops);
             cur_connection.wait_for_empty_write_slot();
             cur_connection.send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));

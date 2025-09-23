@@ -423,7 +423,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTIN
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         WorkerToFabricEdmSender* fabric_connection_handle) {
         const auto unicast_fields = ChipUnicastFields1D::build_from_args(arg_idx);
-        fabric_set_unicast_route<false>(unicast_fields.num_hops, (LowLatencyPacketHeader*)packet_header);
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, unicast_fields.num_hops);
     }
 };
 
@@ -439,7 +439,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
         if constexpr (USE_DYNAMIC_ROUTING) {
             setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
         } else {
-            fabric_set_unicast_route(unicast_fields.dst_device_id, (LowLatencyMeshPacketHeader*)packet_header_address);
+            fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header_address, unicast_fields.dst_device_id);
         }
     }
 };

@@ -104,13 +104,13 @@ void kernel_main() {
         } else {
             if (write_scatter_mode && pages_to_send == 2) {
                 uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-                fabric_set_unicast_route<false>(config.unicast.distance, (LowLatencyPacketHeader*)packet_header);
+                fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);
                 packet_header->to_noc_unicast_scatter_write(
                     tt::tt_fabric::NocUnicastScatterCommandHeader{
                         {dest_noc_address, dest_noc_address2}, (uint16_t)page_size},
                     (pages_to_send * page_size));
             } else {
-                fabric_set_unicast_route<false>(config.unicast.distance, (LowLatencyPacketHeader*)packet_header);
+                fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);
                 packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
             }
@@ -130,9 +130,9 @@ void kernel_main() {
     uint64_t last_message_semaphore_noc0_addr =
         safe_get_noc_addr(receiver_noc_x, receiver_noc_y, (uint32_t)last_message_semaphore_address, 0);
     if constexpr (!mcast_mode) {
-        fabric_set_unicast_route<false>(config.unicast.distance, packet_header);
+        fabric_set_unicast_route<false>(packet_header, config.unicast.distance);
     } else {
-        fabric_set_unicast_route<false>(config.mcast.distance + config.mcast.range - 1, packet_header);
+        fabric_set_unicast_route<false>(packet_header, config.mcast.distance + config.mcast.range - 1);
     }
     packet_header->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));

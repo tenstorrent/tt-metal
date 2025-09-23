@@ -86,7 +86,7 @@ void kernel_main() {
     if constexpr (is_2d_fabric) {
         fabric_set_unicast_route(dst_device_id, (LowLatencyMeshPacketHeader*)packet_header);
     } else {
-        fabric_set_unicast_route<false>(num_hops, (LowLatencyPacketHeader*)packet_header);
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, num_hops);
     }
 
     uint64_t local_credit_handshake_noc_address = get_noc_addr(0) + credit_handshake_address;
