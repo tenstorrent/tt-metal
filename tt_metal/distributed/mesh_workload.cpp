@@ -39,7 +39,8 @@
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class IDevice;
@@ -127,7 +128,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     // the Mesh. Only done when the MeshWorkload is enqueued for the first
     // time.
     auto* mesh_device = mesh_cq.device();
-    if (program_binary_status_.size()) {
+    if (!program_binary_status_.empty()) {
         TT_FATAL(
             program_binary_status_.find(mesh_device->id()) != program_binary_status_.end(),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
@@ -291,7 +292,7 @@ std::vector<std::shared_ptr<KernelGroup>>& MeshWorkloadImpl::get_kernel_groups(u
 std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
     ZoneScoped;
     // Get all semaphores across all programs in the MeshWorkload
-    if (not semaphores_.size()) {
+    if (semaphores_.empty()) {
         for (auto& [device_range, program] : programs_) {
             semaphores_.insert(
                 semaphores_.end(), program.impl().semaphores().begin(), program.impl().semaphores().end());
@@ -305,7 +306,7 @@ std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
     // Get the config sizes for all L1 Program Data Structures
     std::vector<uint32_t> global_program_config_sizes;
     for (auto& program_on_grid : programs_) {
-        if (global_program_config_sizes.size()) {
+        if (!global_program_config_sizes.empty()) {
             for (int i = 0; i < global_program_config_sizes.size(); i++) {
                 TT_FATAL(
                     global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
@@ -348,7 +349,7 @@ MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return
 ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {
     ZoneScoped;
     TT_FATAL(
-        !using_fast_dispatch or (programs_.size() and is_finalized()),
+        !using_fast_dispatch or (!programs_.empty() and is_finalized()),
         "Program Configs can only be queried if a MeshWorkload is populated and finalized.");
     return programs_.begin()->second.impl().get_program_config(index);
 }

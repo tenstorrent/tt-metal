@@ -80,7 +80,6 @@ class upsample2d:
         # tt_out = self.conv(tt_out)
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             reshard_if_not_optimal=False,  # Reshard has error : 1616 Bytes unique+common runtime args targeting kernel reshard_reader on (x=0,y=0) are too large. Cannot be written as they will run into memory region reserved for result. Max allowable size is 1024 Bytes
             enable_act_double_buffer=True,

@@ -35,16 +35,7 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include "umd/device/types/arch.h"
-
-namespace ttnn {
-namespace operations {
-namespace unary {
-enum class UnaryOpType;
-struct UnaryWithParam;
-}  // namespace unary
-}  // namespace operations
-}  // namespace ttnn
+#include <umd/device/types/arch.hpp>
 
 using namespace tt;
 using namespace tt_metal;
@@ -95,7 +86,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
+                    ASSERT_EQ(static_cast<float>(readback_data[j]), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }
@@ -131,7 +122,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 auto write_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(0), write_event);
-                auto output_tensor = ttnn::test_utils::dispatch_ops_to_device(input_tensor, ttnn::DefaultQueueId);
+                auto output_tensor = ttnn::test_utils::dispatch_ops_to_device(input_tensor, QueueId(0));
                 auto workload_event = ttnn::record_event(device->mesh_command_queue(0));
                 ttnn::wait_for_event(device->mesh_command_queue(1), workload_event);
                 // std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -148,7 +139,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
+                    ASSERT_EQ(static_cast<float>(readback_data[j]), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }
@@ -198,7 +189,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 128);
+                    ASSERT_EQ(static_cast<float>(readback_data[j]), -1 * (i + dev_idx) * 32 + 128);
                 }
             }
         }

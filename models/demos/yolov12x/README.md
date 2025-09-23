@@ -68,7 +68,7 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
 - Use the following command to run demo for `640x640` resolution :
 
   ```bash
-  pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo_dp
+  pytest --disable-warnings models/demos/yolov12x/demo/demo.py::test_demo_dp
   ```
 
 - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov12x/demo/images`.

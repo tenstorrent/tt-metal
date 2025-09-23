@@ -640,6 +640,28 @@ def get_base_model_name(model_name: str) -> str:
     return match.group(1) if match else model_name
 
 
+def get_hf_model_name(model_path: str) -> str:
+    # HF model name
+    if model_path.count("/") == 1:
+        return model_path
+
+    # HF cache path
+    pattern = r".*/?models--(?P<model_provider>[^/]+?)--(?P<model_name>[^/]+)/?"
+    match = pattern.search(pattern, model_path)
+    if match:
+        model_provider = match.group("model_provider")
+        model_name = match.group("model_name")
+        return f"{model_provider}/{model_name}"
+    raise ValueError(
+        f"Unsupported '{model_path}', please use HF model name or follow HF format with 'models--<model_provider>--<model_name>'"
+    )
+
+
+def get_hf_tt_cache_path(model_path: str) -> str:
+    model_name = get_hf_model_name(model_path)
+    return f"/mnt/MLPerf/huggingface/tt_cache/{model_name}"
+
+
 def create_tt_model(
     mesh_device,
     instruct,

@@ -28,10 +28,10 @@ bool find_device_with_neighbor_in_multi_direction(
     auto devices = fixture->get_devices();
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
-    for (auto device : devices) {
+    for (const auto& device : devices) {
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
         if (incoming_direction.has_value()) {
-            if (!control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).size()) {
+            if (control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).empty()) {
                 // This potential source will not have the requested incoming direction, skip
                 continue;
             }
@@ -46,7 +46,7 @@ bool find_device_with_neighbor_in_multi_direction(
             auto curr_fabric_node_id = src_fabric_node_id;
             for (uint32_t i = 0; i < num_hops; i++) {
                 auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, routing_direction);
-                if (neighbors.size() > 0) {
+                if (!neighbors.empty()) {
                     temp_end_fabric_node_ids.emplace_back(curr_fabric_node_id.mesh_id, neighbors[0]);
                     temp_physical_end_device_ids.push_back(
                         control_plane.get_physical_chip_id_from_fabric_node_id(temp_end_fabric_node_ids.back()));
@@ -80,12 +80,12 @@ bool find_device_with_neighbor_in_direction(
     RoutingDirection direction) {
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto devices = fixture->get_devices();
-    for (auto device : devices) {
+    for (const auto& device : devices) {
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
 
         // Get neighbours within a mesh in the given direction
         auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
-        if (neighbors.size() > 0) {
+        if (!neighbors.empty()) {
             src_physical_device_id = device->get_devices()[0]->id();
             dst_fabric_node_id = FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]);
             dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);

@@ -23,21 +23,21 @@ pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrain
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `320x320`, end-2-end perf is `114` FPS
+- For `320x320`, end-2-end perf is `156` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
   models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-103-1-act_dtype0-weight_dtype0-device_params0]
   ```
-- For `640x640`, end-2-end perf is `56` FPS
+- For `640x640`, end-2-end perf is `74` FPS  (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
   models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-46-1-act_dtype0-weight_dtype0-device_params0]
   ```
 
 #### Multi Device (DP=2, N300):
-- For `320x320`, end-2-end perf is `224.56` FPS
+- For `320x320`, end-2-end perf is `223` FPS
   ```
   pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution0-103-1-act_dtype0-weight_dtype0-device_params0]
   ```
-- For `640x640`, end-2-end perf is `93.17` FPS
+- For `640x640`, end-2-end perf is `113` FPS
   ```
   pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution1-46-1-act_dtype0-weight_dtype0-device_params0]
   ```

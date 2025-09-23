@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::pool {
 
@@ -46,6 +47,7 @@ struct FactoryParameters {
     uint32_t index_nbytes;
     tt::DataFormat data_format;
     tt::DataFormat index_format;
+    tt::DataFormat output_data_format;
     uint32_t in_ntiles_c;
     uint32_t out_ntiles_c;
     bool is_avg_pool;
@@ -91,16 +93,20 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
-    bool return_indices);
+    bool return_indices,
+    const Layout& output_layout,
+    const DataType& output_dtype);
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
-    const Tensor& input,
+    const DataType& input_dtype,
+    const DataType& output_dtype,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t in_channels,
     Pool2DType pool_type,
-    bool return_indices);
+    bool return_indices,
+    const Layout& output_layout);
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
@@ -119,7 +125,9 @@ uint32_t calculate_L1_usage(
     const tt::tt_metal::MemoryConfig& output_memory,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override);
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout,
+    const DataType& output_dtype);
 
 // pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures

@@ -63,8 +63,7 @@ class ttnn_SPPCSPC:
         x1 = self.cv1(self.device, x)
         x1 = self.cv3(self.device, x1)
         x1 = self.cv4(self.device, x1)
-        x1 = ttnn.sharded_to_interleaved(x1, ttnn.L1_MEMORY_CONFIG)
-        x1 = ttnn.to_layout(x1, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
         x1_m1 = ttnn.max_pool2d(
             input_tensor=x1,
             batch_size=1,
@@ -75,7 +74,6 @@ class ttnn_SPPCSPC:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         x1_m2 = ttnn.max_pool2d(
             input_tensor=x1,
@@ -87,7 +85,6 @@ class ttnn_SPPCSPC:
             stride=[1, 1],
             padding=[4, 4],
             dilation=[1, 1],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         x1_m3 = ttnn.max_pool2d(
@@ -100,16 +97,10 @@ class ttnn_SPPCSPC:
             stride=[1, 1],
             padding=[6, 6],
             dilation=[1, 1],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+
+        x1 = ttnn.sharded_to_interleaved(x1, ttnn.L1_MEMORY_CONFIG)
         x1 = ttnn.to_layout(x1, ttnn.ROW_MAJOR_LAYOUT)
-
-        x1_m1 = ttnn.sharded_to_interleaved(x1_m1, ttnn.L1_MEMORY_CONFIG)
-
-        x1_m2 = ttnn.sharded_to_interleaved(x1_m2, ttnn.L1_MEMORY_CONFIG)
-
-        x1_m3 = ttnn.sharded_to_interleaved(x1_m3, ttnn.L1_MEMORY_CONFIG)
-
         y1 = concat(3, False, x1, x1_m1, x1_m2, x1_m3)
         ttnn.deallocate(x1)
         ttnn.deallocate(x1_m1)
@@ -122,10 +113,7 @@ class ttnn_SPPCSPC:
 
         y2 = self.cv2(self.device, x)
         ttnn.deallocate(x)
-        y1 = ttnn.sharded_to_interleaved(y1, ttnn.L1_MEMORY_CONFIG)
-        y2 = ttnn.sharded_to_interleaved(y2, ttnn.L1_MEMORY_CONFIG)
-
-        out = concat(3, False, y1, y2)
+        out = sharded_concat([y1, y2])
 
         out = self.cv7(self.device, out)
 
@@ -214,7 +202,11 @@ class ttnn_detect:
 
         self.m = []
         self.convm_1 = Conv(
-            [1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation="sigmoid"
+            [1, 80, 80, 256],
+            (1, 1, 1, 1, 0, 0, 1, 1),
+            parameters["0"],
+            is_reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
         )
         self.m.append(self.convm_1)
 
@@ -223,7 +215,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["1"],
             is_reshape=True,
-            activation="sigmoid",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
             height_sharding=False,
         )
         self.m.append(self.convm_2)
@@ -233,7 +225,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["2"],
             is_reshape=True,
-            activation="sigmoid",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
             height_sharding=False,
         )
         self.m.append(self.convm_2)
@@ -326,6 +318,7 @@ class ttnn_detect:
             ttnn.deallocate(d)
             ttnn.deallocate(e)
 
+            y_cat = ttnn.to_layout(y_cat, ttnn.ROW_MAJOR_LAYOUT)
             y_cat = ttnn.to_memory_config(y_cat, memory_config=ttnn.L1_MEMORY_CONFIG)
             y_cat = ttnn.permute(y_cat, (0, 1, 3, 4, 2))
 
@@ -336,15 +329,16 @@ class ttnn_detect:
                 z_1 = reshaped
             if i == 2:
                 z_2 = reshaped
-            ttnn.deallocate(y_cat)
-
         concatenated = concat(1, False, z_0, z_1, z_2)
+        concatenated = ttnn.to_layout(concatenated, ttnn.TILE_LAYOUT)
         out = (concatenated, x)
 
         for t in [z_0, z_1, z_2]:
             ttnn.deallocate(t)
         if i == 3:
             ttnn.deallocate(x)
+
+        ttnn.deallocate(y_cat)
         return out
 
 
@@ -362,25 +356,22 @@ class ttnn_yolov7:
             parameters["0"],
             act_block_h=32 * 50,
             deallocate_activation=True,
-            enable_split_reader=True,
             use_1d_systolic_array=False,
         )
         self.conv2 = Conv(
             [1, 640, 640, 32],
             (3, 3, 2, 2, 1, 1, 1, 1),
             parameters["1"],
-            act_block_h=32 * 50,
+            act_block_h=32 * 10,
             deallocate_activation=True,
-            enable_split_reader=True,
             use_1d_systolic_array=False,
         )
         self.conv3 = Conv(
             [1, 320, 320, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["2"],
-            act_block_h=32 * 15,
+            act_block_h=32 * 10,
             deallocate_activation=True,
-            enable_split_reader=True,
             use_1d_systolic_array=False,
         )
         self.conv4 = Conv(
@@ -388,15 +379,11 @@ class ttnn_yolov7:
             (3, 3, 2, 2, 1, 1, 1, 1),
             parameters["3"],
             deallocate_activation=True,
-            enable_split_reader=True,
             enable_act_double_buffer=True,
-            weights_dtype=ttnn.bfloat8_b,
         )
         self.conv5 = Matmul(
             [1, 160, 160, 128],
             parameters["4"],
-            weight_dtype=ttnn.bfloat16,
-            bias_dtype=ttnn.bfloat16,
             pad_input=0,
             per_core_M=13,
             per_core_N=2,
@@ -406,14 +393,11 @@ class ttnn_yolov7:
             out_block_h=13,
             out_block_w=2,
             shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
-            math_approx_mode=False,
         )
 
         self.conv6 = Matmul(
             [1, 160, 160, 128],
             parameters["5"],
-            weight_dtype=ttnn.bfloat16,
-            bias_dtype=ttnn.bfloat16,
             pad_input=0,
             per_core_M=13,
             per_core_N=2,
@@ -423,36 +407,27 @@ class ttnn_yolov7:
             out_block_h=13,
             out_block_w=2,
             shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
-            math_approx_mode=False,
         )
 
         self.conv7 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["6"],
-            weights_dtype=ttnn.bfloat8_b,
-            # num_cores_nhw=64,
         )
         self.conv8 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["7"],
-            weights_dtype=ttnn.bfloat8_b,
-            # num_cores_nhw=64,
         )
         self.conv9 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["8"],
-            weights_dtype=ttnn.bfloat8_b,
-            # num_cores_nhw=64,
         )
         self.conv10 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["9"],
-            weights_dtype=ttnn.bfloat8_b,
-            # num_cores_nhw=64,
         )
 
         self.conv11 = Matmul(
@@ -467,20 +442,17 @@ class ttnn_yolov7:
             out_block_h=13,
             out_block_w=8,
             shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
-            math_approx_mode=False,
         )
         self.conv12 = Conv(
             [1, 80, 80, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["13"],
-            weights_dtype=ttnn.bfloat8_b,
             math_approx_mode=True,
         )
         self.conv13 = Conv(
             [1, 160, 160, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["14"],
-            weights_dtype=ttnn.bfloat8_b,
             math_approx_mode=True,
         )
         self.conv14 = Conv(
@@ -530,21 +502,14 @@ class ttnn_yolov7:
             out_subblock_w=2,
             out_block_h=25,
             out_block_w=2,
-            math_approx_mode=True,
         )
 
-        self.conv22 = Matmul(
+        self.conv22 = Conv(
             [1, 40, 40, 512],
+            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["26"],
-            memory_config_type="block_sharded",
-            matmul_type="2d",
-            in0_block_w=2,
-            out_subblock_h=7,
-            out_subblock_w=1,
-            out_block_h=7,
-            out_block_w=1,
-            math_approx_mode=True,
         )
+
         self.conv23 = Conv(
             [1, 80, 80, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
@@ -568,7 +533,6 @@ class ttnn_yolov7:
             out_subblock_w=1,
             out_block_h=7,
             out_block_w=1,
-            math_approx_mode=True,
         )
         self.conv26 = Matmul(
             [1, 40, 40, 512],
@@ -580,7 +544,6 @@ class ttnn_yolov7:
             out_subblock_w=1,
             out_block_h=7,
             out_block_w=1,
-            math_approx_mode=True,
         )
         self.conv27 = Conv(
             [1, 40, 40, 256],
@@ -617,7 +580,6 @@ class ttnn_yolov7:
             out_subblock_w=4,
             out_block_h=7,
             out_block_w=4,
-            math_approx_mode=True,
         )
 
         self.conv32 = Conv(
@@ -625,7 +587,6 @@ class ttnn_yolov7:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["39"],
             height_sharding=False,
-            weights_dtype=ttnn.bfloat8_b,
         )
         self.conv33 = Matmul(
             [1, 40, 40, 1024],
@@ -637,7 +598,6 @@ class ttnn_yolov7:
             out_subblock_w=2,
             out_block_h=7,
             out_block_w=2,
-            math_approx_mode=True,
         )
         self.conv34 = Conv(
             [1, 40, 40, 512],
@@ -647,7 +607,6 @@ class ttnn_yolov7:
             height_sharding=False,
             enable_act_double_buffer=True,
             num_cores_nhw=64,
-            enable_split_reader=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
@@ -941,18 +900,18 @@ class ttnn_yolov7:
         conv7 = self.conv7(self.device, conv6)
 
         conv8 = self.conv8(self.device, conv7)
-        ttnn.deallocate(conv7)
 
         conv9 = self.conv9(self.device, conv8)
 
         conv10 = self.conv10(self.device, conv9)
-        ttnn.deallocate(conv9)
 
         conv10 = sharded_concat([conv10, conv8, conv6, conv5])
 
         ttnn.deallocate(conv5)
         ttnn.deallocate(conv6)
+        ttnn.deallocate(conv7)
         ttnn.deallocate(conv8)
+        ttnn.deallocate(conv9)
 
         conv11 = self.conv11(self.device, conv10)
         ttnn.deallocate(conv10)
@@ -1009,6 +968,9 @@ class ttnn_yolov7:
         ttnn.deallocate(conv18)
         ttnn.deallocate(conv20)
 
+        mp2_out_shard_shape = (32, 512)
+        mp2_out_core_grid = get_core_grid_from_num_cores(50)
+
         mp2 = ttnn.max_pool2d(
             input_tensor=conv21,
             batch_size=1,
@@ -1020,6 +982,15 @@ class ttnn_yolov7:
             padding=[0, 0],
             dilation=[1, 1],
         )
+
+        mp2_out_mem = ttnn.create_sharded_memory_config_(
+            mp2_out_shard_shape,
+            core_grid=mp2_out_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        mp2 = ttnn.reshard(mp2, mp2_out_mem)
 
         conv22 = self.conv22(self.device, mp2)
 
@@ -1040,7 +1011,6 @@ class ttnn_yolov7:
         conv27 = self.conv27(self.device, conv26)
 
         conv28 = self.conv28(self.device, conv27)
-        ttnn.deallocate(conv27)
 
         conv29 = self.conv29(self.device, conv28)
 
@@ -1052,6 +1022,7 @@ class ttnn_yolov7:
         conv31 = self.conv31(self.device, conv30)
         ttnn.deallocate(conv25)
         ttnn.deallocate(conv26)
+        ttnn.deallocate(conv27)
         ttnn.deallocate(conv28)
 
         mp3 = ttnn.max_pool2d(
@@ -1280,7 +1251,6 @@ class ttnn_yolov7:
 
         conv71 = self.conv71(self.device, conv69)
 
-        conv71 = ttnn.sharded_to_interleaved(conv71, ttnn.L1_MEMORY_CONFIG)
         conv72 = self.conv72(self.device, conv71)
         ttnn.deallocate(mp5)
 

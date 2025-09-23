@@ -33,7 +33,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -263,7 +263,8 @@ static CBHandle create_circular_buffer(
 }
 
 // Creates a DRAM interleaved buffer configuration
-static DramBuffer create_dram_mesh_buffer(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t byte_size) {
+static DramBuffer create_dram_mesh_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, size_t byte_size) {
     distributed::DeviceLocalBufferConfig local_config = {
         .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config = {.size = byte_size};
@@ -272,7 +273,7 @@ static DramBuffer create_dram_mesh_buffer(std::shared_ptr<distributed::MeshDevic
 
 // Prepares the reader kernel by setting up the DRAM buffer, circular buffer, and kernel
 static DramBuffer prepare_reader(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload& workload,
     const DestPrintTestConfig& config) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -304,7 +305,7 @@ static DramBuffer prepare_reader(
 
 // Prepares the writer kernel by setting up the DRAM buffer, circular buffer, and kernel
 static DramBuffer prepare_writer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload& workload,
     const DestPrintTestConfig& config) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -368,7 +369,7 @@ static std::vector<uint32_t> generate_inputs(const DestPrintTestConfig& config) 
     }
 }
 
-static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFormat data_format) {
+static std::string generate_golden_output(const std::vector<uint32_t>& data, tt::DataFormat data_format) {
     std::stringstream ss;
     ss << std::fixed << std::setprecision(4);
 
@@ -380,7 +381,7 @@ static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFo
 // Performs DRAM --> Reader --> CB --> Datacopy --> CB --> Writer --> DRAM on a single core
 static bool reader_datacopy_writer(
     DPrintMeshFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DestPrintTestConfig& config) {
     // Create program
     distributed::MeshWorkload workload;
@@ -423,7 +424,7 @@ static bool reader_datacopy_writer(
 // Helper function to run tests with proper error handling
 static void run_test_with_config(
     DPrintMeshFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DestPrintTestConfig& config) {
     try {
         reader_datacopy_writer(fixture, mesh_device, config);
@@ -458,7 +459,7 @@ protected:
         }
 
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 run_test_with_config(fixture, mesh_device, config);
             },
             this->devices_[0]);

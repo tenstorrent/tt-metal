@@ -65,6 +65,7 @@ set_target_properties(
 
 file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
+file(GLOB_RECURSE LITE_FABRIC_INC lite_fabric/hw/inc/*)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
@@ -96,8 +97,19 @@ target_sources(
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
             fabric/fabric_edm_packet_header.hpp
             ${FABRIC_HW_INC}
+            ${LITE_FABRIC_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_relay.hpp
@@ -147,6 +159,7 @@ target_link_libraries(
         detail
         distributed
         fabric
+        lite_fabric
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
 )
@@ -196,6 +209,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
+add_subdirectory(lite_fabric)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()
