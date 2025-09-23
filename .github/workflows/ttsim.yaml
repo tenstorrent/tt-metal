@@ -122,36 +122,36 @@ jobs:
             fi
           done
 
-          ttnn-pytests:
-            runs-on: tt-ubuntu-2204-small-stable
-            name: "TTNN Pytests - ${{ matrix.arch }}"
-            strategy:
-              fail-fast: false
-              matrix:
-                include:
-                  - arch: wormhole_b0
-                    build_suffix: release_wh
-                    soc_desc: wormhole_b0_80_arch.yaml
-                  - arch: blackhole
-                    build_suffix: release_bh
-                    soc_desc: blackhole_140_arch.yaml
-            container:
-              image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
-              volumes:
-                - ${{ github.workspace }}/docker-job:/work
-              env:
-                ARCH_NAME: ${{ matrix.arch }}
-                TT_METAL_SIMULATOR_HOME: /work/sim
-                TT_METAL_SIMULATOR: /work/sim/libttsim.so
-                TT_METAL_SLOW_DISPATCH_MODE: 1
-                LOGURU_LEVEL: INFO
-                PYTHONPATH: /work
-                PYTHONHASHSEED: 0
-            defaults:
-              run:
-                shell: bash
-                working-directory: /work # https://github.com/actions/runner/issues/878
-            steps:
+ttnn-pytests:
+  runs-on: tt-ubuntu-2204-small-stable
+  name: "TTNN Pytests - ${{ matrix.arch }}"
+  strategy:
+    fail-fast: false
+    matrix:
+      include:
+        - arch: wormhole_b0
+          build_suffix: release_wh
+          soc_desc: wormhole_b0_80_arch.yaml
+        - arch: blackhole
+          build_suffix: release_bh
+          soc_desc: blackhole_140_arch.yaml
+  container:
+    image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+    volumes:
+      - ${{ github.workspace }}/docker-job:/work
+    env:
+      ARCH_NAME: ${{ matrix.arch }}
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      LOGURU_LEVEL: INFO
+      PYTHONPATH: /work
+      PYTHONHASHSEED: 0
+  defaults:
+    run:
+      shell: bash
+      working-directory: /work # https://github.com/actions/runner/issues/878
+  steps:
               - name: ⬇️  Setup Job
                 uses: tenstorrent/tt-metal/.github/actions/setup-job@main
                 timeout-minutes: 10
