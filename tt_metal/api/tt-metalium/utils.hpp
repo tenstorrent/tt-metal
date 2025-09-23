@@ -5,13 +5,11 @@
 #pragma once
 
 #include <type_traits>
-#include <hostdevcommon/common_values.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <umd/device/soc_descriptor.hpp>
 
 namespace tt::tt_metal::detail {
 

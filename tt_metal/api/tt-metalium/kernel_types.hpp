@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <cstdint>
 #include <map>
 #include <string_view>
