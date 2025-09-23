@@ -223,27 +223,28 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::cr
 
 tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+    log_debug(tt::LogOp, "DEBUG: create_program_at {} is called", coord);
     auto target_device_coord = coord;
     uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(input_tensors[0].tensor_topology(), this->cluster_axis);
 
     auto tensor_topology = input_tensors[0].tensor_topology();
+    log_debug(tt::LogOp, "Getting forward neighbor for {}", coord);
     std::optional<MeshCoordinate> forward_coord =
         ccl::get_physical_neighbor(tensor_topology, coord, 1, this->topology, this->cluster_axis);
 
+    log_debug(tt::LogOp, "Getting backward neighbor for {}", coord);
     std::optional<MeshCoordinate> backward_coord =
         ccl::get_physical_neighbor(tensor_topology, coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
+    log_debug(tt::LogOp, "Getting device index for {}", coord);
     uint32_t device_index = ccl::get_physical_linearized_index(tensor_topology, coord, this->cluster_axis);
+    log_debug(tt::LogOp, "Device index for {} is {}", coord, device_index);
 
     return reduce_scatter_minimal_async(
         input_tensors[0],
         output_tensors[0],
-        target_device,
         target_device_coord,
         forward_coord,
         backward_coord,

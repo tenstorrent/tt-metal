@@ -177,7 +177,6 @@ void append_fabric_mux_connection_rt_args(
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -201,7 +200,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
         program,
         input_tensor,
         intermediate_tensor,
-        sender_device,
         sender_device_coord,
         forward_coord,
         backward_coord,
@@ -225,7 +223,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -249,7 +246,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             program,
             input_tensor,
             intermediate_tensor,
-            sender_device,
             sender_device_coord,
             forward_coord,
             backward_coord,
@@ -273,7 +269,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             program,
             input_tensor,
             intermediate_tensor,
-            sender_device,
             sender_device_coord,
             forward_coord,
             backward_coord,
@@ -299,7 +294,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -793,7 +787,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
     MeshCoordinate& sender_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -1020,7 +1013,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // Kernel Runtime Args
     uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range_set, 0);
     const uint32_t l1_unreserved_base_address =
-        sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {

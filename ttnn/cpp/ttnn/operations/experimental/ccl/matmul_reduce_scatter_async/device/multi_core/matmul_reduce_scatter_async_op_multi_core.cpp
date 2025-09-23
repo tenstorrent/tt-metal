@@ -73,7 +73,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
             program,
             matmul_output_tensor,
             persistent_intermediate_tensor,
-            target_device,
             target_device_coord,
             forward_coord,
             backward_coord,
