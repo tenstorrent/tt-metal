@@ -31,34 +31,34 @@ namespace {
  */
 void test_deit_output_inference(const std::string& model_path) {
     const double pcc_threshold = 0.99;
-    
+
     // Initialize device
-    auto device = ttnn::MeshDevice::create_unit_mesh(0, 
+    auto device = ttnn::MeshDevice::create_unit_mesh(0,
                                                     /*l1_small_size=*/24576,
                                                     /*trace_region_size=*/6434816,
                                                     /*num_command_queues=*/2,
                                                     /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
-    
+
     // Setup base address
     int layer_index = 0;  // Default to layer 0
     std::string base_address = "model.encoder.layer." + std::to_string(layer_index) + ".output.";
-    
+
     // Load state dict and model
     std::unordered_map<std::string, torch::Tensor> state_dict;
     torch::jit::script::Module model;
-    
+
     try {
         // Load the traced model using torch::jit::load
         model = torch::jit::load(model_path);
         model.eval();
-        
+
         std::cout << "Successfully loaded model from: " << model_path << std::endl;
-        
+
         // Load model parameters to state_dict
         std::vector<std::string> required_params = {
             "dense.weight", "dense.bias"
         };
-        
+
         // Use named_parameters() method to get parameters directly
         auto named_params = model.named_parameters();
         std::unordered_map<std::string, at::Tensor> param_map;
@@ -72,14 +72,14 @@ void test_deit_output_inference(const std::string& model_path) {
                 state_dict[full_key] = param_map[full_key];
             }
         }
-        
+
         std::cout << "Loaded " << state_dict.size() << " output parameters for layer " << layer_index << std::endl;
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Failed to load model from " << model_path << ": " << e.what() << std::endl;
         throw;
     }
-    
+
     // Get the output module from the model
     torch::jit::script::Module output_module;
     try {
@@ -96,50 +96,50 @@ void test_deit_output_inference(const std::string& model_path) {
     // Create input tensors based on Python test
     // hidden_state_shape = [1, 198, 3072] - intermediate output
     torch::Tensor hidden_state = torch::randn({1, 198, 3072}, torch::kFloat32);
-    
+
     // input_tensor_shape = [1, 198, 768] - residual connection input
     torch::Tensor input_tensor = torch::randn({1, 198, 768}, torch::kFloat32);
-    
+
     // Call output module forward
     std::vector<torch::jit::IValue> inputs;
     inputs.push_back(hidden_state);
     inputs.push_back(input_tensor);
-    
+
     auto output = output_module.forward(inputs);
     auto torch_output = output.toTensor();
 
     // Create DeiT config
     DeiTConfig config;
-    
+
     // Setup TT model
     TtDeiTOutput tt_output(config, device, state_dict, base_address);
-    
+
     // Convert inputs to TT tensors
     auto tt_hidden_state = helper_funcs::torch_to_tt_tensor_tile(hidden_state, device);
     auto tt_input_tensor = helper_funcs::torch_to_tt_tensor_tile(input_tensor, device);
-    
+
     // Run TT model inference
     auto tt_out = tt_output.forward(tt_hidden_state, tt_input_tensor);
-    
+
     // Convert TT output back to torch tensor
     auto tt_out_host = ttnn::from_device(tt_out);
     auto tt_output_torch = helper_funcs::to_torch(tt_out_host);
-    
+
     // Compute PCC between PyTorch and TT outputs
     double pcc = helper_funcs::compute_pcc(torch_output, tt_output_torch);
-    
+
     // Log results
     std::cout << "PCC between PyTorch and TT outputs: " << pcc << std::endl;
     std::cout << "PyTorch output shape: " << torch_output.sizes() << std::endl;
     std::cout << "TT output shape: " << tt_output_torch.sizes() << std::endl;
-    
+
     // Check if PCC meets threshold
     if (pcc >= pcc_threshold) {
         std::cout << "PASSED: DeiT Output test with PCC = " << pcc << std::endl;
     } else {
         std::cout << "FAILED: PCC (" << pcc << ") is below threshold (" << pcc_threshold << ")" << std::endl;
     }
-    
+
     // Clean up device resources
     ttnn::distributed::close_mesh_device(device);
 }
@@ -148,23 +148,23 @@ void test_deit_output_inference(const std::string& model_path) {
 
 int main(int argc, char** argv) {
     std::cout << "Starting DeiT Output test..." << std::endl;
-    
+
     // Default model path (relative path)
     std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_encoder_model.pt";
-    
+
     // Check if model path is provided as command line argument
     if (argc > 1) {
         model_path = argv[1];
     }
-    
+
     std::cout << "Using model path: " << model_path << std::endl;
-    
+
     try {
         test_deit_output_inference(model_path);
     } catch (const std::exception& e) {
         std::cerr << "Error during test execution: " << e.what() << std::endl;
         return 1;
     }
-    
+
     return 0;
 }

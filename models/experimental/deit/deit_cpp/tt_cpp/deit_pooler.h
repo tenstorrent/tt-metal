@@ -15,7 +15,7 @@
 /**
  * TtDeiTPooler class - C++ implementation of DeiT pooler
  * Equivalent to the Python TtDeiTPooler class
- * 
+ *
  * This class performs pooling operation on the hidden states by:
  * 1. Taking the first token (CLS token) from the sequence
  * 2. Applying a linear transformation
@@ -25,7 +25,7 @@ class TtDeiTPooler {
 public:
     /**
      * Constructor for TtDeiTPooler
-     * 
+     *
      * @param config DeiT configuration containing model parameters
      * @param device Mesh device for tensor operations
      * @param state_dict State dictionary containing pre-trained weights
@@ -40,7 +40,7 @@ public:
 
     /**
      * Forward pass of the pooler
-     * 
+     *
      * @param hidden_states Input hidden states tensor [batch_size, seq_len, hidden_size]
      * @return Pooled output tensor [batch_size, hidden_size]
      */
@@ -50,7 +50,7 @@ private:
     // Configuration
     DeiTConfig config_;
     std::shared_ptr<ttnn::MeshDevice> device_;
-    
+
     // Linear layer weights and bias
     ttnn::Tensor dense_weight_;
     ttnn::Tensor dense_bias_;

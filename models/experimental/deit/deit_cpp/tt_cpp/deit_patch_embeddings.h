@@ -46,9 +46,9 @@ private:
     int num_channels_;
     int num_patches_;
     int hidden_size_;
-    
+
     // Model parameters - using libtorch Conv2d
     torch::nn::Conv2d projection_;
-    
+
 
 };

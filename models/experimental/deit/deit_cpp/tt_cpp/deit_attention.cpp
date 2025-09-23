@@ -31,13 +31,13 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTAttention::forward(
 ) {
     // Forward pass through self attention
     auto self_outputs = attention->forward(hidden_states, head_mask, output_attentions);
-    
+
     // Extract attention output (first element of the tuple)
     ttnn::Tensor attention_hidden_states = std::get<0>(self_outputs);
-    
+
     // Forward pass through output layer
     ttnn::Tensor attention_output = output->forward(attention_hidden_states, hidden_states);
-    
+
     // Prepare return value
     if (output_attentions && std::get<1>(self_outputs).has_value()) {
         // Return both attention output and attention weights

@@ -41,10 +41,10 @@ auto TtDeiTSelfOutput::forward(
     // Apply dense linear transformation using matmul and add
     auto output = helper_funcs::linear_transform(hidden_states, dense_weight, dense_bias);
     // output = ttnn::add(output, input_tensor);
-    
+
     // Note: In the original Python implementation, the residual connection
     // is handled in the DeiTLayer, not here. So we just return the dense output.
     // The input_tensor parameter is kept for compatibility but not used here.
-    
+
     return output;
 }

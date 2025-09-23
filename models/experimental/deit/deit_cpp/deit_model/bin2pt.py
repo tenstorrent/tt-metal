@@ -4,7 +4,12 @@
 
 import torch
 from PIL import Image
-from transformers import ViTFeatureExtractor, DeiTModel, DeiTForImageClassification, DeiTForImageClassificationWithTeacher
+from transformers import (
+    ViTFeatureExtractor,
+    DeiTModel,
+    DeiTForImageClassification,
+    DeiTForImageClassificationWithTeacher,
+)
 
 # Define model name (download from Hugging Face Hub online)
 model_name = "facebook/deit-base-distilled-patch16-224"
@@ -28,44 +33,48 @@ feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
 
 # 3. Create example input
 print("Creating example input...")
-dummy_image = Image.new('RGB', (224, 224), color='red')
+dummy_image = Image.new("RGB", (224, 224), color="red")
 inputs = feature_extractor(images=dummy_image, return_tensors="pt", size=224)
-example_input = inputs['pixel_values']
+example_input = inputs["pixel_values"]
 
 print(f"Input tensor shape: {example_input.shape}")
+
 
 # Create encoder wrapper to return last_hidden_state
 class EncoderWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
-    
+
     def forward(self, x):
         outputs = self.model(x)
         # Return last_hidden_state instead of the entire dictionary
         return outputs.last_hidden_state
+
 
 # Create classifier wrapper to return logits
 class ClassifierWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
-    
+
     def forward(self, x):
         outputs = self.model(x)
         # Return classification logits instead of the entire dictionary
         return outputs.logits
+
 
 # Create Teacher classifier wrapper to return three outputs
 class TeacherWrapper(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
-    
+
     def forward(self, x):
         outputs = self.model(x)
         # Return (logits, cls_logits, distillation_logits) instead of the entire dictionary
         return outputs.logits, outputs.cls_logits, outputs.distillation_logits
+
 
 # Use wrappers
 wrapped_encoder = EncoderWrapper(encoder_model)

@@ -92,7 +92,7 @@ class TtDeiTModel(nn.Module):
         )
         sequence_output = encoder_outputs[0]
         sequence_output = self.layernorm(sequence_output)
-        sequence_output = ttnn.to_layout(sequence_output,ttnn.TILE_LAYOUT)
+        sequence_output = ttnn.to_layout(sequence_output, ttnn.TILE_LAYOUT)
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         head_outputs = (sequence_output, pooled_output) if pooled_output is not None else (sequence_output,)

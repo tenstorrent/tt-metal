@@ -19,7 +19,7 @@ class TtDeiTModel;
 /**
  * TtDeiTForImageClassification - C++ implementation of DeiT for image classification
  * Equivalent to the Python TtDeiTForImageClassification class
- * 
+ *
  * This class wraps a DeiT model with a classification head for image classification tasks.
  * It includes:
  * - A DeiT backbone model (embeddings + encoder + layernorm + pooler)
@@ -29,7 +29,7 @@ class TtDeiTForImageClassification {
 public:
     /**
      * Constructor
-     * 
+     *
      * @param config DeiT configuration
      * @param state_dict PyTorch state dictionary containing model weights
      * @param base_address Base address for weight loading
@@ -49,7 +49,7 @@ public:
 
     /**
      * Forward pass for image classification
-     * 
+     *
      * @param pixel_values Input image tensor [batch_size, channels, height, width]
      * @param head_mask Optional attention head mask
      * @param output_attentions Whether to output attention weights
@@ -79,18 +79,18 @@ private:
     DeiTConfig config_;
     std::shared_ptr<ttnn::MeshDevice> device_;
     int num_labels_;
-    
+
     // DeiT backbone components (we'll need to include the actual DeiT model class)
     // For now, we'll use forward declarations and implement in the cpp file
     std::unique_ptr<TtDeiTModel> deit_model_;
-    
+
     // Classifier head weights
     ttnn::Tensor classifier_weight_;
     ttnn::Tensor classifier_bias_;
-    
+
     /**
      * Apply linear classification layer
-     * 
+     *
      * @param sequence_output Output from DeiT model [batch_size, seq_len, hidden_size]
      * @return Classification logits [batch_size, num_labels]
      */
@@ -99,7 +99,7 @@ private:
 
 /**
  * Factory function to create TtDeiTForImageClassification from pretrained model
- * 
+ *
  * @param device TTNN device
  * @param model_path Path to pretrained model (optional, uses default if empty)
  * @return Shared pointer to TtDeiTForImageClassification instance

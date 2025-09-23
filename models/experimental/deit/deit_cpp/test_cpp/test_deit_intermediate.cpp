@@ -31,34 +31,34 @@ namespace {
  */
 void test_deit_intermediate_inference(const std::string& model_path) {
     const double pcc_threshold = 0.99;
-    
+
     // Initialize device
-    auto device = ttnn::MeshDevice::create_unit_mesh(0, 
+    auto device = ttnn::MeshDevice::create_unit_mesh(0,
                                                     /*l1_small_size=*/24576,
                                                     /*trace_region_size=*/6434816,
                                                     /*num_command_queues=*/2,
                                                     /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
-    
+
     // Setup base address
     int layer_index = 0;  // Default to layer 0
     std::string base_address = "model.encoder.layer." + std::to_string(layer_index) + ".intermediate.";
-    
+
     // Load state dict and model
     std::unordered_map<std::string, torch::Tensor> state_dict;
     torch::jit::script::Module model;
-    
+
     try {
         // Load the traced model using torch::jit::load
         model = torch::jit::load(model_path);
         model.eval();
-        
+
         std::cout << "Successfully loaded model from: " << model_path << std::endl;
-        
+
         // Load model parameters to state_dict
         std::vector<std::string> required_params = {
             "dense.weight", "dense.bias"
         };
-        
+
         // Use named_parameters() method to get parameters directly
         auto named_params = model.named_parameters();
         std::unordered_map<std::string, at::Tensor> param_map;
@@ -74,14 +74,14 @@ void test_deit_intermediate_inference(const std::string& model_path) {
                 std::cerr << "Warning: Parameter not found: " << full_key << std::endl;
             }
         }
-        
+
         std::cout << "Loaded " << state_dict.size() << " intermediate parameters for layer " << layer_index << std::endl;
-        
+
     } catch (const std::exception& e) {
         std::cerr << "Failed to load model from " << model_path << ": " << e.what() << std::endl;
         throw;
     }
-    
+
     // Get the intermediate module from the model
     torch::jit::script::Module intermediate_module;
     try {
@@ -98,39 +98,39 @@ void test_deit_intermediate_inference(const std::string& model_path) {
     // Create input tensor: [batch_size=1, seq_len=198, hidden_size=768]
     // DeiT uses 196 patches + 1 CLS token + 1 distillation token = 198 tokens
     torch::Tensor input_tensor = torch::randn({1, 198, 768}, torch::kFloat32);
-    
+
     // Call intermediate module forward
     std::vector<torch::jit::IValue> inputs;
     inputs.push_back(input_tensor);
-    
+
     auto output = intermediate_module.forward(inputs);
     auto torch_output = output.toTensor();
-    
+
     // Create DeiT config
     DeiTConfig config;
-    
+
     // Setup TT model
     TtDeiTIntermediate tt_intermediate(config, device, state_dict, base_address);
-    
+
     // Convert input to TT tensor
     auto tt_input = helper_funcs::torch_to_tt_tensor_tile(input_tensor, device);
-    
+
     // Run TT model inference
     auto tt_out = tt_intermediate.forward(tt_input);
-    
+
     // Convert TT output back to torch tensor
     auto tt_out_host = ttnn::from_device(tt_out);
     auto tt_output_torch = helper_funcs::to_torch(tt_out_host);
     tt_output_torch = tt_output_torch.squeeze(0); // Remove batch dimension if needed
-    
+
     // Compute PCC between PyTorch and TT outputs
     double pcc = helper_funcs::compute_pcc(torch_output, tt_output_torch);
-    
+
     // Log results
     std::cout << "PCC between PyTorch and TT outputs: " << pcc << std::endl;
     std::cout << "PyTorch output shape: " << torch_output.sizes() << std::endl;
     std::cout << "TT output shape: " << tt_output_torch.sizes() << std::endl;
-    
+
     // Check if PCC meets threshold
     if (pcc >= pcc_threshold) {
         std::cout << "PASSED: DeiT Intermediate test with PCC = " << pcc << std::endl;
@@ -146,23 +146,23 @@ void test_deit_intermediate_inference(const std::string& model_path) {
 
 int main(int argc, char** argv) {
     std::cout << "Starting DeiT Intermediate test..." << std::endl;
-    
+
     // Default model path (relative path)
     std::string model_path = "models/experimental/deit/deit_cpp/deit_model/deit_encoder_model.pt";
-    
+
     // Check if model path is provided as command line argument
     if (argc > 1) {
         model_path = argv[1];
     }
-    
+
     std::cout << "Using model path: " << model_path << std::endl;
-    
+
     try {
         test_deit_intermediate_inference(model_path);
     } catch (const std::exception& e) {
         std::cerr << "Error during test execution: " << e.what() << std::endl;
         return 1;
     }
-    
+
     return 0;
 }
