@@ -853,7 +853,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     // If the input tensor is already sharded, or the conv_config has a specified shard layout, we don't need to do
     // anything.
 
-    log_info(
+    log_debug(
         tt::LogOp, "Auto sharding Input={}x{}, Output={}x{}, ", input_height, input_width, output_height, output_width);
     if ((input_memory_config.has_value() && input_memory_config.value().is_sharded()) ||
         conv_config.shard_layout.has_value()) {
