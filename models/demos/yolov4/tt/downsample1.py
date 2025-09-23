@@ -68,7 +68,6 @@ class Down1:
             create_conv2d_config(conv_args.c8, parameters.c8.weight, parameters.c8.bias),
             device=device,
         )
-        self.convs = [self.conv1, self.conv2, self.conv3, self.conv4, self.conv5, self.conv6, self.conv7, self.conv8]
 
     def __call__(self, input_tensor):
         output_tensor = self.conv1(input_tensor)
@@ -118,12 +117,3 @@ class Down1:
         output_tensor = self.conv8(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         return output_tensor
-
-    def __str__(self) -> str:
-        this_str = ""
-        index = 1
-        for conv in self.convs:
-            this_str += str(index) + " " + str(conv)
-            this_str += " \n"
-            index += 1
-        return this_str

@@ -106,12 +106,3 @@ class Down2:
         output_tensor = self.conv5(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         return output_tensor
-
-    def __str__(self) -> str:
-        this_str = ""
-        index = 1
-        for conv in self.convs:
-            this_str += str(index) + " " + str(conv)
-            this_str += " \n"
-            index += 1
-        return this_str
