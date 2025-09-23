@@ -204,6 +204,7 @@ class Attention(Module):
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
         qkv = self.to_qkv(
             spatial, core_grid=core_grid
@@ -304,16 +305,11 @@ class Attention(Module):
             prompt = ttnn.transformer.concatenate_heads(prompt)
 
         if self.to_out is not None:
-            spatial = all_gather(
-                spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-            )
-
+            spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
             spatial = self.to_out(spatial, core_grid=core_grid)
 
         if self.to_add_out is not None:
-            prompt = all_gather(
-                prompt, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-            )
+            prompt = self.ccl_manager.all_gather(prompt, dim=2, mesh_axis=tp_axis)
             prompt = self.to_add_out(prompt, core_grid=core_grid)
 
         return spatial, prompt
@@ -325,35 +321,3 @@ def _apply_rope(x: ttnn.Tensor, freqs_cis: tuple[ttnn.Tensor, ttnn.Tensor]) -> t
     sin = sin.reshape([1, 1, *sin.shape])
 
     return x * cos + ttnn.alt_complex_rotate90(x) * sin
-
-
-# TODO (Friedrich): move to CCLManager
-# TODO (Friedrich): change parallel_factor to mesh_axis and obtain factor from mesh shape?
-def all_gather(x: ttnn.Tensor, /, *, dim: int, parallel_factor: ParallelFactor, ccl_manager: CCLManager) -> ttnn.Tensor:
-    if parallel_factor.factor <= 1:
-        return x
-
-    # all_gather_async currently supports tensors of rank 4 only
-    rank = len(x.shape)
-    if rank < 4:
-        shape = [1] * (4 - rank) + list(x.shape)
-        x = ttnn.reshape(x, shape)
-        if dim >= 0:
-            dim += 4 - rank
-
-    x = ttnn.experimental.all_gather_async(
-        x,
-        persistent_output_buffer=ccl_manager.get_ag_ping_pong_buffer(x.shape, dim, parallel_factor.mesh_axis),
-        dim=dim,
-        multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(parallel_factor.mesh_axis),
-        num_links=ccl_manager.num_links,
-        topology=ccl_manager.topology,
-        cluster_axis=parallel_factor.mesh_axis,
-        **ccl_manager.get_ag_hyperparams(x.shape),
-    )
-
-    if rank < 4:
-        shape = list(x.shape)[4 - rank :]
-        x = ttnn.reshape(x, shape)
-
-    return x

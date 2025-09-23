@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
-from ...layers.attention import all_gather
 from ...layers.embeddings import PatchEmbed
 from ...layers.feedforward import FeedForward
 from ...layers.linear import ColParallelLinear, Linear
@@ -225,6 +224,8 @@ class MotifTransformer(Module):
         assert pooled.shape[0] == batch_size
         assert timestep.shape[0] == batch_size
 
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
         time_embed = self.time_text_embed(timestep=timestep, pooled_projection=pooled)
         time_embed = time_embed.reshape([batch_size, 1, time_embed.shape[-1]])
         time_embed_silu = ttnn.silu(time_embed)
@@ -257,12 +258,8 @@ class MotifTransformer(Module):
 
         spatial = spatial[:, self.register_tokens.shape[1] :]
 
-        # spatial = all_gather(
-        #     spatial, dim=1, parallel_factor=self.parallel_config.sequence_parallel, ccl_manager=self.ccl_manager
-        # )
-        spatial = all_gather(
-            spatial, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        # spatial = self.ccl_manager.all_gather(spatial, dim=1, mesh_axis=sp_axis)
+        spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
 
         # same as in SD3 but without norm and silu
         spatial_time = self.time_embed_out(time_embed)  # , core_grid=self.core_grid)

@@ -12,7 +12,7 @@ from ..layers.feedforward import ParallelFeedForward
 from ..layers.linear import ColParallelLinear
 from ..layers.normalization import DistributedLayerNorm
 from ..utils.substate import rename_substate
-from .attention import Attention, all_gather
+from .attention import Attention
 from .module import Module
 
 if TYPE_CHECKING:
@@ -197,6 +197,8 @@ class TransformerBlock(Module):
         assert len(spatial.shape) == 3
         assert len(prompt.shape) == 3
 
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -235,12 +237,8 @@ class TransformerBlock(Module):
         prompt_normed = prompt_normed * (1 + prompt_scale_attn) + prompt_shift_attn
 
         # Gather spatial, prompt before attention
-        spatial_normed = all_gather(
-            spatial_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
-        prompt_normed = all_gather(
-            prompt_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
+        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
 
         spatial_attn, prompt_attn = self.attn.forward(
             spatial=spatial_normed,
@@ -259,9 +257,7 @@ class TransformerBlock(Module):
         spatial_normed = ttnn.squeeze(self.norm2(ttnn.unsqueeze(spatial_plus_attn, 0)), 0)
         spatial_normed = spatial_normed * (1 + spatial_scale_ff) + spatial_shift_ff
 
-        spatial_normed = all_gather(
-            spatial_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
 
         spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0), core_grid=self.core_grid), 0)
         spatial_ff = spatial_ff * spatial_gate_ff
@@ -278,9 +274,7 @@ class TransformerBlock(Module):
         prompt_normed = ttnn.squeeze(self.norm2_context(ttnn.unsqueeze(prompt_plus_attn, 0)), 0)
         prompt_normed = prompt_normed * (1 + prompt_scale_ff) + prompt_shift_ff
 
-        prompt_normed = all_gather(
-            prompt_normed, dim=2, parallel_factor=self.parallel_config.tensor_parallel, ccl_manager=self.ccl_manager
-        )
+        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
 
         prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0), core_grid=self.core_grid), 0)
         prompt_ff = prompt_ff * prompt_gate_ff
