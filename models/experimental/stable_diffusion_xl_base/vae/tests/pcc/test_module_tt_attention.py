@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_attention import TtA
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
@@ -18,8 +18,15 @@ from models.utility_functions import torch_random
         ((1, 512, 128, 128), None),
     ],
 )
+@pytest.mark.parametrize(
+    "block_name",
+    [
+        "encoder",
+        "decoder",
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_attention(device, input_shape, encoder_shape, is_ci_env, reset_seeds):
+def test_vae_attention(device, input_shape, encoder_shape, block_name, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -30,8 +37,12 @@ def test_vae_attention(device, input_shape, encoder_shape, is_ci_env, reset_seed
     vae.eval()
     state_dict = vae.state_dict()
 
-    torch_attention = vae.decoder.mid_block.attentions[0]
-    tt_attention = TtAttention(device, state_dict, "decoder.mid_block.attentions.0", 512, 1, 512, None, 512)
+    if block_name == "encoder":
+        torch_attention = vae.encoder.mid_block.attentions[0]
+        tt_attention = TtAttention(device, state_dict, "encoder.mid_block.attentions.0", 512, 1, 512, None, 512)
+    else:
+        torch_attention = vae.decoder.mid_block.attentions[0]
+        tt_attention = TtAttention(device, state_dict, "decoder.mid_block.attentions.0", 512, 1, 512, None, 512)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (
         torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32) if encoder_shape is not None else None

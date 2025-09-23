@@ -4,18 +4,18 @@ allocation_policies:
       max_configs_per_core: 1
 
 Tests:
-  - name: "LinearMulticastLooped"
+  - name: "LinearLooped"
     fabric_setup:
       topology: Linear
 
     top_level_iterations: 10
 
     parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
-      ftype: mcast
       size: 32
       num_packets: 30000
 
@@ -23,18 +23,18 @@ Tests:
       - type: all_to_all
         iterations: 100
 
-  - name: "MeshLowLatencyMulticastLooped"
+  - name: "MeshLowLatencyLooped"
     fabric_setup:
       topology: Mesh
 
     top_level_iterations: 10
 
     parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
-      ftype: mcast
       size: 32
       num_packets: 30000
 
@@ -42,7 +42,7 @@ Tests:
       - type: all_to_all
         iterations: 100
 
-  - name: "MeshDynamicMulticastLooped"
+  - name: "MeshDynamicLooped"
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
@@ -50,11 +50,11 @@ Tests:
     top_level_iterations: 10
 
     parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
     defaults:
-      ftype: mcast
       size: 32
       num_packets: 30000
 

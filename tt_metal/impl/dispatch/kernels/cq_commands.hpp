@@ -273,7 +273,7 @@ struct CQDispatchWritePackedLargeSubCmd {
     uint8_t flags;
 } __attribute__((packed));
 
-constexpr inline __attribute__((always_inline)) uint32_t
+constexpr __attribute__((always_inline)) uint32_t
 get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds *
                                                    sizeof(CQDispatchWritePackedUnicastSubCmd) /

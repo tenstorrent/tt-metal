@@ -38,7 +38,7 @@
 #include "trace/trace_node.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
@@ -425,7 +425,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     if (program.impl().get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
         program.impl().allocate_kernel_bin_buf_on_device(device_);
-        if (program.impl().get_program_transfer_info().binary_data.size()) {
+        if (!program.impl().get_program_transfer_info().binary_data.empty()) {
             const BufferRegion buffer_region(0, program.impl().get_kernels_buffer(device_)->size());
             this->enqueue_write_buffer(
                 *program.impl().get_kernels_buffer(device_),
@@ -572,6 +572,7 @@ void HWCommandQueue::enqueue_record_event(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
     event_dispatch::issue_record_event_commands(
         device_,
+        device_->id(),
         event->event_id,
         id_,
         device_->num_hw_cqs(),
@@ -639,7 +640,7 @@ void HWCommandQueue::read_completion_queue() {
                         [&, this](ReadEventDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
-                                read_descriptor, mmio_device_id, channel, id_, manager_);
+                                read_descriptor, mmio_device_id, this->device_->id(), channel, id_, manager_);
                         },
                         [&, this](const ReadCoreDataDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadCoreData");

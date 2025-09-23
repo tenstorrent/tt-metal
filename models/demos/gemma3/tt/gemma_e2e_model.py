@@ -4,6 +4,7 @@
 from typing import List
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
@@ -132,6 +133,41 @@ class TtGemmaModel(Transformer):
 
         return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
 
-    def compute_vision_token(self, pixel_values):
-        vision_output = self.vision_model(pixel_values)
-        return vision_output
+    def compute_vision_token(self, pixel_values, batch_size=3):
+        """
+        Process vision tokens in batches to avoid OOM for large number of images.
+
+        Args:
+            pixel_values: torch.Tensor of shape (B, C, H, W) where B is number of images
+            batch_size: Number of images to process in one batch (max 3, or else device runs OOM)
+
+        Returns:
+            Combined vision output tensor
+        """
+
+        assert 0 < batch_size <= 3, "Device runs OOM with batch size > 3"
+
+        num_images = pixel_values.shape[0]
+        num_batches = (num_images + batch_size - 1) // batch_size
+        logger.info(f"Starting vision encoder for {num_images} image(s)")
+
+        if num_images <= batch_size:
+            # Process all images at once if within batch size limit
+            vision_output = self.vision_model(pixel_values)
+            logger.info(f"Vision encoder done (single batch)")
+            return vision_output
+
+        # Process images in batches
+        vision_outputs = []
+        for i in range(0, num_images, batch_size):
+            end_idx = min(i + batch_size, num_images)
+            batch_pixel_values = pixel_values[i:end_idx]
+
+            logger.info(f"Processing batch {i//batch_size + 1}/{num_batches}: images {i+1} to {end_idx}")
+            batch_vision_output = self.vision_model(batch_pixel_values)
+            vision_outputs.append(batch_vision_output)
+
+        # Combine all vision outputs along the batch dimension
+        combined_vision_output = ttnn.concat(vision_outputs, dim=1)
+        logger.info(f"Vision encoder done (batched processing)")
+        return combined_vision_output

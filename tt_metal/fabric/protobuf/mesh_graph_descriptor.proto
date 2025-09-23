@@ -227,13 +227,7 @@ message GraphRef {
     // Instance index of the referenced graph.
     int32 graph_id = 2;
 
-    oneof sub_ref {
-        // Optional nested reference to a sub-mesh (and optionally device) within this graph.
-        MeshRef mesh = 3;
-
-        // Optional nested reference to a sub-graph within this graph.
-        GraphRef graph = 4;
-    }
+    optional NodeRef sub_ref = 3;
 }
 
 message MeshRef {
@@ -298,7 +292,7 @@ message GraphTopology {
     // Required graph topology type.
     Type layout_type = 1;
 
-    // Channels for the graph topoogy
+    // Channels for the graph topology
     Channels channels = 2;
 }
 
@@ -370,4 +364,18 @@ message Connection {
 
     // Optional directionality; defaults to false (undirected) when absent.
     optional bool directional = 3;
+
+    // Optional direction assignment for the connection, this is needed for MGD 1.0 back compatibility but will be removed for MGD 2.0
+    repeated RoutingDirection routing_direction = 4;
+}
+
+// NOTE: This is for compatibility with MGD 1.0, this will be removed after migration to MGD 2.0
+enum RoutingDirection {
+    INVALID = 0;
+    N = 1;
+    E = 2;
+    S = 3;
+    W = 4;
+    C = 5;
+    NONE = 6;
 }

@@ -36,7 +36,7 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::MeshDevice> device) {
+WorkerMemMap generate_worker_mem_map(const std::shared_ptr<tt_metal::distributed::MeshDevice>& device) {
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
 

@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <limits.h>
-#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <string_view>
 #include <unordered_map>
 #include <enchantum/enchantum.hpp>
 
@@ -19,7 +17,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -29,7 +27,8 @@ static_assert(
 
 static_assert(
     DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET ==
-        std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max(),
+        std::numeric_limits<dev_msgs::go_msg_t::FieldTraits<false, dev_msgs::go_msg_t::Field::dispatch_message_offset>::
+                                element_type>::max(),
     "DISPATCH_MESSAGES_MAX_OFFSET does not match the maximum value of go_msg_t::dispatch_message_offset. "
     "Fix the value in dispatch_settings.hpp");
 

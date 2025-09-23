@@ -120,6 +120,7 @@ public:
 
     void track_program(Program* program, const IDevice* device);
 
+    // NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
     template <class... Args>
     void track_function_start(std::string_view function_name, Args&&... args) {
         if (processors.empty()) {
@@ -130,6 +131,7 @@ public:
             it->track_function_start(function_name, params);
         }
     }
+    // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
     // Track op that doesn't return anything
     void track_function_end() {
@@ -142,7 +144,7 @@ public:
     }
 
     template <class ReturnType>
-    void track_function_end(ReturnType&& output_tensors) {
+    void track_function_end(ReturnType& output_tensors) {
         if (processors.empty()) {
             return;
         }

@@ -15,11 +15,12 @@ from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
+import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, dequantize, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, dequantize, even_int_div, get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.utility_functions import comp_pcc
 
 
 def load_state_dict(model_path: Path, module_path: str):
@@ -306,9 +307,14 @@ def run_reference_with_attention(
             ),
             diagonal=1,
         )
-        input_cache = transformers_cache_from_torch(
-            tuple(torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16) for _ in range(num_layers))
-        )
+        if layer_idx is not None:
+            input_cache = transformers_cache_single_layer_from_torch(
+                torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16), layer_idx
+            )
+        else:
+            input_cache = transformers_cache_from_torch(
+                tuple(torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16) for _ in range(num_layers))
+            )
     else:
         assert mode == "decode"
         position_ids = position_ids_or_seq_lens.unsqueeze(1)
@@ -461,3 +467,18 @@ def assert_hidden_dim_pcc(
     logger.info(f"PCC: {pcc}")
     assert passing, f"Pearson Correlation Coefficient {pcc} is below required {pcc_required}."
     return pcc
+
+
+def get_test_weight_config(
+    ModuleClass: type[AbstractModule],
+    hf_config: PretrainedConfig,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+    cache_path: Path,
+    mesh_device: ttnn.Device,
+    force_recalculate: bool,
+) -> Any:
+    """Get the weight config, either by loading from cache or recalculating."""
+    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
+    return get_weight_config(
+        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
+    )

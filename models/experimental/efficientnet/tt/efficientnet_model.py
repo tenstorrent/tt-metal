@@ -12,7 +12,7 @@ import torchvision
 from functools import partial
 from loguru import logger
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
 )
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation

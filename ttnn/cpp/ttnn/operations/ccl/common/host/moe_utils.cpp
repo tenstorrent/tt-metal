@@ -87,7 +87,7 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
         process_axis(0);  // vertical (column)
     }
 
-    TT_FATAL(neighbors.size() > 0, "No neighbors found");
+    TT_FATAL(!neighbors.empty(), "No neighbors found");
     TT_FATAL(!(axis.has_value() && neighbors.size() > 2), "Along a single axis, there can only be 2 neighbors");
 
     if (!axis.has_value()) {
@@ -127,7 +127,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         return direction == tt::tt_fabric::RoutingDirection::W || direction == tt::tt_fabric::RoutingDirection::N;
     };
 
-    auto applicable_to_coord = [&](MeshCoordinate coord,
+    auto applicable_to_coord = [&](const MeshCoordinate& coord,
                                    size_t cluster_axis,
                                    size_t axis_size,
                                    tt::tt_fabric::RoutingDirection direction) -> bool {

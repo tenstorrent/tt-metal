@@ -12,7 +12,7 @@
 #include "data_types.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 

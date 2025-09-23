@@ -33,7 +33,7 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
@@ -41,7 +41,7 @@ namespace tt::tt_metal {
 using namespace tt;
 using namespace tt::test_utils;
 
-class SimulatorFixture : public DeviceFixture {
+class SimulatorFixture : public MeshDeviceFixture {
 protected:
     void SetUp() override {
         // Check if simulator mode is enabled
@@ -51,27 +51,27 @@ protected:
         }
 
         // Call parent SetUp to initialize devices
-        DeviceFixture::SetUp();
+        MeshDeviceFixture::SetUp();
     }
 };
 
 TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     // Verify that all devices are properly initialized in simulator mode
     for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device = devices_.at(id);
+        auto mesh_device = devices_.at(id);
 
         // Check that device is valid
-        EXPECT_NE(device, nullptr);
+        EXPECT_NE(mesh_device, nullptr);
 
         // Verify device is accessible
         EXPECT_NO_THROW({});
 
         // Test that we can access the allocator
-        EXPECT_NE(device->allocator(), nullptr);
+        EXPECT_NE(mesh_device->allocator(), nullptr);
 
         // Verify we can get base addresses
-        EXPECT_GT(device->allocator()->get_base_allocator_addr(HalMemType::L1), 0);
-        EXPECT_GT(device->allocator()->get_base_allocator_addr(HalMemType::DRAM), 0);
+        EXPECT_GT(mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1), 0);
+        EXPECT_GT(mesh_device->allocator()->get_base_allocator_addr(HalMemType::DRAM), 0);
     }
 }
 }  // namespace tt::tt_metal

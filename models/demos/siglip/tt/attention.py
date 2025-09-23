@@ -9,11 +9,11 @@ import torch
 from pydantic import BaseModel, Field
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.siglip.tests.common import flatten_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_out_subblock_w
 from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
-from models.utility_functions import nearest_32
 
 
 def find_largest_divisor(n, max_divisor=8):

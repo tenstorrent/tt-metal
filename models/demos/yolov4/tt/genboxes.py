@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.utility_functions import _nearest_32
+from models.common.utility_functions import _nearest_32
 
 
 def create_conv_bias_tensor(torch_tensor, N, K, pad=0):

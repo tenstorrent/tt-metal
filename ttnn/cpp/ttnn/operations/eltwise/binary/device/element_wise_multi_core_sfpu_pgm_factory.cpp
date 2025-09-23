@@ -24,7 +24,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::EltwiseFusedActivations;
     using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
@@ -34,8 +34,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     auto& output = tensor_return_value;
     const auto& op_type = operation_attributes.binary_op_type;
 
-    std::vector<UnaryWithParam> fused_activations =
-        operation_attributes.activations.value_or(std::vector<UnaryWithParam>{});
+    auto fused_activations = operation_attributes.activations.value_or(EltwiseFusedActivations{});
 
     Program program{};
 

@@ -8,9 +8,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
