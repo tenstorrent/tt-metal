@@ -312,6 +312,12 @@ class Generator:
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
 
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
+
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_logits_i = self.model[i].ttnn_decode_forward(
@@ -411,7 +417,7 @@ class Generator:
                 hasattr(self.model[i], "device_decode_sliding_mask")
                 and self.model[i].device_decode_sliding_mask is not None
             ):
-                self.model[i].update_attention_masks_pre_trace(current_pos[i])
+                self.model[i].update_attention_masks(current_pos[i])
 
         for i, trace_id in self.trace_ids_text.items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
