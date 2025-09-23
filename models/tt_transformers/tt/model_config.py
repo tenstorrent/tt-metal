@@ -2496,7 +2496,9 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer"
+            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in (
+                "phi-4",
+            )
             model_name_env = os.getenv("HF_MODEL")
             if hasattr(model.model, "rotary_emb_local"):
                 rotary_emb_local = model.model.rotary_emb_local
@@ -2519,6 +2521,9 @@ class ModelArgs:
                 "Qwen3Attention",
                 "MistralAttention",
                 "Gemma3Attention",
+            )
+            use_position_embeddings = self.base_model_name in (
+                "phi-4",
             )
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
