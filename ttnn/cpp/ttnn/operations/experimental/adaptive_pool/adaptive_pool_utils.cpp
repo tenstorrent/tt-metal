@@ -89,9 +89,9 @@ AdaptivePoolingParams calculate_adaptive_pool_params(
     uint32_t base_kernel_h = (input_h + output_h - 1) / output_h;  // ceil
     uint32_t base_kernel_w = (input_w + output_w - 1) / output_w;  // ceil
 
-    bool h_uniform = are_middle_kernels_uniform(h_kernels) && h_kernels.size() > 0 &&
+    bool h_uniform = are_middle_kernels_uniform(h_kernels) && !h_kernels.empty() &&
                      std::all_of(h_kernels.begin(), h_kernels.end(), [&](uint32_t k) { return k == h_kernels[0]; });
-    bool w_uniform = are_middle_kernels_uniform(w_kernels) && w_kernels.size() > 0 &&
+    bool w_uniform = are_middle_kernels_uniform(w_kernels) && !w_kernels.empty() &&
                      std::all_of(w_kernels.begin(), w_kernels.end(), [&](uint32_t k) { return k == w_kernels[0]; });
 
     if (h_uniform && w_uniform) {

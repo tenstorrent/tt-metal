@@ -237,7 +237,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 auto& candidate_paths = paths[dst_mesh_id_val];
                 std::uint32_t min_load = std::numeric_limits<std::uint32_t>::max();
                 std::uint32_t min_distance = std::numeric_limits<std::uint32_t>::max();
-                if (candidate_paths.size() == 0) {
+                if (candidate_paths.empty()) {
                     this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::NONE;
                     this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] =
                         std::numeric_limits<chip_id_t>::max();
@@ -248,7 +248,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 MeshId next_mesh_id = candidate_paths[0][1].second;
                 for (auto& path : candidate_paths) {
                     // First element is itself, second is next mesh
-                    TT_ASSERT(path.size() > 0, "Expecting at least two entries in path");
+                    TT_ASSERT(!path.empty(), "Expecting at least two entries in path");
                     chip_id_t candidate_exit_chip_id = path[1].first;  // first element is the first hop to target mesh
                     MeshId candidate_next_mesh_id = path[1].second;
                     if (candidate_exit_chip_id == src_chip_id) {
@@ -311,6 +311,12 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
             }
         }
     }
+}
+
+void RoutingTableGenerator::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
+    this->mesh_graph->load_intermesh_connections(intermesh_connections);
+    this->generate_intermesh_routing_table(
+        this->mesh_graph->get_inter_mesh_connectivity(), this->mesh_graph->get_intra_mesh_connectivity());
 }
 
 void RoutingTableGenerator::print_routing_tables() const {

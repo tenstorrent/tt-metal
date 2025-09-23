@@ -54,6 +54,9 @@ public:
     // Return the single exit node (chip in src_mesh_id) for a given src chip and dst mesh
     FabricNodeId get_exit_node_from_mesh_to_mesh(MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const;
 
+    // Load Inter-Mesh Connectivity into the Routing Table Generator
+    void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
+
     std::unique_ptr<MeshGraph> mesh_graph;
 
 private:
