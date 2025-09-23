@@ -48,7 +48,6 @@
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
-#include "kernel.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -401,14 +400,16 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<std::shared_ptr<Kernel>> Program::kernels() const { return internal_->kernels(); }
+std::vector<detail::KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
+    return program.impl().collect_kernel_meta(device);
+}
 
-std::vector<std::shared_ptr<Kernel>> ProgramImpl::kernels() const {
-    std::vector<std::shared_ptr<Kernel>> result;
+std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
+    std::vector<detail::KernelMeta> result;
     result.reserve(this->num_kernels());
     for (const auto& m : this->kernels_) {
         for (const auto& [id, kernel] : m) {
-            result.push_back(kernel);
+            result.push_back(kernel->meta(device));
         }
     }
     return result;
