@@ -201,11 +201,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    /* TODO[improve](vmelnykov): think about how to split work around kernels more efficiently
-     * For example, if we have 8 cores and 4 rows with two heads each (total 8 heads),
-     * we can use 4 cores to process 4 rows in parallel (one head per core) and then use the other 4 cores to process
-     * the same 4 rows in parallel (the second head per core) This way we can utilize all 8 cores and reduce the overall
-     * processing time
+    /* TODO[optimization](vmelnykov): #29160 - explore more efficient ways to split work across kernels.
+     * For example, instead of processing a single row per core, process multiple rows at once
+     * (e.g., q_chunks_size = 2). This allows better utilization of available cores, improves
+     * matmul efficiency (subblock 2x4), and amortizes init/acquire/release overhead across rows.
+     *
      */
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
