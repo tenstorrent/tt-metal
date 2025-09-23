@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -201,6 +201,7 @@ void MAIN {
                     if (first_c_block) {
                         max_reduce_with_indices_init();
                     }
+                    // dprint_tensix_dest_reg(data_dst_idx);
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
                     // update the current index column
@@ -214,8 +215,12 @@ void MAIN {
                             current_idx_col += right_inc;
                             copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         }
+
                         add_int_tile_init();
+                        uint64_t add_start_time = ckernel::read_wall_clock();
                         add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                        uint64_t add_end_time = ckernel::read_wall_clock();
+                        // UNPACK(DPRINT << "Add time (ns): " << (add_end_time - add_start_time) << ENDL());
                     }
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(

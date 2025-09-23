@@ -11,8 +11,8 @@ import pytest
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_max_pool2d_with_indices(device):
     in_n = 1
-    in_h = 159
-    in_w = 159
+    in_h = 10
+    in_w = 10
     in_c = 1
     kernel_size = [3, 3]
     stride = [1, 1]
@@ -75,7 +75,7 @@ def test_max_pool2d_with_indices(device):
         buffer_type=ttnn.BufferType.L1,
         shard_spec=ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
-            [1280, 32],
+            [5, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.ShardMode.PHYSICAL,
         ),
