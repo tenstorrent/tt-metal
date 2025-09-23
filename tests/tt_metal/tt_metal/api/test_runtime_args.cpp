@@ -258,7 +258,7 @@ void verify_results(
         }
 
         // Verify common RT Args (same for all cores) if they exist.
-        if (common_rt_args.size() > 0) {
+        if (!common_rt_args.empty()) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
                 device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
                 kernel->get_kernel_processor_class(),

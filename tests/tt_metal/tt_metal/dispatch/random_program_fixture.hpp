@@ -332,7 +332,7 @@ private:
             case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
         }
 
-        TT_FATAL(cores.size() > 0, "Generated cores cannot be empty");
+        TT_FATAL(!cores.empty(), "Generated cores cannot be empty");
         return cores;
     }
 

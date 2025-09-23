@@ -319,13 +319,13 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutesMGD2) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
 }
 
@@ -934,7 +934,7 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutesMGD2) {
     EXPECT_GT(valid_chans.size(), 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
-        EXPECT_EQ(path.size() > 0, true);
+        EXPECT_EQ(!path.empty(), true);
     }
 }
 

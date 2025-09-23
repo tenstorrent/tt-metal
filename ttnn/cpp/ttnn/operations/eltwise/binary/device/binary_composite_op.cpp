@@ -579,7 +579,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
 
 Tensor _polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(coeffs.size() != 0 && "coeffs should be 1 or more coefficients");
+    TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
     if (coeffs.size() == 1) {
         return ttnn::full_like(input_a, coeffs[0]);
     }
