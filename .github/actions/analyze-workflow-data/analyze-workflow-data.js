@@ -352,7 +352,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
               }
               const testLabel = extractTestLabelBackward(lines, i);
               const textBlock = block.join('\n');
-              const fileBase = path.basename(p).split('.')[0];
+              const fileBase = path.basename(p, path.extname(p));
               const finalLabel = testLabel ? `${fileBase}:\n${testLabel}` : `${fileBase}:\nno label found`;
               collected.push({ snippet: textBlock.length > 600 ? textBlock.slice(0, 600) + '…' : textBlock, label: finalLabel });
               foundInFile++;
