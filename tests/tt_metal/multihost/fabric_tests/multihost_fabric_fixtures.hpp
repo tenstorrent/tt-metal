@@ -20,11 +20,6 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set for Multi-Host Fabric Tests.");
 
-    const char* mesh_graph_desc_path = std::getenv("TT_MESH_GRAPH_DESC_PATH");
-
-    tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->serialize_to_file(
-        std::string(mesh_graph_desc_path) + "_cluster_descriptor_" + mesh_id_str + ".yaml");
-
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
         fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
     bool custom_mesh_graph_path_set =

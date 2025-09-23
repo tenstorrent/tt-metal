@@ -1084,18 +1084,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         for (auto src_mesh : local_mesh_binding_.mesh_ids) {
             for (std::size_t chip_id = 0; chip_id < intermesh_connectivity[*src_mesh].size(); chip_id++) {
                 for (const auto& [dst_mesh, edge] : intermesh_connectivity[*src_mesh][chip_id]) {
-                    auto src_physical_id =
-                        this->get_physical_chip_id_from_fabric_node_id(FabricNodeId(src_mesh, chip_id));
-                    const auto src_asic_id =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(src_physical_id);
-                    for (const auto& asic_neigbor :
-                         physical_system_descriptor_->get_asic_neighbors(tt::tt_metal::AsicID{src_asic_id})) {
+                    auto src_physical_id = this->get_physical_chip_id_from_fabric_node_id(FabricNodeId(src_mesh, chip_id));
+                    const auto src_asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(src_physical_id);
+                    for (const auto& asic_neigbor : physical_system_descriptor_->get_asic_neighbors(tt::tt_metal::AsicID{src_asic_id})) {
                         auto neighbor_fabric_node_id = this->get_fabric_node_id_from_asic_id(*asic_neigbor);
                         if (neighbor_fabric_node_id.mesh_id == dst_mesh) {
-                            for (const auto chan : physical_system_descriptor_->get_eth_connections(
-                                     tt::tt_metal::AsicID{src_asic_id}, asic_neigbor)) {
-                                this->assign_direction_to_fabric_eth_chan(
-                                    FabricNodeId(src_mesh, chip_id), chan.src_chan, edge.port_direction);
+                            for (const auto chan : physical_system_descriptor_->get_eth_connections(tt::tt_metal::AsicID{src_asic_id}, asic_neigbor)) {
+                                this->assign_direction_to_fabric_eth_chan(FabricNodeId(src_mesh, chip_id), chan.src_chan, edge.port_direction);
                             }
                         }
                     }
@@ -2043,10 +2038,6 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
         tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
 
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
-    std::string fabric_router_channels_on_chip_vec;
-    for (const auto& chan_id : fabric_router_channels_on_chip) {
-        fabric_router_channels_on_chip_vec += std::to_string(chan_id) + " ";
-    }
     if (fabric_router_channels_on_chip.contains(chan_id)) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
     } else {
@@ -2296,6 +2287,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
     }
 }
 
+
 // Intermesh Connectivity Generation Functions
 
 void ControlPlane::generate_intermesh_connectivity() {
@@ -2369,8 +2361,8 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
 
     TT_FATAL(
-        requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
-        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
+        !requested_intermesh_connections.empty() || !requested_intermesh_ports.empty(),
+        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections.");
 
     bool strict_binding = !requested_intermesh_ports.empty();
 
@@ -2653,10 +2645,6 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
 
     const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
-
-    TT_FATAL(
-        requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
-        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
 
     bool strict_binding = !requested_intermesh_ports.empty();
 
