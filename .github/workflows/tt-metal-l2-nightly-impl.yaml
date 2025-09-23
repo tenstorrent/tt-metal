@@ -86,7 +86,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=$(( (${{ inputs.timeout }} - 2) * 60 ))
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -134,7 +134,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly matmul tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=$(( (${{ inputs.timeout }} - 2) * 60 ))
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -182,7 +182,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly pool tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode" --timeout=$(( (${{ inputs.timeout }} - 2) * 60 ))
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -232,7 +232,7 @@ jobs:
       - name: ttnn nightly sdxl tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode"
+          pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=$(( (${{ inputs.timeout }} - 2) * 60 ))
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -328,7 +328,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: tt-sdpa-stress tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/nightly/single_card/sdpa
+        run: pytest tests/nightly/single_card/sdpa --timeout=$(( (${{ inputs.timeout }} - 2) * 60 ))
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -378,7 +378,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations -xv -m "not disable_fast_runtime_mode" -k panoptic
+        run: pytest tests/ttnn/nightly/unit_tests/operations -xv -m "not disable_fast_runtime_mode" -k panoptic --timeout=$(( (${{ inputs.timeout }} - 2) * 60 ))
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
