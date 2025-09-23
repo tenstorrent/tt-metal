@@ -52,11 +52,11 @@ class TtnnYoloV11:
         if channel_padding_needed > 0:
             # Use list format instead of tuples for ttnn.pad API compatibility
             x = ttnn.pad(input, [[0, 0], [0, channel_padding_needed], [0, 0], [0, 0]], value=0.0)
+            ttnn.deallocate(input)
         else:
             # No padding needed, use input as is
             x = input
             min_channels = c  # Update min_channels to actual channels
-        ttnn.deallocate(input)
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x = self.conv1(self.device, x)
