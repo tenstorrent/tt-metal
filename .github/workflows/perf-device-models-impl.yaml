@@ -311,7 +311,7 @@ jobs:
         with:
           device_perf_model_name: "yolov5x"
           commands: |
-            pytest models/experimental/yolov5x/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov5x/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 

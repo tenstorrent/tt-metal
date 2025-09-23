@@ -2,43 +2,45 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import pytest
+
+import ttnn
+from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov5x.tt.c3 import TtnnC3
+from models.demos.yolov5x.tt.model_preprocessing import create_yolov5x_input_tensors, create_yolov5x_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov5x.tt.common import TtnnBottleneck
-from models.experimental.yolov5x.tt.model_preprocessing import (
-    create_yolov5x_input_tensors,
-    create_yolov5x_model_parameters,
-)
-from models.experimental.yolov5x.common import load_torch_model, YOLOV5X_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
-    "index, fwd_input_shape , shortcut",
+    "index, fwd_input_shape , num_layers, shortcut",
     [
         (
             2,
-            (1, 80, 160, 160),
+            (1, 160, 160, 160),
+            4,
             True,
         ),
         (
             4,
-            (1, 160, 80, 80),
+            (1, 320, 80, 80),
+            8,
             True,
         ),
         (
             17,
-            (1, 160, 80, 80),
+            (1, 640, 80, 80),
+            4,
             False,
         ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE}], indirect=True)
-def test_yolov5x_Bottleneck(
+def test_yolov5x_C3(
     device,
     reset_seeds,
     index,
     fwd_input_shape,
+    num_layers,
     shortcut,
     model_location_generator,
 ):
@@ -54,13 +56,15 @@ def test_yolov5x_Bottleneck(
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
 
     torch_model = load_torch_model(model_location_generator)
-    torch_model = torch_model.model.model[index].m[0]
+    torch_model = torch_model.model.model[index]
 
     parameters = create_yolov5x_model_parameters(torch_model, torch_input, device=device)
 
     torch_model_output = torch_model(torch_input)[0]
 
-    ttnn_module = TtnnBottleneck(shortcut=shortcut, device=device, parameters=parameters.conv_args, conv_pt=parameters)
+    ttnn_module = TtnnC3(
+        shortcut=shortcut, n=num_layers, device=device, parameters=parameters.conv_args, conv_pt=parameters
+    )
     ttnn_output = ttnn_module(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
