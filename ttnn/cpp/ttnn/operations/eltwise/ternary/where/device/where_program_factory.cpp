@@ -746,8 +746,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";  // First tensor (CB0)
         reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";  // Second tensor (CB1)
 
-        // Add BCAST_LLK define
-        reader_defines["BCAST_LLK"] = "0";
     } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::ROW_BCAST) {
         // TST row broadcast
         reader_defines = make_dataflow_defines(
