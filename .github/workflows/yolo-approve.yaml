@@ -1,0 +1,83 @@
+name: YOLO Approve on PR Comment
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  yolo-approve:
+    if: >
+      ${{
+        github.repository_owner == 'tenstorrent' &&
+        github.event.issue.pull_request &&
+        (contains(github.event.comment.body, '/yolo') || contains(github.event.comment.body, '/YOLO')) &&
+        github.event.comment.user.type == 'User' &&
+        github.event.comment.user.login != 'blozano-tt' &&
+        github.actor != 'github-actions[bot]'
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Validate team and approve as blozano-tt
+        env:
+          WILDER_PAT: ${{ secrets.WILDER_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y jq; }
+
+          ORG="tenstorrent"
+          TEAM_SLUG="metalium-admins"
+          OWNER="${REPOSITORY%%/*}"
+          REPO="${REPOSITORY#*/}"
+
+          post_comment () {
+            local msg="$1"
+            jq -Rn --arg body "$msg" '{body:$body}' | \
+            curl -s -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+              -d @- >/dev/null
+          }
+
+          # 1) Check team membership via memberships endpoint (returns 200 + JSON)
+          memb_json="$(curl -s -H "Authorization: token ${WILDER_PAT}" \
+                              -H "Accept: application/vnd.github+json" \
+                              "https://api.github.com/orgs/${ORG}/teams/${TEAM_SLUG}/memberships/${COMMENTER}")"
+          memb_code="$(
+            curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: token ${WILDER_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/orgs/${ORG}/teams/${TEAM_SLUG}/memberships/${COMMENTER}"
+          )"
+
+          if [ "$memb_code" != "200" ]; then
+            post_comment "🚫 YOLO denied: @${COMMENTER} is not a member of ${ORG}/${TEAM_SLUG} (HTTP ${memb_code})."
+            exit 0
+          fi
+
+          state="$(printf '%s' "$memb_json" | jq -r '.state // empty')"
+          if [ "$state" != "active" ]; then
+            post_comment "🚫 YOLO denied: @${COMMENTER} membership in ${ORG}/${TEAM_SLUG} is not active (state=${state})."
+            exit 0
+          fi
+
+          # Approve PR as blozano-tt using PAT
+          approve_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Authorization: token ${WILDER_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            -d '{"event":"APPROVE","body":"YOLO approval via workflow on behalf of @blozano-tt"}')
+
+          case "$approve_code" in
+            2*) post_comment "✅ YOLO: Approved by @blozano-tt." ;;
+            422) post_comment "⚠️ YOLO attempted but failed: PR may be a draft or otherwise not reviewable (HTTP 422)." ;;
+            401|403) post_comment "⚠️ YOLO attempted but failed: insufficient token scope/permission (HTTP ${approve_code})." ;;
+            404) post_comment "⚠️ YOLO attempted but failed: PR not found or bot lacks access (HTTP 404)." ;;
+            *) post_comment "⚠️ YOLO attempted but approval API returned ${approve_code}." ;;
+          esac
