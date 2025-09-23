@@ -16,10 +16,12 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP a
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
+    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
+    dequantize_state_dict,
     get_model_config,
+    get_test_weight_config,
     load_state_dict,
-    pad_or_trim_seq_len,
     run_module_forward,
 )
 
@@ -66,29 +68,7 @@ def create_combined_state_dict(module_path: str, model_path: Path) -> dict:
             k_ = f"{base_path.split('.')[-1]}.{i}.{k}"
             state_dict[k_] = v
 
-    # Remove weight_scale_inv keys from state_dict as reference model does not have them
-    keys_to_remove = [k for k in state_dict.keys() if "weight_scale_inv" in k]
-    for k in keys_to_remove:
-        del state_dict[k]
-
     return state_dict
-
-
-def get_reference_model(weight_type, hf_config, module_path, model_path: Path) -> DeepseekV3MoEExperts:
-    reference_model = DeepseekV3MoEExperts(hf_config)
-    if weight_type == "real":
-        # Load the state_dict from the specified module path and model path
-        state_dict = create_combined_state_dict(module_path, model_path)
-        reference_model.load_state_dict(state_dict)
-    return reference_model
-
-
-def get_reference_input(batch_size, seq_len, hf_config):
-    return torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
-
-
-def get_reference_output(torch_input, reference_model):
-    return reference_model(torch_input)
 
 
 @pytest.mark.parametrize(
@@ -111,21 +91,36 @@ def test_forward_pass(
     seq_len: int,
     hf_config: Any,
     tmp_path: Path,
+    cache_path: Path,
     mesh_device: Any,
     weight_type: str,
     module_path: str,
     model_path: Path,
-    reset_seeds: Any,
+    force_recalculate_weight_config,
+    set_deterministic_env,
 ):
     batch_size = 1
 
-    reference_model = get_reference_model(weight_type, hf_config, module_path, model_path)
-    torch_input = get_reference_input(batch_size, seq_len, hf_config)
-    reference_output = get_reference_output(torch_input, reference_model)
+    reference_model = DeepseekV3MoEExperts(hf_config).eval()
+    torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
+    if weight_type == "random":
+        state_dict = add_inv_scale_to_state_dict(
+            reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
+        )
 
-    torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
+    else:
+        assert weight_type == "real"
+        state_dict = create_combined_state_dict(module_path, model_path)
+        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+    reference_output = reference_model(torch_input)
+
     # Generate module configs and state
-    weight_config = TTExperts.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        TTExperts, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+    )
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
     model_state = TTExperts.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)

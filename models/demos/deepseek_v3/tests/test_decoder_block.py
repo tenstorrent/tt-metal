@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     get_model_config,
+    get_test_weight_config,
     paged_cache_from_torch,
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
@@ -58,9 +59,11 @@ def test_forward_pass(
     batch_size,
     hf_config_short,
     tmp_path,
+    cache_path,
     mesh_device,
     model_path,
     ccl,
+    force_recalculate_weight_config,
     set_deterministic_env,
 ):
     # CCL workaround (remove once persistent buffers are added)
@@ -95,6 +98,10 @@ def test_forward_pass(
         )
         input_cache = torch_cache_from_transformers_single_layer(input_cache, reference_layer_idx)
         output_cache = torch_cache_from_transformers_single_layer(output_cache, reference_layer_idx)
+
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
     else:
         raise NotImplementedError("Loading reference IO is not implemented yet")
 
@@ -107,8 +114,13 @@ def test_forward_pass(
 
     # Set up model config
     is_padding_layer = [False] * mesh_device.shape[0]
-    weight_config = DecoderBlockClass.convert_weights(
-        hf_config_short, [state_dict] * mesh_device.shape[0], tmp_path, mesh_device
+    weight_config = get_test_weight_config(
+        DecoderBlockClass,
+        hf_config_short,
+        (state_dict,) * mesh_device.shape[0],
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
     )
     model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, is_padding_layer)
     model_state = DecoderBlockClass.create_state(

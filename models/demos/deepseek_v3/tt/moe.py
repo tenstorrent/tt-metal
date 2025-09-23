@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import cast
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -48,11 +47,16 @@ class MoE(SharedStateAddOn, AbstractModule):
         assert (
             len(state_dicts) == 1 and state_dicts[0] is not None
         ), f"MoE expects exactly one non-padding state dict, got {len(state_dicts)}"
-        (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
+        (state_dict,) = state_dicts
+        assert state_dict is not None
 
         return {
-            "moe_gate": MoEGate.convert_weights(hf_config, state_dict, output_path / "moe_gate", mesh_device, "gate."),
-            "moe_experts": MoEExperts.convert_weights(hf_config, state_dict, output_path / "moe_experts", mesh_device),
+            "moe_gate": MoEGate.convert_weights(
+                hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
+            ),
+            "moe_experts": MoEExperts.convert_weights(
+                hf_config, (state_dict,), output_path / "moe_experts", mesh_device
+            ),
         }
 
     @classmethod

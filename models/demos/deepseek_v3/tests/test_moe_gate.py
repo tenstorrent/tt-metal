@@ -16,13 +16,6 @@ from models.demos.deepseek_v3.utils.test_utils import get_model_config, run_modu
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
-@pytest.fixture
-def reference_model(hf_config, use_bitonic_sort):
-    """Get the actual DeepSeek MLP model using local implementation."""
-    torch.use_deterministic_algorithms(True)
-    return ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
-
-
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
@@ -39,22 +32,23 @@ def reference_model(hf_config, use_bitonic_sort):
 def test_forward_pass(
     mode,
     seq_len,
-    set_deterministic_env,
-    reference_model,
     hf_config,
     topk_fallback,
     use_bitonic_sort,
     tmp_path,
     mesh_device,
+    set_deterministic_env,
 ):
     """Test forward pass against reference model."""
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
+    torch.use_deterministic_algorithms(True)
+    reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoEGate.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
+    weight_config = MoEGate.convert_weights(hf_config, (hf_state_dict,), tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(

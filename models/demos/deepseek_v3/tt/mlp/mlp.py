@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, final
 
 import torch
-import ttnn.experimental
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -21,6 +20,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     OpConfigBase,
     ReduceScatterAsyncConfig,
     ReshardConfig,
+    SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -32,7 +32,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
     get_state_dicts,
-    save_and_get_path,
+    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -73,19 +73,17 @@ class MLP(AbstractModule):
     ) -> WeightConfig:
         return {
             models_name: {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": cls.convert_metaweight(
                     output_path / f"{models_name}.input_tensor_b",
-                    cls.convert_metaweight(
-                        get_state_dicts(
-                            state_dicts,
-                            f"{hf_name}.weight",
-                            shape=(out_features, in_features),
-                            dtype=cls.WEIGHT_TORCH_DTYPE,
-                        ),
-                        mesh_device,
-                        is_w2,
+                    get_state_dicts(
+                        state_dicts,
+                        f"{hf_name}.weight",
+                        shape=(out_features, in_features),
+                        dtype=cls.WEIGHT_TORCH_DTYPE,
                     ),
-                )
+                    mesh_device,
+                    is_w2,
+                ),
             }
             for hf_name, models_name, is_w2 in [
                 ("gate_proj", "w1", False),
@@ -99,10 +97,11 @@ class MLP(AbstractModule):
     @classmethod
     def convert_metaweight(
         cls,
+        path: Path,
         torch_metaweight_tensor: torch.Tensor,
         mesh_device: ttnn.Device,
         is_w2: bool,
-    ) -> ttnn.Tensor:
+    ) -> SavedWeight:
         """
         Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
 
@@ -130,19 +129,20 @@ class MLP(AbstractModule):
             mesh_sharded_dim = 2
 
         # Convert the torch tensor to a TTNN tensor
-        metaweight_tensor = ttnn.from_torch(
+        return shard_and_save(
+            path,
             torch_metaweight_tensor,
+            shard_dims=(0, mesh_sharded_dim),
+            mesh_device=mesh_device,
+            remove_dims=(True, False),
             dtype=cls.WEIGHT_DTYPE,
             layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
             memory_config=dram_sharded_weight_config(
                 per_device_in_features,
                 per_device_out_features,
                 mesh_device.dram_grid_size(),
             ),
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, mesh_sharded_dim)),
         )
-        return ttnn.squeeze(metaweight_tensor, 0)  # Remove the row shard dimension
 
     @final
     @classmethod

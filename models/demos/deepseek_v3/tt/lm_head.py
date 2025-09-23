@@ -29,7 +29,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     find_largest_divisor,
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
-    save_and_get_path,
+    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -85,24 +85,20 @@ class LMHead(AbstractModule):
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
 
-        weight = ttnn.from_torch(
-            weight_tensor,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=dram_sharded_weight_config(
-                hidden_dim,
-                even_int_div(vocab_size, mesh_device.get_num_devices()),
-                mesh_device.dram_grid_size(),
-            ),
-            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, -1),
-        )
-
         return {
             "linear": {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": shard_and_save(
                     output_path / "linear.input_tensor_b",
-                    weight,
+                    weight_tensor,
+                    shard_dims=(-1, -1),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat4_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=dram_sharded_weight_config(
+                        hidden_dim,
+                        even_int_div(vocab_size, mesh_device.get_num_devices()),
+                        mesh_device.dram_grid_size(),
+                    ),
                 )
             }
         }
@@ -271,8 +267,11 @@ class LMHead(AbstractModule):
 
         mesh_scatter(x, **cfg["mesh_scatter"])
 
+        print("running linear")
+        print(f"{x.shape=}, {cfg['linear']['input_tensor_b'].shape=}")
         output = ttnn.linear(x, **cfg["linear"])
-        ttnn.deallocate(x)
+
+        # Debug print removed
         assert output.memory_config() == cfg["output_memory_config"]
         return output
 
