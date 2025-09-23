@@ -15,10 +15,11 @@ from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
+import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, dequantize, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, dequantize, even_int_div, get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -466,3 +467,18 @@ def assert_hidden_dim_pcc(
     logger.info(f"PCC: {pcc}")
     assert passing, f"Pearson Correlation Coefficient {pcc} is below required {pcc_required}."
     return pcc
+
+
+def get_test_weight_config(
+    ModuleClass: type[AbstractModule],
+    hf_config: PretrainedConfig,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+    cache_path: Path,
+    mesh_device: ttnn.Device,
+    force_recalculate: bool,
+) -> Any:
+    """Get the weight config, either by loading from cache or recalculating."""
+    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
+    return get_weight_config(
+        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
+    )
