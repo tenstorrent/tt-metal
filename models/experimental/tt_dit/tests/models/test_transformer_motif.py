@@ -179,7 +179,7 @@ def test_transformer_motif(
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )[:batch_size]
+    )[:batch_size].permute(0, 3, 1, 2)
 
     assert_quality(torch_output, tt_output_torch, pcc=0.997, relative_rmse=8.1)
 
