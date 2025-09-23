@@ -102,7 +102,7 @@ private:
     std::unordered_map<size_t, std::shared_ptr<tt::tt_fabric::FabricMuxConfig>> mux_configs_;
 
     // Helper methods for initialization
-    void initialize_channel_mappings();
+    bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_mux_configs();
 };

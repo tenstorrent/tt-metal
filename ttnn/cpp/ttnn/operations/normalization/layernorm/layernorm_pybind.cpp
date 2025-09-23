@@ -15,10 +15,11 @@ void bind_normalization_layernorm_program_config(py::module& module) {
 
     py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig")
         .def(
-            py::init<bool, bool>(),
+            py::init<bool, bool, bool>(),
             py::kw_only(),
             py::arg("legacy_reduction").noconvert() = true,
-            py::arg("legacy_rsqrt").noconvert() = true)
+            py::arg("legacy_rsqrt").noconvert() = true,
+            py::arg("use_welford").noconvert() = false)
         .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
@@ -49,7 +50,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
                 \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
 
             Where:
-                - :math:`\mu` and :math:`\sigma^2` are the mean and variance of the input tensor, respectively
+                - :math:`\mu` is the mean of the input tensor. This is computed over the last dimension of the input tensor (W).
+                - :math:`\sigma^2` is the variance of the input tensor. This is computed over the last dimension of the input tensor (W) and is biased.
                 - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
                 - :math:`\epsilon` is a small constant
 
@@ -67,8 +69,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig)
 
-            Returns:
-                ttnn.Tensor: the output tensor.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Note:
             Supported data types and layouts by tensor:
@@ -113,15 +115,12 @@ void bind_normalization_layernorm_operation(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B (typically matches input; PRE_ALL_GATHER produces BF16)
                  - TILE
 
-            Rank: input rank must be >= 1. See Limitations for additional sharding/distributed constraints.
-
         Limitations:
-            - All input tensors must be on-device.
+            - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
-            - `weight`/`bias` tensors:
-              - If TILE: last padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
-              - If ROW_MAJOR: last padded dim must be TILE_WIDTH and the stick count must align with the input width.
+            - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
+            - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
             - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
 
         Example:

@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      gtest_filter:
+        required: false
+        default: "*"
+        type: string
+        description: "Filter for gtest"
 
 jobs:
   models:
@@ -32,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
@@ -75,7 +80,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U07ASPTGJTS # Denys
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

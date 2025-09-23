@@ -178,7 +178,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_weights_double_buffer,
     bool full_inner_dim,
     bool enable_activation_reuse,
-    bool config_tensors_in_dram) {
+    bool config_tensors_in_dram,
+    std::optional<bool> force_split_reader) {
     distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -237,7 +238,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const uint32_t num_cores_x = parallelization_config.grid_size.x;
     const uint32_t num_cores_y = parallelization_config.grid_size.y;
-    // log_info(tt::LogOp, "Conv2D parallelization grid size: {} x {}", num_cores_x, num_cores_y);
     const uint32_t total_num_cores = all_cores.num_cores();
 
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
@@ -295,7 +295,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const bool enable_split_reader =
         is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
-        is_split_reader_viable(
+        force_split_reader.value_or(is_split_reader_viable(
             act_block_h_ntiles,
             input_channels_padded,
             filter_w,
@@ -308,10 +308,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             act_block_w_ntiles,
             fp32_dest_acc_en,
             output.dtype(),
-            enable_activation_reuse);
+            enable_activation_reuse));
     log_debug(
         tt::LogOp,
-        "enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, act_block_h_ntiles: {}",
+        "force_split_reader: {}, enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, "
+        "act_block_h_ntiles: {}",
+        force_split_reader,
         enable_split_reader,
         per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
         per_core_out_matrix_height_ntiles,
@@ -638,7 +640,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
         .enable_weights_double_buffer = enable_weights_double_buffer,
-        .enable_activation_reuse = enable_activation_reuse};
+        .enable_activation_reuse = enable_activation_reuse,
+        .force_split_reader = force_split_reader};
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
         block_config,
@@ -1189,7 +1192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             std::vector<uint32_t> receiver_args;
             if (block_sharded) {
                 if (transpose_mcast) {
-                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.x};
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
                     CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
                     receiver_args = create_receiver_args(top_left_core_physical.x, right_core_physical.y);
                 } else {
