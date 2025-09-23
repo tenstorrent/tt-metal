@@ -146,6 +146,7 @@ jobs:
         TT_METAL_SLOW_DISPATCH_MODE: 1
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        PYTHONHASHSEED: 0
     defaults:
       run:
         shell: bash
