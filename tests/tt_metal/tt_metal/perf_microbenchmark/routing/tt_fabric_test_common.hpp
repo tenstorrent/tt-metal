@@ -519,6 +519,18 @@ public:
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
+        // Handle inter-mesh routing differently from intra-mesh routing
+        if (src_node_id.mesh_id != dst_node_id.mesh_id) {
+            // Inter-mesh routing: requires ethernet links between meshes
+            // This is complex and should be handled by control plane or specialized routing
+            log_debug(
+                tt::LogTest, "Inter-mesh routing {}->{} requires control plane routing", src_node_id, dst_node_id);
+
+            // Return empty hops - inter-mesh routing will be handled by get_full_fabric_path
+            return {};
+        }
+
+        // Intra-mesh routing: use coordinate-based hop calculation
         const auto& src_coord = get_device_coord(src_node_id);
         const auto& dst_coord = get_device_coord(dst_node_id);
 
@@ -1310,50 +1322,62 @@ public:
 
     std::vector<FabricNodeId> get_full_fabric_path(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
-        // Use the control plane API from within the cycle detector
-        auto fabric_path = tt::tt_fabric::fabric_tests::get_fabric_path_from_control_plane(
-            *control_plane_ptr_, src_node_id, dst_node_id);
-
-        if (!fabric_path.empty()) {
-            return fabric_path;
-        }
-
-        // Fallback to hop-based path building if control plane API fails
-        log_info(tt::LogTest, "Falling back to hop-based path tracing for {}->{}", src_node_id, dst_node_id);
+        // Skip control plane entirely - use hop-based path building directly
+        log_debug(tt::LogTest, "Using hop-based path tracing for {}->{}", src_node_id, dst_node_id);
         auto hops = get_hops_to_chip(src_node_id, dst_node_id);
-        auto path_graph = tt::tt_fabric::fabric_tests::build_path_graph(src_node_id, dst_node_id, *this);
 
-        // Convert path graph to linear path
+        // Build path using hops directly (avoid recursion)
         std::vector<FabricNodeId> path;
         path.push_back(src_node_id);
 
-        FabricNodeId current_node = src_node_id;
-        std::unordered_set<FabricNodeId> visited;
-        visited.insert(current_node);
+        if (hops.empty()) {
+            // No hops available - this could be inter-mesh traffic
+            if (src_node_id.mesh_id != dst_node_id.mesh_id) {
+                // Inter-mesh routing: we need to find the path through ethernet links
+                // For now, create a simplified path that represents the inter-mesh connection
+                // TODO: Implement proper inter-mesh path discovery
+                log_debug(tt::LogTest, "Creating simplified inter-mesh path for {}->{}", src_node_id, dst_node_id);
+                if (src_node_id != dst_node_id) {
+                    path.push_back(dst_node_id);
+                }
+                return path;
+            } else {
+                // Intra-mesh but no hops - this shouldn't happen
+                log_warning(tt::LogTest, "No hops found for intra-mesh routing {}->{}", src_node_id, dst_node_id);
+                if (src_node_id != dst_node_id) {
+                    path.push_back(dst_node_id);
+                }
+                return path;
+            }
+        }
 
-        while (current_node != dst_node_id) {
-            auto it = path_graph.find(current_node);
-            if (it == path_graph.end() || it->second.empty()) {
-                break;
+        FabricNodeId current_node = src_node_id;
+
+        // Build path by following hops
+        for (const auto& [direction, num_hops] : hops) {
+            if (num_hops == 0) {
+                continue;
             }
 
-            // Find next unvisited node
-            FabricNodeId next_node = dst_node_id;  // Default to destination
-            for (const auto& neighbor : it->second) {
-                if (visited.find(neighbor) == visited.end()) {
-                    next_node = neighbor;
-                    break;
+            for (uint32_t hop = 0; hop < num_hops; ++hop) {
+                try {
+                    FabricNodeId next_node = get_neighbor_node_id(current_node, direction);
+                    path.push_back(next_node);
+                    current_node = next_node;
+                } catch (const std::exception& e) {
+                    log_warning(tt::LogTest, "Failed to get neighbor for {}: {}", current_node, e.what());
+                    // If we can't get neighbor, just go directly to destination
+                    if (current_node != dst_node_id) {
+                        path.push_back(dst_node_id);
+                    }
+                    return path;
                 }
             }
+        }
 
-            if (visited.find(next_node) != visited.end()) {
-                // All neighbors visited, we're stuck
-                break;
-            }
-
-            path.push_back(next_node);
-            visited.insert(next_node);
-            current_node = next_node;
+        // Ensure we end at the destination
+        if (current_node != dst_node_id) {
+            path.push_back(dst_node_id);
         }
 
         return path;

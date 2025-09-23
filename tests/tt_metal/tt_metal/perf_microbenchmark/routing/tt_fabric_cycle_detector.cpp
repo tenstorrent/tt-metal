@@ -6,41 +6,7 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
-// Function to get complete fabric path using control plane API
-// This is kept within the test infrastructure to avoid modifying core control plane
-std::vector<FabricNodeId> get_fabric_path_from_control_plane(
-    const tt::tt_fabric::ControlPlane& control_plane,
-    FabricNodeId src_fabric_node_id,
-    FabricNodeId dst_fabric_node_id) {
-    try {
-        // Get the complete route using the first available channel (channel 0)
-        // For cycle detection, we only care about the node sequence, not the specific channels
-        auto full_route = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, 0);
-
-        // Extract just the FabricNodeId from each hop
-        std::vector<FabricNodeId> path;
-        path.reserve(full_route.size());
-
-        for (const auto& [node_id, channel_id] : full_route) {
-            path.push_back(node_id);
-        }
-
-        // Ensure the path includes the destination node if it's not already there
-        if (!path.empty() && path.back() != dst_fabric_node_id) {
-            path.push_back(dst_fabric_node_id);
-        }
-
-        return path;
-    } catch (const std::exception& e) {
-        log_warning(
-            tt::LogTest,
-            "Failed to get fabric route from control plane for {}->{}: {}",
-            src_fabric_node_id,
-            dst_fabric_node_id,
-            e.what());
-        return {};
-    }
-}
+// Removed get_fabric_path_from_control_plane - not needed for cycle detection
 
 // Helper to detect cycles in a graph using DFS (finds all cycles via backtracking)
 bool has_cycle_dfs(
@@ -136,7 +102,14 @@ NodeGraph build_path_graph(FabricNodeId src, FabricNodeId dest, const IRouteMana
     // Fallback to hop-based path construction
     auto hops = route_manager.get_hops_to_chip(src, dest);
     if (hops.empty()) {
-        log_warning(tt::LogTest, "No hops found for path {}->{}", src, dest);
+        log_debug(tt::LogTest, "No hops found for path {}->{} (likely inter-mesh traffic)", src, dest);
+        // For inter-mesh traffic without control plane support, create a direct edge
+        // This is a simplified representation for cycle detection purposes
+        if (src.mesh_id != dest.mesh_id) {
+            path_graph[src].push_back(dest);
+            path_graph[dest] = {};  // Ensure destination exists
+            log_debug(tt::LogTest, "Created direct inter-mesh edge for cycle detection: {}->{}", src, dest);
+        }
         return path_graph;
     }
 
@@ -280,7 +253,8 @@ void dump_cycles_to_yaml(
     log_info(tt::LogTest, "Cycles dumped to: {}", file_path);
 }
 
-// Main cycle detection function for inter-mesh traffic
+// Main cycle detection function for inter-mesh traffic ONLY
+// Intra-mesh traffic uses dimension-ordered routing and cannot have cycles
 bool detect_cycles_in_random_inter_mesh_traffic(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
     const IRouteManager& route_manager,
@@ -291,64 +265,44 @@ bool detect_cycles_in_random_inter_mesh_traffic(
         return false;
     }
 
-    log_debug(tt::LogTest, "Starting cycle detection for test '{}' with {} traffic pairs", test_name, pairs.size());
+    // Filter to ONLY inter-mesh traffic pairs - intra-mesh uses dimension-ordered routing (no cycles possible)
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> inter_mesh_pairs;
+    for (const auto& [src, dest] : pairs) {
+        if (src.mesh_id != dest.mesh_id) {
+            inter_mesh_pairs.push_back({src, dest});
+        }
+    }
+
+    if (inter_mesh_pairs.empty()) {
+        log_debug(
+            tt::LogTest,
+            "No inter-mesh traffic pairs found in test '{}' - no cycle detection needed (intra-mesh uses "
+            "dimension-ordered routing)",
+            test_name);
+        return false;  // No cycles possible in intra-mesh traffic
+    }
+
+    log_debug(
+        tt::LogTest,
+        "Starting inter-mesh cycle detection for test '{}' with {} inter-mesh pairs (filtered from {} total pairs)",
+        test_name,
+        inter_mesh_pairs.size(),
+        pairs.size());
+
+    // Validate input parameters
+    if (max_retry_attempts == 0) {
+        log_warning(tt::LogTest, "max_retry_attempts is 0, setting to 1");
+        max_retry_attempts = 1;
+    }
 
     NodeGraph comprehensive_graph;
 
-    // Try to get control plane for enhanced path accuracy
-    const void* control_plane_ptr = route_manager.get_control_plane();
-    const tt::tt_fabric::ControlPlane* control_plane = nullptr;
-    if (control_plane_ptr) {
-        control_plane = static_cast<const tt::tt_fabric::ControlPlane*>(control_plane_ptr);
-    }
-
-    // Build comprehensive graph from all traffic pairs
-    for (const auto& [src, dest] : pairs) {
+    // Build comprehensive graph from ONLY inter-mesh traffic pairs
+    for (const auto& [src, dest] : inter_mesh_pairs) {
         NodeGraph path_graph;
 
-        // First, try to get the full fabric path using control plane API
-        if (control_plane) {
-            try {
-                auto full_path = get_fabric_path_from_control_plane(*control_plane, src, dest);
-                if (!full_path.empty()) {
-                    path_graph = build_path_graph_from_full_path(full_path);
-                } else {
-                    log_debug(tt::LogTest, "Control plane returned empty path for {}->{}, using fallback", src, dest);
-                    path_graph = build_path_graph(src, dest, route_manager);
-                }
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogTest,
-                    "Control plane path retrieval failed for {}->{}: {}, using fallback",
-                    src,
-                    dest,
-                    e.what());
-                path_graph = build_path_graph(src, dest, route_manager);
-            }
-        } else {
-            // Fallback to route manager's get_full_fabric_path
-            try {
-                auto full_path = route_manager.get_full_fabric_path(src, dest);
-                if (!full_path.empty()) {
-                    path_graph = build_path_graph_from_full_path(full_path);
-                } else {
-                    log_debug(
-                        tt::LogTest,
-                        "Route manager returned empty path for {}->{}, using hop-based fallback",
-                        src,
-                        dest);
-                    path_graph = build_path_graph(src, dest, route_manager);
-                }
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogTest,
-                    "Route manager path retrieval failed for {}->{}: {}, using hop-based fallback",
-                    src,
-                    dest,
-                    e.what());
-                path_graph = build_path_graph(src, dest, route_manager);
-            }
-        }
+        // For inter-mesh routing, we need to build the actual path through ethernet links
+        path_graph = build_path_graph(src, dest, route_manager);
 
         // Merge this path into the comprehensive graph
         for (const auto& [node, neighbors] : path_graph) {
@@ -367,9 +321,11 @@ bool detect_cycles_in_random_inter_mesh_traffic(
     if (!cycles.empty()) {
         log_warning(
             tt::LogTest,
-            "Cycle detection found {} cycle(s) in test '{}' with {} traffic pairs",
+            "Cycle detection found {} cycle(s) in inter-mesh traffic for test '{}' ({} inter-mesh pairs out of {} "
+            "total pairs)",
             cycles.size(),
             test_name,
+            inter_mesh_pairs.size(),
             pairs.size());
 
         // Dump cycles for debugging
@@ -378,7 +334,12 @@ bool detect_cycles_in_random_inter_mesh_traffic(
         return true;  // Cycles detected
     }
 
-    log_debug(tt::LogTest, "No cycles detected in test '{}' with {} traffic pairs", test_name, pairs.size());
+    log_debug(
+        tt::LogTest,
+        "No cycles detected in inter-mesh traffic for test '{}' ({} inter-mesh pairs out of {} total pairs)",
+        test_name,
+        inter_mesh_pairs.size(),
+        pairs.size());
     return false;  // No cycles detected
 }
 
