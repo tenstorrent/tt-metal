@@ -85,7 +85,7 @@ void MetalContext::initialize(
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
                 force_reinit_ = false;
-                log_warning(
+                log_debug(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
                 teardown();
@@ -410,7 +410,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -420,7 +420,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();
@@ -451,7 +451,7 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    if (is_2d_fabric_config(fabric_config) && cluster_->get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (is_2d_fabric_config(fabric_config) && !cluster_->is_ubb_galaxy()) {
         const auto fabric_type = get_fabric_type(fabric_config);
         if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
             fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
@@ -552,7 +552,7 @@ void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
+    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
@@ -584,7 +584,7 @@ void MetalContext::initialize_control_plane() {
     std::string suffix = ".textproto";
 
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+    if (cluster_->is_ubb_galaxy()) {
         std::string mesh_graph_descriptor;
         switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
             case tt::tt_fabric::FabricType::TORUS_XY:
@@ -964,17 +964,12 @@ void MetalContext::initialize_firmware(
 dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     chip_id_t device_id, HalProgrammableCoreType programmable_core_type) const {
     const metal_SocDescriptor& soc_d = cluster_->get_soc_desc(device_id);
-    uint64_t pcie_chan_base_addr = cluster_->get_pcie_base_addr_from_device(device_id);
-    uint32_t num_host_channels = cluster_->get_num_host_channels(device_id);
-    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
-    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
-        pcie_chan_end_addr += cluster_->get_host_channel_size(device_id, pcie_chan);
-    }
+    // Use architecture-defined supported PCIe address bounds
     auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
     dev_msgs::core_info_msg_t buffer = factory.create<dev_msgs::core_info_msg_t>();
     auto core_info = buffer.view();
-    core_info.noc_pcie_addr_base() = pcie_chan_base_addr;
-    core_info.noc_pcie_addr_end() = pcie_chan_end_addr;
+    core_info.noc_pcie_addr_base() = hal_->get_pcie_addr_lower_bound();
+    core_info.noc_pcie_addr_end() = hal_->get_pcie_addr_upper_bound();
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));

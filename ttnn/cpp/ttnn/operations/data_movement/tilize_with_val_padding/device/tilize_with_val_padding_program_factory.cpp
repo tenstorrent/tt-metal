@@ -270,7 +270,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
 
@@ -380,7 +380,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 
     // compute
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
@@ -547,7 +547,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         }
     }
 
-    bool has_cliff = core_range_cliff.size() > 0;
+    bool has_cliff = !core_range_cliff.empty();
 
     uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
@@ -588,7 +588,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     /** compute
      */
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
