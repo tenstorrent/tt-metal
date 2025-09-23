@@ -40,7 +40,7 @@ jobs:
           {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: ${{ github.event.pull_request.head.repo.fork == true || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:

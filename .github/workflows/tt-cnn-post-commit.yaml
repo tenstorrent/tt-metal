@@ -74,7 +74,7 @@ jobs:
           - name: tt-cnn builder unit tests
             cmd: pytest models/tt_cnn/tests/test_builder.py
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: ${{ github.event.pull_request.head.repo.fork == true || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
