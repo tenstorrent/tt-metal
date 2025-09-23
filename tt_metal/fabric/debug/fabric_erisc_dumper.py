@@ -51,14 +51,14 @@ from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device
 
-from erisc_debug_constants import (
+from fabric_erisc_constants import (
     ERISC_REGISTERS,
     DEFAULT_ADDRESSES,
     FABRIC_STREAM_GROUPS,
     STREAM_REGISTER_MASK_BITS,
     STREAM_REGISTER_MASK,
 )
-from erisc_debug_utils import (
+from fabric_erisc_utils import (
     get_stream_reg_address,
     normalize_architecture,
     get_fabric_stream_addresses,
