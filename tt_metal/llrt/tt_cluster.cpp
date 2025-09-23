@@ -375,7 +375,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
 void Cluster::start_driver(tt_device_params &device_params) const {
     device_params.init_device = true;
 
-    TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
+    TT_FATAL(!this->sdesc_per_chip_.empty(), "Descriptor must be loaded. Try open_driver()");
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {

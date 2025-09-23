@@ -398,7 +398,7 @@ nlohmann::json GraphProcessor::end_capture() {
         // lets connect capture_start with capture_end
         // it means we didn't capture any functions
         TT_ASSERT(
-            current_op_id.size(),
+            !current_op_id.empty(),
             "Graph size cannot be 0. This means that track_function_end was called more than begin.");
         graph[0].connections.push_back(counter);
     }
