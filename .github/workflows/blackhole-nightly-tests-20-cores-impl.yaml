@@ -34,7 +34,8 @@ jobs:
             { model: panoptic-deeplab, owner_id: U08ARDXARPF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py }, # Ilija Anastasijevic
           ]
     name: Nightly 20 cores ${{ matrix.test-group.model }}
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
+    # CIv2 to get weights
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -43,12 +44,10 @@ jobs:
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
         TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
-        TT_GH_CI_INFRA: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
