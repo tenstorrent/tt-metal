@@ -253,7 +253,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        dispatch_cores.size() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
+        !dispatch_cores.empty() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
         "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
