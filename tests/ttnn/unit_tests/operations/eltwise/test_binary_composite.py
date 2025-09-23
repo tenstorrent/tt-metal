@@ -417,7 +417,7 @@ def test_shape_remainder(device, shapes):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_remainder_ttnn(input_shapes, scalar, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
@@ -481,7 +481,7 @@ def test_binary_fmod_decimal_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_fmod_ttnn(input_shapes, scalar, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
@@ -660,7 +660,7 @@ def test_binary_gti_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_gti_ttnn(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -701,7 +701,7 @@ def test_binary_gei_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_gei_ttnn(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -742,7 +742,7 @@ def test_binary_lti_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_lti_ttnn(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -783,7 +783,7 @@ def test_binary_lei_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_lei_ttnn(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -824,7 +824,7 @@ def test_binary_eqi_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_eqi_ttnn(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -865,7 +865,7 @@ def test_binary_nei_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    tuple(random.randint(-100, 100) + 0.5 for _ in range(5)),
 )
 def test_nei_ttnn(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -921,7 +921,7 @@ def test_binary_prelu_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {-0.25, -2.7, 0.45, 6.4},
+    (-0.25, -2.7, 0.45, 6.4),
 )
 def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
     in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
@@ -1032,7 +1032,7 @@ def test_binary_right_shift(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(0, 31)},
+    (random.randint(0, 31),),
 )
 def test_unary_left_shift(input_shapes, device, scalar):
     torch.manual_seed(213919)
@@ -1059,7 +1059,7 @@ def test_unary_left_shift(input_shapes, device, scalar):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(0, 31)},
+    (random.randint(0, 31),),
 )
 def test_unary_right_shift(input_shapes, device, scalar):
     torch.manual_seed(213919)

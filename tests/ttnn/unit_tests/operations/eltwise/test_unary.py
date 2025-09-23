@@ -1113,7 +1113,7 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
 )
 @pytest.mark.parametrize(
     "param",
-    {0.65, 7.7, 36.49, 58.6, 97.2},
+    (0.65, 7.7, 36.49, 58.6, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1146,7 +1146,7 @@ def test_unary_shrink_functions_ttnn(input_shapes, param, torch_dtype, ttnn_dtyp
 )
 @pytest.mark.parametrize(
     "param",
-    {7.0, 36.49, 58.5, 97.2},
+    (7.0, 36.49, 58.5, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1174,7 +1174,7 @@ def test_unary_shrink_functions_bf8b_ttnn(input_shapes, param, ttnn_function, de
 )
 @pytest.mark.parametrize(
     "param",
-    {0.45, 7.7, 197.2, 1e5},
+    (0.45, 7.7, 197.2, 1e5),
 )
 @pytest.mark.parametrize(
     "ttnn_function",

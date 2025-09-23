@@ -117,30 +117,34 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
 )
 @pytest.mark.parametrize(
     "ttnn_fn, activations",
-    {
-        *parameters(
-            binary_fns,
+    tuple(
+        sorted(
             {
-                no_activations,
-                square_lhs,
-                sin_rhs,
-                floor_lhs_ceil_rhs_cos_post,
-                exp_floor_lhs_exp_rhs,
-                log_lhs_sqrt_abs_post,
-            },
-        ),
-        *parameters({"add"}, {((), (), (op,)) for op in activation_fns.keys()}),
-    }.difference(
-        parameters({"eq", "ne"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
-        parameters({"logaddexp", "logaddexp2"}, {floor_lhs_ceil_rhs_cos_post}),
-        parameters({"ge", "lt", "le"}, {exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
-        parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu"}, {log_lhs_sqrt_abs_post}),
-        parameters({"divide"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
-        parameters({"sub"}, {log_post, log2_post, log10_post}),
-        parameters({"ldexp"}, {erfinv_post, tan_post, floor_post, ceil_post}),
-        parameters({"squared_difference"}, {erfinv_post, i0_post}),
-        parameters({"add"}, {tan_post, tanh_post}),
-        {("mul", log_lhs_sqrt_abs_post)},
+                *parameters(
+                    binary_fns,
+                    {
+                        no_activations,
+                        square_lhs,
+                        sin_rhs,
+                        floor_lhs_ceil_rhs_cos_post,
+                        exp_floor_lhs_exp_rhs,
+                        log_lhs_sqrt_abs_post,
+                    },
+                ),
+                *parameters({"add"}, {((), (), (op,)) for op in activation_fns.keys()}),
+            }.difference(
+                parameters({"eq", "ne"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+                parameters({"logaddexp", "logaddexp2"}, {floor_lhs_ceil_rhs_cos_post}),
+                parameters({"ge", "lt", "le"}, {exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+                parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu"}, {log_lhs_sqrt_abs_post}),
+                parameters({"divide"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
+                parameters({"sub"}, {log_post, log2_post, log10_post}),
+                parameters({"ldexp"}, {erfinv_post, tan_post, floor_post, ceil_post}),
+                parameters({"squared_difference"}, {erfinv_post, i0_post}),
+                parameters({"add"}, {tan_post, tanh_post}),
+                {("mul", log_lhs_sqrt_abs_post)},
+            )
+        )
     ),
 )
 def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
@@ -812,24 +816,28 @@ binary_inplace_fns = {
 )
 @pytest.mark.parametrize(
     "ttnn_fn, activations",
-    {
-        *parameters(
-            binary_inplace_fns,
+    tuple(
+        sorted(
             {
-                no_activations,
-                square_lhs,
-                sin_rhs,
-                floor_lhs_ceil_rhs_cos_post,
-                exp_floor_lhs_exp_rhs,
-                log_lhs_sqrt_abs_post,
-            },
+                *parameters(
+                    binary_inplace_fns,
+                    {
+                        no_activations,
+                        square_lhs,
+                        sin_rhs,
+                        floor_lhs_ceil_rhs_cos_post,
+                        exp_floor_lhs_exp_rhs,
+                        log_lhs_sqrt_abs_post,
+                    },
+                )
+            }.difference(
+                parameters({"eq_", "ne_"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs}),
+                parameters({"lt_", "ge_"}, {exp_floor_lhs_exp_rhs}),
+                parameters({"le_"}, {sin_rhs, log_lhs_sqrt_abs_post}),
+                parameters({"bias_gelu_"}, {log_lhs_sqrt_abs_post}),
+                parameters({"mul_"}, {log_lhs_sqrt_abs_post}),
+            )
         )
-    }.difference(
-        parameters({"eq_", "ne_"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs}),
-        parameters({"lt_", "ge_"}, {exp_floor_lhs_exp_rhs}),
-        parameters({"le_"}, {sin_rhs, log_lhs_sqrt_abs_post}),
-        parameters({"bias_gelu_"}, {log_lhs_sqrt_abs_post}),
-        parameters({"mul_"}, {log_lhs_sqrt_abs_post}),
     ),
 )
 def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, device):
