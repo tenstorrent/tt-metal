@@ -252,8 +252,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         next_l1_addr += 32;
     }
 
+    // constexpr size_t handshake_info_size = eth_channel_sync_size;
+    constexpr size_t handshake_info_size = 2 * eth_channel_sync_size;
     this->handshake_addr = next_l1_addr;
-    next_l1_addr += eth_channel_sync_size;
+    next_l1_addr += handshake_info_size;
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
@@ -291,6 +293,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
         this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
         next_l1_addr += num_words_consumed_per_counter;
+    } else {
+        size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
+        next_l1_addr = tt::align(next_l1_addr, field_size) + 4 * num_words_consumed_per_counter;
     }
 
     this->edm_channel_ack_addr = next_l1_addr;
@@ -356,7 +361,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    this->buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
+    this->buffer_region_start = tt::align(buffer_address, buffer_alignment);
     this->available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
 }
 

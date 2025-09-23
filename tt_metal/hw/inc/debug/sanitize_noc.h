@@ -236,6 +236,7 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
     debug_sanitize_noc_dir_t dir,
     debug_sanitize_noc_which_core_t which_core,
     uint16_t return_code) {
+    WAYPOINT("HaNg");
     if (return_code == DebugSanitizeNocOK) {
         return;
     }
@@ -261,6 +262,7 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
 
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
     // kernel is written. In this case we'll do an early exit back to base FW.
+    WAYPOINT("HANG");
     internal_::disable_erisc_app();
     // Subordinates do not have an erisc exit
 #if !(defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
@@ -269,6 +271,7 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
 #endif
 
     while (1) {
+        WAYPOINT("hang");
         ;
     }
 }
@@ -309,6 +312,7 @@ uint32_t debug_sanitize_noc_addr(
     debug_sanitize_noc_cast_t multicast,
     debug_sanitize_noc_dir_t dir,
     bool check_linked) {
+        WAYPOINT("chk3");
     // Different encoding of noc addr depending on multicast vs unitcast
     uint8_t x, y;
     if (multicast) {
@@ -352,14 +356,17 @@ uint32_t debug_sanitize_noc_addr(
                 return_code = DebugSanitizeNocMulticastInvalidRange;
             }
         }
+        WAYPOINT("chk4");
         debug_sanitize_post_noc_addr_and_hang(
             noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, return_code);
     }
 #if defined(WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION)
     if (check_linked) {
+        WAYPOINT("chk5");
         debug_sanitize_check_linked_transactions(noc_id, noc_addr, l1_addr, noc_len, multicast, dir);
     }
 #endif
+    WAYPOINT("chk6");
 
     // Check noc addr, we save the alignment requirement from the noc src/dst because the L1 address
     // needs to match alignment.
@@ -427,6 +434,7 @@ uint32_t debug_sanitize_noc_addr(
             DEBUG_SANITIZE_NOC_TARGET,
             DebugSanitizeNocTargetInvalidXY);
     }
+    WAYPOINT("chk7");
 
     return alignment_mask;
 }
@@ -440,20 +448,26 @@ void debug_sanitize_noc_and_worker_addr(
     debug_sanitize_noc_dir_t dir,
     bool check_linked) {
     // Check noc addr, get any extra alignment req for worker.
+    WAYPOINT("chk0");
     uint32_t alignment_mask = debug_sanitize_noc_addr(noc_id, noc_addr, worker_addr, len, multicast, dir, check_linked);
 
     // Check worker addr and alignment, but these don't apply to regs.
+    WAYPOINT("chk1");
     if (!debug_valid_reg_addr(worker_addr, len)) {
+        WAYPOINT("chk1");
         // Local addr needs to be checked depending on whether we're on eth or tensix.
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
         uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #endif
+        WAYPOINT("chk2");
         debug_sanitize_post_noc_addr_and_hang(
             noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
 
+        WAYPOINT("chk3");
         if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
+            WAYPOINT("chk4");
             debug_sanitize_post_noc_addr_and_hang(
                 noc_id,
                 noc_addr,
@@ -464,7 +478,9 @@ void debug_sanitize_noc_and_worker_addr(
                 DEBUG_SANITIZE_NOC_TARGET,
                 DebugSanitizeNocAlignment);
         }
+        WAYPOINT("chk5");
     }
+    WAYPOINT("chk6");
 }
 
 void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {

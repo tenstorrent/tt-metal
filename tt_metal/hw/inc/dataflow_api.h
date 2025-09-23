@@ -24,6 +24,7 @@
 #include "dev_msgs.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/ring_buffer.h"
 
 // clang-format off
 /**
@@ -2121,10 +2122,34 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NAWW");
+    WAYPOINT("NawW");
+    if (noc == 0) {
+        WAYPOINT("NAW0");
+    }
+    WAYPOINT("Naw1");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
+    WAYPOINT("Naw2");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    WAYPOINT("Naw3");
+    uint32_t count = 0;
+    bool dumped = false;
+    while (!noc_cmd_buf_ready(noc, cmd_buf)) {
+        if (count > 100000) {
+            if (!dumped) {
+                WATCHER_RING_BUFFER_PUSH(0x12345678);
+                WATCHER_RING_BUFFER_PUSH(src_local_l1_addr);
+                WATCHER_RING_BUFFER_PUSH(cmd_buf);
+                WATCHER_RING_BUFFER_PUSH(noc);
+                WATCHER_RING_BUFFER_PUSH(vc);
+                WATCHER_RING_BUFFER_PUSH(size);
+                WATCHER_RING_BUFFER_PUSH(uint32_t(dst_noc_addr && 0xFFFFFFFF));
+                WATCHER_RING_BUFFER_PUSH(uint32_t(dst_noc_addr >> 32));
+                dumped = true;
+            }
+        } else {
+            count++;
+        }
+    }
 
 #ifdef ARCH_BLACKHOLE
     // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
@@ -2179,7 +2204,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NAWW");
+    WAYPOINT("naww");
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
 
