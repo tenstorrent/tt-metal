@@ -595,9 +595,6 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
     }
 }
 
-template <typename T>
-using vector_aligned_32 = std::vector<T, tt::stl::aligned_allocator<T, 32>>;
-
 TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     if (!mesh_device_->get_memory_pinning_parameters().can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
@@ -630,7 +627,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
-    auto dst = std::make_shared<vector_aligned_32<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    auto dst = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
     uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
 
     // Create HostBuffer on top of dst
@@ -691,7 +688,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
 
     constexpr size_t unaligned_shift = 3;
     // Prepare destination buffer and pin the entire destination range for the target shard
-    auto dst = std::make_shared<vector_aligned_32<uint8_t>>(bytes_per_device + unaligned_shift, 0);
+    auto dst = std::make_shared<vector_aligned<uint8_t>>(bytes_per_device + unaligned_shift, 0);
     uint8_t* dst_ptr_unaligned = dst->data() + unaligned_shift;
 
     // Create HostBuffer on top of dst
