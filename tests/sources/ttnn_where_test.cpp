@@ -41,9 +41,9 @@ void run_kernel()
         UNPACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    volatile uint32_t* const buffer_condition = reinterpret_cast<volatile uint32_t*>(0x1a000);
-    volatile uint32_t* const buffer_true      = reinterpret_cast<volatile uint32_t*>(0x1b000);
-    volatile uint32_t* const buffer_false     = reinterpret_cast<volatile uint32_t*>(0x1c000);
+    constexpr uint32_t buffer_condition = 0x1a000;
+    constexpr uint32_t buffer_true      = 0x1b000;
+    constexpr uint32_t buffer_false     = 0x1c000;
 
     _llk_unpack_A_hw_configure_<is_fp32_dest_acc_en, StochRndType::None, disable_src_zero_flag>(UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, 0, 4);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_FMT, UNPACK_FMT);
@@ -143,7 +143,7 @@ void run_kernel()
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    volatile uint32_t* const buffer_Dest = reinterpret_cast<volatile uint32_t*>(0x1d000);
+    constexpr uint32_t buffer_Dest = 0x1d000;
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);

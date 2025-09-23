@@ -63,6 +63,13 @@ class BootMode(Enum):
     BRISC = "brisc"
     TRISC = "trisc"
     EXALENS = "exalens"
+    DEFAULT = "default"
+
+
+CHIP_DEFAULT_BOOT_MODES = {
+    ChipArchitecture.WORMHOLE: BootMode.BRISC,
+    ChipArchitecture.BLACKHOLE: BootMode.BRISC,
+}
 
 
 class RiscCore(IntEnum):
@@ -149,10 +156,19 @@ def exalens_device_setup(chip_arch, device_id=0, location="0,0"):
     debug_tensix.inject_instruction(ops.TT_OP_SEMINIT(1, 0, 4), 0)
 
 
-def run_elf_files(testname, device_id=0, location="0,0", boot_mode=BootMode.BRISC):
+def resolve_default_boot_mode(boot_mode: BootMode) -> BootMode:
+    if boot_mode == BootMode.DEFAULT:
+        CHIP_ARCH = get_chip_architecture()
+        boot_mode = CHIP_DEFAULT_BOOT_MODES[CHIP_ARCH]
+    return boot_mode
+
+
+def run_elf_files(testname, boot_mode, device_id=0, location="0,0"):
     CHIP_ARCH = get_chip_architecture()
     LLK_HOME = os.environ.get("LLK_HOME")
     BUILD_DIR = Path(LLK_HOME) / "tests" / "build" / CHIP_ARCH.value
+
+    boot_mode = resolve_default_boot_mode(boot_mode)
 
     # Perform soft reset
     perform_tensix_soft_reset(location)
@@ -409,10 +425,10 @@ def wait_until_tensix_complete(location, mailbox_addr, timeout=30, max_backoff=5
         if read_word_from_device(location, mailbox_addr.value) == KERNEL_COMPLETE:
             return
 
-        time.sleep(backoff)
-        # Disable exponential backoff if running on simulator
-        # The simulator sits idle due to no polling - If it is idle for too long, it gets stuck
+        # Disable any waiting if running on simulator
+        # this makes simulator tests run ever so slightly faster
         if not test_target.run_simulator:
+            time.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)  # Exponential backoff with a cap
 
     raise TimeoutError(

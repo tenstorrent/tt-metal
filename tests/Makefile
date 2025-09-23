@@ -57,6 +57,19 @@ OPTIONS_ALL	:= -g -O3 -mabi=ilp32 -std=$(CXX_VERSION) -ffast-math $(ARCH_CPU)
 OPTIONS_COMPILE := -fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Werror -Wunused-parameter \
 				   -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized \
 				   -Wmaybe-uninitialized -DTENSIX_FIRMWARE $(ARCH_DEFINE) -DCOMPILE_FOR_TRISC=
+
+BOOT_MODE := $(if $(bootmode),$(bootmode),brisc)
+ifeq ($(BOOT_MODE),brisc)
+	OPTIONS_COMPILE += -DLLK_BOOT_MODE_BRISC
+else ifeq ($(BOOT_MODE),trisc)
+	OPTIONS_COMPILE += -DLLK_BOOT_MODE_TRISC
+endif
+
+PROFILER_BUILD := $(if $(profiler_build),$(profiler_build),false)
+ifeq ($(PROFILER_BUILD),true)
+	OPTIONS_COMPILE += -DLLK_PROFILER
+endif
+
 OPTIONS_LINK	:= -fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace
 
 INCLUDES := -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc \
@@ -67,12 +80,10 @@ OPTIONS_COMPILE += $(INCLUDES)
 
 TO_UPPER = $(shell echo $(1) | tr '[:lower:]' '[:upper:]')
 
-TEST_KERNEL_FLAG := -DTEST_KERNEL
-
 # =========================
 # Targets
 # =========================
-.PHONY: all dis profiler clean
+.PHONY: all dis profiler clean always
 
 all: $(ELF_DIR)/unpack.elf \
 	 $(ELF_DIR)/math.elf \
@@ -120,25 +131,25 @@ $(SHARED_ELF_DIR)/brisc.elf: $(SHARED_OBJ_DIR)/tmu-crt0.o $(SHARED_OBJ_DIR)/bris
 .SECONDARY: $(SHARED_OBJ_DIR)/*.o $(OBJ_DIR)/*.o
 
 # build kernel_unpack.o, kernel_math.o, kernel_pack.o from ai_gen subdirectory
-$(OBJ_DIR)/kernel_%.o: sources/ai_gen/$(testname).cpp | $(OBJ_DIR) $(DEPS_DIR)
-	$(GXX) $(OPTIONS_ALL) $(TEST_KERNEL_FLAG) $(OPTIONS_COMPILE) \
+$(OBJ_DIR)/kernel_%.o: sources/ai_gen/$(testname).cpp $(BUILD_DIR)/params.stamp | $(OBJ_DIR) $(DEPS_DIR)
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(OBJ_DIR)/%.o,$(DEPS_DIR)/%.d,$@) \
 	-DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
 # build kernel_unpack.o, kernel_math.o, kernel_pack.o from main sources directory
-$(OBJ_DIR)/kernel_%.o: sources/$(testname).cpp | $(OBJ_DIR) $(DEPS_DIR)
-	$(GXX) $(OPTIONS_ALL) $(TEST_KERNEL_FLAG) $(OPTIONS_COMPILE) \
+$(OBJ_DIR)/kernel_%.o: sources/$(testname).cpp $(BUILD_DIR)/params.stamp | $(OBJ_DIR) $(DEPS_DIR)
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(OBJ_DIR)/%.o,$(DEPS_DIR)/%.d,$@) \
 	-DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
 # build main_unpack.o, main_math.o, main_pack.o
-$(SHARED_OBJ_DIR)/main_%.o: $(RISCV_SOURCES)/trisc.cpp | $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR)
+$(SHARED_OBJ_DIR)/main_%.o: $(RISCV_SOURCES)/trisc.cpp $(BUILD_DIR)/params.stamp | $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(SHARED_OBJ_DIR)/%.o,$(SHARED_DEPS_DIR)/%.d,$@) \
 	-DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
 # build brisc.o
-$(SHARED_OBJ_DIR)/brisc.o: $(RISCV_SOURCES)/brisc.cpp | $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR)
+$(SHARED_OBJ_DIR)/brisc.o: $(RISCV_SOURCES)/brisc.cpp $(BUILD_DIR)/params.stamp | $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(SHARED_OBJ_DIR)/%.o,$(SHARED_DEPS_DIR)/%.d,$@) \
 	-c -o $@ $<
@@ -148,6 +159,11 @@ $(SHARED_OBJ_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(SHARED_OBJ_DIR) $(SHARED
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(SHARED_OBJ_DIR)/%.o,$(SHARED_DEPS_DIR)/%.d,$@) \
 	-c -o $@ $<
+
+# create a stamp file to track build parameters
+PARAMS := BOOT_MODE=$(BOOT_MODE) PROFILER_BUILD=$(PROFILER_BUILD)
+$(BUILD_DIR)/params.stamp: always
+	echo "$(PARAMS)" | cmp -s - $@ || echo "$(PARAMS)" > $@
 
 # create folder structure for shared files
 $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR) $(SHARED_DIS_DIR) $(SHARED_ELF_DIR):
@@ -166,6 +182,9 @@ clean:
 	$(RMDIR) __pycache__
 	$(RMDIR) .pytest_cache
 	$(MAKE) -C python_tests clean
+
+# do nothing except cause dependent targets to always fire
+always:
 
 -include $(wildcard $(SHARED_DEPS_DIR)/*.d)
 -include $(wildcard $(DEPS_DIR)/*.d)

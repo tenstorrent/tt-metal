@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdarg>
 #include <type_traits>
 
 // Include auto-generated build configuration
@@ -15,9 +14,9 @@
 #include "perf.h"
 #include "tensix_types.h"
 
-inline uint32_t L1_ADDRESS(const volatile void* buffer)
+inline uint32_t L1_ADDRESS(uint32_t buffer_address)
 {
-    return (reinterpret_cast<uint32_t>(buffer) / 16) - 1;
+    return (buffer_address / 16) - 1;
 }
 
 namespace
@@ -48,7 +47,7 @@ constexpr auto& formats = formats_array[0];
 
 #else // Not inferring formats — all formats are pre-defined. Set format configuration directly.
 constexpr bool is_fp32_dest_acc_en = dest_acc_en_input; // dest_acc doesn't require adjustment; configuration is hard-coded
-constexpr FormatConfig formats     = FormatConfig(UNPACK_A_IN, UNPACK_A_OUT, MATH, PACK_IN, PACK_OUT);
+constexpr FormatConfig formats     = FormatConfig(UNPACK_A_IN, UNPACK_A_OUT, MATH_FORMAT, PACK_IN, PACK_OUT);
 #endif
 
 // Tile count validation - applies to all kernel variants (UNPACK, MATH, PACK)

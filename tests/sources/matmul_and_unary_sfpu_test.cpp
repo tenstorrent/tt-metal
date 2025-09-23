@@ -18,7 +18,7 @@ uint32_t math_sync_tile_dst_index = 0;
 uint32_t tile_size                = 128;
 const int iterations              = 32; // Dependent on size of input tensor (1024 currently). Could be made dynamic once tensor size becomes variable.
 
-volatile uint32_t* const buffer_A_tilized = reinterpret_cast<volatile uint32_t*>(0x17000);
+constexpr uint32_t buffer_A_tilized = 0x17000;
 
 #ifdef LLK_TRISC_UNPACK
 

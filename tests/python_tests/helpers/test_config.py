@@ -5,7 +5,12 @@ import os
 from enum import Enum
 from pathlib import Path
 
-from .device import BootMode, run_elf_files, wait_for_tensix_operations_finished
+from .device import (
+    BootMode,
+    resolve_default_boot_mode,
+    run_elf_files,
+    wait_for_tensix_operations_finished,
+)
 from .dimensions import validate_tile_dimensions
 from .format_arg_mapping import (
     FPU_BINARY_OPERATIONS,
@@ -51,11 +56,7 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
     return constants
 
 
-def generate_build_header(
-    test_config,
-    profiler_build: ProfilerBuild = ProfilerBuild.No,
-    boot_mode: BootMode = BootMode.BRISC,
-):
+def generate_build_header(test_config):
     """
     Generate the contents of a C++ header file (build.h) with all configuration defines.
 
@@ -72,8 +73,6 @@ def generate_build_header(
 
     Args:
         test_config (dict): Dictionary containing test configuration parameters.
-        profiler_build (ProfilerBuild, optional): Whether to enable profiler defines.
-        boot_mode (BootMode, optional): Which core / host performs initial device setup.
 
     Returns:
         str: The complete contents of the build.h header file as a string.
@@ -88,8 +87,8 @@ def generate_build_header(
         "",
         "#pragma once",
         "",
-        "#include <type_traits>",
         "",
+        '#include "operand.h"',
         '#include "llk_defs.h"',
         '#include "llk_sfpu_types.h"',
         '#include "perf.h"',
@@ -100,23 +99,9 @@ def generate_build_header(
         "constexpr std::uint32_t TILE_SIZE_CNT = 0x1000;",
     ]
 
-    # Profiler configuration
-    if profiler_build == ProfilerBuild.Yes:
-        header_content.append("#define LLK_PROFILER")
-
     loop_factor = test_config.get("loop_factor", 1)
 
-    if profiler_build == ProfilerBuild.No and loop_factor != 1:
-        raise ValueError(
-            "test_config['loop_factor'] should only be used when profiler is enabled"
-        )
-
     header_content.append(f"constexpr int LOOP_FACTOR = {loop_factor};")
-
-    if boot_mode == BootMode.BRISC:
-        header_content.append("#define LLK_BOOT_MODE_BRISC")
-    elif boot_mode == BootMode.TRISC:
-        header_content.append("#define LLK_BOOT_MODE_TRISC")
 
     # Dest accumulation
     dest_acc = test_config.get("dest_acc", DestAccumulation.No)
@@ -288,40 +273,10 @@ def generate_build_header(
     buffer_B_address = test_config.get("buffer_B_address", 0x1B000)
     result_buffer_address = test_config.get("result_buffer_address", 0x1C000)
 
-    buffer_A_array = []
-    buffer_B_array = []
-    buffer_res_array = []
-
-    if formats is not None:
-        for i in range(tile_cnt):
-            buffer_A_array.append(
-                buffer_A_address + i * format_tile_sizes[formats.input_format]
-            )
-            buffer_B_array.append(
-                buffer_B_address + i * format_tile_sizes[formats.input_format]
-            )
-            buffer_res_array.append(
-                result_buffer_address + i * format_tile_sizes[formats.output_format]
-            )
-
-    buffer_A_str = ", ".join(
-        f"reinterpret_cast<volatile uint32_t*>({hex(addr)})" for addr in buffer_A_array
-    )
-    buffer_B_str = ", ".join(
-        f"reinterpret_cast<volatile uint32_t*>({hex(addr)})" for addr in buffer_B_array
-    )
-    buffer_res_str = ", ".join(
-        f"reinterpret_cast<volatile uint32_t*>({hex(addr)})"
-        for addr in buffer_res_array
-    )
     header_content.append(
-        "#if defined(LLK_TRISC_UNPACK) && defined(TEST_KERNEL)\n"
-        "volatile uint32_t* buffer_A[TILE_CNT] = {" + buffer_A_str + "}; \n"
-        "volatile uint32_t* buffer_B[TILE_CNT] = {" + buffer_B_str + "}; \n"
-        "#endif\n"
-        "#if defined(LLK_TRISC_PACK) && defined(TEST_KERNEL)\n"
-        "volatile uint32_t* buffer_Res[TILE_CNT] = {" + buffer_res_str + "}; \n"
-        "#endif\n"
+        f"constexpr Operand buffer_A({hex(buffer_A_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});\n"
+        f"constexpr Operand buffer_B({hex(buffer_B_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});\n"
+        f"constexpr Operand buffer_Res({hex(result_buffer_address)}, {format_tile_sizes[formats.output_format if formats != None else DataFormat.Float16_b]});\n"
     )
 
     input_A_dimensions = test_config.get("input_A_dimensions", [32, 32])
@@ -341,12 +296,10 @@ def generate_build_header(
 
     header_content.extend(
         [
-            "#if defined(TEST_KERNEL)",
             f"constexpr uint32_t FULL_RT_DIM = {full_rt_dim};",
             f"constexpr uint32_t FULL_CT_DIM = {full_ct_dim};",
             f"constexpr uint32_t BLOCK_CT_DIM = {block_ct_dim};",
             f"constexpr uint32_t BLOCK_RT_DIM = {block_rt_dim};",
-            "#endif",
         ]
     )
 
@@ -370,25 +323,23 @@ def generate_build_header(
     return "\n".join(header_content)
 
 
-def write_build_header(
-    test_config,
-    profiler_build: ProfilerBuild = ProfilerBuild.No,
-    boot_mode: BootMode = BootMode.BRISC,
-):
-    header_content = generate_build_header(
-        test_config, profiler_build, boot_mode=boot_mode
-    )
+def write_build_header(test_config):
+    header_content = generate_build_header(test_config)
     with open("../helpers/include/build.h", "w") as f:
         f.write(header_content)
 
 
 def generate_make_command(
     test_config,
-    profiler_build: ProfilerBuild = ProfilerBuild.No,
+    boot_mode: BootMode,
+    profiler_build: ProfilerBuild,
 ):
     """Generate make command"""
+
+    boot_mode = resolve_default_boot_mode(boot_mode)
+
     # Simplified make command - only basic build parameters
-    make_cmd = f"make -j 6 --silent testname={test_config.get('testname')} all "
+    make_cmd = f"make -j 6 --silent testname={test_config.get('testname')} bootmode={boot_mode.value} profiler_build={profiler_build.value} all "
 
     if profiler_build == ProfilerBuild.Yes:
         make_cmd += "profiler "
@@ -398,8 +349,8 @@ def generate_make_command(
 
 def build_test(
     test_config,
-    profiler_build: ProfilerBuild = ProfilerBuild.No,
-    boot_mode: BootMode = BootMode.BRISC,
+    boot_mode: BootMode,
+    profiler_build: ProfilerBuild,
 ):
     """Only builds the files required to run a test"""
 
@@ -409,20 +360,20 @@ def build_test(
 
     TESTS_DIR = str((Path(root) / "tests").absolute())
 
-    write_build_header(test_config, profiler_build=profiler_build, boot_mode=boot_mode)
-    make_cmd = generate_make_command(test_config, profiler_build=profiler_build)
+    write_build_header(test_config)
+    make_cmd = generate_make_command(test_config, boot_mode, profiler_build)
     run_shell_command(make_cmd, cwd=TESTS_DIR)
 
 
 def run_test(
     test_config,
+    boot_mode: BootMode = BootMode.DEFAULT,  # global override boot mode here
     profiler_build: ProfilerBuild = ProfilerBuild.No,
-    boot_mode: BootMode = BootMode.BRISC,  # change default boot mode here
 ):
     """Run the test with the given configuration"""
 
-    build_test(test_config, profiler_build=profiler_build, boot_mode=boot_mode)
+    build_test(test_config, boot_mode, profiler_build)
 
     # run test
-    run_elf_files(test_config["testname"], boot_mode=boot_mode)
+    run_elf_files(test_config["testname"], boot_mode)
     wait_for_tensix_operations_finished()

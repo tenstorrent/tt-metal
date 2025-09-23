@@ -4,10 +4,11 @@
 
 #pragma once
 
+#if defined(LLK_PROFILER)
+
 #include <cstdint>
 #include <cstring>
 
-#include "build.h"
 #include "ckernel.h"
 
 // Logic to convert zone name -> 16bit numeric id
@@ -42,8 +43,6 @@ constexpr std::uint16_t hashString16(const char (&s)[N])
     __attribute__((section(".profiler_meta"), used))        \
     static const char _profiler_meta_##__COUNTER__[] = full_marker;
 // clang-format on
-
-#if defined(LLK_PROFILER)
 
 namespace llk_profiler
 {

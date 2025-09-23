@@ -13,8 +13,6 @@ from typing import Optional
 from ttexalens.tt_exalens_lib import read_words_from_device
 
 from helpers.chip_architecture import get_chip_architecture
-from helpers.test_config import ProfilerBuild, generate_make_command
-from helpers.utils import run_shell_command
 
 
 @dataclass
@@ -23,11 +21,6 @@ class ProfilerFullMarker:
     file: str
     line: int
     id: int
-
-
-def build_with_profiler(test_config):
-    make_cmd = generate_make_command(test_config, ProfilerBuild.Yes)
-    run_shell_command(f"cd .. && {make_cmd}")
 
 
 @dataclass
