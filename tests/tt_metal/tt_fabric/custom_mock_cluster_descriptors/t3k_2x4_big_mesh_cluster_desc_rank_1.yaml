@@ -5,30 +5,30 @@ arch:
   3: wormhole_b0
 chips:
   0:
-    - 1
-    - 1
+    - 2
+    - 0
     - 0
     - 0
   1:
+    - 2
     - 1
-    - 0
     - 0
     - 0
   2:
+    - 3
     - 0
-    - 1
     - 0
     - 0
   3:
-    - 0
-    - 0
+    - 3
+    - 1
     - 0
     - 0
 chip_unique_ids:
-  3: 14521819281
-  2: 14521819277
-  1: 10226851985
-  0: 10226851981
+  3: 14521819628
+  2: 14521819436
+  1: 10226852332
+  0: 10226852140
 ethernet_connections:
   -
     - chip: 0
@@ -72,39 +72,39 @@ ethernet_connections:
       chan: 7
 ethernet_connections_to_remote_devices:
   -
-    - chip: 0
-      chan: 0
-    - remote_chip_id: 10226852332
-      chan: 0
-  -
-    - chip: 0
+    - chip: 1
       chan: 1
-    - remote_chip_id: 10226852332
+    - remote_chip_id: 10226851981
       chan: 1
   -
     - chip: 1
-      chan: 6
-    - remote_chip_id: 10226852140
-      chan: 6
+      chan: 0
+    - remote_chip_id: 10226851981
+      chan: 0
   -
-    - chip: 1
+    - chip: 0
       chan: 7
-    - remote_chip_id: 10226852140
+    - remote_chip_id: 10226851985
       chan: 7
+  -
+    - chip: 0
+      chan: 6
+    - remote_chip_id: 10226851985
+      chan: 6
 chips_with_mmio:
-  - 0: 1
-  - 1: 0
+  - 0: 3
+  - 1: 2
 harvesting:
   0:
     noc_translation: true
-    harvest_mask: 528
+    harvest_mask: 513
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
     l2cpu_harvesting_mask: 0
   1:
     noc_translation: true
-    harvest_mask: 768
+    harvest_mask: 513
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
@@ -118,7 +118,7 @@ harvesting:
     l2cpu_harvesting_mask: 0
   3:
     noc_translation: true
-    harvest_mask: 640
+    harvest_mask: 544
     dram_harvesting_mask: 0
     eth_harvesting_mask: 0
     pcie_harvesting_mask: 0
@@ -129,20 +129,20 @@ chip_to_boardtype:
   2: n300
   3: n300
 chip_to_bus_id:
-  0: 0x004b
-  1: 0x0031
-  2: 0x004b
-  3: 0x0031
+  0: 0x00ca
+  1: 0x00b1
+  2: 0x00ca
+  3: 0x00b1
 boards:
   -
-    - board_id: 72058994492006541
+    - board_id: 72058994492006700
     - board_type: n300
     - chips:
-        - 0
         - 2
+        - 0
   -
-    - board_id: 72058994492006545
+    - board_id: 72058994492006892
     - board_type: n300
     - chips:
-        - 1
         - 3
+        - 1
