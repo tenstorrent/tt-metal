@@ -191,7 +191,7 @@ run_t3000_llama3_90b_vision_tests() {
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 1200; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 900 || fail=1
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time

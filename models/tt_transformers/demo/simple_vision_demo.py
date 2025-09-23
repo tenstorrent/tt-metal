@@ -157,7 +157,7 @@ def prepare_generator_args(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 14951424, "num_command_queues": 2}], indirect=True
+    "device_params", [{"fabric_config": True, "trace_region_size": 17000000, "num_command_queues": 2}], indirect=True
 )
 def test_multimodal_demo_text(
     mesh_device,
