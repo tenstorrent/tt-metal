@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import (
     LoadImages,
     load_coco_class_names,
@@ -19,7 +20,6 @@ from models.demos.utils.common_demo_utils import (
 from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov5x.reference.yolov5x import YOLOv5
 from models.demos.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
-from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

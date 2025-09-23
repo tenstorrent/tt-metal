@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.utility_functions import is_wormhole_b0, is_grayskull
+from models.common.utility_functions import is_wormhole_b0, is_grayskull
 
 # use combinations of batch_size/core height and q_heads/kv_heads/core width to keep permutations under control
 # some failures are known (e.g. batch_size > cores_h, seq_q > seq_kv, num_kv_heads != num_q_heads when transpose = true) though they shouldn't be failures

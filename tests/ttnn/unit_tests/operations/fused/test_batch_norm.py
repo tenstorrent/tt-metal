@@ -10,7 +10,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_results_batch_norm,
 )
 from itertools import product
-from models.utility_functions import skip_for_grayskull, comp_pcc
+from models.common.utility_functions import skip_for_grayskull, comp_pcc
 
 
 @skip_for_grayskull("Unsupported dtype for Grayskull")

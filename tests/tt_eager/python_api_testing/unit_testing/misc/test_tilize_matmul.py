@@ -6,7 +6,7 @@
 import ttnn
 from loguru import logger
 
-from models.utility_functions import untilize, tilize_to_list, comp_pcc, skip_for_blackhole
+from models.common.utility_functions import untilize, tilize_to_list, comp_pcc, skip_for_blackhole
 import torch
 
 

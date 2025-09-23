@@ -4,8 +4,8 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import is_wormhole_b0, is_grayskull
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import is_wormhole_b0, is_grayskull
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

@@ -5,7 +5,7 @@ import pytest
 import ttnn
 import torch
 import time
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
 )

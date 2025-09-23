@@ -15,9 +15,9 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-from models.utility_functions import print_diff_argmax, comp_pcc
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.utility_functions import is_grayskull
+from models.common.utility_functions import print_diff_argmax, comp_pcc
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.common.utility_functions import is_grayskull
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)

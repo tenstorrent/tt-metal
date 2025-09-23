@@ -16,7 +16,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
+from models.common.utility_functions import (
     enable_memory_reports,
     skip_for_grayskull,
     is_wormhole_b0,

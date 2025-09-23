@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
 def fa_rand(*shape):

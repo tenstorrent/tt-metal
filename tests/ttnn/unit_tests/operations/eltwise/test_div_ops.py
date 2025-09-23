@@ -6,7 +6,7 @@ import torch
 import ttnn
 
 import pytest
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 

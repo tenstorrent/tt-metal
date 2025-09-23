@@ -7,7 +7,7 @@ from math import prod
 import pytest
 import torch
 
-from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,

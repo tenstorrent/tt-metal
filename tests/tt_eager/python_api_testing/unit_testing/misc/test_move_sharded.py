@@ -7,7 +7,7 @@ from loguru import logger
 
 
 import ttnn
-from models.utility_functions import comp_pcc, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import comp_pcc, is_wormhole_b0, is_blackhole
 import torch
 import ttnn
 
