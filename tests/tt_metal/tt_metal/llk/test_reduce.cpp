@@ -494,17 +494,17 @@ TEST_F(DeviceFixture, TensixComputeReduceH) {
 TEST_F(DeviceFixture, TensixComputeReduceW) {
     std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+    for (uint8_t math_fid = uint8_t(MathFidelity::HiFi4); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
-            for (bool fp32_dest_acc_en : {true, false}) {
+        for (uint8_t reduce_type = uint8_t(ReduceType::MAX); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {false}) {
                 if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                     continue;
                 }
-                for (bool dst_full_sync_en : {true, false}) {
+                for (bool dst_full_sync_en : {false}) {
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::W,

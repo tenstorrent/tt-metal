@@ -31,7 +31,11 @@ void MAIN {
                 reduce_tile_math(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+                if constexpr (REDUCE_OP == PoolType::MAX && REDUCE_DIM == ReduceDim::REDUCE_ROW) {
+                    reduce_tile_max_row(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+                } else {
+                    reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+                }
 #endif
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }

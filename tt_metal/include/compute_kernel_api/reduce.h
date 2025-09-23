@@ -54,6 +54,24 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 
 // clang-format off
 /**
+ * Specialized initialization for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
+ * Provides optimized performance by using specialized unpack and math functions.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
+ */
+// clang-format on
+ALWI void reduce_init_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
+    UNPACK((llk_unpack_AB_reduce_row_max_init<BroadcastType::NONE>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, MATH_FIDELITY>()));
+    PACK((llk_pack_reduce_mask_config<false /*untilize*/, ReduceDim::REDUCE_ROW>()));
+}
+
+// clang-format off
+/**
  * Resets the packer edge mask configuration to its default state by clearing any previously set masks. Needs to be called after
  * reduce_tile if the next operation requires default packer state. In case that the next operation is reduce operation across the
  * same dimension, this call can be omitted. If this function is not called, the packer will continue to use the edge masks set
@@ -128,6 +146,40 @@ template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, b
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, num_faces)));
+}
+
+// clang-format off
+/**
+ * Specialized version of reduce_tile for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
+ * Provides optimized performance by eliminating compile-time conditionals.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | itile                     | The index of the tile within the first CB                                               | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | itile_scaler              | The index of the tile within the scaling factor CB                                      | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
+    MATH((llk_math_reduce_max_row<MATH_FIDELITY>(icb, icb_scaler, idst)));
+    UNPACK((llk_unpack_AB(icb, icb_scaler, itile, itile_scaler)));
+}
+
+// clang-format off
+/**
+ * Specialized math-only version of reduce_tile_math for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
+ * Provides optimized performance by eliminating compile-time conditionals.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
+ */
+// clang-format on
+ALWI void reduce_tile_max_row_math(uint32_t idst, uint32_t num_faces = 4) {
+    MATH((llk_math_reduce_max_row<MATH_FIDELITY>(idst, num_faces)));
 }
 
 }  // namespace ckernel
