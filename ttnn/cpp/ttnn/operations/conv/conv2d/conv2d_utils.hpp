@@ -139,17 +139,6 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid);
 
-inline std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
-    MeshDevice* device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv);
-
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     TensorMemoryLayout shard_layout,
     ShardOrientation block_shard_orientation,
