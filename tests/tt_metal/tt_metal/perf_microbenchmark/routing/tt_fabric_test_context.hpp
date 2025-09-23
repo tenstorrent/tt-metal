@@ -32,6 +32,9 @@
 const std::string output_dir = "generated/fabric";
 const std::string bandwidth_csv_dir = output_dir + "/bandwidth_results";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
+// CI will always check the following folder for artifacts to upload
+const std::string ci_artifacts_dir = "/work/generated/test_reports";
+const std::string ci_bandwidth_results_dir = ci_artifacts_dir + "/fabric_bandwidth_results";
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
@@ -412,6 +415,17 @@ public:
             std::filesystem::create_directories(bandwidth_results_path);
         }
 
+        // Create a symlink to the bandwidth results directory for CI to upload CSV files
+        // Edge case: CI artifacts directory wasn't created
+        // We may not have permission to create it, so skip the symlink in that case
+        if (!std::filesystem::exists(ci_artifacts_dir)) {
+            // std::filesystem::create_directories(ci_artifacts_dir);
+            log_warning(tt::LogTest, "CI artifacts directory {} not found, skipping symlink creation to bandwidth results directory", ci_artifacts_dir);
+        }
+        else {
+            std::filesystem::create_directory_symlink(bandwidth_results_path, ci_bandwidth_results_dir);
+        }
+        
         auto arch_name = tt::tt_metal::hal::get_arch_name();
 
         // Generate detailed CSV filename
