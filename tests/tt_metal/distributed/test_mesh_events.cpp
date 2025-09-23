@@ -27,7 +27,6 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {

@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 

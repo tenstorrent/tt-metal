@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"

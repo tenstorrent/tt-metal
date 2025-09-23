@@ -8,7 +8,6 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 

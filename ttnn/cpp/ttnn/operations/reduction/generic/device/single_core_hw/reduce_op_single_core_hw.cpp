@@ -5,7 +5,6 @@
 #include <string>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"

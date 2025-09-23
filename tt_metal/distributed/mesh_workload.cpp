@@ -34,7 +34,6 @@
 #include "semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include <tt-metalium/utils.hpp>
 #include "tracy/Tracy.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"

@@ -74,7 +74,6 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
 

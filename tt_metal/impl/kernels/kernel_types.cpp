@@ -7,7 +7,6 @@
 #include "impl/context/metal_context.hpp"
 #include <utility>
 
-#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 

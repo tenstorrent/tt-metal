@@ -15,7 +15,6 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/distributed.hpp>
 
 #include <tt-metalium/tt_metal.hpp>

@@ -13,7 +13,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt_stl/tt_stl/reflection.hpp>
 

@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::grid_sample {

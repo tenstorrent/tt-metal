@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -58,7 +57,6 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
