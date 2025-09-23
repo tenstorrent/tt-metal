@@ -241,7 +241,8 @@ bool fabric_set_unicast_route(
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (routing_table->my_mesh_id != dst_mesh_id) {
-        // TODO: inter-mesh routing: update dst_dev_id to be exit node dev id for the target mesh
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
+        // inter-mesh routing: update dst_dev_id to be exit node dev id for the target mesh
         // ASSERT(dst_mesh_id < MAX_NUM_MESHES); // dst_mesh_id must be valid if specified
         // tt_l1_ptr exit_node_table_t* exit_node_table =
         //     reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
