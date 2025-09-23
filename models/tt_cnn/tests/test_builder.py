@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 import torch
 from ttnn.model_preprocessing import infer_ttnn_module_args
@@ -17,7 +21,6 @@ from models.tt_cnn.tt.builder import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 DEVICE_PARAMS = {"l1_small_size": 32768}
-DEVICE_GRID = (8, 8)
 PCC_THRESHOLD = 0.999
 
 INPUT_SIZES = [(8, 8), (16, 8)]
