@@ -55,10 +55,10 @@ jobs:
             runner-label: BH-DeskBox
             extra-tag: pipeline-perf
             num_devices: 2
-          # - name: RackBox Demo tests
-          #   runner-label: BH-RackBox
-          #   extra-tag: pipeline-functional
-          #   num_devices: 8
+          - name: LoudBox Demo tests
+            runner-label: BH-LoudBox
+            extra-tag: pipeline-functional
+            num_devices: 8
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -78,8 +78,8 @@ jobs:
             runner-label: BH-LLMBox
           - name: DeskBox unit tests
             runner-label: BH-DeskBox
-          # - name: RackBox unit tests
-          #   runner-label: BH-RackBox
+          - name: LoudBox unit tests
+            runner-label: BH-LoudBox
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}
@@ -98,8 +98,8 @@ jobs:
             runner-label: BH-LLMBox
           - name: DeskBox ttnn stress tests
             runner-label: BH-DeskBox
-          # - name: RackBox unit tests
-          #   runner-label: BH-RackBox
+          - name: LoudBox unit tests
+            runner-label: BH-LoudBox
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}

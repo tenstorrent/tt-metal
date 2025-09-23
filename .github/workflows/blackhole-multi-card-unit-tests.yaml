@@ -26,8 +26,8 @@ jobs:
             runner-label: BH-LLMBox
           - name: DeskBox unit tests
             runner-label: BH-DeskBox
-          # - name: RackBox unit tests
-          #   runner-label: BH-RackBox
+          - name: LoudBox unit tests
+            runner-label: BH-LoudBox
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}
