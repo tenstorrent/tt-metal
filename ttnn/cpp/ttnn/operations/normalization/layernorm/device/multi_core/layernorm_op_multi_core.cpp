@@ -998,10 +998,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         reader_mcast_sender_defines["FUSE_BETA"] = "1";
         reader_mcast_receiver_defines["FUSE_BETA"] = "1";
     }
-    if (rms_norm) {
-        reader_mcast_sender_defines["RMSNORM"] = "1";
-        reader_mcast_receiver_defines["RMSNORM"] = "1";
-    }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
@@ -1020,7 +1016,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)use_two_stage_reduce,
         (std::uint32_t)num_blocks_first_stage,
         (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        (std::uint32_t)reduce_second_stage_semaphore_id,
+        (std::uint32_t)rms_norm};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1036,7 +1033,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)use_two_stage_reduce,
         (std::uint32_t)num_blocks_first_stage,
         (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        (std::uint32_t)reduce_second_stage_semaphore_id,
+        (std::uint32_t)rms_norm};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1052,7 +1050,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        (std::uint32_t)reduce_second_stage_semaphore_id,
+        (std::uint32_t)rms_norm};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -1262,7 +1261,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             "layernorm_sharded_post_allgather.cpp";
     } else {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
+            use_welford
+                ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                  "layernorm_sharded_welford.cpp"
+                : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
