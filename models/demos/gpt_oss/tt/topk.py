@@ -53,7 +53,7 @@ class TopKRouter:
         router_logits = ttnn.linear(
             hidden_states, self.weight, bias=self.bias, compute_kernel_config=self.compute_config
         )
-        hidden_states.deallocate(True)
+        # hidden_states.deallocate(True)
         router_scores, _expert_weights, router_indices = topk_router(router_logits, self.top_k)
-        router_logits.deallocate(True)
+        # router_logits.deallocate(True)
         return router_scores, router_indices, router_logits

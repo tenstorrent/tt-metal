@@ -12,7 +12,70 @@ from .rope import ApplyRotaryPosEmb
 
 
 class Model:
-    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager, dtype=ttnn.bfloat16, tensor_cache_path=None):
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        paged_attention_config=None,
+    ):
+        """Original GPT-OSS constructor"""
+        self._init_gpt_oss(
+            mesh_device, hf_config, state_dict, ccl_manager, dtype, tensor_cache_path, paged_attention_config
+        )
+
+    @classmethod
+    def create_transformer_compatible(
+        cls,
+        args,
+        dtype,
+        mesh_device,
+        state_dict,
+        weight_cache_path,
+        paged_attention_config=None,
+        use_paged_kv_cache=False,
+        attention_class=None,
+        rope_setup_class=None,
+    ):
+        """Constructor compatible with tt_transformers.Transformer interface"""
+        # Create a dummy CCL manager for GPT-OSS
+        from models.demos.gpt_oss.tt.ccl import CCLManager
+
+        ccl_manager = CCLManager(mesh_device)
+
+        # Create instance using original constructor
+        instance = cls.__new__(cls)
+        instance._init_gpt_oss(
+            mesh_device=mesh_device,
+            hf_config=args.hf_config,
+            state_dict=state_dict,
+            ccl_manager=ccl_manager,
+            dtype=dtype,
+            tensor_cache_path=weight_cache_path,
+            paged_attention_config=paged_attention_config,
+        )
+
+        # Add tt_transformers compatible attributes
+        instance.args = args
+        instance.vocab_size = args.vocab_size
+        instance.n_layers = args.n_layers
+        instance.dtype = dtype
+
+        return instance
+
+    def _init_gpt_oss(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        paged_attention_config=None,
+    ):
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
@@ -39,6 +102,7 @@ class Model:
                 ccl_manager,
                 dtype=dtype,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
+                paged_attention_config=paged_attention_config,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -120,7 +184,7 @@ class Model:
         # current_pos,
         # rot_mat_idxs_global=None,
         # rot_mat_idxs_local=None,
-        # page_table=None,
+        page_table=None,
         kv_cache=None,
         argmax_on_device=False,
     ):
@@ -129,6 +193,13 @@ class Model:
         """
         x = inputs[0]
         current_pos = inputs[1]
+
+        # Extract page_table from inputs if available (5th element, index 4)
+        # inputs structure: [tokens, current_pos, tt_cos, tt_sin, page_table, tt_sliding_mask]
+        # Maintain backward compatibility: only extract if available and not None
+        if len(inputs) > 4 and inputs[4] is not None:
+            page_table = inputs[4]
+        # Otherwise keep the page_table parameter as-is (might be None for non-paged flow)
 
         # For decode mode, we expect single token input
         input_embeds = ttnn.embedding(x, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
@@ -164,6 +235,7 @@ class Model:
                 attention_mask=layer_mask,
                 position_embeddings=rope_stuff,
                 position_idx=current_pos,
+                page_table=page_table,
             )
 
         hidden_states = self.norm(hidden_states)
@@ -186,7 +258,6 @@ class Model:
         """
         Prefill forward pass - processes full sequences
         """
-
         # x is already embedded input tokens from prepare_inputs_prefill
         # Keep track of original shape for slice operation
         is_4d_input = len(x.shape) == 4
@@ -226,13 +297,30 @@ class Model:
                 attention_mask=layer_mask,
                 position_embeddings=rope_stuff,
                 position_idx=None,
+                page_table=page_table,
             )
+
+        # If get_last_token is specified, slice before norm and lm_head for efficiency
+        if get_last_token != -1:
+            # Need to work with the original 4D tensor for slicing to match tt_transformers
+            # Convert back to 4D if we squeezed it
+            if len(hidden_states.shape) == 3:
+                # Convert [batch, seq_len, hidden] -> [batch, 1, seq_len, hidden]
+                hidden_states = ttnn.unsqueeze(hidden_states, dim=1)
+
+            # Now slice as 4D tensor (matching tt_transformers exactly)
+            # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+            hidden_states = ttnn.slice(
+                hidden_states, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, hidden_states.shape[-1])
+            )
+
+            # Squeeze back to 3D for norm/lm_head if needed
+            if len(hidden_states.shape) == 4 and hidden_states.shape[1] == 1:
+                hidden_states = ttnn.squeeze(hidden_states, dim=1)
 
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight)
 
-        # REMOVED: No internal slicing - return full output like original test_demo.py
-        # The original test extracts the token OUTSIDE the model, not inside
         return logits
 
     def prepare_inputs_decode(self, inputs):
@@ -412,7 +500,8 @@ class Model:
         return torch_tensor
 
     def process_output_prefill(self, tt_out, last_token_idx):
-        last_token_idx = 301
+        # last_token_idx = 92
+        print("last_token_idx", last_token_idx)
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         Matches original test_demo.py pattern exactly:
@@ -426,16 +515,17 @@ class Model:
 
         # Step 2: Convert to torch (original test does this directly without cpu())
         torch_output = ttnn.to_torch(tt_output_tensor)
+        print(f"Output tensor shape: {torch_output.shape}")
 
         # Show what tokens we have at different positions for debugging
 
         # Step 3: Extract token at last_token_idx (original: [:, decode_start_pos - 1, :])
-        result = torch_output[:, last_token_idx, :]
+        result = torch_output[:, last_token_idx, : self.vocab_size]
 
         # Check if this matches expected shape - original test shows [1, vocab_size] 2D tensor
 
         # Get the token ID and decode it for comparison
-        token_id = torch.argmax(result[0].float(), dim=-1)
+        # token_id = torch.argmax(result[0].float(), dim=-1)
 
         return result  # Return 2D tensor [1, vocab_size] like original test shows
 

@@ -10,11 +10,19 @@ from ..utils.general_utils import MAX_SEQ_LEN
 
 
 class Attention:
-    def __init__(self, mesh_device, hf_config, state_dict, layer_idx, ccl_manager, tensor_cache_path=None):
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        layer_idx,
+        ccl_manager,
+        tensor_cache_path=None,
+        paged_attention_config=None,
+    ):
         self.layer_idx = layer_idx
         self.use_sliding_window = self.layer_idx % 2 == 0
         self.scaling = hf_config.head_dim**-0.5
-        self.cache = None
         self.head_dim = hf_config.head_dim
         self.num_heads = hf_config.num_attention_heads
         self.num_kv_heads = hf_config.num_key_value_heads
@@ -149,7 +157,18 @@ class Attention:
         )
 
         # Set up kv cache
-        cache_shape = [1, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim]
+        # Store paged attention config for later use in operations
+        self.paged_attention_config = paged_attention_config
+
+        if paged_attention_config:
+            cache_shape = [
+                paged_attention_config.max_num_blocks,
+                self.num_kv_heads,
+                paged_attention_config.block_size,
+                self.head_dim,
+            ]
+        else:
+            cache_shape = [1, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim]
         k_cache = ttnn.as_tensor(
             torch.zeros(cache_shape),
             device=mesh_device,
@@ -170,11 +189,15 @@ class Attention:
         )
         self.kv_cache = [k_cache, v_cache]
 
+        # Set layer_past to reference the actual KV cache for tt_transformers compatibility
+        self.layer_past = self.kv_cache
+
         grid_size = mesh_device.compute_with_storage_grid_size()
-        kv_shape = (1, 1, self.num_local_kv_heads, self.head_dim)
-        kv_shard_height = nearest_y(kv_shape[2], ttnn.TILE_SIZE)
-        kv_shard_width = kv_shape[3]
-        kv_num_cores = kv_shape[1]
+        # Fix: k/v tensors should be [1, num_local_kv_heads, 1, head_dim] for decode, not [1, 1, num_local_kv_heads, head_dim]
+        kv_shape = (1, self.num_local_kv_heads, 1, self.head_dim)
+        kv_shard_height = nearest_y(kv_shape[1], ttnn.TILE_SIZE)  # height = num_local_kv_heads
+        kv_shard_width = kv_shape[3]  # width = head_dim
+        kv_num_cores = kv_shape[2]  # cores = 1 (sequence length for decode)
         kv_core_grid = ttnn.num_cores_to_corerangeset(kv_num_cores, grid_size, row_wise=True)
         self.kv_mem_cfg = ttnn.create_sharded_memory_config(
             shape=(kv_shard_height, kv_shard_width),
@@ -198,7 +221,7 @@ class Attention:
             packer_l1_acc=False,
         )
 
-    def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None):
+    def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None, page_table=None):
         batch_size, seq_len, hidden_size = x.shape
 
         tt_q = ttnn.matmul(x, self.q_proj)
@@ -212,7 +235,7 @@ class Attention:
         tt_v = ttnn.matmul(x, self.v_proj)
         tt_v = ttnn.add(tt_v, self.v_proj_bias, output_tensor=tt_v)
         tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
-        x.deallocate(True)
+        # x.deallocate(True)
 
         apply_rope, tt_cos, tt_sin = rope_stuff
         tt_q_rope = apply_rope(tt_q, tt_cos, tt_sin)
@@ -229,34 +252,56 @@ class Attention:
 
             tt_k = ttnn.to_memory_config(tt_k, self.kv_mem_cfg)
             tt_v = ttnn.to_memory_config(tt_v, self.kv_mem_cfg)
-
+            # Paged attention path - like tt-transformers
             ttnn.experimental.paged_update_cache(
                 k_cache,
                 tt_k,
                 update_idxs_tensor=position_idx,
+                page_table=page_table,
             )
-            tt_k.deallocate(True)
             ttnn.experimental.paged_update_cache(
                 v_cache,
                 tt_v,
                 update_idxs_tensor=position_idx,
+                page_table=page_table,
             )
-            tt_v.deallocate(True)
-            tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
-                tt_q,
-                k_cache,
-                v_cache,
-                cur_pos_tensor=position_idx,
-                is_causal=self.layer_idx % 2 != 0,
-                attn_mask=mask if self.layer_idx % 2 == 0 else None,
-                attention_sink=self.decode_sinks,
-                scale=self.scaling,
-                program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            tt_q.deallocate(True)
 
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+
+            # Use paged SDPA when page_table is available (like tt-transformers)
+            if page_table is not None:
+                print("paged sdpa", k_cache.shape, v_cache.shape)
+                tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    tt_q,
+                    k_cache,
+                    v_cache,
+                    cur_pos_tensor=position_idx,
+                    is_causal=self.layer_idx % 2 != 0,
+                    attn_mask=mask if self.layer_idx % 2 == 0 else None,
+                    attention_sink=self.decode_sinks,
+                    page_table_tensor=page_table,
+                    scale=self.scaling,
+                    program_config=self.sdpa_program_config,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
+                    tt_q,
+                    k_cache,
+                    v_cache,
+                    cur_pos_tensor=position_idx,
+                    is_causal=self.layer_idx % 2 != 0,
+                    attn_mask=mask if self.layer_idx % 2 == 0 else None,
+                    attention_sink=self.decode_sinks,
+                    scale=self.scaling,
+                    program_config=self.sdpa_program_config,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            tt_q.deallocate(True)
+            print("tt_sdpa_tensor", tt_sdpa_tensor.shape)
             tt_sdpa_tensor = ttnn.transpose(tt_sdpa_tensor, 1, 2)
             tt_sdpa_out = ttnn.experimental.nlp_concat_heads(
                 tt_sdpa_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -275,16 +320,30 @@ class Attention:
             tt_v = ttnn.transpose(tt_v, 1, 2)
             tt_v = ttnn.typecast(tt_v, v_cache.dtype)
 
-            ttnn.fill_cache(
-                k_cache,
-                tt_k,
-                batch_idx=0,
-            )
-            ttnn.fill_cache(
-                v_cache,
-                tt_v,
-                batch_idx=0,
-            )
+            # Use paged fill cache when page_table is available (like tt-transformers)
+            if page_table is not None:
+                # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+                # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+                block_size = k_cache.shape[2]
+
+                page_len = page_table.shape[1] * block_size
+                tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
+                tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
+
+                print("paged fill cache", k_cache.shape, tt_k.shape)
+                ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=0)
+            else:
+                ttnn.fill_cache(
+                    k_cache,
+                    tt_k,
+                    batch_idx=0,
+                )
+                ttnn.fill_cache(
+                    v_cache,
+                    tt_v,
+                    batch_idx=0,
+                )
 
             # FIXME: Should eventually remove
             tt_k = ttnn.transpose(tt_k, 1, 2)
@@ -329,6 +388,7 @@ class Attention:
                 cluster_axis=1,
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             )
+            ##ttnn.synchronize_device(self.mesh_device)
             tt_out.deallocate(True)
             tt_out = ttnn.experimental.all_gather_async(
                 tt_out_scattered,
@@ -341,6 +401,7 @@ class Attention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
             )
+            ##ttnn.synchronize_device(self.mesh_device)
             tt_out_scattered.deallocate(True)
             if tt_out.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
                 tt_out = tt_out[:, :, :, : self.hidden_size]

@@ -29,7 +29,7 @@ BASE_PROMPT_LEN = 81  # Send empty prompt to apply_chat_template
 @pytest.mark.parametrize(
     "generation_length",
     [
-        2,
+        200,
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
@@ -73,7 +73,7 @@ def test_model(
     decode_start_pos = (inputs.attention_mask[0] == 0).nonzero(as_tuple=True)[0][0].item()
     print(f"DEBUG: decode_start_pos: {decode_start_pos}")
     # Create configuration
-    config = AutoConfig.from_pretrained(local_model_path, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(local_weights_path, trust_remote_code=True)
 
     # Create input tensors (prefill)
     mask = torch.triu(torch.full((1, 1, padded_prefill_seq_len, padded_prefill_seq_len), -float("inf")), diagonal=1)
@@ -136,7 +136,6 @@ def test_model(
     prefill_token_out = tokenizer.decode(prefill_out_token_id.flatten())
     outputs += prefill_token_out
     print(f"Prefill token output: {prefill_token_out}")
-    return True
     ###### Decode Setup ######
     prev_token_id = prefill_out_token_id.unsqueeze(0)
     cur_pos = decode_start_pos

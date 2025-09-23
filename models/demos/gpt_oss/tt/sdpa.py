@@ -75,8 +75,8 @@ def sdpa(
         tt_v = ttnn.concat([tt_v_back, tt_v], dim=2)  # (nkv, 1, cache_len + num_tokens, dim)
 
         tt_cache = [tt_k, tt_v]  # Update cache with new keys and values
-        ttnn.deallocate(tt_k_back)
-        ttnn.deallocate(tt_v_back)
+        # ttnn.deallocate(tt_k_back)
+        # ttnn.deallocate(tt_v_back)
 
     kv_len = tt_k.shape[2]  # Length of keys/values in the cache
 
@@ -86,7 +86,7 @@ def sdpa(
     tt_v = ttnn.repeat(tt_v, [1, nh // nkv, 1, 1])  # (nkv, nh // nkv, kv_len, dim)
 
     # QK + scale
-    tt_qk = ttnn.matmul(tt_q, tt_k, dtype=ttnn.bfloat8_b)  # (nkv, nh // nkv, num_tokens, kv_len)
+    tt_qk = ttnn.matmul(tt_q, tt_k)  # (nkv, nh // nkv, num_tokens, kv_len)
     tt_qk *= sm_scale
 
     # Mask
@@ -105,7 +105,7 @@ def sdpa(
     tt_qk = tt_qk[:, :, :, :kv_len]
 
     # Out stuff
-    out = ttnn.matmul(tt_qk, tt_v, dtype=ttnn.bfloat8_b)  # (nkv, nh // nkv, num_tokens, dim)
+    out = ttnn.matmul(tt_qk, tt_v)  # (nkv, nh // nkv, num_tokens, dim)
     out = ttnn.reshape(out, [1, nh, num_tokens, dim])
 
     out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, num_tokens, dim * nh]

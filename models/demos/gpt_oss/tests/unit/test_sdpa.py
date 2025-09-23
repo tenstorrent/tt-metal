@@ -40,7 +40,7 @@ def reference_sdpa(Q, K, V, S, sm_scale, sliding_window=0):
 @pytest.mark.parametrize("sliding_window", [0, 128], ids=["regular", "sliding_window"])
 @pytest.mark.parametrize(
     "num_iters",
-    [0, 16],
+    [1, 16],
     ids=["single", "multi"],
 )
 def test_sdpa(device, num_tokens, nh, nkv, dim, sliding_window, num_iters, reset_seeds):

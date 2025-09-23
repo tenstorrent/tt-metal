@@ -29,7 +29,7 @@ class Experts:
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_{dtype}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.up_proj = ttnn.as_tensor(
@@ -38,7 +38,7 @@ class Experts:
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_{dtype}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.gate_proj_bias = ttnn.as_tensor(
@@ -47,7 +47,7 @@ class Experts:
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_bias_{dtype}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_bias"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.up_proj_bias = ttnn.as_tensor(
@@ -56,7 +56,7 @@ class Experts:
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_bias_{dtype}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_bias"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -68,7 +68,7 @@ class Experts:
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             mesh_mapper=row_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_{dtype}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Row-parallel bias must not be replicated. Extend it with zeros for TP devices.
@@ -82,7 +82,7 @@ class Experts:
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_bias_{dtype}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_bias"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -96,12 +96,15 @@ class Experts:
         hidden_states = ttnn.reshape(
             hidden_states, (batch_size, 1, seq_len, self.hidden_size)
         )  # unsqueeze a dim for expert broadcast
-        hidden_states_repeated = hidden_states  # ttnn.repeat(hidden_states, repeat_dims=(1, self.num_experts, 1, 1))
+        hidden_states_repeated = ttnn.repeat(hidden_states, repeat_dims=(1, self.num_experts, 1, 1))
         # hidden_states.deallocate(True)
+        print("num_experts", self.num_experts)
+        print("hidden_states_repeated", hidden_states_repeated.shape)
+        print("self.gate_proj", self.gate_proj.shape)
 
-        gate_unclamped = ttnn.matmul(hidden_states_repeated, self.gate_proj, dtype=ttnn.bfloat8_b)
+        gate_unclamped = ttnn.matmul(hidden_states_repeated, self.gate_proj)  # , dtype=ttnn.bfloat8_b)
         gate_unclamped = ttnn.add(gate_unclamped, self.gate_proj_bias, output_tensor=gate_unclamped)
-        up_unclamped = ttnn.matmul(hidden_states_repeated, self.up_proj, dtype=ttnn.bfloat8_b)
+        up_unclamped = ttnn.matmul(hidden_states_repeated, self.up_proj)  # , dtype=ttnn.bfloat8_b)
         up_unclamped = ttnn.add(up_unclamped, self.up_proj_bias, output_tensor=up_unclamped)
         hidden_states_repeated.deallocate(True)
 
@@ -168,11 +171,12 @@ class Experts:
         print("self.num_experts_per_tok", self.num_experts_per_tok)
 
         # >>> # Sparse matmul for 64 batch, 128 sequence, 512 hidden dimensions, 8 experts
-        # >>> expert_weights = ttnn.ones([1, 8, 512, 512]) [1, 128, 2880, 360]
         # >>> tokens = ttnn.ones([1, 64, 128, 512]) [1, 1, 1024, 2880]
+        # >>> expert_weights = ttnn.ones([1, 8, 512, 512]) [1, 128, 2880, 360]
         # >>> # Create sparsity bitmask
         # >>> sparsity_bitmask = torch.zeros([1, 64, 128, 8])     [1, 1, 1024, 128]
         # [batch_size, seq_len, 1, hidden_size]
+        # ttnn.synchronize_device(self.mesh_device)
         gate = ttnn.sparse_matmul(
             hidden_states_4D,
             self.gate_proj,
@@ -181,6 +185,7 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
         )
+        # ttnn.synchronize_device(self.mesh_device)
         print("done sparse matmul")
         gate = ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
         gate = ttnn.add(gate, self.gate_proj_bias, output_tensor=gate)
@@ -194,7 +199,7 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
         )
-        ttnn.deallocate(hidden_states_4D)
+        # ttnn.deallocate(hidden_states_4D)
         up = ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
         up = ttnn.add(up, self.up_proj_bias, output_tensor=up)
         up = ttnn.clamp(up, min=-self.limit, max=self.limit)
@@ -213,10 +218,10 @@ class Experts:
             nnz=self.num_experts_per_tok,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
-            batched_input_a=True,
+            is_input_a_sparse=True,
         )
-        ttnn.deallocate(down_in0)
-        ttnn.deallocate(routing_weights_rm)
+        # ttnn.deallocate(down_in0)
+        # ttnn.deallocate(routing_weights_rm)
 
         next_states = (
             ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size)) + self.down_proj_bias
@@ -261,7 +266,7 @@ class Experts:
         #     return self.run_sparse_experts(hidden_states, routing_weights)
         # else:
         #     return self.run_dense_experts(hidden_states, routing_weights)
-        return self.run_sparse_experts(hidden_states, routing_weights)
+        return self.run_dense_experts(hidden_states, routing_weights)
 
 
 class SparseExperts(Experts):
@@ -301,7 +306,7 @@ class SparseExperts(Experts):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
         )
-        ttnn.deallocate(hidden_states_4D)
+        # ttnn.deallocate(hidden_states_4D)
 
         up = (
             ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
@@ -323,10 +328,10 @@ class SparseExperts(Experts):
             nnz=self.num_experts_per_tok,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
-            batched_input_a=True,
+            is_input_a_sparse=True,
         )
         ttnn.deallocate(down_in0)
-        ttnn.deallocate(routing_weights_rm)
+        # ttnn.deallocate(routing_weights_rm)
 
         next_states = (
             ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size)) + self.down_proj_bias

@@ -14,10 +14,10 @@ from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mkn", [(16, 128, 512)])
-@pytest.mark.parametrize("num_experts", [8])
-@pytest.mark.parametrize("num_tokens", [(1, 4)])
-@pytest.mark.parametrize("tile_h", [16])
+@pytest.mark.parametrize("mkn", [(1, 2880, 320)])
+@pytest.mark.parametrize("num_experts", [128])
+@pytest.mark.parametrize("num_tokens", [(1, 16)])
+@pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
 def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype):
@@ -71,6 +71,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
     output_t = ttnn.sparse_matmul(
         in0_t,
         in1_t,
+        # is_input_a_sparse=True,
         sparsity=sparsity_t,
         nnz=nnz,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -79,6 +80,8 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
 
     output_tensor = ttnn.to_torch(output_t)
 
+    logger.info(output_tensor.shape)
+
     # Compute matmul using torch for each batch and concatenate the results
     for b, s, e in itertools.product(range(b), range(s), range(num_experts)):
         if sparsity[0, b, s, e] == 0.0:
@@ -86,6 +89,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
         in0_batch = in0[b, s, :, :]
         in1_batch = in1[0, e, :, :]
         pt_out = torch.matmul(in0_batch, in1_batch)
+        logger.info(pt_out.shape)
 
         # Compare with output tensor
         expected_pcc = 0.999

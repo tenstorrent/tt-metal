@@ -55,14 +55,14 @@ def test_demo_with_generator(
     print("MESH SHAPE!", mesh_device.shape)
 
     # Setup paths
-    local_model_path = "models/demos/gpt_oss/reference"
     local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
     # Setup tensor cache directory based on actual mesh shape
     tensor_cache_dir = local_weights_path + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
 
     # Load configuration and tokenizer
-    config = AutoConfig.from_pretrained(local_model_path, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(local_weights_path, trust_remote_code=True)
+    # config.num_hidden_layers = 1
     tokenizer = load_tokenizer(local_weights_path)
     print("✓ Loaded configuration and tokenizer")
 
@@ -93,31 +93,7 @@ def test_demo_with_generator(
     print("\n=== Running Text Generation Example ===")
 
     # Prepare input using chat template (following original test pattern)
-    # Choose different prompt sizes to test various prefill sequence lengths:
-
-    prompts = {
-        "short": "How many r's in the word 'strawberry'?",
-        "medium": "Explain the differences between machine learning, deep learning, and artificial intelligence. Provide examples of applications for each and discuss their relative strengths and weaknesses in solving real-world problems.",
-        "long": """Please analyze the following scenario and provide a detailed explanation:
-
-A software engineer is working on optimizing a machine learning model for natural language processing. The model uses transformer architecture with attention mechanisms. The engineer needs to decide between two approaches:
-
-1. Implementing dynamic batching with variable sequence lengths to maximize throughput
-2. Using fixed-size batching with padding to ensure consistent memory usage
-
-The model will be deployed in a production environment where it needs to handle:
-- Real-time inference requests with varying input lengths
-- Batch processing jobs with thousands of documents
-- Memory constraints on GPU hardware
-- Latency requirements under 100ms for real-time requests
-
-What factors should the engineer consider when making this decision, and what would you recommend as the optimal approach?""",
-    }
-
-    # Select prompt size (change this to test different prefill lengths)
-    prompt_size = "long"  # Options: "short", "medium", "long"
-    prompt = prompts[prompt_size]
-    print(f"Using {prompt_size} prompt for prefill length testing")
+    prompt = "How many r's in the word 'strawberry'?"
 
     padded_prefill_seq_len = nearest_y(len(prompt) + BASE_PROMPT_LEN, ttnn.TILE_SIZE)
     messages = [
@@ -132,11 +108,9 @@ What factors should the engineer consider when making this decision, and what wo
         padding="max_length",
         max_length=padded_prefill_seq_len,
     )
-    print(f"Input prompt length: {len(prompt)} characters")
-    print(f"Prefill sequence length: {padded_prefill_seq_len} tokens")
+    print(f"Input prompt: {prompt}")
+    print(f"Detokenized input: {tokenizer.decode(inputs.input_ids[0])}")
     print(f"Input tokens shape: {inputs.input_ids.shape}")
-    print(f"First 100 chars of prompt: {prompt[:100]}...")
-    print(f"Detokenized input (first 200 chars): {tokenizer.decode(inputs.input_ids[0])[:200]}...")
 
     # Calculate the correct position like original test_demo.py
     if hasattr(inputs, "attention_mask") and inputs.attention_mask is not None:
@@ -148,8 +122,7 @@ What factors should the engineer consider when making this decision, and what wo
     # Prefill forward
     print("Running prefill...")
     batch_size = 1
-    prompt_lens = torch.tensor([len(prompt) + BASE_PROMPT_LEN])
-    print(f"Prompt lens: {prompt_lens}")
+    prompt_lens = torch.tensor([inputs.input_ids.shape[1]])
 
     prefill_logits = generator.prefill_forward_text(tokens=inputs.input_ids, prompt_lens=prompt_lens, empty_slots=[0])
 
@@ -164,20 +137,22 @@ What factors should the engineer consider when making this decision, and what wo
     # Decode forward for a few more tokens
     print("\nRunning decode for additional tokens...")
     current_pos = inputs.input_ids.shape[1]
-    current_pos = 79
+    current_pos = 93
     generated_tokens = [next_token_id.item()]
 
-    for i in range(200):  # Generate 5 more tokens
+    for i in range(50):  # Generate 5 more tokens
         decode_tokens = torch.tensor([[next_token_id.item()]])
         start_pos = torch.tensor([current_pos + i])
 
         decode_logits = generator.decode_forward_text(
-            tokens=decode_tokens, start_pos=start_pos, enable_trace=True  # Tracing should now work correctly
+            tokens=decode_tokens, start_pos=start_pos, enable_trace=False  # Disable tracing for simplicity
         )
+        print(f"Decode logits shape: {decode_logits.shape}")
 
         next_token_id = torch.argmax(decode_logits[0, 0], dim=-1)
         next_token = tokenizer.decode([next_token_id.item()])
         generated_tokens.append(next_token_id.item())
+        print(f"Token {i+1}: '{next_token}' (ID: {next_token_id.item()})")
 
     # Show full generated text
     full_generated = tokenizer.decode(generated_tokens)
