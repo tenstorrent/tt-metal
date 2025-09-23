@@ -5,11 +5,12 @@
 #pragma once
 
 #include "ttnn-pybind/pybind_fwd.hpp"
+
 #include "ttnn-pybind/decorators.hpp"
 
-namespace ttnn::operations::experimental::isin::detail {
+namespace ttnn::operations::experimental::unique::detail {
 
 namespace py = pybind11;
-void bind_isin_operation(py::module& module);
+void bind_unique_operation(py::module& module);
 
-}  // namespace ttnn::operations::experimental::isin::detail
+}  // namespace ttnn::operations::experimental::unique::detail

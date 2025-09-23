@@ -4,21 +4,21 @@
 
 #pragma once
 
-#include "../isin_common.hpp"
+#include "../unique_common.hpp"
 
-#include "isin_device_op_types.hpp"
+#include "unique_device_op_types.hpp"
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/experimental/isin/isin_cbs.hpp"
+#include "ttnn/operations/experimental/unique/unique_cbs.hpp"
 
-namespace ttnn::operations::experimental::isin {
+namespace ttnn::operations::experimental::unique {
 
 using namespace tt;
 using ttnn::device_operation::CachedProgram;
 using namespace tt::tt_metal;
 
-struct IsInProgramFactory {
+struct UniqueProgramFactory {
     struct shared_variables_t {
         KernelHandle reader_kernel_id;
         KernelHandle writer_kernel_id;
@@ -26,9 +26,9 @@ struct IsInProgramFactory {
     };
 
     static constexpr const char* READER_KERNEL_PATH =
-        "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_reader.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/unique/device/kernels/dataflow/unique_reader.cpp";
     static constexpr const char* WRITER_KERNEL_PATH =
-        "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/unique/device/kernels/dataflow/unique_writer.cpp";
 
     using cached_program_t = CachedProgram<shared_variables_t>;
     static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
@@ -39,7 +39,7 @@ struct IsInProgramFactory {
     static CBHandle create_cb(
         Program& program,
         const DataType& dtype,
-        const IsInCB& is_in_cb,
+        const UniqueCB& is_in_cb,
         const CoreRangeSet& core_range_set,
         const uint32_t& page_size_bytes);
 
@@ -51,4 +51,4 @@ struct IsInProgramFactory {
         const std::vector<uint32_t>& runtime_args = {});
 };
 
-}  // namespace ttnn::operations::experimental::isin
+}  // namespace ttnn::operations::experimental::unique
