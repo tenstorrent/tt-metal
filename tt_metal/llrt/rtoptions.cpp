@@ -407,7 +407,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
         }
     }
     for (auto& core_type_and_cores : feature_targets[feature].cores) {
-        if (core_type_and_cores.second.size() > 0) {
+        if (!core_type_and_cores.second.empty()) {
             feature_targets[feature].enabled = true;
         }
     }
@@ -504,7 +504,7 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
     }
 
     // Default is no chips are specified is all
-    if (chips.size() == 0) {
+    if (chips.empty()) {
         feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;

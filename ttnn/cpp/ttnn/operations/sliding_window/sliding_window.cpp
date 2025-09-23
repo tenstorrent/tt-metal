@@ -490,7 +490,7 @@ static std::vector<DestinationTransferPair> flatten_gather_config(const GatherCo
 static GatherConfig reduce_flattened_transfers(const std::vector<DestinationTransferPair>& transfers) {
     GatherConfig output;
 
-    if (transfers.size() == 0) {
+    if (transfers.empty()) {
         return output;
     }
 

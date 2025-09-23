@@ -730,7 +730,7 @@ class TtModelArgs:
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=256 if seqlen >= 2048 else 64,
+                k_chunk_size=512 if seqlen >= 2048 else 64,
             )
 
             def find_largest_divisor(n, max_divisor=8):

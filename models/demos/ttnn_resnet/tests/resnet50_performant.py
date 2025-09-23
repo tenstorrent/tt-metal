@@ -22,6 +22,7 @@ def run_resnet50_pipeline(
     math_fidelity,
     model_location_generator,
     pipeline_config,
+    skip_compile_run=False,
 ):
     test_infra = create_test_infra(
         device,
@@ -49,7 +50,8 @@ def run_resnet50_pipeline(
         l1_input_memory_config=input_mem_config,
     )
 
-    pipeline.compile(tt_inputs_host)
+    if not skip_compile_run:
+        pipeline.compile(tt_inputs_host)
 
     if use_signpost:
         signpost(header="start")
@@ -70,6 +72,7 @@ def run_resnet50_inference(
     weight_dtype,
     math_fidelity,
     model_location_generator,
+    skip_compile_run=False,
 ):
     run_resnet50_pipeline(
         device,
@@ -79,6 +82,7 @@ def run_resnet50_inference(
         math_fidelity,
         model_location_generator,
         PipelineConfig(use_trace=False, num_command_queues=1, all_transfers_on_separate_command_queue=False),
+        skip_compile_run=skip_compile_run,
     )
 
 

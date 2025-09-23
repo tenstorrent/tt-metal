@@ -493,8 +493,8 @@ void py_module(py::module& module) {
                region. Otherwise, the tensor shards are distributed across mesh in row-major order.
            )doc")
         .def(
-            py::init([](std::optional<size_t> row_dim,
-                        std::optional<size_t> col_dim,
+            py::init([](std::optional<int> row_dim,
+                        std::optional<int> col_dim,
                         const std::optional<MeshShape>& mesh_shape_override) {
                 MeshMapperConfig config;
                 config.placements.push_back(
@@ -540,7 +540,7 @@ void py_module(py::module& module) {
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
            )doc")
         .def(
-            py::init([](size_t row_dim, size_t col_dim, const std::optional<MeshShape>& mesh_shape_override) {
+            py::init([](int row_dim, int col_dim, const std::optional<MeshShape>& mesh_shape_override) {
                 MeshComposerConfig config;
                 config.dims.push_back(row_dim);
                 config.dims.push_back(col_dim);
