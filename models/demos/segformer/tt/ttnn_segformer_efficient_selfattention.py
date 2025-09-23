@@ -182,7 +182,6 @@ class TtSegformerEfficientSelfAttention:
                 0
             ]
 
-        key_layer = ttnn.to_memory_config(key_layer, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         query_layer = ttnn.to_layout(query_layer, ttnn.TILE_LAYOUT)
 
         query_layer = ttnn.to_memory_config(
@@ -215,8 +214,6 @@ class TtSegformerEfficientSelfAttention:
         )
         ttnn.deallocate(attention_scores)
         attention_probs = ttnn.to_layout(attention_probs, ttnn.TILE_LAYOUT)
-
-        value_layer = ttnn.to_memory_config(value_layer, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         attention_probs = ttnn.to_memory_config(
             attention_probs,
