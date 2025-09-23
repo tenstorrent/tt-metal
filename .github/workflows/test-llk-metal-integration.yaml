@@ -50,9 +50,6 @@ on:
       blackhole-result:
         description: 'Result of blackhole tests (status:url format)'
         value: ${{ jobs.setup-and-test.outputs.blackhole-result }}
-      tt-metal-l2-nightly-result:
-        description: 'Result of TT-Metal L2 Nightly APC tests (status:url format)'
-        value: ${{ jobs.setup-and-test.outputs.tt-metal-l2-nightly-result }}
 
 concurrency:
   group: llk-integration-${{ inputs.mirrored_branch }}
@@ -85,10 +82,8 @@ jobs:
       parent-branch-name: ${{ env.PARENT_BRANCH_NAME }}
       all-post-commit-run-id: ${{ steps.trigger-workflows.outputs.all-post-commit-run-id }}
       blackhole-run-id: ${{ steps.trigger-workflows.outputs.blackhole-run-id }}
-      tt-metal-l2-nightly-run-id: ${{ steps.trigger-workflows.outputs.tt-metal-l2-nightly-run-id }}
       all-post-commit-result: ${{ steps.monitor-workflows.outputs.all-post-commit-result }}
       blackhole-result: ${{ steps.monitor-workflows.outputs.blackhole-result }}
-      tt-metal-l2-nightly-result: ${{ steps.monitor-workflows.outputs.tt-metal-l2-nightly-result }}
     steps:
       - name: Setup
         uses: actions/checkout@v4
@@ -178,7 +173,6 @@ jobs:
           declare -A workflows
           workflows["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}"
           workflows["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}"
-          workflows["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit }}"
 
           declare -A run_ids
 
@@ -187,12 +181,7 @@ jobs:
             local workflow_file="$1"
             local display_name="$2"
 
-            # Special handling for tt-metal-l2-nightly.yaml to pass run_APC_cpp_tests parameter
-            if [ "$workflow_file" = "tt-metal-l2-nightly.yaml" ]; then
-              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" -f run_APC_cpp_tests=true
-            else
-              gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
-            fi
+            gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
 
             # Poll for run ID
             local run_id=""
@@ -219,10 +208,6 @@ jobs:
                   run_ids["blackhole"]=$(trigger_and_get_id "$workflow" "Blackhole")
                   [ -n "${run_ids[blackhole]}" ] && echo "✅ Blackhole run ID: ${run_ids[blackhole]}"
                   ;;
-                "tt-metal-l2-nightly.yaml")
-                  run_ids["tt-metal-l2-nightly"]=$(trigger_and_get_id "$workflow" "TT-Metal L2 Nightly APC")
-                  [ -n "${run_ids[tt-metal-l2-nightly]}" ] && echo "✅ TT-Metal L2 Nightly APC run ID: ${run_ids[tt-metal-l2-nightly]}"
-                  ;;
               esac
             fi
           done
@@ -230,7 +215,6 @@ jobs:
           # Output run IDs for monitoring steps
           echo "all-post-commit-run-id=${run_ids[all-post-commit]}" >> $GITHUB_OUTPUT
           echo "blackhole-run-id=${run_ids[blackhole]}" >> $GITHUB_OUTPUT
-          echo "tt-metal-l2-nightly-run-id=${run_ids[tt-metal-l2-nightly]}" >> $GITHUB_OUTPUT
       - name: Monitor triggered workflows
         id: monitor-workflows
         if: |
@@ -243,7 +227,6 @@ jobs:
           POLL_INTERVAL: ${{ env.POLL_INTERVAL }}
           ALL_POST_COMMIT_RUN_ID: ${{ steps.trigger-workflows.outputs.all-post-commit-run-id }}
           BLACKHOLE_RUN_ID: ${{ steps.trigger-workflows.outputs.blackhole-run-id }}
-          TT_METAL_L2_NIGHTLY_RUN_ID: ${{ steps.trigger-workflows.outputs.tt-metal-l2-nightly-run-id }}
         run: |
           # Helper function for workflow monitoring
           monitor_workflow() {
@@ -312,7 +295,6 @@ jobs:
           declare -A workflow_configs
           workflow_configs["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}:$ALL_POST_COMMIT_RUN_ID:all-post-commit-result"
           workflow_configs["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}:$BLACKHOLE_RUN_ID:blackhole-result"
-          workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
           exit_code=0
           for workflow_file in "${!workflow_configs[@]}"; do
             IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
@@ -332,7 +314,7 @@ jobs:
         run: |
           echo "🔄 Parent workflow cancelled - cleaning up spawned workflows..."
           # Workflows spawned by this job
-          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml")
+          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml")
           # Consider both queued and in_progress runs
           STATUSES=("queued" "in_progress")
           for workflow in "${SPAWNED_WORKFLOWS[@]}"; do
@@ -405,7 +387,6 @@ jobs:
             declare -A test_configs
             test_configs["All Post-Commit Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.all-post-commit-result }}"
             test_configs["Blackhole Post-Commit Tests"]="${{ inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.blackhole-result }}"
-            test_configs["TT-Metal L2 Nightly APC Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
 
             # Function to display test result
             display_test_result() {

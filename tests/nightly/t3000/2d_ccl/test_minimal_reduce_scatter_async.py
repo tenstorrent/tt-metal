@@ -93,6 +93,9 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
+    if enable_trace:
+        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
+
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),

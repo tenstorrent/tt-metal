@@ -21,7 +21,7 @@ struct RuntimeArgsData {
     std::uint32_t* rt_args_data;
     std::size_t rt_args_count;
 
-    bool in_bounds(std::size_t index) const noexcept {
+    inline bool in_bounds(std::size_t index) const noexcept {
         if (index >= rt_args_count) {
             std::cerr << "TT_FATAL: Index " << index << " is larger than runtime args size " << rt_args_count << " at "
                       << __FILE__ << ":" << __LINE__ << std::endl;
@@ -30,17 +30,17 @@ struct RuntimeArgsData {
         return true;
     }
 
-    std::uint32_t& operator[](std::size_t index) noexcept {
+    inline std::uint32_t& operator[](std::size_t index) noexcept {
         assert(in_bounds(index));
         return this->rt_args_data[index];
     }
 
-    const std::uint32_t& operator[](std::size_t index) const noexcept {
+    inline const std::uint32_t& operator[](std::size_t index) const noexcept {
         assert(in_bounds(index));
         return this->rt_args_data[index];
     }
 
-    std::uint32_t& at(std::size_t index) {
+    inline std::uint32_t& at(std::size_t index) {
         if (!in_bounds(index)) {
             throw std::out_of_range(
                 "Index " + std::to_string(index) + " is larger than runtime args size " +
@@ -49,7 +49,7 @@ struct RuntimeArgsData {
         return this->rt_args_data[index];
     }
 
-    const std::uint32_t& at(std::size_t index) const {
+    inline const std::uint32_t& at(std::size_t index) const {
         if (!in_bounds(index)) {
             throw std::out_of_range(
                 "Index " + std::to_string(index) + " is larger than runtime args size " +
@@ -58,11 +58,11 @@ struct RuntimeArgsData {
         return this->rt_args_data[index];
     }
 
-    std::uint32_t* data() noexcept { return rt_args_data; }
+    inline std::uint32_t* data() noexcept { return rt_args_data; }
 
-    const std::uint32_t* data() const noexcept { return rt_args_data; }
+    inline const std::uint32_t* data() const noexcept { return rt_args_data; }
 
-    std::size_t size() const noexcept { return rt_args_count; }
+    inline std::size_t size() const noexcept { return rt_args_count; }
 };
 
 }  // namespace tt::tt_metal

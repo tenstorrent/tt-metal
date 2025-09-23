@@ -201,7 +201,8 @@ inline std::tuple<bool, std::vector<std::string>> has_command_option_and_remaini
 
 template <class T>
 inline void split_string_into_vector(
-    std::vector<T>& output_vector, std::string input_command_modified, const char* delimiter) {
+    std::vector<T>& output_vector, const std::string input_command, const char* delimiter) {
+    std::string input_command_modified = input_command;
     if (!input_command_modified.empty()) {
         size_t current_pos = input_command_modified.find(delimiter);
         while (current_pos != std::string::npos) {

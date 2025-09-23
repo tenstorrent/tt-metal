@@ -9,7 +9,7 @@ from loguru import logger
 
 
 from models.experimental.hrnet.reference.hrnet import PytorchHighResolutionNet
-from models.common.utility_functions import comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 
 @pytest.mark.parametrize(

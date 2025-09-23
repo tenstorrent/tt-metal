@@ -53,8 +53,7 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
+WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::MeshDevice> device, Topology topology) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
@@ -118,7 +117,7 @@ void get_mcast_receivers(
             auto curr_fabric_node_id = node;
             for (uint32_t i = 0; i < mcast_ref[trunk_direction].size(); i++) {
                 auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, trunk_direction);
-                if (!neighbors.empty()) {
+                if (neighbors.size() > 0) {
                     FabricNodeId rx_node_id(MeshId{curr_fabric_node_id.mesh_id}, neighbors[0]);
                     mcast_receiver_physical_device_ids.push_back(
                         control_plane.get_physical_chip_id_from_fabric_node_id(rx_node_id));
@@ -396,7 +395,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
         // get a port to connect to
         eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
-        if (eth_chans.empty()) {
+        if (eth_chans.size() == 0) {
             GTEST_SKIP() << "No active eth chans to connect to";
         }
     } else {
@@ -413,7 +412,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
         eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-        if (eth_chans.empty()) {
+        if (eth_chans.size() == 0) {
             log_info(
                 tt::LogTest,
                 "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
@@ -637,7 +636,7 @@ void run_unicast_test_bw_chips(
 
     // append the EDM connection rt args
     const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
-    EXPECT_EQ(!available_links.empty(), true);
+    EXPECT_EQ(available_links.size() > 0, true);
 
     uint32_t link_idx = available_links[0];
     append_fabric_connection_rt_args(

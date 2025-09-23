@@ -71,7 +71,6 @@ Tensor Creation
    ttnn.ones_like
    ttnn.full
    ttnn.full_like
-   ttnn.rand
 
 Matrix Multiplication
 =====================

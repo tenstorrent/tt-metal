@@ -6,6 +6,7 @@
 #include "llrt/rtoptions.hpp"
 
 #include <core_coord.hpp>
+#include "dev_msgs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
@@ -71,9 +72,8 @@ namespace tt {
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
-        auto soc_desc =
-            tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-        auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        auto arch = init.get_arch_name();
         if (arch == tt::ARCH::WORMHOLE_B0) {
             return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
         } else if (arch == tt::ARCH::BLACKHOLE) {
@@ -167,8 +167,6 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             TT_FATAL(num_chips == 2, "Unknown cluster type for P300 board with {}", num_chips);
             cluster_type = tt::tt_metal::ClusterType::P300;
         } else if (board_type == BoardType::UBB) {
-            cluster_type = tt::tt_metal::ClusterType::GALAXY;
-        } else if (board_type == BoardType::UBB_BLACKHOLE) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
         }
     }
@@ -375,7 +373,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
 void Cluster::start_driver(tt_device_params &device_params) const {
     device_params.init_device = true;
 
-    TT_FATAL(!this->sdesc_per_chip_.empty(), "Descriptor must be loaded. Try open_driver()");
+    TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
@@ -912,7 +910,7 @@ void Cluster::set_tunnels_from_mmio_device() {
         auto device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
         device_ids.erase(mmio_chip_id);
 
-        if (device_ids.empty()) {
+        if (device_ids.size() == 0) {
             this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
             continue;
         }
@@ -968,7 +966,7 @@ void Cluster::set_tunnels_from_mmio_device() {
                 "tt-topology.");
         }
 
-        TT_ASSERT(!tunnels_from_mmio.empty(), "Must have at least 1 tunnel from MMIO Device.");
+        TT_ASSERT(tunnels_from_mmio.size() != 0, "Must have at least 1 tunnel from MMIO Device.");
         uint32_t tunnel_depth = tunnels_from_mmio[0].size();
         log_debug(tt::LogMetal, "Each FD Tunnel is {} deep.", tunnel_depth);
 
@@ -1313,7 +1311,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     // we do not always context switch to base FW
     std::vector<chip_id_t> non_mmio_devices;
     std::vector<chip_id_t> mmio_devices = target_mmio_devices;
-    if (mmio_devices.empty()) {
+    if (mmio_devices.size() == 0) {
         mmio_devices.reserve(this->number_of_pci_devices());
         for (auto chip_id : this->driver_->get_target_mmio_device_ids()) {
             mmio_devices.emplace_back(chip_id);
@@ -1323,47 +1321,44 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
         non_mmio_devices.emplace_back(chip_id);
     }
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto dev_msgs_factory = hal_.get_dev_msgs_factory(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     if (enable_internal_routing) {
-        auto routing_info_enabled = dev_msgs_factory.create<tt_metal::dev_msgs::routing_info_t>();
-        routing_info_enabled.view().routing_enabled() = 1;
-        routing_info_enabled.view().src_sent_valid_cmd() = 0;
-        routing_info_enabled.view().dst_acked_valid_cmd() = 0;
+        const routing_info_t routing_info_enabled = {
+            .routing_enabled = 1,
+            .src_sent_valid_cmd = 0,
+            .dst_acked_valid_cmd = 0,
+        };
         for (const auto &chip_id : non_mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for non-mmio devices
-                write_core(
-                    routing_info_enabled.data(), routing_info_enabled.size(), virtual_eth_core, routing_info_addr_);
+                write_core((void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
         for (const auto &chip_id : mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for mmio devices
-                write_core(
-                    routing_info_enabled.data(), routing_info_enabled.size(), virtual_eth_core, routing_info_addr_);
+                write_core((void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
     } else {
-        auto routing_info_disabled = dev_msgs_factory.create<tt_metal::dev_msgs::routing_info_t>();
-        routing_info_disabled.view().routing_enabled() = 0;
-        routing_info_disabled.view().src_sent_valid_cmd() = 0;
-        routing_info_disabled.view().dst_acked_valid_cmd() = 0;
+        const routing_info_t routing_info_disabled = {
+            .routing_enabled = 0,
+            .src_sent_valid_cmd = 0,
+            .dst_acked_valid_cmd = 0,
+        };
         for (const auto &chip_id : mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for mmio devices
-                write_core(
-                    routing_info_disabled.data(), routing_info_disabled.size(), virtual_eth_core, routing_info_addr_);
+                write_core((void*)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
         for (const auto &chip_id : non_mmio_devices) {
             for (const auto& eth_core : control_plane.get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for non-mmio devices
-                write_core(
-                    routing_info_disabled.data(), routing_info_disabled.size(), virtual_eth_core, routing_info_addr_);
+                write_core((void*)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
     }

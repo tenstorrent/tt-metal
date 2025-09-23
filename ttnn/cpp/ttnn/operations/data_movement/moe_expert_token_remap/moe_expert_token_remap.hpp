@@ -13,6 +13,7 @@ namespace operations::data_movement {
 struct ExecuteMoeExpertTokenRemap {
     static constexpr auto REDUCTION_SIZE = MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE;
     static std::vector<ttnn::Tensor> invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         const ttnn::Tensor& expert_metadata_tensor,

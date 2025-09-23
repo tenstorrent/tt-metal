@@ -12,7 +12,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
+from models.utility_functions import is_blackhole
 
 
 class TtGemmaImageFeedForward(LightweightModule):

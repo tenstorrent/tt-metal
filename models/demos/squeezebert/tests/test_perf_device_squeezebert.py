@@ -4,8 +4,8 @@
 
 import pytest
 
-from models.common.utility_functions import is_grayskull
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.utility_functions import is_grayskull
 
 
 @pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/24738")

@@ -10,7 +10,7 @@ import pytest
 
 from models.experimental.mobilenet.reference.mobilenetv2 import MobileNetV2Model as TtMobileNetv2Model
 
-from models.common.utility_functions import (
+from models.utility_functions import (
     comp_pcc,
 )
 

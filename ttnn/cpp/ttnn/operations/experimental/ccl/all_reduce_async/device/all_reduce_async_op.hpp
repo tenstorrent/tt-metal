@@ -19,7 +19,6 @@
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
-#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -54,9 +53,9 @@ struct AllReduceAsync {
         num_links(num_links),
         ring_size(ring_size),
         dtype(dtype),
-        output_mem_config(std::move(output_mem_config)),
+        output_mem_config(output_mem_config),
         topology(topology),
-        semaphore(std::move(semaphore)),
+        semaphore(semaphore),
         sub_device_id(sub_device_id),
         use_noc1_only(use_noc1_only),
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),

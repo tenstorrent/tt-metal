@@ -86,7 +86,7 @@ namespace local_test_functions {
 /// @return
 template <typename T>
 std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config) {
     auto device = mesh_device->get_devices()[0];
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
@@ -112,9 +112,7 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
 
 template <typename T>
 bool l1_buffer_read(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const L1Config<T>& test_config,
-    const auto& write_info) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config, const auto& write_info) {
     auto buffer = write_info.first;
     auto input = write_info.second;
     auto output = std::vector<uint32_t>(input.size());
@@ -141,7 +139,7 @@ bool l1_buffer_read(
 }
 
 template <typename T>
-bool l1_buffer_read_write(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
+bool l1_buffer_read_write(std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config) {
     auto write_info = l1_buffer_write_wait(mesh_device, test_config);
     return l1_buffer_read(mesh_device, test_config, write_info);
 }

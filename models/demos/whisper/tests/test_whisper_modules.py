@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,10 +11,9 @@ from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfi
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, torch_random
-from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.utility_functions import is_blackhole, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
@@ -23,7 +22,7 @@ MODEL_NAME = "distil-whisper/distil-large-v3"
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "sequence_size, use_encoder_states, use_attn_mask, use_kv_cache",
     (
@@ -41,18 +40,16 @@ MODEL_NAME = "distil-whisper/distil-large-v3"
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_whisper_attention(
-    mesh_device,
+    device,
     ttnn_model,
     model_name,
-    batch_size_per_device,
+    batch_size,
     sequence_size,
     use_encoder_states,
     use_attn_mask,
     use_kv_cache,
 ):
     torch.manual_seed(0)
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     is_decode = use_encoder_states or use_attn_mask or use_kv_cache
     model = transformers.models.whisper.modeling_whisper.WhisperAttention(
@@ -67,11 +64,7 @@ def test_whisper_attention(
     if use_encoder_states:
         torch_encoder_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
         ttnn_encoder_states = ttnn.from_torch(
-            torch_encoder_states,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=input_mesh_mapper,
+            torch_encoder_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
     else:
         torch_encoder_states = None
@@ -84,11 +77,7 @@ def test_whisper_attention(
         )
         ttnn_attention_mask = torch_attention_mask.expand(-1, num_heads, -1, -1)
         ttnn_attention_mask = ttnn.from_torch(
-            ttnn_attention_mask,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=input_mesh_mapper,
+            ttnn_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
     else:
         torch_attention_mask = None
@@ -97,17 +86,8 @@ def test_whisper_attention(
     past_key_values = None
     if use_kv_cache:
         past_key_values = EncoderDecoderCache.from_legacy_cache(past_key_values)
-        kv_cache = init_kv_cache(
-            config,
-            mesh_device,
-            max_batch_size=batch_size_per_device,
-            max_seq_len=512,
-            n_layers=1,
-            weights_mesh_mapper=weights_mesh_mapper,
-        )[0]
-        current_decode_pos = ttnn.from_torch(
-            torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
-        )
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512, n_layers=1)[0]
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
         generation_length = 5
     else:
         generation_length = 1
@@ -115,8 +95,8 @@ def test_whisper_attention(
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: True,
-        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
-        device=mesh_device,
+        custom_preprocessor=ttnn_model.custom_preprocessor,
+        device=device,
         prefix="encoder_attn" if use_encoder_states else "",
     )
 
@@ -125,11 +105,7 @@ def test_whisper_attention(
     for i in range(generation_length):
         torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
         ttnn_hidden_states = ttnn.from_torch(
-            torch_hidden_states,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=input_mesh_mapper,
+            torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         torch_output, _, present_key_values = model(
@@ -152,7 +128,7 @@ def test_whisper_attention(
             current_decode_pos=current_decode_pos if use_kv_cache else None,
             parameters=ttnn_parameters,
         )
-        output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+        output = ttnn.to_torch(output)
 
         pcc_passed, output_pcc = comp_pcc(torch_output, output, expec_out_pcc)
         logger.info(f"[pos={i}] Output PCC: {output_pcc}")
@@ -161,8 +137,8 @@ def test_whisper_attention(
             logger.warning(f"[pos={i}] Output PCC {output_pcc} is lower than {expec_out_pcc}")
 
         if use_kv_cache:
-            k_cache = ttnn.to_torch(kv_cache[0], mesh_composer=output_mesh_composer)[:, :, : (i + 1), :]
-            v_cache = ttnn.to_torch(kv_cache[1], mesh_composer=output_mesh_composer)[:, :, : (i + 1), :]
+            k_cache = ttnn.to_torch(kv_cache[0])[:, :, : (i + 1), :]
+            v_cache = ttnn.to_torch(kv_cache[1])[:, :, : (i + 1), :]
 
             pcc_passed, k_cache_pcc = comp_pcc(past_keys[0], k_cache, expec_k_cache_pcc)
             logger.info(f"[pos={i}] K Cache PCC: {k_cache_pcc}")
@@ -187,13 +163,11 @@ def test_whisper_attention(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_size):
+def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
 
@@ -205,19 +179,15 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
-        device=mesh_device,
+        custom_preprocessor=ttnn_model.custom_preprocessor,
+        device=device,
     )
     ttnn_hidden_states = ttnn.from_torch(
-        torch_hidden_states,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=input_mesh_mapper,
+        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
-    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    output = ttnn.to_torch(output)
 
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
@@ -225,13 +195,11 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_length):
+def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length):
     torch.manual_seed(0)
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
 
@@ -243,21 +211,19 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        custom_preprocessor=ttnn_model.custom_preprocessor,
         prefix="encoder",
-        device=mesh_device,
+        device=device,
     )
 
     input_embeds = ttnn_model.preprocess_encoder_inputs(
         config=config,
         input_features=torch_input_features,
         parameters=ttnn_parameters,
-        device=mesh_device,
-        weights_mesh_mapper=weights_mesh_mapper,
-        input_mesh_mapper=input_mesh_mapper,
+        device=device,
     )
     output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
-    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    output = ttnn.to_torch(output)
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.998)
     logger.info(f"Output PCC: {pcc_message}")
@@ -265,7 +231,7 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -276,17 +242,15 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_decoder_layer(
-    mesh_device,
+    device,
     ttnn_model,
     model_name,
-    batch_size_per_device,
+    batch_size,
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
 ):
     torch.manual_seed(0)
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).eval()
 
@@ -307,40 +271,21 @@ def test_decoder_layer(
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: True,
-        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
-        device=mesh_device,
+        custom_preprocessor=ttnn_model.custom_preprocessor,
+        device=device,
     )
     ttnn_hidden_states = ttnn.from_torch(
-        torch_hidden_states,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=input_mesh_mapper,
+        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
     attention_mask = attention_mask.expand(-1, num_heads, -1, -1)
-    ttnn_attention_mask = ttnn.from_torch(
-        attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=input_mesh_mapper
-    )
+    ttnn_attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_encoder_hidden_states = ttnn.from_torch(
-        torch_encoder_hidden_states,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=input_mesh_mapper,
+        torch_encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     if use_kv_cache:
-        kv_cache = init_kv_cache(
-            config,
-            mesh_device,
-            max_batch_size=batch_size_per_device,
-            max_seq_len=512,
-            n_layers=1,
-            weights_mesh_mapper=weights_mesh_mapper,
-        )[0]
-        current_decode_pos = ttnn.from_torch(
-            torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
-        )
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512, n_layers=1)[0]
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
 
     output = ttnn_model.decoder_layer(
         config,
@@ -351,7 +296,7 @@ def test_decoder_layer(
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
-    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    output = ttnn.to_torch(output)
 
     _, pcc_message = assert_with_pcc(torch_output, output, 0.999)
     logger.info(f"Output PCC: {pcc_message}")
@@ -359,7 +304,7 @@ def test_decoder_layer(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
 @pytest.mark.parametrize(
     "decoder_sequence_size, use_kv_cache",
@@ -370,17 +315,15 @@ def test_decoder_layer(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_decoder(
-    mesh_device,
+    device,
     ttnn_model,
     model_name,
-    batch_size_per_device,
+    batch_size,
     encoder_sequence_size,
     decoder_sequence_size,
     use_kv_cache,
 ):
     torch.manual_seed(0)
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
     embed_dim = config.d_model
@@ -402,39 +345,24 @@ def test_decoder(
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
-        device=mesh_device,
+        custom_preprocessor=ttnn_model.custom_preprocessor,
+        device=device,
         prefix="decoder",
     )
-    ttnn_decoder_input_ids = ttnn.from_torch(decoder_input_ids, dtype=ttnn.bfloat16, mesh_mapper=input_mesh_mapper)
-    ttnn_decoder_input_ids = ttnn.to_device(ttnn_decoder_input_ids, mesh_device)
+    ttnn_decoder_input_ids = ttnn.from_torch(decoder_input_ids, dtype=ttnn.bfloat16)
+    ttnn_decoder_input_ids = ttnn.to_device(ttnn_decoder_input_ids, device)
 
-    ttnn_encoder_hidden_states = ttnn.from_torch(
-        torch_encoder_hidden_states, dtype=ttnn.bfloat16, mesh_mapper=input_mesh_mapper
-    )
+    ttnn_encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16)
     ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
-    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, mesh_device)
+    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device)
 
     (decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_decoder_inputs(
-        config,
-        decoder_input_ids,
-        attention_mask,
-        parameters=ttnn_parameters,
-        device=mesh_device,
-        input_mesh_mapper=input_mesh_mapper,
+        config, decoder_input_ids, attention_mask, parameters=ttnn_parameters, device=device
     )
 
     if use_kv_cache:
-        kv_cache = init_kv_cache(
-            config,
-            mesh_device,
-            max_batch_size=batch_size_per_device,
-            max_seq_len=512,
-            weights_mesh_mapper=weights_mesh_mapper,
-        )
-        current_decode_pos = ttnn.from_torch(
-            torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
-        )
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512)
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
 
     output = ttnn_model.decoder(
         config,
@@ -445,7 +373,7 @@ def test_decoder(
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
-    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    output = ttnn.to_torch(output)
 
     _, pcc_message = assert_with_pcc(torch_output, output, pcc=0.999)
     logger.info(f"Output PCC: {pcc_message}")
@@ -460,22 +388,19 @@ def test_decoder(
         [1, True],
     ),
 )
-@pytest.mark.parametrize("batch_size_per_device", [1])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_ttnn_whisper(
-    tmp_path, mesh_device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, batch_size_per_device
-):
+def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache):
     torch.manual_seed(0)
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
-    input_features = input_features.repeat(batch_size, 1, 1)
-    decoder_input_ids = torch.ones(batch_size, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
+    decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
+
+    batch_size = 1
     attention_mask = None
+
     model = WhisperModel.from_pretrained(model_name).eval()
 
     expected_last_hidden_state = model(
@@ -487,8 +412,8 @@ def test_ttnn_whisper(
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
-        device=mesh_device,
+        custom_preprocessor=ttnn_model.custom_preprocessor,
+        device=device,
     )
 
     (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
@@ -497,22 +422,12 @@ def test_ttnn_whisper(
         input_ids=decoder_input_ids,
         attention_mask=attention_mask,
         parameters=ttnn_parameters,
-        device=mesh_device,
-        input_mesh_mapper=input_mesh_mapper,
-        weights_mesh_mapper=weights_mesh_mapper,
+        device=device,
     )
 
     if use_kv_cache:
-        kv_cache = init_kv_cache(
-            config,
-            mesh_device,
-            max_batch_size=batch_size_per_device,
-            max_seq_len=512,
-            weights_mesh_mapper=weights_mesh_mapper,
-        )
-        current_decode_pos = ttnn.from_torch(
-            torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
-        )
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512)
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
 
     last_hidden_state = ttnn_model.whisper(
         config,
@@ -523,7 +438,7 @@ def test_ttnn_whisper(
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
-    last_hidden_state = ttnn.to_torch(last_hidden_state, mesh_composer=output_mesh_composer)
+    last_hidden_state = ttnn.to_torch(last_hidden_state)
 
     if is_blackhole():
         expec_out_pcc = 0.990

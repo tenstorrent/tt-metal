@@ -5,7 +5,7 @@
 from loguru import logger
 import ttnn
 
-from models.common.utility_functions import (
+from models.utility_functions import (
     torch2tt_tensor,
     comp_pcc,
 )

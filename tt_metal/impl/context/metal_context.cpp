@@ -2,19 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
 #include <filesystem>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
-#include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/debug/inspector_impl.hpp"
@@ -31,7 +28,6 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -85,7 +81,7 @@ void MetalContext::initialize(
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
                 force_reinit_ = false;
-                log_debug(
+                log_warning(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
                 teardown();
@@ -370,32 +366,30 @@ void MetalContext::clear_dram_state(chip_id_t device_id) {
 }
 
 void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
-    auto clear_ethernet_core = [&](const CoreCoord& logical_eth_core, HalProgrammableCoreType programmable_core_type) {
-        auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
-        std::vector<std::byte> init_launch_msg_data(
-            dev_msgs::launch_msg_buffer_num_entries * factory.size_of<dev_msgs::launch_msg_t>(), std::byte{0});
-        dev_msgs::go_msg_t go_msg = factory.create<dev_msgs::go_msg_t>();
-        go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
+    go_msg.signal = RUN_MSG_INIT;
+    std::memset(&launch_msg, 0, sizeof(launch_msg_t));
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, launch_msg);
 
+    auto clear_ethernet_core = [&](const CoreCoord& logical_eth_core) {
         CoreCoord virtual_eth_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_eth_core, CoreType::ETH);
         cluster_->write_core(
             init_launch_msg_data.data(),
-            init_launch_msg_data.size(),
+            launch_msg_buffer_num_entries * sizeof(launch_msg_t),
             tt_cxy_pair(device_id, virtual_eth_core),
-            hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
-        cluster_->write_core(
-            go_msg.data(),
-            go_msg.size(),
-            {device_id, virtual_eth_core},
-            hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG));
+            hal_->get_dev_addr(get_programmable_core_type(virtual_eth_core, device_id), HalL1MemAddrType::LAUNCH));
+        uint32_t go_addr =
+            hal_->get_dev_addr(get_programmable_core_type(virtual_eth_core, device_id), HalL1MemAddrType::GO_MSG);
+        cluster_->write_core(&go_msg, sizeof(go_msg_t), tt_cxy_pair(device_id, virtual_eth_core), go_addr);
     };
 
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-        clear_ethernet_core(eth_core, HalProgrammableCoreType::ACTIVE_ETH);
+        clear_ethernet_core(eth_core);
     }
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        clear_ethernet_core(eth_core, HalProgrammableCoreType::IDLE_ETH);
+        clear_ethernet_core(eth_core);
     }
 }
 
@@ -410,7 +404,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -420,7 +414,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();
@@ -552,7 +546,7 @@ void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
-    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+    if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
@@ -579,24 +573,22 @@ void MetalContext::initialize_control_plane() {
     auto cluster_type = cluster_->get_cluster_type();
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), true);
-
-    std::string suffix = ".textproto";
+            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()));
 
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
-        std::string mesh_graph_descriptor;
+        std::string_view mesh_graph_descriptor;
         switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
             case tt::tt_fabric::FabricType::TORUS_XY:
-                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor" + suffix;
+                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
                 break;
             case tt::tt_fabric::FabricType::TORUS_X:
-                mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor" + suffix;
+                mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor.yaml";
                 break;
             case tt::tt_fabric::FabricType::TORUS_Y:
-                mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor" + suffix;
+                mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor.yaml";
                 break;
-            default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor" + suffix; break;
+            default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml"; break;
         }
         mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
@@ -634,8 +626,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         const int timeout_ms = 10000;  // 10 seconds for now
         if (!id_and_cores.second.empty()) {
             try {
-                llrt::internal_::wait_until_cores_done(
-                    id_and_cores.first, dev_msgs::RUN_MSG_GO, id_and_cores.second, timeout_ms);
+                llrt::internal_::wait_until_cores_done(id_and_cores.first, RUN_MSG_GO, id_and_cores.second, timeout_ms);
             } catch (std::runtime_error& e) {
                 log_warning(
                     tt::LogAlways,
@@ -754,7 +745,8 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
     bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
-        noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
+        noc_translation_enabled && (hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
+                                    hal_->get_virtualized_core_types().end());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
@@ -827,8 +819,8 @@ void MetalContext::initialize_firmware(
     chip_id_t device_id,
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
-    dev_msgs::launch_msg_t::View launch_msg,
-    dev_msgs::go_msg_t::ConstView go_msg) {
+    launch_msg_t* launch_msg,
+    go_msg_t* go_msg) {
     ZoneScoped;
 
     initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core);
@@ -848,8 +840,10 @@ void MetalContext::initialize_firmware(
                                        .get_target_out_path("");
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
-                    hal_->set_iram_text_size(
-                        launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
+                    if (riscv_id + build_idx == 1) {  // TODO: clean up how brisc/ncrisc are handled
+                        // In this context, ncrisc_kernel_size16 is the size of the fw
+                        launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
+                    }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
@@ -861,7 +855,7 @@ void MetalContext::initialize_firmware(
 
             if (!rtoptions_.get_fast_dispatch()) {
                 // Host always writes launch messages
-                launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
+                launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
             } else {
                 std::unordered_set<CoreCoord> virtual_dispatch_cores;
                 if (dispatch_core_manager_->get_dispatch_core_type() == CoreType::WORKER) {
@@ -872,10 +866,10 @@ void MetalContext::initialize_firmware(
                 }
                 if (virtual_dispatch_cores.contains(virtual_core)) {
                     // Dispatch cores - Host writes launch messages
-                    launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
+                    launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
                 } else {
                     // Worker cores - Dispatcher will write launch messages
-                    launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_DEV;
+                    launch_msg->kernel_config.mode = DISPATCH_MODE_DEV;
                 }
             }
 
@@ -911,9 +905,8 @@ void MetalContext::initialize_firmware(
             }
             // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
-            launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth)
-                                                    ? dev_msgs::DISPATCH_MODE_HOST
-                                                    : dev_msgs::DISPATCH_MODE_DEV;
+            launch_msg->kernel_config.mode =
+                (!rtoptions_.get_fast_dispatch() or is_idle_eth) ? DISPATCH_MODE_HOST : DISPATCH_MODE_DEV;
             break;
         }
         default:
@@ -937,21 +930,15 @@ void MetalContext::initialize_firmware(
     // dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
     // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
-    size_t launch_msg_size = launch_msg.size();
-    std::vector<std::byte> init_launch_msg_data(
-        dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
-    for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
-        std::copy(
-            launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
-    }
-    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
+    auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
     cluster_->write_core(
         init_launch_msg_data.data(),
-        init_launch_msg_data.size(),
+        launch_msg_buffer_num_entries * sizeof(launch_msg_t),
         tt_cxy_pair(device_id, virtual_core),
         hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
     uint32_t go_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
-    cluster_->write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
+    cluster_->write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(device_id, virtual_core), go_addr);
     uint64_t launch_msg_buffer_read_ptr_addr =
         hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
     uint32_t zero = 0;
@@ -961,18 +948,30 @@ void MetalContext::initialize_firmware(
     cluster_->write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 }
 
-dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
-    chip_id_t device_id, HalProgrammableCoreType programmable_core_type) const {
+void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
+    ZoneScoped;
+
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
+    go_msg.signal = RUN_MSG_INIT;
+
+    // Populate core info, which will be written to device
+    std::vector<uint32_t> core_info_vec(sizeof(core_info_msg_t) / sizeof(uint32_t));
+    core_info_msg_t* core_info = (core_info_msg_t*)core_info_vec.data();
+
     const metal_SocDescriptor& soc_d = cluster_->get_soc_desc(device_id);
-    // Use architecture-defined supported PCIe address bounds
-    auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
-    dev_msgs::core_info_msg_t buffer = factory.create<dev_msgs::core_info_msg_t>();
-    auto core_info = buffer.view();
-    core_info.noc_pcie_addr_base() = hal_->get_pcie_addr_lower_bound();
-    core_info.noc_pcie_addr_end() = hal_->get_pcie_addr_upper_bound();
-    core_info.noc_dram_addr_base() = 0;
-    core_info.noc_dram_addr_end() = soc_d.dram_core_size;
-    core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
+    uint64_t pcie_chan_base_addr = cluster_->get_pcie_base_addr_from_device(device_id);
+    uint32_t num_host_channels = cluster_->get_num_host_channels(device_id);
+    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
+    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
+        pcie_chan_end_addr += cluster_->get_host_channel_size(device_id, pcie_chan);
+    }
+    core_info->noc_pcie_addr_base = pcie_chan_base_addr;
+    core_info->noc_pcie_addr_end = pcie_chan_end_addr;
+    core_info->noc_dram_addr_base = 0;
+    core_info->noc_dram_addr_end = soc_d.dram_core_size;
+    core_info->l1_unreserved_start = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
+
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
     // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing
@@ -996,29 +995,19 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
         soc_d.get_cores(CoreType::ETH, CoordSystem::NOC0);  // make these translated and then convert to physical
 
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= core_info.non_worker_cores().size(),
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
     TT_ASSERT(
-        eth_cores.size() <= core_info.virtual_non_worker_cores().size(),
+        eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
-    auto set_addressable_core =
-        [](dev_msgs::addressable_core_t::View core, const CoreCoord& core_coord, dev_msgs::AddressableCoreType type) {
-            core.x() = core_coord.x;
-            core.y() = core_coord.y;
-            core.type() = type;
-        };
-    for (auto non_worker_core : core_info.non_worker_cores()) {
-        set_addressable_core(
-            non_worker_core,
-            {dev_msgs::CORE_COORD_INVALID, dev_msgs::CORE_COORD_INVALID},
-            dev_msgs::AddressableCoreType::UNKNOWN);
+    for (int idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
+        core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
-    for (auto virtual_non_worker_core : core_info.virtual_non_worker_cores()) {
-        set_addressable_core(
-            virtual_non_worker_core,
-            {dev_msgs::CORE_COORD_INVALID, dev_msgs::CORE_COORD_INVALID},
-            dev_msgs::AddressableCoreType::UNKNOWN);
+    for (int idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
+        core_info->virtual_non_worker_cores[idx] = {
+            CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
+
     // On Blackhole, virtualized Tensix coordinates overlap with NoC1 physical DRAM and PCIe coordinates beause
     // virtualized Tensix coordinates == NoC0 Tensix physical coordinates. This causes false negative Watcher
     // sanitization errors because it appears as a mixed use of physical and virtual To workaround this, skip over
@@ -1027,16 +1016,13 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     bool skip_physical = cluster_->arch() == ARCH::BLACKHOLE and hal_->is_coordinate_virtualization_enabled();
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
-            set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::PCIE);
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
         }
         for (tt::umd::CoreCoord core : dram_cores) {
-            set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::DRAM);
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
         }
         for (tt::umd::CoreCoord core : eth_cores) {
-            set_addressable_core(
-                core_info.non_worker_cores()[non_worker_cores_idx++], core, dev_msgs::AddressableCoreType::ETH);
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
         }
     }
 
@@ -1045,29 +1031,23 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
         uint32_t virtual_non_worker_cores_idx = 0;
         for (tt::umd::CoreCoord core : eth_cores) {
             auto virtual_core = cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
-            set_addressable_core(
-                core_info.virtual_non_worker_cores()[virtual_non_worker_cores_idx++],
-                virtual_core,
-                dev_msgs::AddressableCoreType::ETH);
+            core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
 
         if (cluster_->arch() == ARCH::BLACKHOLE) {
             for (const CoreCoord& core : pcie_cores) {
                 auto virtual_core =
                     cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
-                set_addressable_core(
-                    core_info.virtual_non_worker_cores()[virtual_non_worker_cores_idx++],
-                    virtual_core,
-                    dev_msgs::AddressableCoreType::PCIE);
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
             }
 
             for (const CoreCoord& core : dram_cores) {
                 auto virtual_core =
                     cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
-                set_addressable_core(
-                    core_info.virtual_non_worker_cores()[virtual_non_worker_cores_idx++],
-                    virtual_core,
-                    dev_msgs::AddressableCoreType::DRAM);
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::DRAM};
             }
         }
     }
@@ -1086,11 +1066,10 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
         }
     }
     TT_ASSERT(
-        harvested_axis_coord.size() <= core_info.harvested_coords().size(),
-        "Detected more harvested rows than fit in mailbox.");
-    for (size_t idx = 0; idx < core_info.harvested_coords().size(); idx++) {
-        core_info.harvested_coords()[idx] =
-            (idx < harvested_axis_coord.size()) ? harvested_axis_coord[idx] : dev_msgs::CORE_COORD_INVALID;
+        harvested_axis_coord.size() <= MAX_HARVESTED_ON_AXIS, "Detected more harvested rows than fit in mailbox.");
+    for (int idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+        core_info->harvested_coords[idx] =
+            (idx < harvested_axis_coord.size()) ? harvested_axis_coord[idx] : CORE_COORD_INVALID;
         // Populate harvested rows/cols in virtual coordinate space if virtualization is supported by HW.
         // Harvested rows/cols in the virtual space are placed at the end of the worker grid,
         if (hal_->is_coordinate_virtualization_enabled() and idx < harvested_axis_coord.size()) {
@@ -1102,33 +1081,20 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
                                             : hal_->get_virtual_worker_start_x() + logical_grid_size.x;
 
             // BH translated tensix cores are same as noc0 physical
-            core_info.virtual_harvested_coords()[idx] = end_virtual_grid + harvested_axis_coord.size() - (idx + 1);
+            core_info->virtual_harvested_coords[idx] = end_virtual_grid + harvested_axis_coord.size() - (idx + 1);
         } else {
-            core_info.virtual_harvested_coords()[idx] = dev_msgs::CORE_COORD_INVALID;
+            core_info->virtual_harvested_coords[idx] = CORE_COORD_INVALID;
         }
     }
 
-    core_info.noc_size_x() = soc_d.grid_size.x;
-    core_info.noc_size_y() = soc_d.grid_size.y;
-    core_info.worker_grid_size_x() = logical_grid_size.x;  // Grid size as virtual coords see it (workers only)
-    core_info.worker_grid_size_y() = logical_grid_size.y;
-
-    return buffer;
-}
-
-void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
-    ZoneScoped;
+    core_info->noc_size_x = soc_d.grid_size.x;
+    core_info->noc_size_y = soc_d.grid_size.y;
+    core_info->worker_grid_size_x = logical_grid_size.x;  // Grid size as virtual coords see it (workers only)
+    core_info->worker_grid_size_y = logical_grid_size.y;
 
     // Download to worker cores
     log_debug(LogDevice, "Initializing firmware");
     std::unordered_set<CoreCoord> not_done_cores;
-    CoreCoord logical_grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-
-    auto dev_msgs_factory = hal_->get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
-    auto core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::TENSIX);
-    auto launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-    auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
-    go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
     const auto& storage_only_cores = tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config_);
     auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
@@ -1141,16 +1107,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                 // Setup the absolute logical coordinates of this worker which are relative to true origin. not the sub
                 // device. When running the user kernel, which potentially is on a sub device, send that info using the
                 // launch message using dispatch.
-                core_info.view().absolute_logical_x() = logical_core.x;
-                core_info.view().absolute_logical_y() = logical_core.y;
+                core_info->absolute_logical_x = logical_core.x;
+                core_info->absolute_logical_y = logical_core.y;
                 // Must write to core before starting it
                 cluster_->write_core_immediate(
-                    core_info.data(),
-                    core_info.size(),
-                    {device_id, worker_core},
-                    hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
-                initialize_firmware(
-                    device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
+                    device_id,
+                    worker_core,
+                    core_info_vec,
+                    hal_->get_dev_addr(
+                        get_programmable_core_type(worker_core, device_id), HalL1MemAddrType::CORE_INFO));
+                initialize_firmware(device_id, HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
                 not_done_cores.insert(worker_core);
             }
         }
@@ -1173,47 +1139,35 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     }
 
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
-    dev_msgs_factory = hal_->get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
-    core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::ACTIVE_ETH);
-    launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-    go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
-    go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
     std::unordered_set<CoreCoord> active_eth_cores;
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        core_info.view().absolute_logical_x() = eth_core.x;
-        core_info.view().absolute_logical_y() = eth_core.y;
+        core_info->absolute_logical_x = eth_core.x;
+        core_info->absolute_logical_y = eth_core.y;
         cluster_->write_core_immediate(
-            core_info.data(),
-            core_info.size(),
-            {device_id, virtual_core},
-            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
-        initialize_firmware(
-            device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
+            device_id,
+            virtual_core,
+            core_info_vec,
+            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+        initialize_firmware(device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, &launch_msg, &go_msg);
         if (!hal_->get_eth_fw_is_cooperative()) {
             active_eth_cores.insert(virtual_core);
             not_done_cores.insert(virtual_core);
         }
     }
 
-    dev_msgs_factory = hal_->get_dev_msgs_factory(HalProgrammableCoreType::IDLE_ETH);
-    core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::IDLE_ETH);
-    launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-    go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
-    go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        core_info.view().absolute_logical_x() = eth_core.x;
-        core_info.view().absolute_logical_y() = eth_core.y;
+        core_info->absolute_logical_x = eth_core.x;
+        core_info->absolute_logical_y = eth_core.y;
         cluster_->write_core_immediate(
-            core_info.data(),
-            core_info.size(),
-            {device_id, virtual_core},
-            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
-        initialize_firmware(
-            device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
+            device_id,
+            virtual_core,
+            core_info_vec,
+            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+        initialize_firmware(device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, &launch_msg, &go_msg);
         not_done_cores.insert(virtual_core);
     }
 
@@ -1239,21 +1193,11 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     log_debug(LogDevice, "Waiting for firmware init complete");
     const int timeout_ms = 10000;  // 10 seconds for now
     try {
-        llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
+        llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error& e) {
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");
-}
-
-// Command queue id stack for thread
-thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
-
-MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
-    return MetalContext::command_queue_id_stack_for_thread_;
-}
-const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
-    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 uint32_t MetalContext::get_active_erisc_launch_flag_addr() {
@@ -1281,17 +1225,17 @@ bool MetalContext::erisc_app_still_running(chip_id_t device_id, CoreCoord virtua
 
 // Send exit_erisc_kernel to the launch message
 void MetalContext::erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth) {
-    HalProgrammableCoreType programmable_core_type =
-        is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-    auto dev_msgs_factory = hal_->get_dev_msgs_factory(programmable_core_type);
-    auto launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-    auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
-    DeviceAddr launch_addr = hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH);
+    go_msg_t go_msg{};
+    DeviceAddr launch_addr = hal_->get_dev_addr(
+        is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
+        HalL1MemAddrType::LAUNCH);
 
-    cluster_->read_core(launch_msg.data(), launch_msg.size(), {device_id, virtual_core}, launch_addr);
+    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+    data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
 
-    launch_msg.view().kernel_config().exit_erisc_kernel() = 1;
-    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg.view(), go_msg.view(), false);
+    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+    launch_msg->kernel_config.exit_erisc_kernel = 1;
+    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg, &go_msg, launch_addr, false);
 
     if (!is_idle_eth) {
         // Active

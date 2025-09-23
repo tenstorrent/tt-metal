@@ -21,8 +21,6 @@
 #include <cstdint>
 #include <utility>
 
-using namespace tt::tt_metal;
-
 using arg_idx_t = uint16_t;
 
 ///////////////////////////////////////////////////

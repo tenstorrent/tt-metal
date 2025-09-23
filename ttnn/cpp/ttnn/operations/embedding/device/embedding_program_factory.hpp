@@ -79,7 +79,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
-    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -607,7 +606,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
-    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////

@@ -189,7 +189,7 @@ CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords) {
     *this = unmerged_set.merge_ranges();
 }
 
-void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept { std::swap(first.ranges_, second.ranges_); }
+void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, second.ranges_); }
 
 CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) = default;
 
@@ -364,7 +364,7 @@ bool CoreRangeSet::contains(const CoreRangeSet& other) const {
 const std::vector<CoreRange>& CoreRangeSet::ranges() const { return this->ranges_; }
 
 std::string CoreRangeSet::str() const {
-    if (!this->ranges().empty()) {
+    if (this->ranges().size() > 0) {
         std::string core_range_set_str = "{";
         for (const auto& core_range : this->ranges_) {
             core_range_set_str += core_range.str() + ", ";
@@ -386,7 +386,7 @@ uint32_t CoreRangeSet::num_cores() const {
 }
 
 CoreRange CoreRangeSet::bounding_box() const {
-    TT_FATAL(!this->ranges().empty(), "Cannot get bounding_box of an empty CoreRangeSet!");
+    TT_FATAL(this->ranges().size() > 0, "Cannot get bounding_box of an empty CoreRangeSet!");
     size_t min_x = UINT32_MAX, min_y = UINT32_MAX, max_x = 0, max_y = 0;
     for (const auto& cr : this->ranges()) {
         min_x = std::min(min_x, cr.start_coord.x);

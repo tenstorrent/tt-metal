@@ -61,7 +61,7 @@ void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
 }
 
 void RunDelayTestOnCore(
-    MeshWatcherDelayFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core) {
+    MeshWatcherDelayFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, CoreCoord& core) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -183,7 +183,7 @@ TEST_F(MeshWatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
         GTEST_SKIP();
 
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunDelayTestOnCore(dynamic_cast<MeshWatcherDelayFixture*>(fixture), mesh_device, core);
         },

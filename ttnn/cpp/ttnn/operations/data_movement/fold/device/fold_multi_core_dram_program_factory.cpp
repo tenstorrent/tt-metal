@@ -160,7 +160,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         });
 
     // Create cliff compute kernel if needed (for handling edge cases)
-    if (!core_range_cliff.ranges().empty()) {
+    if (core_range_cliff.ranges().size() > 0) {
         tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,

@@ -11,7 +11,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -58,7 +58,7 @@ def test_forward_pass(
     hf_config: Any,
     tmp_path: Path,
     mesh_device: ttnn.Device,
-    ccl: CCL,
+    ccl: CCL1D,
     set_deterministic_env: Any,
 ):
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."

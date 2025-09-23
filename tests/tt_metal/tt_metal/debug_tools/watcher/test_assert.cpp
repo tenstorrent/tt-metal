@@ -34,7 +34,7 @@ using namespace tt::tt_metal;
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(
     MeshWatcherFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
     HalProgrammableCoreType programmable_core_type,
     HalProcessorClassType processor_class,
     int processor_id,
@@ -202,7 +202,7 @@ static void RunTest(
     std::string exception = "";
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
-    } while (exception.empty());
+    } while (exception == "");
     EXPECT_EQ(expected, MetalContext::instance().watcher_server()->exception_message());
 }
 }
@@ -231,7 +231,7 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
-        [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [&params](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             RunTest(
                 fixture,
                 mesh_device,

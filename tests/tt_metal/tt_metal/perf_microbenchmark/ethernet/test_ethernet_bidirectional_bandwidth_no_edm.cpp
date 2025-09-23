@@ -86,8 +86,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device0,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,

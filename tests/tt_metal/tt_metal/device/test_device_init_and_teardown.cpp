@@ -45,7 +45,7 @@ namespace unit_tests_common::basic::test_device_init {
 /// @brief load_blank_kernels into all cores and will launch
 /// @param device
 /// @return
-bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+bool load_all_blank_kernels(std::shared_ptr<distributed::MeshDevice> mesh_device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
     auto mesh_workload = distributed::MeshWorkload();

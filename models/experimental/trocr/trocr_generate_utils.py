@@ -4,7 +4,7 @@
 
 import torch
 from typing import Optional
-from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from loguru import logger
 import copy
 import inspect

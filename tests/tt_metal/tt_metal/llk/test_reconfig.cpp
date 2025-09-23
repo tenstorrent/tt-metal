@@ -79,8 +79,7 @@ using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_reconfig(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReconfigConfig& test_config) {
+bool single_core_reconfig(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReconfigConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -261,20 +260,20 @@ bool single_core_reconfig(
     std::vector<uint32_t> packed_golden0(input1.size());
     for (auto i = 0; i < temp_golden.size(); i++) {
         // Do temp = SrcA + SrcB:
-        temp_golden[i] = static_cast<float>(input1[i]) + static_cast<float>(bfloat16(input0[i]));
+        temp_golden[i] = input1[i].to_float() + bfloat16(input0[i]).to_float();
         // Do temp + DST, store in out0 vector depending on fp32_dest_acc_en:
         if (test_config.fp32_dest_acc_en) {
-            golden0_fp32[i] = temp_golden[i] + static_cast<float>(input2[i]);
+            golden0_fp32[i] = temp_golden[i] + input2[i].to_float();
         } else {
-            golden0_bfp16[i] = bfloat16(temp_golden[i] + static_cast<float>(input2[i]));
+            golden0_bfp16[i] = bfloat16(temp_golden[i] + input2[i].to_float());
         }
         // Do out1 = temp + DST:
-        golden1[i] = static_cast<float>(bfloat16(temp_golden[i] + static_cast<float>(input2[i])));
+        golden1[i] = bfloat16(temp_golden[i] + input2[i].to_float()).to_float();
         // Do out0[bfp16] = temp + L1, this makes sense only if not fp32_dest_acc_en:
         if (test_config.l1_acc && !test_config.fp32_dest_acc_en) {
-            golden0_bfp16[i] = bfloat16(static_cast<float>(golden0_bfp16[i]) + out0_result_old);
+            golden0_bfp16[i] = bfloat16(golden0_bfp16[i].to_float() + out0_result_old);
         } else {
-            out0_result_old = static_cast<float>(golden0_bfp16[i]);
+            out0_result_old = golden0_bfp16[i].to_float();
         }
         // Cast float32 to "packed "uint32 out0 vector if fp32_dest_acc_en:
         if (test_config.fp32_dest_acc_en) {

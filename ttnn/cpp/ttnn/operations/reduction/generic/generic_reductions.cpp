@@ -196,7 +196,7 @@ static Tensor reduce_impl(
     }
 
     float pad_value = get_pad_value(reduce_type);
-    bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
+    bool single_reduce_op = (dim.size() == 0) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
         auto reduce_nd_loop = [&](const bool use_reduce_type) -> Tensor {
@@ -250,7 +250,7 @@ static Tensor reduce_impl(
         }
     } else {
         tt::tt_metal::ReduceOpDim reduce_op_dim;
-        if ((dim.empty()) || (dim.size() == 1 and dim[0] == rank - 1)) {
+        if ((dim.size() == 0) || (dim.size() == 1 and dim[0] == rank - 1)) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
         } else if (dim.size() == 1 and dim[0] == rank - 2) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
@@ -421,11 +421,11 @@ Tensor Reduce<reduce_type>::invoke(
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
 
-        if (!non_height_width_dims.empty()) {
+        if (non_height_width_dims.size() > 0) {
             input_tensor =
                 non_height_width_reduce(input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config);
 
-            if (height_width_dims.empty()) {
+            if (height_width_dims.size() == 0) {
                 return adjust_shape(
                     input_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
             }

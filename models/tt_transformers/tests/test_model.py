@@ -8,10 +8,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -130,7 +130,7 @@ def test_model_inference(
                 (32, True): "llama32_11b",
                 (80, False): "llama31_70b",
                 (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_llama_vision())]
+            }[(model_args.n_layers, model_args.is_vision())]
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {

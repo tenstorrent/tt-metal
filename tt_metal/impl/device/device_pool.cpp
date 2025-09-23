@@ -23,8 +23,11 @@
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_types.hpp"
+#include "hal.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -33,6 +36,7 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/common/executor.hpp"
@@ -831,7 +835,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
 
         auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
-        tt::llrt::internal_::wait_until_cores_done(dev_id, dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
+        tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
     }
 
     // Process registered termination signals from topology

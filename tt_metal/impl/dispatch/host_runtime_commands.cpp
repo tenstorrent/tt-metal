@@ -216,7 +216,7 @@ void EnqueueReadBuffer(
 
 void EnqueueReadSubBuffer(
     CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
     const BufferRegion& region,
     bool blocking) {

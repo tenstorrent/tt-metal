@@ -13,11 +13,11 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
-from models.common.utility_functions import (
+from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.common.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
@@ -57,7 +57,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_llama_attention_inference(

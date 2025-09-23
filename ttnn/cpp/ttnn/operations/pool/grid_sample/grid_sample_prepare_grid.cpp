@@ -101,8 +101,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                     // Reinterpret int16 bits as bfloat16 for coordinates
                     uint16_t h0_bits = static_cast<uint16_t>(h0_clamped);
                     uint16_t w0_bits = static_cast<uint16_t>(w0_clamped);
-                    output_buffer[base_idx + 0] = std::bit_cast<bfloat16>(h0_bits);
-                    output_buffer[base_idx + 1] = std::bit_cast<bfloat16>(w0_bits);
+                    output_buffer[base_idx + 0] = bfloat16(h0_bits);
+                    output_buffer[base_idx + 1] = bfloat16(w0_bits);
 
                     // Convert weights to bfloat16
                     output_buffer[base_idx + 2] = bfloat16(weight_nw);

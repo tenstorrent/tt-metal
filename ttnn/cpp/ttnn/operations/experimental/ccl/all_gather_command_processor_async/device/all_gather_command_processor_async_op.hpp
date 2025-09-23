@@ -19,7 +19,6 @@
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
-#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -50,9 +49,9 @@ struct AllGatherCommandProcessorAsync {
         devices(std::move(devices)),
         ring_size(ring_size),
         dim(dim),
-        semaphore(std::move(semaphore)),
+        semaphore(semaphore),
         num_links(num_links),
-        output_memory_config(std::move(output_memory_config)),
+        output_memory_config(output_memory_config),
         topology(topology),
         cluster_axis(cluster_axis),
         sub_device_id(sub_device_id) {}

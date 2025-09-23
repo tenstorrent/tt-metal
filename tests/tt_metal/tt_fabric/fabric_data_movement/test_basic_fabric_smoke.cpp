@@ -46,8 +46,7 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
+WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::MeshDevice> device, Topology topology) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
@@ -100,7 +99,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 
     // Get available links between devices
     auto eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-    if (eth_chans.empty()) {
+    if (eth_chans.size() == 0) {
         GTEST_SKIP() << "No fabric connection available between device 0 and device 1";
     }
     auto edm_port = *eth_chans.begin();

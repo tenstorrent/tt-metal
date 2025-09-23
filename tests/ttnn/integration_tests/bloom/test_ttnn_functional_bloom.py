@@ -143,6 +143,8 @@ def test_bloom_block(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.997)
 
 
+@pytest.mark.skip(reason="Issue #8648.")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -181,6 +183,8 @@ def test_bloom(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.924)
 
 
+@pytest.mark.skip(reason="Issue #8648.")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])

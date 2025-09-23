@@ -18,7 +18,6 @@ from infra.data_collection.github.workflows import (
     get_github_job_ids_to_tt_smi_versions,
 )
 from infra.data_collection import pydantic_models
-from infra.data_collection.pydantic_models import Step
 
 
 def get_cicd_json_filename(pipeline):
@@ -77,18 +76,12 @@ def create_cicd_json_for_data_analysis(
         else:
             tests = []
 
-        raw_steps = raw_job.get("steps")
-        steps = [Step(**step) for step in raw_steps] if raw_steps else []
-
-        # Remove 'steps' from raw_job to avoid double-passing of 'steps'
-        raw_job = dict(raw_job)
-        raw_job.pop("steps", None)
+        logger.info(f"Found {len(tests)} tests for job {github_job_id}")
 
         job = pydantic_models.Job(
             **raw_job,
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
             tests=tests,
-            steps=steps,
         )
         jobs.append(job)
 

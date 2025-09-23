@@ -267,7 +267,7 @@ std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
 }
 
 void test_multi_mesh_single_conn_bwd(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -327,7 +327,7 @@ void test_multi_mesh_single_conn_bwd(
 }
 
 void test_multi_mesh_single_conn_fwd(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -384,7 +384,7 @@ void test_multi_mesh_single_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_fwd(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -444,7 +444,7 @@ void test_multi_mesh_multi_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_bidirectional(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,

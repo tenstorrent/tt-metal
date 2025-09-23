@@ -175,7 +175,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 }
 
 bool validation(
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     std::vector<CoreCoord>& all_cores,

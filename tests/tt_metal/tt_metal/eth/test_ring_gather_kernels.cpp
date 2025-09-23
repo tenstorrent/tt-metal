@@ -401,7 +401,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         inputs.emplace_back(tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-            -1.0f, 1.0f, cfg.size_bytes / sizeof(bfloat16), i));
+            -1.0f, 1.0f, cfg.size_bytes / bfloat16::SIZEOF, i));
         full_input.insert(full_input.begin() + i * numel, inputs[i].begin(), inputs[i].end());
 
         const auto& device = std::get<0>(sender_receivers[i]);

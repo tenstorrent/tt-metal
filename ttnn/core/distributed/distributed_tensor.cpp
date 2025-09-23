@@ -15,7 +15,6 @@
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
 #include <algorithm>
-#include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include <type_traits>
@@ -101,7 +100,7 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
         tt::stl::make_const_span(span),
         tensor_spec,
         /*device=*/nullptr,
-        /*cq_id=*/std::nullopt,
+        ttnn::DefaultQueueId,
         pad_value));
 }
 
@@ -289,7 +288,7 @@ private:
                             std::move(data_vec),
                             shard_spec,
                             /*device=*/nullptr,
-                            std::nullopt,
+                            ttnn::DefaultQueueId,
                             pad_value);
                         auto buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
                         converted_buffers.emplace(&xtensor_view->get(), buffer);
@@ -517,7 +516,7 @@ Tensor distribute_tensor(
     const Tensor& tensor,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
-    std::optional<ttnn::QueueId> cq_id) {
+    ttnn::QueueId cq_id) {
     TT_FATAL(
         tensor.storage_type() == tt::tt_metal::StorageType::HOST,
         "TensorToMesh only supports host tensors; got storage type: {}",
@@ -537,7 +536,7 @@ Tensor create_distributed_tensor(
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
-    std::optional<ttnn::QueueId> cq_id,
+    ttnn::QueueId cq_id,
     T pad_value) {
     Tensor output = mapper(buffer, global_shape, buffer_pin, shard_layout, pad_value);
     if (mesh_device.has_value()) {
@@ -553,7 +552,7 @@ Tensor create_distributed_tensor(
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
-    std::optional<ttnn::QueueId> cq_id,
+    ttnn::QueueId cq_id,
     T pad_value) {
     Tensor output =
         mapper.template operator()<const T>(buffer, global_shape, tt::tt_metal::MemoryPin(), shard_layout, pad_value);
@@ -571,7 +570,7 @@ Tensor create_distributed_tensor(
         const tt::tt_metal::TensorLayout& shard_layout,                \
         const TensorToMesh& mapper,                                    \
         std::optional<std::reference_wrapper<MeshDevice>> mesh_device, \
-        std::optional<ttnn::QueueId> cq_id,                            \
+        ttnn::QueueId cq_id,                                           \
         TYPE pad_value);                                               \
     template Tensor create_distributed_tensor<TYPE>(                   \
         tt::stl::Span<const TYPE> buffer,                              \
@@ -579,7 +578,7 @@ Tensor create_distributed_tensor(
         const tt::tt_metal::TensorLayout& shard_layout,                \
         const TensorToMesh& mapper,                                    \
         std::optional<std::reference_wrapper<MeshDevice>> mesh_device, \
-        std::optional<ttnn::QueueId> cq_id,                            \
+        ttnn::QueueId cq_id,                                           \
         TYPE pad_value);
 
 INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(bfloat16)

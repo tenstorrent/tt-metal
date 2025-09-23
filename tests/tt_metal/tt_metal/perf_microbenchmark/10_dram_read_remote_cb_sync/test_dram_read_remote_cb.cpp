@@ -345,7 +345,7 @@ create_mesh_workloads(
     return {std::move(mesh_workloads), std::move(global_cb)};
 }
 
-float to_float(bfloat16 bfloat16_num) { return static_cast<float>(bfloat16_num); }
+float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
 
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     if (x.size() != y.size()) {

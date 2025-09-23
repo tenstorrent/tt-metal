@@ -8,13 +8,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.runner.performant_runner_infra import YOLOv4PerformanceRunnerInfra
 from models.demos.yolov4.runner.pipeline_runner import YoloV4PipelineRunner
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
+from models.utility_functions import profiler, run_for_wormhole_b0
 
 
 def _run_model_pipeline(
@@ -132,6 +132,7 @@ def run_perf_e2e_yolov4(
 
 
 @run_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
@@ -167,7 +168,6 @@ def test_e2e_performant(
 
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],

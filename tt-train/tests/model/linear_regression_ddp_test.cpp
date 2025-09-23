@@ -34,7 +34,7 @@ protected:
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
 
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
     }
 

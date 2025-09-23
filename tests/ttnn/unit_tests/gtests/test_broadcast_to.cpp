@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to.hpp"
 #include "ttnn/operations/core/core.hpp"

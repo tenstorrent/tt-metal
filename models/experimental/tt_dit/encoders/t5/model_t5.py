@@ -195,6 +195,7 @@ class T5DenseGatedActDense:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
         )
         self.wi1 = ColParallelLinear(
             in_features=self.config.embed_dim,
@@ -202,6 +203,7 @@ class T5DenseGatedActDense:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
         )
         self.wo = RowParallelLinear(
             in_features=self.config.ff_dim,
@@ -210,6 +212,7 @@ class T5DenseGatedActDense:
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=self.ccl_manager,
+            init=True,
         )
 
     def load_state_dict(self, state_dict):
@@ -309,6 +312,7 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
         )
         self.k_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -316,6 +320,7 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
         )
         self.v_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -323,6 +328,7 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
         )
         self.o_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -330,6 +336,7 @@ class T5Attention:
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            init=True,
         )
 
         self.layer_norm = RMSNorm(

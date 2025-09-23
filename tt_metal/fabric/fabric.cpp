@@ -18,10 +18,10 @@
 #include <optional>
 #include <set>
 #include <vector>
+#include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 #include "fabric_host_utils.hpp"
@@ -265,7 +265,7 @@ void append_routing_plane_connection_manager_rt_args(
             link_idx = connection_link_indices[i];
         } else {
             const auto links = get_forwarding_link_indices(src_fabric_node_id, dst_node);
-            TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
+            TT_FATAL(links.size() > 0, "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
             link_idx = links[0];
         }
 

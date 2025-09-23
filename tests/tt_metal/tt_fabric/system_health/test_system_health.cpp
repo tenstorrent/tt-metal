@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
+#include <iomanip>
 #include <map>
 #include <tuple>
 #include <unordered_map>
@@ -151,9 +152,8 @@ std::string get_ubb_id_str(chip_id_t chip_id) {
 std::string get_physical_slot_str(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto physical_slot = cluster.get_physical_slot(chip_id);
-    auto asic_loc = cluster.get_cluster_desc()->get_asic_location(chip_id);
     if (physical_slot.has_value()) {
-        return "Physical Slot: " + std::to_string(*physical_slot) + " ASIC Location: " + std::to_string(asic_loc);
+        return "Physical Slot: " + std::to_string(*physical_slot);
     }
     return "";
 }
@@ -189,9 +189,10 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
 
 TEST(Cluster, ReportIntermeshLinks) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto all_intermesh_links = cluster.get_ethernet_connections_to_remote_devices();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     // Check if cluster supports intermesh links
-    if (all_intermesh_links.empty()) {
+    if (!control_plane.system_has_intermesh_links()) {
         log_info(tt::LogTest, "Cluster does not support intermesh links");
         return;
     }
@@ -199,11 +200,14 @@ TEST(Cluster, ReportIntermeshLinks) {
     log_info(tt::LogTest, "Intermesh Link Configuration Report");
     log_info(tt::LogTest, "===================================");
 
+    // Get all intermesh links in the system
+    auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
+
     // Summary
     size_t total_chips = 0;
     size_t total_links = 0;
     for (const auto& [chip_id, links] : all_intermesh_links) {
-        if (!links.empty()) {
+        if (links.size() > 0) {
             total_chips++;
             total_links += links.size();
         }
@@ -215,13 +219,12 @@ TEST(Cluster, ReportIntermeshLinks) {
 
     // Detailed information per chip
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        if (all_intermesh_links.find(chip_id) != all_intermesh_links.end()) {
-            auto links = all_intermesh_links.at(chip_id);
+        if (control_plane.has_intermesh_links(chip_id)) {
+            auto links = control_plane.get_intermesh_eth_links(chip_id);
             log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
-            for (const auto& [channel, remote_connection] : links) {
-                tt::umd::CoreCoord eth_core =
-                    cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
-                log_info(tt::LogTest, "  Channel {} at {}", channel, CoreCoord{eth_core.x, eth_core.y}.str());
+
+            for (const auto& [eth_core, channel] : links) {
+                log_info(tt::LogTest, "  Channel {} at {}", channel, eth_core.str());
             }
         }
     }

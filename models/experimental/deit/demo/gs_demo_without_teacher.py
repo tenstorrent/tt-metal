@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 
-from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.deit.tt.deit_for_image_classification import deit_for_image_classification
 
 

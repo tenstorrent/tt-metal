@@ -51,7 +51,7 @@ void create_file(const std::string& file_path_str) {
 
 const std::string& get_reports_dir() {
     static std::string outpath;
-    if (outpath.empty()) {
+    if (outpath == "") {
         outpath = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "/generated/reports/";
     }
     return outpath;

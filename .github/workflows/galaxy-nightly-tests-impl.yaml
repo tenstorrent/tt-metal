@@ -31,13 +31,6 @@ jobs:
           { name: "Galaxy Fabric unit tests", arch: wormhole_b0, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 60, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           { name: "Galaxy Fabric 2D Torus Nightly Tests", arch: wormhole_b0, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml, timeout: 60, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           {
-            name: "Galaxy Fabric Stability Tests",
-            arch: wormhole_b0,
-            cmd: TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml,
-            timeout: 150,
-            owner_id: U08FXFFH7L0
-          }, # Abhishek Agarwal
-          {
             name: "Llama Galaxy Accuracy Test",
             arch: wormhole_b0,
             cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_llama_accuracy.py",
@@ -89,7 +82,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

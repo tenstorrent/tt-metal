@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+
+using namespace tt::constants;
 
 namespace ttnn::operations::embedding_backward {
 

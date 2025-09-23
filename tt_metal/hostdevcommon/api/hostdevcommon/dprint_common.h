@@ -96,19 +96,21 @@ struct SliceRange {
     // This is only used with DPRINT for TileSlice object
     uint8_t h0, h1, hs, w0, w1, ws;
     // [0:32:16, 0:32:16]
-    static SliceRange hw0_32_16() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16}; }
+    static inline SliceRange hw0_32_16() {
+        return SliceRange{.h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16};
+    }
     // [0:32:8, 0:32:8]
-    static SliceRange hw0_32_8() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8}; }
+    static inline SliceRange hw0_32_8() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8}; }
     // [0:32:4, 0:32:4]
-    static SliceRange hw0_32_4() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 4, .w0 = 0, .w1 = 32, .ws = 4}; }
+    static inline SliceRange hw0_32_4() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 4, .w0 = 0, .w1 = 32, .ws = 4}; }
     // [0, 0:32]
-    static SliceRange h0_w0_32() { return SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}; }
+    static inline SliceRange h0_w0_32() { return SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}; }
     // [0:32, 0]
-    static SliceRange h0_32_w0() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1}; }
+    static inline SliceRange h0_32_w0() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1}; }
     // [0:32:1, 1]
-    static SliceRange h0_32_w1() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 1, .w1 = 2, .ws = 1}; }
+    static inline SliceRange h0_32_w1() { return SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 1, .w1 = 2, .ws = 1}; }
     // [0:4:1, 0:4:1]
-    static SliceRange hw041() { return SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}; }
+    static inline SliceRange hw041() { return SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}; }
 } ATTR_PACK;
 
 template <int MAX_BYTES = 0>
@@ -146,7 +148,7 @@ static_assert(sizeof(DebugPrintMemLayout) == DPRINT_BUFFER_SIZE);
 static_assert(sizeof(DebugPrintMemLayout().data) >= sizeof(uint32_t) * 8 * sizeof(uint32_t));
 
 // Size of datum in bytes, dprint-specific to support device-side and bfp* DataFormats
-static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
+static inline constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
     switch (format) {
         case CommonDataFormat::Float32:
         case CommonDataFormat::UInt32:
@@ -168,7 +170,7 @@ static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
     }
 }
 
-static constexpr bool is_bfp(const CommonDataFormat& format) {
+static inline constexpr bool is_bfp(const CommonDataFormat& format) {
     switch (format) {
         case CommonDataFormat::Bfp2:
         case CommonDataFormat::Bfp2_b:
@@ -190,7 +192,7 @@ static constexpr bool is_bfp(const CommonDataFormat& format) {
     }
 }
 
-static constexpr bool is_supported_format(const CommonDataFormat& format) {
+static inline constexpr bool is_supported_format(const CommonDataFormat& format) {
     switch (format) {
         case CommonDataFormat::Bfp4_b:
         case CommonDataFormat::Bfp8_b:

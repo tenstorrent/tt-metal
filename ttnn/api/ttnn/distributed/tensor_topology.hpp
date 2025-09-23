@@ -32,27 +32,20 @@ public:
     const std::vector<tt::tt_metal::distributed::MeshCoordinate>& mesh_coords() const { return mesh_coords_; }
 
     tt::tt_metal::distributed::MeshCoordinate get_neighbor(
-        const tt::tt_metal::distributed::MeshCoordinate& tensor_coord, int32_t offset, int32_t dim) const;
+        const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t offset, int32_t dim) const;
 
     tt::tt_metal::distributed::MeshCoordinate get_next_neighbor(
-        const tt::tt_metal::distributed::MeshCoordinate& tensor_coord, int32_t dim) const;
+        const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t dim) const;
 
     tt::tt_metal::distributed::MeshCoordinate get_prev_neighbor(
-        const tt::tt_metal::distributed::MeshCoordinate& tensor_coord, int32_t dim) const;
+        const tt::tt_metal::distributed::MeshCoordinate& coord, int32_t dim) const;
 
-    // Returns the physical device coordinate for the given tensor coordinate
     tt::tt_metal::distributed::MeshCoordinate get_device_coord(
-        const tt::tt_metal::distributed::MeshCoordinate& tensor_coord) const;
-
-    // Returns the tensor coordinate for the given physical device coordinate
-    // If no tensor coordinate corresponds to the given physical device coordinate, returns std::nullopt
-    std::optional<tt::tt_metal::distributed::MeshCoordinate> get_tensor_coord(
-        const tt::tt_metal::distributed::MeshCoordinate& device_coord) const;
+        const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
 private:
     tt::tt_metal::distributed::MeshShape distribution_shape_;
     tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_;
-    // Physical device coordinates
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords_;
 };
 

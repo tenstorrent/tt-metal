@@ -33,15 +33,13 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
-bool using_mock_cluster_desc() { return tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(); }
-
 TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 
-    if (using_mock_cluster_desc() || mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
+    if (mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -58,8 +56,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
-        TT_FATAL(
-            using_mock_cluster_desc() || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
+        TT_FATAL(get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
@@ -258,6 +255,7 @@ void PhysicalSystemDescriptor::run_global_discovery() {
         this->validate_graphs();
     }
     this->exchange_metadata(false);
+    distributed_context.barrier();
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
@@ -301,9 +299,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    if (*distributed_context.size() == 1) {
-        return;
-    }
+
     auto my_rank = *(distributed_context.rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;
@@ -609,7 +605,7 @@ ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
     return asic_descriptors_.at(asic_id).asic_location;
 }
 
-std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
+std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(std::string hostname) const {
     std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.find(hostname) != system_graph_.asic_connectivity_graph.end()) {
         for (const auto& [asic_id, _] : system_graph_.asic_connectivity_graph.at(hostname)) {
@@ -617,30 +613,6 @@ std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const 
         }
     }
     return asics;
-}
-
-bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const {
-    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
-        if (this->get_host_name_for_asic(asic_id) != host) {
-            continue;
-        }
-        const auto& connections = asic_group.at(asic_id);
-        auto connection_it = std::find_if(connections.begin(), connections.end(), [&](const auto& connection) {
-            // Check if this chan_id is a src_chan in any of the eth_connections
-            return std::find_if(connection.second.begin(), connection.second.end(), [&](const auto& eth_conn) {
-                       return eth_conn.src_chan == chan_id;
-                   }) != connection.second.end();
-        });
-        TT_FATAL(
-            connection_it != connections.end(),
-            "Channel {} not found in asic connectivity graph for asic {}",
-            chan_id,
-            asic_id);
-        auto connected_asic = connection_it->first;
-        return this->get_host_name_for_asic(connected_asic) != host;
-    }
-    TT_THROW("Asic {} not found in any host's asic connectivity graph", asic_id);
-    return false;
 }
 
 std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std::string& hostname) const {

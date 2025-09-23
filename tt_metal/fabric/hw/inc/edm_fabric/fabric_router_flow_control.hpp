@@ -14,46 +14,38 @@
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
-        completion_counters_base_ptr(
-            reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)),
-        ack_counters_base_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
-        completion_counters({}),
-        ack_counters({}) {
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            completion_counters[i] = 0;
-            ack_counters[i] = 0;
-        }
-    }
-
-    static FORCE_INLINE uint32_t round_down_to_eth_word_alignment(uint32_t addr) { return addr & ~0xF; }
+        completion_counter_ptr(
+            reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counter_ptrs[receiver_channel_index])),
+        ack_counter_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counter_ptrs[receiver_channel_index])),
+        completion_counter(0),
+        ack_counter(0) {}
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        completion_counters[src_id]++;
-        completion_counters_base_ptr[src_id] = completion_counters[src_id];
+        completion_counter++;
+        *completion_counter_ptr = completion_counter;
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
-            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->completion_counters_base_ptr + src_id)),
-            round_down_to_eth_word_alignment(
-                to_sender_remote_completion_counters_base_address + src_id * sizeof(uint32_t)),
+            reinterpret_cast<uint32_t>(this->completion_counter_ptr),
+            to_sender_remote_completion_counter_addrs[src_id],
             ETH_WORD_SIZE_BYTES);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        ack_counters[src_id]++;
-        ack_counters_base_ptr[src_id] = ack_counters[src_id];
+        ack_counter++;
+        *ack_counter_ptr = ack_counter;
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
-            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
-            round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)),
+            reinterpret_cast<uint32_t>(this->ack_counter_ptr),
+            to_sender_remote_ack_counter_addrs[src_id],
             ETH_WORD_SIZE_BYTES);
     }
 
-    volatile tt_l1_ptr uint32_t* completion_counters_base_ptr;
-    volatile tt_l1_ptr uint32_t* ack_counters_base_ptr;
+    volatile tt_l1_ptr uint32_t* completion_counter_ptr;
+    volatile tt_l1_ptr uint32_t* ack_counter_ptr;
     // Local memory copy to save an L1 load
-    std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
-    std::array<uint32_t, NUM_SENDER_CHANNELS> ack_counters;
+    uint32_t completion_counter;
+    uint32_t ack_counter;
 };
 
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
@@ -120,10 +112,9 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
     SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
         acks_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address) + sender_channel_index),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counter_addrs[sender_channel_index])),
         completions_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address) +
-            sender_channel_index),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counter_addrs[sender_channel_index])),
         acks_received_and_processed(0),
         completions_received_and_processed(0) {}
 

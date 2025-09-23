@@ -135,8 +135,6 @@ FORCE_INLINE
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
-    constexpr bool update_counter = false;
-
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
@@ -144,7 +142,7 @@ FORCE_INLINE
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid<update_counter, false>(
+            noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -181,7 +179,7 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
-            noc_async_write_one_packet_with_trid<update_counter, false>(
+            noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -212,7 +210,7 @@ FORCE_INLINE
                     chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
                 }
                 const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
-                noc_async_write_one_packet_with_trid<update_counter, false>(
+                noc_async_write_one_packet_with_trid<false, false>(
                     payload_start_address + offset,
                     dest_address,
                     chunk_size,

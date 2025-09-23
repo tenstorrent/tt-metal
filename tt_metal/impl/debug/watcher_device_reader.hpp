@@ -32,6 +32,7 @@ private:
     struct DumpData;
     FILE* f;
     chip_id_t device_id;
+    uint32_t num_erisc_cores{0};
     const std::vector<std::string>& kernel_names;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
 };

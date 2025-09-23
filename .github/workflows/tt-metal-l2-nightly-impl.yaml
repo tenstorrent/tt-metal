@@ -96,7 +96,7 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -144,7 +144,7 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U06Q7ESTFEV # Borys Bradel
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -192,7 +192,7 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -242,7 +242,7 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U07N3CUUN05 # Iva Potkonjak
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -291,7 +291,7 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U082L4RSULT # Denys Makoviichuk
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -338,7 +338,7 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U03FJB5TM5Y # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -388,7 +388,7 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

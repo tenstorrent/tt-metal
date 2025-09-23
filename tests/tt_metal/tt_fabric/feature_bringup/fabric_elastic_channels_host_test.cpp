@@ -17,7 +17,6 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
-#include <utility>
 #include <variant>
 #include <vector>
 #include <chrono>
@@ -590,8 +589,8 @@ TestResources create_test_resources(
     CoreCoord eth_receiver_core,
     const TestConfig& config) {
     TestResources resources;
-    resources.local_device.device = std::move(device_0);
-    resources.remote_device.device = std::move(device_1);
+    resources.local_device.device = device_0;
+    resources.remote_device.device = device_1;
     resources.local_device.eth_core = eth_sender_core;
     resources.remote_device.eth_core = eth_receiver_core;
 

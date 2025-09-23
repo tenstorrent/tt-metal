@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include <map>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <utility>
 
 #include <tt_stl/strong_type.hpp>
@@ -19,6 +17,13 @@ namespace tt::scaleout_tools {
 // Strong types to prevent mixing with other uint32_t values
 using HostId = ttsl::StrongType<uint32_t, struct HostIdTag>;
 using TrayId = ttsl::StrongType<uint32_t, struct TrayIdTag>;
+
+// Custom hasher for (HostId, TrayId) pairs
+struct HostTrayHasher {
+    std::size_t operator()(const std::pair<HostId, TrayId>& p) const {
+        return std::hash<uint64_t>{}((static_cast<uint64_t>(*p.first) << 32) | *p.second);
+    }
+};
 
 struct Host {
     std::string hostname;
@@ -40,7 +45,8 @@ struct LogicalChannelEndpoint {
 struct PhysicalChannelEndpoint {
     std::string hostname;
     TrayId tray_id{0};
-    AsicChannel asic_channel;
+    uint32_t asic_location = 0;
+    ChanId channel_id{0};
 
     auto operator<=>(const PhysicalChannelEndpoint& other) const = default;
 };
@@ -51,7 +57,7 @@ struct PhysicalPortEndpoint {
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
     TrayId tray_id{0};
-    PortType port_type = PortType::TRACE;
+    PortType port_type = PortType::QSFP;
     PortId port_id{0};
 
     auto operator<=>(const PhysicalPortEndpoint& other) const = default;
@@ -66,7 +72,7 @@ using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalCha
 
 struct Node {
     std::string motherboard;
-    std::map<TrayId, Board> boards;
+    std::unordered_map<TrayId, Board> boards;
     HostId host_id{0};
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
     using PortEndpoint = std::pair<TrayId, PortId>;
@@ -78,18 +84,14 @@ struct Node {
 struct ResolvedGraphInstance {
     std::string template_name;
     std::string instance_name;
-    std::map<std::string, Node> nodes;                                        // Direct node children (by name)
-    std::map<std::string, std::unique_ptr<ResolvedGraphInstance>> subgraphs;  // Nested graph children
+    std::unordered_map<std::string, Node> nodes;  // Direct node children (by name)
+    std::unordered_map<std::string, std::unique_ptr<ResolvedGraphInstance>> subgraphs;  // Nested graph children
 
     // All connections within this graph instance
-    using PortEndpoint = std::tuple<HostId, TrayId, PortId>;  // host_id, tray_id, port_id
+    using PortEndpoint = std::tuple<std::vector<std::string>, TrayId, PortId>;  // Path, tray_id, port_id
     using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
     std::unordered_map<PortType, std::vector<PortConnection>> internal_connections;
 };
-
-enum class CableLength { CABLE_0P5, CABLE_1, CABLE_2P5, CABLE_3, CABLE_5, UNKNOWN };
-
-CableLength calc_cable_length(const Host& host1, const Host& host2);
 
 class CablingGenerator {
 public:
@@ -98,13 +100,11 @@ public:
 
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
+    const std::unordered_map<std::pair<HostId, TrayId>, const Board*, HostTrayHasher>& get_boards_by_host_tray() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
 
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
-
-    // Method to emit cabling guide CSV
-    void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
 private:
     // Validate that each host_id is assigned to exactly one node
@@ -121,23 +121,16 @@ private:
 
     void generate_connections_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph);
 
-    void populate_host_id_to_node();
+    void populate_boards_by_host_tray();
 
-    void populate_host_id_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph);
-
-    void get_all_connections_of_type(
-        const std::unique_ptr<ResolvedGraphInstance>& instance,
-        const std::vector<PortType>& port_types,
-        std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>>& conn_list)
-        const;
+    void populate_boards_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph);
 
     // Caches for optimization
     std::unordered_map<tt::umd::BoardType, Board> board_templates_;
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     std::unique_ptr<ResolvedGraphInstance> root_instance_;
-    std::map<HostId, Node*> host_id_to_node_;  // Global lookup map for HostId -> Node reference
-    // Guaranteed to be sorted
+    std::unordered_map<std::pair<HostId, TrayId>, const Board*, HostTrayHasher> boards_by_host_tray_;
     std::vector<LogicalChannelConnection> chip_connections_;
     std::vector<Host> deployment_hosts_;
 };

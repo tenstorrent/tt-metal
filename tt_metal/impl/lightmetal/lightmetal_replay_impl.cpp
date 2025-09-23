@@ -256,27 +256,27 @@ void LightMetalReplayImpl::close_devices() { CloseDevice(this->device_); }
 // Later can update these to be asserts once all paths covered properly.
 void LightMetalReplayImpl::clear_object_maps() {
     // Later can update these to be asserts.
-    if (!buffer_map_.empty()) {
+    if (buffer_map_.size()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay BufferMap: {} entries", buffer_map_.size());
         buffer_map_.clear();
     }
 
-    if (!program_map_.empty()) {
+    if (program_map_.size()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay ProgramMap: {} entries", program_map_.size());
         program_map_.clear();
     }
 
-    if (!kernel_handle_map_.empty()) {
+    if (kernel_handle_map_.size()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelHandleMap: {} entries", kernel_handle_map_.size());
         kernel_handle_map_.clear();
     }
 
-    if (!kernel_map_.empty()) {
+    if (kernel_map_.size()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelMap: {} entries", kernel_map_.size());
         kernel_map_.clear();
     }
 
-    if (!cb_handle_map_.empty()) {
+    if (cb_handle_map_.size()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay CBHandleMap: {} entries", cb_handle_map_.size());
         cb_handle_map_.clear();
     }

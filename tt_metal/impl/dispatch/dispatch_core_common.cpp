@@ -10,12 +10,8 @@
 namespace tt::tt_metal {
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
-    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
-        if (MetalContext::instance().get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
-            return DispatchCoreAxis::COL;
-        }
-    }
-    return DispatchCoreAxis::ROW;
+    return (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) ? DispatchCoreAxis::COL
+                                                                                  : DispatchCoreAxis::ROW;
 }
 
 DispatchCoreConfig get_dispatch_core_config() {

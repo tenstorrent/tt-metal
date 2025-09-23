@@ -13,9 +13,9 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.mla import MLA
-from models.demos.deepseek_v3.tt.model import Model
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.mla_1d import MLA1D
+from models.demos.deepseek_v3.tt.model_1d import Model1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
@@ -47,10 +47,10 @@ def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
 
 class DeepseekGenerator:
     """
-    Simple generator that wires Model + LMHead for decode-only inference.
+    Simple generator that wires Model1D + LMHead for decode-only inference.
 
     Notes:
-    - Prefill at the model level is not fully implemented in Model; we emulate
+    - Prefill at the model level is not fully implemented in Model1D; we emulate
       prefill by iterating decode steps over the prompt tokens (updates caches).
     - Batch size in configs is tied to MAX_BATCH_SIZE; for simplicity we decode
       up to that many sequences. If fewer are provided, we pad/ignore extras.
@@ -90,13 +90,13 @@ class DeepseekGenerator:
         self.tokenizer = tokenizer
 
         # Runtime helpers
-        self.ccl = CCL(mesh_device)
+        self.ccl = CCL1D(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
 
         # Paged attention setup
-        self.paged_config = MLA.get_valid_paged_config(self.hf_config.max_seq_len, MAX_BATCH_SIZE, self.dp_factor)
-        self.page_table_tt, _ = MLA.create_page_table(
+        self.paged_config = MLA1D.get_valid_paged_config(self.hf_config.max_seq_len, MAX_BATCH_SIZE, self.dp_factor)
+        self.page_table_tt, _ = MLA1D.create_page_table(
             MAX_BATCH_SIZE, dp_factor=self.dp_factor, config=self.paged_config, mesh_device=mesh_device
         )
         self.rope = RotarySetup(device=mesh_device, batch_size=MAX_BATCH_SIZE, hf_config=self.hf_config)
@@ -132,7 +132,7 @@ class DeepseekGenerator:
         if self.random_weights:
             if self.single_layer and self.single_layer.lower() == "moe":
                 raise NotImplementedError(
-                    "Random weights with 'moe' single layer is not supported by Model demo yet. Use 'mlp' or disable random mode."
+                    "Random weights with 'moe' single layer is not supported by Model1D demo yet. Use 'mlp' or disable random mode."
                 )
             logger.info("Building random weights from HF reference model (ForCausalLM)...")
             ref_model = DeepseekV3ForCausalLM(self.hf_config).eval()
@@ -145,7 +145,7 @@ class DeepseekGenerator:
                 block_shape=self.hf_config.quantization_config["weight_block_size"],
             )
             stripped = _strip_model_prefix(torch_state)
-            model_state = {
+            model1d_state = {
                 k: v
                 for k, v in stripped.items()
                 if k.startswith("embed_tokens.")
@@ -158,14 +158,14 @@ class DeepseekGenerator:
             hf_weights = load_model_weights(self.model_path)
             logger.info("HF weights loaded")
 
-            # Split weight dicts for Model and LMHead
+            # Split weight dicts for Model1D and LMHead
             stripped = _strip_model_prefix(hf_weights)
             if "lm_head.weight" not in stripped:
                 raise RuntimeError(
                     "No HF safetensors found in model path or missing 'lm_head.weight'. "
                     "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
                 )
-            model_state = {
+            model1d_state = {
                 k: v
                 for k, v in stripped.items()
                 if k.startswith("embed_tokens.")
@@ -174,15 +174,17 @@ class DeepseekGenerator:
                 or k.startswith("lm_head.")
             }
         # Convert weights to TT tensors-on-disk and build weight_config
-        logger.info("Converting weights to TTNN SavedWeight format (Model)...")
-        self.model_weight_config = Model.convert_weights(
-            self.hf_config, model_state, weights_out / "model_1d", self.mesh_device
+        logger.info("Converting weights to TTNN SavedWeight format (Model1D)...")
+        self.model1d_weight_config = Model1D.convert_weights(
+            self.hf_config, model1d_state, weights_out / "model_1d", self.mesh_device
         )  # Build model and head decode configs + states
-        model_decode_cfg = Model.decode_model_config(self.hf_config, self.mesh_device)
-        model_state = Model.create_state(self.hf_config, self.mesh_device, paged_config=self.paged_config, ccl=self.ccl)
-        model_shared_state = Model.create_shared_state(self.hf_config, self.mesh_device)
-        self.model_run_config = create_run_config(
-            model_decode_cfg, self.model_weight_config, model_state, model_shared_state
+        model_decode_cfg = Model1D.decode_model_config(self.hf_config, self.mesh_device)
+        model_state = Model1D.create_state(
+            self.hf_config, self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
+        )
+        model_shared_state = Model1D.create_shared_state(self.hf_config, self.mesh_device)
+        self.model1d_run_config = create_run_config(
+            model_decode_cfg, self.model1d_weight_config, model_state, model_shared_state
         )
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
@@ -225,8 +227,8 @@ class DeepseekGenerator:
         rope_tensors, tt_positions = self._tt_from_positions(positions)
 
         # Model forward
-        logits_tt = Model.forward_decode(
-            tt_tokens, tt_positions, rope_tensors, self.page_table_tt, self.model_run_config
+        logits_tt = Model1D.forward_decode(
+            tt_tokens, tt_positions, rope_tensors, self.page_table_tt, self.model1d_run_config
         )
         # Gather to host
         logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))

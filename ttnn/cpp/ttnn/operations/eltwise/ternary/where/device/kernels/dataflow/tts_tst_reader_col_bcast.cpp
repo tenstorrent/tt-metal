@@ -34,8 +34,8 @@ void kernel_main() {
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
 
-    constexpr auto predicate_cb = get_compile_time_arg_val(0);
-    constexpr auto true_cb = get_compile_time_arg_val(1);
+    constexpr auto predicate_cb = tt::CBIndex::c_0;
+    constexpr auto true_cb = tt::CBIndex::c_1;
 
 // CB1 broadcast: For TTS it's true tensor, for TST it's false tensor
 // So we check if either true or false tensor needs broadcasting

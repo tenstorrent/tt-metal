@@ -59,17 +59,15 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
-// Don't use std::forward since we are in a loop.
-// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <typename Container, typename Func>
 void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& func) {
-    std::for_each(std::cbegin(container), std::cend(container), [&](const auto& coord) {
+    for (auto it = container.begin(); it != container.end(); ++it) {
+        const auto& coord = *it;
         if (mesh_device->is_local(coord)) {
-            std::invoke(func, coord);
+            func(coord);
         }
-    });
+    }
 }
-// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
@@ -103,7 +101,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<ThreadPool>& reader_thread_pool,
     std::shared_ptr<CQSharedState>& cq_shared_state,
     std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, std::move(lock_api_function)),
+    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, lock_api_function),
     reader_thread_pool_(reader_thread_pool),
     cq_shared_state_(cq_shared_state),
     dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
@@ -190,7 +188,6 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     for (auto device : mesh_device_->get_devices()) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
-            device->id(),
             event.id(),
             id_,
             mesh_device_->num_hw_cqs(),
@@ -656,7 +653,6 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
-            mesh_device_->get_device(coord)->id(),
             event.id(),
             id_,
             mesh_device_->num_hw_cqs(),
@@ -831,12 +827,7 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
         event_dispatch::read_events_from_completion_queue(
-            read_event_descriptor.single_device_descriptor,
-            mmio_device_id,
-            device->id(),
-            channel,
-            id_,
-            device->sysmem_manager());
+            read_event_descriptor.single_device_descriptor, mmio_device_id, channel, id_, device->sysmem_manager());
     });
 }
 
@@ -1116,7 +1107,7 @@ void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
     ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
 #if defined(TRACY_ENABLE)
     for (auto& [is_multicast, original_launch_msg, launch_msg] : program_cmd_seq.launch_messages) {
-        launch_msg.kernel_config().host_assigned_id() =
+        launch_msg->kernel_config.host_assigned_id =
             tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
     }
 #endif

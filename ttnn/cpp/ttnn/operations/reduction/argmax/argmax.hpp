@@ -13,6 +13,7 @@ namespace operations::reduction {
 
 struct ArgMaxOperation {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         std::optional<int> dim = std::nullopt,
         bool keepdim = false,

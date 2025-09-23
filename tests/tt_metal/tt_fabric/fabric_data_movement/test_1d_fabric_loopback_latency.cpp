@@ -30,7 +30,7 @@ struct WriterSpec {
 using LatencyTestWriterSpecs = std::vector<std::optional<WriterSpec>>;
 
 static std::vector<std::shared_ptr<MeshDevice>> get_test_devices_impl(
-    const std::shared_ptr<MeshDevice>& mesh_device, size_t line_size, bool is_6u) {
+    std::shared_ptr<MeshDevice> mesh_device, size_t line_size, bool is_6u) {
     std::vector<std::shared_ptr<MeshDevice>> devices_;
     if (is_6u) {
         // on 6u galaxy systems, we can form a 2D torus so we can just use a full row or column
@@ -260,9 +260,9 @@ inline void RunPersistent1dFabricLatencyTest(
     size_t program_device_index = 0;
 
     auto build_connection_args = [is_ring](
-                                     const std::shared_ptr<MeshDevice>& device,
-                                     const std::shared_ptr<MeshDevice>& forward_device,
-                                     const std::shared_ptr<MeshDevice>& backward_device,
+                                     std::shared_ptr<MeshDevice> device,
+                                     std::shared_ptr<MeshDevice> forward_device,
+                                     std::shared_ptr<MeshDevice> backward_device,
                                      Program& program,
                                      CoreCoord worker_core_logical,
                                      bool is_connected_in_direction,

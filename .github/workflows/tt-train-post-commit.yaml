@@ -18,16 +18,11 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 35
       enable-watcher:
         required: false
         type: boolean
         default: false
-      gtest_filter:
-        required: false
-        default: "*"
-        type: string
-        description: "Filter for gtest"
 
 jobs:
   models:
@@ -37,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train, cmd: ctest --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
@@ -46,7 +41,7 @@ jobs:
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -80,7 +75,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U07ASPTGJTS # Denys
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

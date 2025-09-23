@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstring>
 #include <exception>

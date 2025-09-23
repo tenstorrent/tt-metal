@@ -45,7 +45,7 @@ struct DRAMtoL1MulticastConfig {
 
 bool dram_to_l1_multicast(
     tt::tt_metal::MeshDispatchFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
     const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
 

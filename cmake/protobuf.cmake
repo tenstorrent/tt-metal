@@ -18,6 +18,22 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
     endif()
     set(PROTO_GENERATED_DIR "${PROTO_GENERATED_BASE}/protobuf")
 
+    # Generate .clang-tidy configuration file in the build directory
+    file(
+        WRITE
+        ${PROTO_GENERATED_DIR}/.clang-tidy
+        "InheritParentConfig: true
+Checks: >
+  -bugprone-reserved-identifier,
+  -readability-duplicate-include,
+  -cppcoreguidelines-pro-type-static-cast-downcast,
+  -readability-redundant-access-specifiers,
+  -cppcoreguidelines-interfaces-global-init,
+  -hicpp-use-equals-default,
+  -modernize-use-equals-default,
+  -cppcoreguidelines-avoid-goto"
+    )
+
     # Generate protobuf files by invoking protoc directly. This avoids depending on
     # the CMake-provided protobuf_generate() macro, which may be unavailable when
     # using protobuf via CPM.
@@ -52,8 +68,8 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
     set_source_files_properties(
         ${GENERATED_CC}
         PROPERTIES
-            SKIP_LINTING
-                TRUE
+            CXX_CLANG_TIDY
+                ""
     )
 
     # Add to all_generated_files target if it exists

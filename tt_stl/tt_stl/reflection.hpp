@@ -203,7 +203,7 @@ struct Attribute final {
         move_storage{other.move_storage},
         implementations{other.implementations} {}
 
-    Attribute(Attribute&& other) noexcept :
+    Attribute(Attribute&& other) :
         pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
         delete_storage{other.delete_storage},
         copy_storage{other.copy_storage},
@@ -225,7 +225,7 @@ struct Attribute final {
         return *this;
     }
 
-    Attribute& operator=(Attribute&& other) noexcept {
+    Attribute& operator=(Attribute&& other) {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -510,8 +510,7 @@ struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
 void visit_object_of_type(auto&& callback, T&& object) {
-    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
-        std::forward<decltype(callback)>(callback), std::forward<T>(object));
+    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
 }
 
 template <typename T>
@@ -649,8 +648,7 @@ struct transform_object_of_type_t;
 
 template <typename object_t, typename T>
 auto transform_object_of_type(auto&& callback, T&& object) {
-    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
-        std::forward<decltype(callback)>(callback), std::forward<T>(object));
+    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
 }
 
 template <typename T>

@@ -8,7 +8,7 @@ from transformers import DeiTForImageClassification, AutoImageProcessor
 from loguru import logger
 
 from models.experimental.deit.tt.deit_model import TtDeiTModel
-from models.common.utility_functions import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
     comp_pcc,

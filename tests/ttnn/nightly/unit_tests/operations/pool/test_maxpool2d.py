@@ -192,7 +192,7 @@ def run_max_pool(
             torch_input,
             (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
             mode="constant",
-            value=float("-inf"),
+            value=0,
         )
         torch_padding = [0, 0]  # use zero padding for torch avg pool since we are padding manually
     else:

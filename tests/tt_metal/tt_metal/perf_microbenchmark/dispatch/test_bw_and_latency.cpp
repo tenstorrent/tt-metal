@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
             default: {
                 src_mem = "FROM_PCIE";
                 vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-                TT_ASSERT(!pcie_cores.empty());
+                TT_ASSERT(pcie_cores.size() > 0);
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
                 noc_mem_addr = dev_pcie_base + pcie_offset;

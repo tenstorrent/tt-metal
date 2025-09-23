@@ -29,11 +29,6 @@ bool is_valid_device_conv_weights(
 bool is_valid_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
 
-// Converts convolution weights to interleaved MM layout [1, 1, KhKwCi, Co] and tilizes
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_interleaved_mm_layout(
-    const Tensor& conv_weight_tensor, std::optional<DataType> output_dtype = std::nullopt);
-
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(
@@ -129,7 +124,6 @@ struct Conv2dWeightsBiasPrepConfig {
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
         uint32_t input_width_,
-        bool interlaved_mm_conv,
         bool has_bias_ = false,
         bool parameters_on_device_ = true,
         bool enable_kernel_stride_folding_ = false,
@@ -154,8 +148,7 @@ struct Conv2dWeightsBiasPrepConfig {
         enable_activation_reuse(enable_activation_reuse_),
         kernel_size(kernel_size_),
         stride(stride_),
-        padding_n4(padding_n4_),
-        interleaved_mm_conv(interlaved_mm_conv) {}
+        padding_n4(padding_n4_) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
@@ -178,47 +171,6 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::array<uint32_t, 2> kernel_size;
     const std::array<uint32_t, 2> stride;
     const std::array<uint32_t, 4> padding_n4;
-    // This conv will go through auto shard codepath for matmul based convs
-    const bool interleaved_mm_conv;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "input_channels_alignment",
-        "weights_bias_dtype",
-        "weight_block_h_ntiles",
-        "weight_block_w_ntiles",
-        "input_parallel_config",
-        "output_parallel_config",
-        "groups",
-        "act_block_h_ntiles",
-        "input_width",
-        "has_bias",
-        "parameters_on_device",
-        "enable_kernel_stride_folding",
-        "full_inner_dim",
-        "kernel_size",
-        "stride",
-        "padding_n4",
-        "interleaved_mm_conv");
-    auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->input_channels_alignment),
-            std::cref(this->weights_bias_dtype),
-            std::cref(this->weight_block_h_ntiles),
-            std::cref(this->weight_block_w_ntiles),
-            std::cref(this->input_parallel_config),
-            std::cref(this->output_parallel_config),
-            std::cref(this->groups),
-            std::cref(this->act_block_h_ntiles),
-            std::cref(this->input_width),
-            std::cref(this->has_bias),
-            std::cref(this->parameters_on_device),
-            std::cref(this->enable_kernel_stride_folding),
-            std::cref(this->full_inner_dim),
-            std::cref(this->kernel_size),
-            std::cref(this->stride),
-            std::cref(this->padding_n4),
-            std::cref(this->interleaved_mm_conv));
-    }
 };
 
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(

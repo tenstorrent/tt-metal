@@ -195,7 +195,7 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    const std::function<std::vector<chip_id_t>(chip_id_t)>& get_adjacent_chips_func,
+    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func,
     std::optional<chip_id_t> start_chip_id /* = std::nullopt */) {
     constexpr size_t CORNER_1D_ADJACENT_CHIPS = 1;
     constexpr size_t CORNER_ADJACENT_CHIPS = 2;
@@ -359,7 +359,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id) {
     // Check number of corners for 2D meshes
     TT_FATAL(
-        topology_info.corners.size() == 4, "Error during physical chip discovery: missing connections in 2D mesh. Please check ethernet connection status");
+        topology_info.corners.size() == 4, "Expected 4 corners for 2D mesh, got {}.", topology_info.corners.size());
 
     // Determine the northwest corner
     chip_id_t nw_corner;

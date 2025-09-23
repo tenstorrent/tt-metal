@@ -26,6 +26,7 @@ using Result = std::variant<
 
 struct ConvTranpose2dOperation {
     static Result invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         IDevice* device,
@@ -50,6 +51,7 @@ struct ConvTranpose2dOperation {
         bool return_weights_and_bias = false);
 
     static Result invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         MeshDevice* device,
@@ -65,7 +67,7 @@ struct ConvTranpose2dOperation {
         std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
         uint32_t groups = 1,
         const std::optional<const DataType>& dtype = std::nullopt,
-        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
+        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,

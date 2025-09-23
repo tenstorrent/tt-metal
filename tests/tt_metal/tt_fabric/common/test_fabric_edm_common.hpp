@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "tt-metalium/kernel_types.hpp"
@@ -180,5 +181,5 @@ static void build_and_enqueue(
 
 static void wait_for_worker_program_completion(const std::vector<std::shared_ptr<MeshDevice>>& devices) {
     std::ranges::for_each(
-        devices, [&](const std::shared_ptr<MeshDevice>& d) { tt_metal::distributed::Finish(d->mesh_command_queue()); });
+        devices, [&](std::shared_ptr<MeshDevice> d) { tt_metal::distributed::Finish(d->mesh_command_queue()); });
 }

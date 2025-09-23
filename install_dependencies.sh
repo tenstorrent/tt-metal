@@ -207,7 +207,6 @@ init_packages() {
                 "libc++abi-17-dev"
                 "wget"
                 "curl"
-                "xxd"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
@@ -235,7 +234,6 @@ init_packages() {
                 "capstone-devel"
                 "wget"
                 "curl"
-                "vim-common" # Includes xxd
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")

@@ -187,6 +187,7 @@ ttnn::Tensor reshape_per_channel_vector_args(
 namespace ttnn::operations::quantization {
 
 Tensor QuantOp::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::variant<Tensor, float>& scale,
     const std::variant<Tensor, int32_t>& zero_point,
@@ -207,7 +208,7 @@ Tensor QuantOp::invoke(
         TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Quantize only supports int32 outputs for now");
     }
 
-    constexpr tt::stl::Span<const unary::EltwiseUnaryWithParam> none{};
+    constexpr tt::stl::Span<const unary::UnaryWithParam> none{};
 
     const bool is_per_channel = axis.has_value();
     if (is_per_channel) {
@@ -222,9 +223,10 @@ Tensor QuantOp::invoke(
         const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, a_dtype);
         const Tensor zero_point_full = reshape_per_channel_vector_args(*zero_point_p, input_shape, axis_v, a_dtype);
         const Tensor input_scaled =
-            ttnn::divide(input_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none, false);
+            ttnn::divide(queue_id, input_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none, false);
         return ttnn::typecast(
             ttnn::add(
+                queue_id,
                 input_scaled,
                 zero_point_full,
                 std::nullopt,
@@ -241,10 +243,11 @@ Tensor QuantOp::invoke(
         tt::stl::overloaded{
             [&](const float scale, const int32_t zero_point) {
                 const std::array post_activation{
-                    unary::EltwiseUnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
+                    unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
                 // LLK quant kernel expects the reciprocal of the actual scale to avoid doing div on the device
                 return ttnn::prim::binary_ng(
+                    queue_id,
                     input_a,
                     1.0f / scale,
                     binary::BinaryOpType::QUANT,
@@ -258,9 +261,10 @@ Tensor QuantOp::invoke(
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
                 const std::array post_activation{
-                    unary::EltwiseUnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
+                    unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
                 return ttnn::prim::binary_ng(
+                    queue_id,
                     input_a,
                     ttnn::reciprocal(scale),
                     binary::BinaryOpType::QUANT,
@@ -273,10 +277,11 @@ Tensor QuantOp::invoke(
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);
-                const Tensor input_scaled =
-                    ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+                const Tensor input_scaled = ttnn::divide(
+                    queue_id, input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
                 return ttnn::typecast(
                     ttnn::add(
+                        queue_id,
                         input_scaled,
                         zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
                         a_dtype,
@@ -292,6 +297,7 @@ Tensor QuantOp::invoke(
                 check_per_tensor_scale(scale);
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_scaled = ttnn::divide(
+                    queue_id,
                     input_a,
                     scale.dtype() == a_dtype ? scale : ttnn::typecast(scale, a_dtype),
                     a_dtype,
@@ -303,6 +309,7 @@ Tensor QuantOp::invoke(
                     false);
                 return ttnn::typecast(
                     ttnn::add(
+                        queue_id,
                         input_scaled,
                         zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
                         a_dtype,
@@ -319,6 +326,7 @@ Tensor QuantOp::invoke(
 }
 
 Tensor RequantOp::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::variant<Tensor, float>& in_scale,
     const std::variant<Tensor, int32_t>& in_zero_point,
@@ -337,7 +345,7 @@ Tensor RequantOp::invoke(
         TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Requantize only supports int32 outputs for now");
     }
 
-    constexpr tt::stl::Span<const unary::EltwiseUnaryWithParam> none{};
+    constexpr tt::stl::Span<const unary::UnaryWithParam> none{};
 
     const bool has_axis = axis.has_value();
 
@@ -395,10 +403,20 @@ Tensor RequantOp::invoke(
             expand_or_cast(*out_zero_point_p, out_zero_point_is_full_size, DataType::FLOAT32);
 
         const Tensor scale_recip_full = ttnn::divide(
-            in_scale_full, out_scale_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+            queue_id, in_scale_full, out_scale_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
         const Tensor in_zero_point_scaled_full = ttnn::multiply(
-            in_zero_point_full, scale_recip_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+            queue_id,
+            in_zero_point_full,
+            scale_recip_full,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            none,
+            none,
+            none,
+            false);
         const Tensor zero_point_full = ttnn::subtract(
+            queue_id,
             out_zero_point_full,
             in_zero_point_scaled_full,
             std::nullopt,
@@ -410,6 +428,7 @@ Tensor RequantOp::invoke(
             false);
 
         const Tensor input_scaled = ttnn::multiply(
+            queue_id,
             ttnn::typecast(input_tensor, DataType::FLOAT32),
             scale_recip_full,
             std::nullopt,
@@ -421,6 +440,7 @@ Tensor RequantOp::invoke(
             false);
         return ttnn::typecast(
             ttnn::add(
+                queue_id,
                 input_scaled,
                 zero_point_full,
                 std::nullopt,
@@ -445,9 +465,9 @@ Tensor RequantOp::invoke(
                 // z is passed to and consumed by the LLK as f32 anyway, might as well preserve some accuracy here.
                 const float zero_point = out_zero_point - in_zero_point * scale_recip;
 
-                const std::array post_activation{
-                    unary::EltwiseUnaryWithParam{unary::UnaryOpType::ZERO_POINT, zero_point}};
+                const std::array post_activation{unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, zero_point}};
                 return ttnn::prim::binary_ng(
+                    queue_id,
                     input_tensor,
                     scale_recip,
                     binary::BinaryOpType::REQUANT,
@@ -467,9 +487,23 @@ Tensor RequantOp::invoke(
                 const std::optional<int> quant_axis = has_tensor_out_scale ? axis : std::nullopt;
 
                 const Tensor dequantized = DequantOp::invoke(
-                    input_tensor, in_scale, in_zero_point, dequant_axis, std::nullopt, std::nullopt, std::nullopt);
+                    queue_id,
+                    input_tensor,
+                    in_scale,
+                    in_zero_point,
+                    dequant_axis,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt);
                 return QuantOp::invoke(
-                    dequantized, out_scale, out_zero_point, quant_axis, c_dtype, memory_config, optional_output_tensor);
+                    queue_id,
+                    dequantized,
+                    out_scale,
+                    out_zero_point,
+                    quant_axis,
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor);
             }},
         in_scale,
         in_zero_point,
@@ -478,6 +512,7 @@ Tensor RequantOp::invoke(
 }
 
 Tensor DequantOp::invoke(
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::variant<Tensor, float>& scale,
     const std::variant<Tensor, int32_t>& zero_point,
@@ -493,7 +528,7 @@ Tensor DequantOp::invoke(
         c_dtype == DataType::FLOAT32 || c_dtype == DataType::BFLOAT16,
         "Dequantize only supports bf16/f32 outputs for now");
 
-    constexpr tt::stl::Span<const unary::EltwiseUnaryWithParam> none{};
+    constexpr tt::stl::Span<const unary::UnaryWithParam> none{};
 
     const bool is_per_channel = axis.has_value();
     if (is_per_channel) {
@@ -509,6 +544,7 @@ Tensor DequantOp::invoke(
         const Tensor zero_point_full =
             reshape_per_channel_vector_args(*zero_point_p, input_shape, axis_v, DataType::FLOAT32);
         const Tensor input_shifted = ttnn::subtract(
+            queue_id,
             ttnn::typecast(input_tensor, DataType::FLOAT32),
             zero_point_full,
             std::nullopt,
@@ -520,6 +556,7 @@ Tensor DequantOp::invoke(
             false);
         return ttnn::typecast(
             ttnn::multiply(
+                queue_id,
                 input_shifted,
                 scale_full,
                 std::nullopt,
@@ -537,8 +574,9 @@ Tensor DequantOp::invoke(
             [&](const float scale, const int32_t zero_point) {
                 // LLK dequant kernel does addition, so we need to negate zero_point
                 const std::array post_activation{
-                    unary::EltwiseUnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
+                    unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
                 return ttnn::prim::binary_ng(
+                    queue_id,
                     input_tensor,
                     scale,
                     binary::BinaryOpType::DEQUANT,
@@ -552,8 +590,9 @@ Tensor DequantOp::invoke(
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
                 const std::array post_activation{
-                    unary::EltwiseUnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
+                    unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
                 return ttnn::prim::binary_ng(
+                    queue_id,
                     input_tensor,
                     scale,
                     binary::BinaryOpType::DEQUANT,
@@ -568,19 +607,47 @@ Tensor DequantOp::invoke(
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                        queue_id,
+                        input_tensor,
+                        zero_point,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        none,
+                        none,
+                        none,
+                        false),
                     c_dtype);
                 return ttnn::multiply(
-                    input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none, false);
+                    queue_id,
+                    input_shifted,
+                    scale,
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor,
+                    none,
+                    none,
+                    none,
+                    false);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
                 check_per_tensor_scale(scale);
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                        queue_id,
+                        input_tensor,
+                        zero_point,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        none,
+                        none,
+                        none,
+                        false),
                     c_dtype);
                 return ttnn::multiply(
+                    queue_id,
                     input_shifted,
                     scale.dtype() == c_dtype ? scale : ttnn::typecast(scale, c_dtype),
                     c_dtype,

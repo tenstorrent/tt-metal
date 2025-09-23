@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <map>
-#include <string_view>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -16,11 +15,6 @@
 #include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal {
-
-// 341 = (4096/(3 * sizeof(uint32_t)), where
-// - 4096 - packet size in dispatch
-// - 3 - number of kernels per tensix
-constexpr uint32_t max_runtime_args = 341;
 
 using KernelHandle = std::uint32_t;
 
@@ -44,6 +38,8 @@ struct DataMovementConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -52,24 +48,22 @@ struct DataMovementConfig {
     //     CreateKernel(program, "kernel.cpp", core, DataMovementConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
     std::unordered_map<std::string, uint32_t> named_compile_args;
-    // Set the compiler and linker optimization level
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
     ReaderDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
-        std::unordered_map<std::string, uint32_t> named_compile_args = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::unordered_map<std::string, uint32_t> named_compile_args = {});
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
     WriterDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
-        std::unordered_map<std::string, uint32_t> named_compile_args = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::unordered_map<std::string, uint32_t> named_compile_args = {});
 };
 
 struct ComputeConfig {
@@ -84,6 +78,8 @@ struct ComputeConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -92,8 +88,6 @@ struct ComputeConfig {
     //     CreateKernel(program, "kernel.cpp", core, ComputeConfig{.compile_args = compile_args, .named_compile_args =
     //     named_compile_args})
     std::unordered_map<std::string, uint32_t> named_compile_args;
-    // Set the compiler and linker optimization level
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
 };
 
 struct EthernetConfig {
@@ -105,6 +99,8 @@ struct EthernetConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -113,38 +109,6 @@ struct EthernetConfig {
     //     CreateKernel(program, "kernel.cpp", core, EthernetConfig{.compile_args = compile_args, .named_compile_args =
     //     named_compile_args})
     std::unordered_map<std::string, uint32_t> named_compile_args;
-    // Set the compiler and linker optimization level
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
-
-// These are only used in op_profiler, are unstable and have not been designed for general use.
-namespace detail {
-
-struct KernelBinaryMeta {
-    // This maps to Kernel::get_kernel_processor_type
-    using ProcessorType = uint32_t;
-    ProcessorType processor_type;
-    std::size_t packed_size;
-};
-
-struct KernelMeta {
-    // Kernel identifiers:
-    // Owner for name and source is the Program class,
-    // (direct owner is the Kernel class internally)
-    std::string_view name, source;
-
-    // Core identifiers:
-    HalProcessorClassType processor_class;
-    HalProgrammableCoreType programmable_core_type;
-
-    // Core configuration:
-    // This optinonal only contains a MathFidelity if the kernel is a compute kernel
-    std::optional<MathFidelity> math_fidelity;
-
-    // Binary metadata:
-    std::vector<KernelBinaryMeta> binary_meta;
-};
-
-}  // namespace detail
 
 }  // namespace tt::tt_metal

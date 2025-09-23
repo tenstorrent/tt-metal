@@ -128,12 +128,38 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
+        (  # Batch-1 run with single decoder layer in vision model (CI only) - single user repeated batch
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",
+            True,  # instruct mode
+            4,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
+        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            32,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
         (  # Batch-1 run with full model for more stable BLEU checks (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
             True,  # instruct mode
-            2,  # repeat_batches to simulate multiple users with the same prompt
+            1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
-            32,  # batch_size -- samples to load from the prompt JSON
+            1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
@@ -141,7 +167,7 @@ def create_tt_model(
             True,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
+        (  # Batch-1 run with single decoder layer in vision model (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
@@ -154,26 +180,14 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-1 run with 300 dpi scanned document (Latency) - single user, real-world test
-            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
-            True,  # instruct mode
-            4,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
-            12288,  # max_seq_len, allow for image tokens
-            1,  # batch_size -- samples to load from the prompt JSON
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-        ),
     ],
     ids=[
         "batch-1",  # latency
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only-bert-score",  # ci_only batch-bleu-score for testing coverage in CI pipelines
-        "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
-        "real-world-test",  # real-world test for 300DPI scanned document
+        "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
+        "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
+        "ci-only-bleu-score",  # ci_only batch-bleu-score for faster testing coverage in CI pipelines
+        "ci-only-text-only",  # ci_only batch-text-only for faster testing coverage in CI pipelines
     ],
 )
 @pytest.mark.parametrize(
@@ -215,6 +229,7 @@ def test_demo(
     is_ci_env,
     ci_only,
     reset_seeds,
+    ensure_nltk,
     request,
 ):
     """
@@ -314,9 +329,8 @@ def test_demo(
         use_paged_kv_cache=paged_attention,
     )
 
-    processor = model_args.processor
     tokenizer = model_args.tokenizer
-    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     # Load vision model and processor
     # reduce the number of layers to 1 for fast ci runs (also useful for debugging)
@@ -326,6 +340,9 @@ def test_demo(
     ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
     transformers_logging.set_verbosity_error()
     config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
+    if ci_only and "bleu-score" not in test_id:
+        # [INFO] use single decoder layer for faster CI runs; bleu-score test uses full model for stable text output
+        config.vision_config.depth = 1
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
     )
@@ -345,7 +362,7 @@ def test_demo(
     num_image_tokens = []
 
     text_outputs = []
-    text_outputs_all_users_all_batches = []
+    text_outputs_all_users = []
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
@@ -560,7 +577,8 @@ def test_demo(
                         logger.info(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
-                    text_outputs_all_users_all_batches.append(text_after_prompt)
+                    if batch_idx == 0:
+                        text_outputs_all_users.append(text_after_prompt)
 
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
@@ -581,31 +599,28 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
+    # compare the strings in text_outputs in repeat_batches model
+    if is_ci_env and repeat_batches > 1:
+        all_match = True
+        for i in range(len(text_outputs)):
+            for j in range(i + 1, len(text_outputs)):
+                if text_outputs[i] != text_outputs[j]:
+                    logger.info(f"text_outputs[{i}] != text_outputs[{j}]")
+                    all_match = False
+        assert all_match, "text_outputs should be the same for all batches"
+
     if is_ci_env and "bleu-score" in test_id:
         assert mesh_device.get_num_devices() > 2, "BLEU score is only supported for T3K for now"
         expected_output = load_expected_text(model_args.base_model_name)
-        from bert_score import score as bert_score
+        from nltk.tokenize import word_tokenize
+        from nltk.translate.bleu_score import sentence_bleu
 
-        candidates = text_outputs_all_users_all_batches
-        references = [expected_output] * len(candidates)
-        P0, R0, F10 = bert_score(
-            candidates,
-            references,
-            lang="en",
-            model_type="microsoft/deberta-xlarge-mnli",
-            rescale_with_baseline=False,
-            batch_size=64,
-        )
-        for i, (p, r, f) in enumerate(zip(P0, R0, F10)):
-            logger.debug(
-                f"BERTScore (rescaled) P/R/F1 for sample {i % batch_size} of batch {i // batch_size}: "
-                f"{p.item():.3f}/{r.item():.3f}/{f.item():.3f}"
-            )
-        if "Qwen2.5-VL-3B" not in model_args.base_model_name:
-            # todo)) fix this issue before enabling BERTScore check for 3B model:
-            #        https://github.com/tenstorrent/tt-metal/issues/28442
-            logger.info(f"Mean BERTScore F1 (raw): {F10.mean().item():.3f}")
-            assert F10.mean().item() > 0.8, f"BERTScore F1 (raw) is lower than expected."
+        for i, output_text in enumerate(text_outputs_all_users):
+            reference = [word_tokenize(expected_output.lower())]
+            candidate = word_tokenize(output_text.lower())
+            bleu_score = sentence_bleu(reference, candidate)
+            logger.info(f"BLEU score for batch {i} is {bleu_score:.3f}")
+            assert bleu_score > 0.5, f"BLEU score for batch {i} is lower than expected"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill")
@@ -777,8 +792,6 @@ def load_expected_text(model_name):
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_72B.txt"
     elif "Qwen2.5-VL-32B" in model_name:
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_32B.txt"
-    elif "Qwen2.5-VL-3B" in model_name:
-        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_3B.txt"
     else:
         raise ValueError(f"Model {model_name} not supported")
 

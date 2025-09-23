@@ -88,7 +88,7 @@ template <
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
-    uint32_t in_nbytes_leftover,
+    uint32_t in_nbytes_leftover,  // in_aligned_nbytes_c
     uint32_t in_c,
     uint32_t max_sticks_for_reduction,
     uint32_t total_elems_to_reduce,
@@ -97,7 +97,6 @@ template <
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
     uint32_t in_nbytes_c,
-    uint32_t shard_width_bytes,
     bool is_large_kernel,
     bool last_tile_is_partial,
     uint32_t dilation_h,
@@ -124,13 +123,13 @@ ALWI void read_window_with_top_left_index(
         }
     }
 #endif
+
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
         if constexpr (wide_reduction) {
             read_bytes =
                 (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
-
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         cb_reserve_back(in_cb_id, 1);
         uint32_t in_idx_l1_write_addr = 0;
@@ -146,7 +145,7 @@ ALWI void read_window_with_top_left_index(
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
-                    in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
+                    in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
@@ -157,7 +156,7 @@ ALWI void read_window_with_top_left_index(
                 }
                 if constexpr (return_indices) {
                     const uint32_t idx_read_offset =
-                        in_idx_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
+                        in_idx_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
                     noc_async_read_one_packet(
                         get_noc_addr(idx_read_offset), in_idx_l1_write_addr, read_bytes * w_multiple);
                     if constexpr (tilize_reconfig) {
@@ -266,7 +265,7 @@ void kernel_main() {
     constexpr int32_t pad_w = get_compile_time_arg_val(3);
 
     // channel size in bytes
-    constexpr uint32_t in_nbytes_leftover = get_compile_time_arg_val(4);
+    constexpr uint32_t in_aligned_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
     constexpr int32_t in_w = get_compile_time_arg_val(5);
@@ -298,7 +297,7 @@ void kernel_main() {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
     constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(30);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(31);
+    constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(31);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(32);
     constexpr uint32_t stride_w = get_compile_time_arg_val(33);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
@@ -421,7 +420,7 @@ void kernel_main() {
                 window_h,
                 window_w,
                 in_w_padded,
-                in_nbytes_leftover,
+                in_aligned_nbytes_c,
                 in_c,
                 max_sticks_for_reduction,
                 total_elems_to_reduce,
@@ -429,8 +428,7 @@ void kernel_main() {
                 wide_reduction,
                 clear_value_cb_id,
                 in_cb_ntiles,
-                in_nbytes_c,
-                shard_width_bytes,
+                in_nbytes_padded_c,
                 is_large_kernel,
                 last_tile_is_partial,
                 dilation_h,
@@ -456,7 +454,7 @@ void kernel_main() {
             window_h,
             window_w,
             in_w_padded,
-            in_nbytes_leftover,
+            in_aligned_nbytes_c,
             in_c,
             max_sticks_for_reduction,
             total_elems_to_reduce,
@@ -464,8 +462,7 @@ void kernel_main() {
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
-            in_nbytes_c,
-            shard_width_bytes,
+            in_nbytes_padded_c,
             is_large_kernel,
             last_tile_is_partial,
             dilation_h,

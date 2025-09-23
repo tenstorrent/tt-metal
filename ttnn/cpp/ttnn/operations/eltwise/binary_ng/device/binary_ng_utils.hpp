@@ -72,12 +72,10 @@ struct OpConfig {
         MAXIMUM,
         MINIMUM,
         XLOGY,
-        LT,
-        GT,
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
+    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
@@ -90,7 +88,7 @@ struct OpConfig {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
+    tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 

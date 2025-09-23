@@ -8,7 +8,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
@@ -57,17 +57,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.prefill_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.prefill_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -89,17 +82,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.decode_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.decode_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -122,8 +108,8 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        ccl: CCL,
-        is_padding_layer: tuple[bool, ...] | None = None,
+        is_padding_layer: tuple[bool, ...],
+        ccl: CCL1D,
     ) -> ModelState:
         return {
             "moe": [
@@ -209,13 +195,9 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
-            "moe": [
-                None if is_padding else MoE.create_shared_state(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.create_shared_state(hf_config, mesh_device)],
             "shared_expert": {},
         }
 

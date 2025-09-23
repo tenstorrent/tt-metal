@@ -89,8 +89,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         int8_t dst_y;
         int8_t mcast_end_dst_x;
         int8_t mcast_end_dst_y;
-        NocType dst_noc_type : 4;
-        FabricPacketType routing_fields_type : 4;
+        FabricPacketType routing_fields_type;
     };
 
     struct FabricNoCScatterEvent {
@@ -99,8 +98,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         int8_t dst_y;
         int16_t chunk_size;
         int8_t num_chunks;
-        NocType dst_noc_type : 4;
-        FabricPacketType routing_fields_type : 4;
+        FabricPacketType routing_fields_type;
     };
 
     // represents a fabric routing fields event; follows a FabricNoCEvent

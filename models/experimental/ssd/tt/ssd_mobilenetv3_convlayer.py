@@ -7,7 +7,7 @@ import torch.nn as nn
 import ttnn
 
 import tt_lib.fallback_ops as fallback_ops
-from models.common.utility_functions import (
+from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from models.experimental.ssd.ssd_utils import create_batchnorm

@@ -26,6 +26,7 @@ target_include_directories(
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/wormhole/tt-metalium
 )
 target_link_libraries(
     wh_hal
@@ -54,6 +55,7 @@ target_include_directories(
     PRIVATE
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/blackhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/blackhole/tt-metalium
 )
 target_link_libraries(
     bh_hal

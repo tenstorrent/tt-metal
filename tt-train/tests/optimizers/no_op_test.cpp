@@ -25,7 +25,7 @@ protected:
     }
 };
 
-TEST_F(NoOpFullTest, NIGHTLY_NoOpTest) {
+TEST_F(NoOpFullTest, NoOpTest) {
     using namespace ttml::ops;
     ttml::autograd::ctx().set_seed(123U);
     auto* device = &ttml::autograd::ctx().get_device();
