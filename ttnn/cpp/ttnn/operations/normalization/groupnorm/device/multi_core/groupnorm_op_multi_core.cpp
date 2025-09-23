@@ -2347,9 +2347,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             pack_two_bfloat16_into_uint32({bfloat_winv_value_group_2, bfloat_winv_value_group_2});
     }
     float cinv = std::sqrt(
-        pad_correction_factor / num_cores_per_batch *
-        num_cores_per_group);  // bcast-cores scaler. Pad correction factor=(padded_size/logical_size) to account for
-                               // scaling error from padding.
+        pad_correction_factor /
+        (num_cores_per_batch *
+         num_cores_per_group));  // bcast-cores scaler. Pad correction factor=(padded_size/logical_size) to account for
+                                 // scaling error from padding.
     bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     union {
