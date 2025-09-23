@@ -4,7 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>

@@ -73,8 +73,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "util.hpp"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
 
@@ -1461,7 +1460,7 @@ void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; 
 void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
-    HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
+    HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + this->get_program_config(
                                MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
@@ -1469,7 +1468,7 @@ uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*log
 }
 
 uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
-    HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
+    HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + this->get_program_config(
                                MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))

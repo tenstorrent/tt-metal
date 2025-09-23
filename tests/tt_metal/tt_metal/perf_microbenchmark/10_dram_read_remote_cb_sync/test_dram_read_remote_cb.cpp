@@ -14,7 +14,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>

@@ -13,7 +13,7 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 

@@ -24,7 +24,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
-#include <utils.hpp>
+#include "dispatch_utils.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
@@ -423,7 +423,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
-    tt::utils::loop_and_wait_with_timeout(
+    tt::tt_metal::dispatch::utils::loop_and_wait_with_timeout(
         wait_operation_body,
         wait_condition,
         on_timeout,

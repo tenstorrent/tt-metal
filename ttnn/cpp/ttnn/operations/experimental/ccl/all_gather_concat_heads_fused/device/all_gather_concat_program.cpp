@@ -15,7 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"

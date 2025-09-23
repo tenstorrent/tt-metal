@@ -10,7 +10,7 @@
 #include "rotary_embedding_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 

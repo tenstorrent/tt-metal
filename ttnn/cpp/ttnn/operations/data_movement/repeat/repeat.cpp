@@ -5,7 +5,7 @@
 #include <functional>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/core/core.hpp"

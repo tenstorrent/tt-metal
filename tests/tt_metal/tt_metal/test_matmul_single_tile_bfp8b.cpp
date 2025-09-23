@@ -10,7 +10,7 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>

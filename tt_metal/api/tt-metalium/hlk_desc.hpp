@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/utils.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
+#include <tt_stl/tt_stl/reflection.hpp>
 
 namespace tt {
 /**
@@ -143,7 +144,7 @@ inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
     const char* const raw_bytes = reinterpret_cast<char*>(hlk_args);
 
     for (size_t i = 0; i < hlk_args_size; ++i) {
-        tt::utils::hash_combine(seed, std::hash<char>{}(raw_bytes[i]));
+        ttsl::hash::hash_combine(seed, std::hash<char>{}(raw_bytes[i]));
     }
 }
 
@@ -152,12 +153,12 @@ struct std::hash<tt::tt_hlk_desc> {
     std::size_t operator()(tt::tt_hlk_desc const& obj) const {
         std::size_t hash_value = 0;
         for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_buf_dataformat(i)));
-            tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_r_dim(i)));
-            tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_c_dim(i)));
+            ttsl::hash::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_buf_dataformat(i)));
+            ttsl::hash::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_r_dim(i)));
+            ttsl::hash::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_c_dim(i)));
         }
-        tt::utils::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
-        tt::utils::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
+        ttsl::hash::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
+        ttsl::hash::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
 
         // Get hash for hlk_args here
         void* hlk_args = obj.get_hlk_args();

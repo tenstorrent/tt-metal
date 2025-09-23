@@ -1,21 +1,23 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "jit_build_utils.hpp"
+
 #include <stdlib.h>
-#include <utils.hpp>
 #include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <string>
 #include <chrono>
-
-#include "impl/context/metal_context.hpp"
+#include <fstream>
 
 namespace fs = std::filesystem;
 
 namespace tt {
+namespace jit_build {
 namespace utils {
+
 bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
@@ -49,13 +51,6 @@ void create_file(const std::string& file_path_str) {
     ofs.close();
 }
 
-const std::string& get_reports_dir() {
-    static std::string outpath;
-    if (outpath.empty()) {
-        outpath = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "/generated/reports/";
-    }
-    return outpath;
-}
 }  // namespace utils
-
+}  // namespace jit_build
 }  // namespace tt

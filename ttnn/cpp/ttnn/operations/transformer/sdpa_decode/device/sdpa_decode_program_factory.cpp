@@ -11,7 +11,7 @@
 #include "sdpa_decode_op.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>

@@ -26,7 +26,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include "tt_metal/api/tt-metalium/math.hpp"
 #include <enchantum/enchantum.hpp>
 

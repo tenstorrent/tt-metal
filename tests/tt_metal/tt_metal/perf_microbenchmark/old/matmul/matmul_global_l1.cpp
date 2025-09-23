@@ -12,7 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>

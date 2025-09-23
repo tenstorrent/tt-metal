@@ -7,7 +7,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement {

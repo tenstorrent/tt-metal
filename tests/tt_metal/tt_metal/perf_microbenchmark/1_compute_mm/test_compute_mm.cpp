@@ -13,7 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/mesh_device.hpp>

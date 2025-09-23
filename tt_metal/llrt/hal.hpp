@@ -644,6 +644,17 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
     }
 }
 
+// Core type conversion utility
+inline HalProgrammableCoreType hal_programmable_core_type_from_core_type(CoreType core_type) {
+    switch (core_type) {
+        case CoreType::WORKER:
+        case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
+        case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
+        case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
+        default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
+    }
+}
+
 }  // namespace tt_metal
 }  // namespace tt
 
