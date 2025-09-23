@@ -658,7 +658,12 @@ def as_tensor(
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
         ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
         if device is not None:
-            tensor = tensor.to(device, memory_config)
+            # For replicated wrapper, we keep the cache device-agnostic (host, undisttributed),
+            # but return a distributed tensor in-memory to reflect the actual topology.
+            if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper):
+                tensor = ttnn._ttnn.multi_device.distribute_tensor(tensor, mesh_mapper.unwrap(), device)
+            else:
+                tensor = tensor.to(device, memory_config)
         return tensor
 
     cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
@@ -668,7 +673,12 @@ def as_tensor(
         return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
 
     try:
-        tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
+        tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name)
+        # If a replicate wrapper was provided, re-distribute after loading from cache so topology reflects mapper.
+        if device is not None and isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper):
+            tensor = ttnn._ttnn.multi_device.distribute_tensor(tensor, mesh_mapper.unwrap(), device)
+
+        tensor = tensor.to(device)
         logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
     except RuntimeError as e:
         logger.warning(f"Failed to load cache for {cache_file_name}: {e}")

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor/flatbuffer/tensor_flatbuffer.hpp"
+#include "tensor_flatbuffer.hpp"
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
@@ -10,14 +10,19 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <flatbuffers/flatbuffers.h>
 
+#include <cstdint>
+#include <unordered_map>
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "mesh_shape_generated.h"
+#include "tensor_topology_flatbuffer.hpp"
 #include <tt-metalium/serialized_descriptors/mesh_coordinate_generated.h>
 #include "tensor_generated.h"
 
@@ -133,7 +138,10 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     auto mesh_shape_offset = to_flatbuffer(host_storage.buffer().shape(), builder);
 
-    auto tensor_offset = ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards);
+    auto topology_offset = to_flatbuffer(tensor.tensor_topology(), builder);
+
+    auto tensor_offset =
+        ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards, topology_offset);
 
     return tensor_offset;
 }
@@ -169,8 +177,12 @@ Tensor from_flatbuffer(
 
     tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
 
-    // TODO (#25340): Add TensorTopology to flatbuffer serialization and properly handle it in deserialization.
-    return Tensor(std::move(host_storage), spec, tt::tt_metal::TensorTopology{});
+    tt::tt_metal::TensorTopology topology{};
+    if (const auto* fb_topology = fb_tensor->tensor_topology()) {
+        topology = from_flatbuffer(fb_topology);
+    }
+
+    return Tensor(std::move(host_storage), spec, std::move(topology));
 }
 
 }  // namespace ttnn
