@@ -425,6 +425,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     program_config.block_w,
                     program_config.legacy_reduction,
                     program_config.legacy_rsqrt,
+                    program_config.use_welford,
                     this->compute_kernel_config);
             } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 TT_FATAL(

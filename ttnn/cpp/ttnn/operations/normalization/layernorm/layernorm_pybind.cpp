@@ -24,7 +24,7 @@ void bind_normalization_layernorm_program_config(py::module& module) {
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool, bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("subblock_w").noconvert(),
@@ -32,7 +32,8 @@ void bind_normalization_layernorm_program_config(py::module& module) {
             py::arg("block_w").noconvert(),
             py::arg("inplace").noconvert(),
             py::arg("legacy_reduction").noconvert() = false,
-            py::arg("legacy_rsqrt").noconvert() = false)
+            py::arg("legacy_rsqrt").noconvert() = false,
+            py::arg("use_welford").noconvert() = false)
         .def(
             "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 }

@@ -562,6 +562,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t block_wt,
     bool legacy_reduction,
     bool legacy_rsqrt,
+    bool use_welford,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
