@@ -211,6 +211,7 @@ def test_motif(
         context_pre_only=is_last_block,
         context_head_scaling=True,
         add_attention_to_output=False,
+        ff_activation_fn="silu",
         mesh_device=submesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -239,11 +240,11 @@ def test_motif(
     )
 
     tt_spatial_torch = to_torch(tt_spatial_out, device=submesh_device, mesh_mapping={sp_axis: 1, tp_axis: 2})
-    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.99998, relative_rmse=0.006)
+    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.999996, relative_rmse=0.003)
 
     if is_last_block:
         assert tt_prompt_out is None
         return
 
     tt_prompt_torch = to_torch(tt_prompt_out, device=submesh_device, mesh_mapping={tp_axis: 2})
-    assert_quality(torch_prompt, tt_prompt_torch, pcc=0.99998, relative_rmse=0.006)
+    assert_quality(torch_prompt, tt_prompt_torch, pcc=0.999996, relative_rmse=0.003)
