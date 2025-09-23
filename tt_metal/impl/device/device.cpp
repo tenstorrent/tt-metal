@@ -182,7 +182,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         l1_small_size,
         trace_region_size,
         worker_l1_unreserved_start,
-        {l1_bank_remap.begin(), l1_bank_remap.end()});
+        {l1_bank_remap.begin(), l1_bank_remap.end()},
+        {});
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);

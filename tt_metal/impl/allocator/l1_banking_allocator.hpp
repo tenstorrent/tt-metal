@@ -23,7 +23,8 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
-        BankMapping l1_bank_remap);
+        BankMapping l1_bank_remap,
+        const AllocatorDependenciesConfig& dependencies = {});
 };
 
 }  // namespace tt_metal

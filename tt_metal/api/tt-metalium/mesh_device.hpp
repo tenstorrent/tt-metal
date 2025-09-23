@@ -256,6 +256,9 @@ public:
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
+    // Submesh allocation state helpers
+    uint32_t submesh_allocator_state_id() const;
+
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 

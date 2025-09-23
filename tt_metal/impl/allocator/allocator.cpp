@@ -103,7 +103,7 @@ void Allocator::verify_safe_allocation() const {
     }
 }
 
-DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
+DeviceAddr Allocator::allocate_buffer(Buffer* buffer, uint32_t allocator_state_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     DeviceAddr address = 0;
     auto size = buffer->aligned_size();
@@ -120,11 +120,23 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
             break;
         case BufferType::L1:
-            address = l1_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
+            address = l1_manager_->allocate_buffer(
+                size,
+                page_size,
+                bottom_up,
+                config_.compute_grid,
+                num_cores,
+                tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID{allocator_state_id});
             break;
         case BufferType::L1_SMALL: {
             TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
-            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
+            address = l1_small_manager_->allocate_buffer(
+                size,
+                page_size,
+                bottom_up,
+                config_.compute_grid,
+                num_cores,
+                tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID{allocator_state_id});
             break;
         }
         case BufferType::TRACE:
@@ -139,14 +151,20 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
     return address;
 }
 
-void Allocator::deallocate_buffer(Buffer* buffer) {
+void Allocator::deallocate_buffer(Buffer* buffer, uint32_t allocator_state_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
-        case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
-        case BufferType::L1_SMALL: l1_small_manager_->deallocate_buffer(address); break;
+        case BufferType::L1:
+            l1_manager_->deallocate_buffer(
+                address, tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID{allocator_state_id});
+            break;
+        case BufferType::L1_SMALL:
+            l1_small_manager_->deallocate_buffer(
+                address, tt::tt_metal::BankManager::AllocatorDependencies::AllocatorID{allocator_state_id});
+            break;
         case BufferType::TRACE: trace_buffer_manager_->deallocate_buffer(address); break;
         default: {
             TT_THROW("Unsupported buffer type!");

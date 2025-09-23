@@ -969,8 +969,22 @@ bool MeshDevice::initialize(
     cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator();
+    auto alloc_config = allocator->get_config();
+    // Thread submesh allocator dependencies into the MeshDevice's allocator config (lightweight form)
+    if (submesh_state_) {
+        AllocatorDependenciesConfig deps_cfg;
+        const auto& deps = submesh_state_->get_dependencies();
+        deps_cfg.dependencies.clear();
+        deps_cfg.dependencies.resize(deps.num_allocators());
+        for (uint32_t src = 0; src < deps.num_allocators(); ++src) {
+            for (const auto& neighbor : deps.dependencies[src]) {
+                deps_cfg.dependencies[src].push_back(neighbor.get());
+            }
+        }
+        alloc_config.allocator_dependencies = std::move(deps_cfg);
+    }
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+        this, std::make_unique<L1BankingAllocator>(alloc_config), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
@@ -1091,5 +1105,7 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+
+uint32_t MeshDevice::submesh_allocator_state_id() const { return static_cast<uint32_t>(submesh_state_->id()); }
 
 }  // namespace tt::tt_metal::distributed

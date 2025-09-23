@@ -34,9 +34,9 @@ public:
 
     ~Allocator();
 
-    DeviceAddr allocate_buffer(Buffer* buffer);
+    DeviceAddr allocate_buffer(Buffer* buffer, uint32_t allocator_state_id = 0);
 
-    void deallocate_buffer(Buffer* buffer);
+    void deallocate_buffer(Buffer* buffer, uint32_t allocator_state_id = 0);
     void deallocate_buffers();
 
     std::unordered_set<Buffer*> get_allocated_buffers() const;
