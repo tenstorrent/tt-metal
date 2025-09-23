@@ -354,8 +354,8 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-std::string get_platform_architecture_name() {
-    return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
+std::string get_physical_architecture_name() {
+    return tt::get_string_lowercase(tt::tt_metal::get_physical_architecture());
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
