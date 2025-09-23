@@ -48,8 +48,11 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t target_device_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t opposite_target_device_offset = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
@@ -75,30 +78,33 @@ void kernel_main() {
 
     // Barrier semaphore
     if (use_barrier_sem) {
-        if (!is_last_chip) {
-            // unicast output ready semaphore
-            uint64_t barrier_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-            auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_barriersem);
-            pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                barrier_sem_noc_addr_in_pkt,
-                static_cast<uint16_t>(1),  // increment 1
-                32});
-            // Write the unicast packet
-            if (direction) {
+        // unicast output ready semaphore
+        uint64_t barrier_sem_noc_addr_in_pkt =
+            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+        auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_barriersem);
+        pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            barrier_sem_noc_addr_in_pkt,
+            static_cast<uint16_t>(1),  // increment 1
+            32});
+        // Write the unicast packet
+        if (direction) {
+            if (fabric_connection.has_backward_connection()) {
                 fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
+                pkt_hdr_sem_inc->to_chip_unicast(opposite_target_device_offset);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                     packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
-            } else {
+            }
+        } else {
+            if (fabric_connection.has_forward_connection()) {
                 fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
+                pkt_hdr_sem_inc->to_chip_unicast(opposite_target_device_offset);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                     packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
             }
         }
+        noc_async_writes_flushed();
 
-        if (!is_first_chip) {
+        if (!is_last_chip) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         }
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -208,12 +214,14 @@ void kernel_main() {
                 pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+
             } else {
                 fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
             }
+            noc_async_writes_flushed();
         }
 
         // Copy the entire input
