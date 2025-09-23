@@ -520,7 +520,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "get_arch_name",
-        &tt::tt_metal::detail::get_physical_architecture_name,
+        &tt::tt_metal::detail::get_platform_architecture_name,
         "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
