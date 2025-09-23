@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "build.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 

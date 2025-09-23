@@ -28,9 +28,10 @@
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal::distributed::test::utils {
 
@@ -101,19 +102,28 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
                 .set_page_size(ouput_cb_index, single_tile_size);
         tt_metal::CreateCircularBuffer(program, full_grid, cb_output_config);
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src0_bufs.front()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src1_bufs.front()).append_to(reader_compile_time_args);
         auto binary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
             full_grid,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_compile_time_args});
 
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(output_bufs.front()).append_to(writer_compile_time_args);
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
             full_grid,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
 
         std::vector<uint32_t> compute_kernel_args = {};
 
@@ -204,7 +214,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         // Create Semaphores
         for (uint32_t j = 0; j < NUM_SEMS; j++) {
             CreateSemaphore(program, cr_set, j + 1);
-            if (active_eth_cores.size()) {
+            if (!active_eth_cores.empty()) {
                 auto active_eth_core = active_eth_cores.begin();
                 for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
                      ++i, ++active_eth_core) {
@@ -384,7 +394,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
                 TT_THROW("Invalid");
             }
         }
-        if (active_eth_cores.size()) {
+        if (!active_eth_cores.empty()) {
             auto active_eth_core = active_eth_cores.begin();
             for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end(); ++i, ++active_eth_core) {
                 auto dummy_erisc_kernel = CreateKernel(

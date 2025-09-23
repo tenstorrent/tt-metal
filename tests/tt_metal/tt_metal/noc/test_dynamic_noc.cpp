@@ -25,6 +25,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
@@ -35,7 +36,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 void build_and_run_program(
-    std::shared_ptr<distributed::MeshDevice> device,
+    const std::shared_ptr<distributed::MeshDevice>& device,
     bool slow_dispatch,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
@@ -62,6 +63,7 @@ void build_and_run_program(
     CreateCircularBuffer(program2, cr_set, cb_config);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size};
+    tt_metal::TensorAccessorArgs().append_to(compile_args);
 
     auto brisc_kernel1 = CreateKernel(
         program1,

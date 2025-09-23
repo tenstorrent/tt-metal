@@ -390,7 +390,7 @@ def get_single_rot_mat(
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs_unscaled, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len, rope_type="llama3")
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -403,7 +403,7 @@ def get_single_rot_mat(
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type="llama3")
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)
@@ -638,6 +638,28 @@ def get_base_model_name(model_name: str) -> str:
     # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
     match = re.search(r"(.*?\d+[bB])-", model_name)
     return match.group(1) if match else model_name
+
+
+def get_hf_model_name(model_path: str) -> str:
+    # HF model name
+    if model_path.count("/") == 1:
+        return model_path
+
+    # HF cache path
+    pattern = r".*/?models--(?P<model_provider>[^/]+?)--(?P<model_name>[^/]+)/?"
+    match = pattern.search(pattern, model_path)
+    if match:
+        model_provider = match.group("model_provider")
+        model_name = match.group("model_name")
+        return f"{model_provider}/{model_name}"
+    raise ValueError(
+        f"Unsupported '{model_path}', please use HF model name or follow HF format with 'models--<model_provider>--<model_name>'"
+    )
+
+
+def get_hf_tt_cache_path(model_path: str) -> str:
+    model_name = get_hf_model_name(model_path)
+    return f"/mnt/MLPerf/huggingface/tt_cache/{model_name}"
 
 
 def create_tt_model(

@@ -424,7 +424,11 @@ class TtLlamaAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
+        if batch_size > 1:
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -457,6 +461,9 @@ class TtLlamaAttention(LightweightModule):
 
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         # split qkv into heads
         (
@@ -514,35 +521,22 @@ class TtLlamaAttention(LightweightModule):
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(k_heads_1KSD)
 
-        # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        else:
-            k_fill = k_heads_1KSD_8b
+        k_fill = k_heads_1KSD_8b
 
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
 
         ttnn.deallocate(v_heads_1VSD)
 
-        # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        else:
-            v_fill = v_heads_1VSD_8b
+        v_fill = v_heads_1VSD_8b
+
+        if batch_size > 1:
+            k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
+            v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
 
         if self.TG and not page_table:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
         if page_table:
-            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
-            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
-            block_size = keys_BKSD.shape[2]
-            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
-
-            page_len = fill_page_table.shape[1] * block_size
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
             if isinstance(user_id, int):
                 user_id = ttnn.from_torch(
                     torch.tensor([user_id], dtype=torch.int32),
@@ -551,8 +545,8 @@ class TtLlamaAttention(LightweightModule):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx_tensor=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx_tensor=user_id)
 
         else:
             ttnn.fill_cache(
@@ -566,26 +560,28 @@ class TtLlamaAttention(LightweightModule):
                 user_id % self.batch_size_per_device_group,
             )
 
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            ttnn.deallocate(k_fill)
-            ttnn.deallocate(v_fill)
-
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        if chunk_start_idx is not None:
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+        # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
+        # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
+        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
+        if ring_distributed_sdpa:
+            # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
+            # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
+            # This ensures each device processes two complementary chunks of the attention matrix
+            attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
-                keys_BKSD,
-                values_BKSD,
-                page_table,
-                chunk_start_idx,
+                k_heads_1KSD_8b,
+                v_heads_1VSD_8b,
+                ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
+                scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
-            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+            attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
@@ -600,8 +596,6 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
-
         ###
         # Output matmul
         ###
@@ -610,6 +604,39 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
+
+        if ring_distributed_sdpa:
+            # Split the attention output into two chunks along the sequence dimension for ring all-gather
+            # 4 = ring_size (number of devices in ring), 2 = number of chunks per device
+            attn_output_11SH_chunks = ttnn.split(attn_output_11SH, seq_len // 4 // 2, dim=2)
+            attn_output_11SH.deallocate(True)
+
+            # Perform ring all-gather on the first chunk (normal order)
+            attn_output_11SH_chunk_0 = self.tt_ccl.ring_all_gather(
+                attn_output_11SH_chunks[0],
+                dim=2,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SDPA",
+            )
+            attn_output_11SH_chunks[0].deallocate(True)
+
+            # Perform ring all-gather on the second chunk (reverse order)
+            attn_output_11SH_chunk_1 = self.tt_ccl.ring_all_gather(
+                attn_output_11SH_chunks[1],
+                dim=2,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                reverse_order=True,
+                buffer_key="SDPA_REVERSE",
+            )
+            attn_output_11SH_chunks[1].deallocate(True)
+
+            # Concatenate the gathered chunks along the sequence dimension to form the final output
+            attn_output_11SH = ttnn.concat([attn_output_11SH_chunk_0, attn_output_11SH_chunk_1], dim=2)
+        if batch_size > 1:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
+
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
@@ -649,6 +676,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -659,6 +687,7 @@ class TtLlamaAttention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

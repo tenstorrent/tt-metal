@@ -28,6 +28,8 @@
 #include <tt_stl/type_name.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+// NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
+
 namespace ttsl {
 
 template <typename T>
@@ -201,7 +203,7 @@ struct Attribute final {
         move_storage{other.move_storage},
         implementations{other.implementations} {}
 
-    Attribute(Attribute&& other) :
+    Attribute(Attribute&& other) noexcept :
         pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
         delete_storage{other.delete_storage},
         copy_storage{other.copy_storage},
@@ -223,7 +225,7 @@ struct Attribute final {
         return *this;
     }
 
-    Attribute& operator=(Attribute&& other) {
+    Attribute& operator=(Attribute&& other) noexcept {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -508,7 +510,8 @@ struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
 void visit_object_of_type(auto&& callback, T&& object) {
-    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -646,7 +649,8 @@ struct transform_object_of_type_t;
 
 template <typename object_t, typename T>
 auto transform_object_of_type(auto&& callback, T&& object) {
-    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -1578,3 +1582,5 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
+
+// NOLINTEND(bugprone-multi-level-implicit-pointer-conversion)

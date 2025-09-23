@@ -443,7 +443,7 @@ def test_all_gather_only(
     indirect=True,
 )
 def test_bh_trace_ag(
-    p150_mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -460,13 +460,13 @@ def test_bh_trace_ag(
     output_shard_grid,
     tensor_mem_layout,
 ):
-    if p150_mesh_device.shape[0] != num_devices:
+    if bh_2d_mesh_device.shape[0] != num_devices:
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
     if ttnn.get_num_devices() == 8:
         pytest.skip("Test requires a torus but rackbox is a mesh")
     profiler = BenchmarkProfiler()
     run_all_gather_impl(
-        p150_mesh_device,
+        bh_2d_mesh_device,
         num_devices,
         output_shape,
         dim,

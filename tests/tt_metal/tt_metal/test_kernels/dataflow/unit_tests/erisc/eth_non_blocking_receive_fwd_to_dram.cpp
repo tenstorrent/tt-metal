@@ -17,14 +17,14 @@
  * */
 
 // Initiate DRAM write -> advances  write pointer
-template <bool dest_is_dram>
+template <typename Accessor>
 void write_chunk_legacy(
     const uint32_t eth_l1_buffer_address_base,
     const uint32_t num_pages,
     const uint32_t num_pages_per_l1_buffer,
     const uint32_t page_size,
     uint32_t& page_index,
-    const InterleavedAddrGen<dest_is_dram>& dest_address_generator) {
+    const Accessor& dest_address_generator) {
     uint32_t local_eth_l1_curr_src_addr = eth_l1_buffer_address_base;
     uint32_t end_page_index = std::min(page_index + num_pages_per_l1_buffer, num_pages);
     for (; page_index < end_page_index; ++page_index) {
@@ -38,7 +38,7 @@ void write_chunk_legacy(
     }
 }
 
-template <uint32_t MAX_NUM_CHANNELS, bool dest_is_dram>
+template <uint32_t MAX_NUM_CHANNELS, typename Accessor>
 bool eth_initiate_noc_write_sequence(
     std::array<uint32_t, MAX_NUM_CHANNELS>& transaction_channel_receiver_buffer_addresses,
     erisc::datamover::QueueIndexPointer<uint8_t>& noc_writer_buffer_wrptr,
@@ -50,7 +50,7 @@ bool eth_initiate_noc_write_sequence(
     const uint32_t num_pages_per_l1_buffer,
     const uint32_t page_size,
     uint32_t& page_index,
-    const InterleavedAddrGen<dest_is_dram>& dest_address_generator) {
+    const Accessor& dest_address_generator) {
     bool did_something = false;
     bool noc_write_is_in_progress = erisc::datamover::deprecated::receiver_is_noc_write_in_progress(
         noc_writer_buffer_wrptr, noc_writer_buffer_ackptr);
@@ -62,7 +62,7 @@ bool eth_initiate_noc_write_sequence(
             // and the receiver ackptr != next write pointer
             // // DPRINT << "rx: accepting payload, sending receive ack on channel " <<
             // (uint32_t)noc_writer_buffer_wrptr << "\n";
-            write_chunk_legacy<dest_is_dram>(
+            write_chunk_legacy(
                 transaction_channel_receiver_buffer_addresses[noc_writer_buffer_wrptr.index()],
                 num_pages,
                 num_pages_per_l1_buffer,
@@ -96,8 +96,8 @@ void kernel_main() {
     const std::uint32_t num_pages = get_arg_val<uint32_t>(5);
     erisc::datamover::eth_setup_handshake(remote_eth_l1_dst_addr, false);
 
-    const InterleavedAddrGen<dest_is_dram> dest_address_generator = {
-        .bank_base_address = dest_addr, .page_size = page_size};
+    constexpr auto dst_args = TensorAccessorArgs<5>();
+    const auto dest_address_generator = TensorAccessor(dst_args, dest_addr, page_size);
 
     erisc::datamover::QueueIndexPointer<uint8_t> noc_writer_buffer_ackptr(MAX_NUM_CHANNELS);
     erisc::datamover::QueueIndexPointer<uint8_t> noc_writer_buffer_wrptr(MAX_NUM_CHANNELS);
@@ -137,7 +137,7 @@ void kernel_main() {
             num_receives_acked = received ? num_receives_acked + 1 : num_receives_acked;
             did_something = received || did_something;
 
-            did_something = eth_initiate_noc_write_sequence<MAX_NUM_CHANNELS, dest_is_dram>(
+            did_something = eth_initiate_noc_write_sequence<MAX_NUM_CHANNELS>(
                                 transaction_channel_local_buffer_addresses,
                                 noc_writer_buffer_wrptr,
                                 noc_writer_buffer_ackptr,

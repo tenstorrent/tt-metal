@@ -18,8 +18,8 @@ inputs:
     description: 'Number of days of data to fetch (default: 7)'
     required: false
   cache-path:
-    description: 'Path to save the cached workflow data'
-    required: true
+    description: 'Path to write the workflow data JSON (artifact)'
+    required: false
   GITHUB_TOKEN:
     description: 'GitHub token for API access'
     required: true
@@ -29,6 +29,8 @@ outputs:
     description: 'Total number of runs fetched'
   workflow-count:
     description: 'Number of unique workflows found'
+  cache-path:
+    description: 'Absolute path to the written workflow data JSON file'
 
 runs:
   using: 'node20'

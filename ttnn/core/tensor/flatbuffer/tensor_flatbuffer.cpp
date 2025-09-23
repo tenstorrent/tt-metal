@@ -13,7 +13,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -51,7 +50,10 @@ tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape
 }
 
 tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
-    uint64_t size_bytes, const TensorSpec& spec, tt::stl::Span<std::byte> data, tt::tt_metal::MemoryPin memory_pin) {
+    uint64_t size_bytes,
+    const TensorSpec& spec,
+    tt::stl::Span<std::byte> data,
+    const tt::tt_metal::MemoryPin& memory_pin) {
     switch (spec.data_type()) {
         case tt::tt_metal::DataType::UINT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
@@ -139,7 +141,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     tt::stl::Span<std::byte> tensor_data,
-    tt::tt_metal::MemoryPin memory_pin) {
+    const tt::tt_metal::MemoryPin& memory_pin) {
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();
@@ -165,27 +167,10 @@ Tensor from_flatbuffer(
             coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
     }
 
-    // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
-    // directly in Tensor storage.
-    const auto strategy = [&]() -> tt::tt_metal::DistributedTensorConfig {
-        std::unordered_set<const std::byte*> buffer_addresses;
-        distributed_buffer.apply([&buffer_addresses](const tt::tt_metal::HostBuffer& shard) {
-            buffer_addresses.insert(shard.view_bytes().data());
-        });
-        if (buffer_addresses.size() == 1) {
-            return tt::tt_metal::ReplicateTensor();
-        } else if (ttnn_mesh_shape.dims() == 2) {
-            return tt::tt_metal::ShardTensor2D{
-                tt::tt_metal::ShardMesh{.y = ttnn_mesh_shape[0], .x = ttnn_mesh_shape[1]}};
-        } else {
-            return tt::tt_metal::AllGatherTensor{};
-        }
-    }();
-
     tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
 
     // TODO (#25340): Add TensorTopology to flatbuffer serialization and properly handle it in deserialization.
-    return Tensor(std::move(host_storage), spec, strategy, tt::tt_metal::TensorTopology{});
+    return Tensor(std::move(host_storage), spec, tt::tt_metal::TensorTopology{});
 }
 
 }  // namespace ttnn

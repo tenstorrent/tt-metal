@@ -127,7 +127,7 @@ class TtUnet:
             auto_shard=True,
             dtype=ttnn.bfloat8_b,
             output_layout=ttnn.TILE_LAYOUT,
-            activation="",
+            activation=None,
             reallocate_halo_output=True,
         )
         self.dec1_2 = Conv(
@@ -143,7 +143,7 @@ class TtUnet:
         self.conv = Conv(
             [1, 1, 0, 0],
             parameters["conv"],
-            activation="",
+            activation=None,
             reshard=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,

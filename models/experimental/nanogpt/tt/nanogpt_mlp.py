@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.helper_funcs import Linear
+from models.common.helper_funcs import Linear
 
 
 class TtMLP(torch.nn.Module):

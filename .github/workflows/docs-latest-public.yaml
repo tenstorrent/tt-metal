@@ -16,6 +16,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      dry-run:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-docs:
@@ -70,7 +74,9 @@ jobs:
         run: |
           mkdir gh_pages
           mv docs/build/html gh_pages/${{ inputs.version }}
-      - uses: actions/upload-artifact@v4
+      - name: Upload docs artifact (skipped for dry run)
+        if: ${{ !inputs.dry-run }}
+        uses: actions/upload-artifact@v4
         with:
           name: gh_pages_${{ inputs.version }}
           path: /work/gh_pages/${{ inputs.version }}/
@@ -78,7 +84,7 @@ jobs:
 
   deploy-docs:
     needs: build-docs
-    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/releases/v') }}
+    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) }}
     runs-on: ubuntu-latest
     concurrency:
       # Note that people may spam the post-commit pipeline on their branch, and

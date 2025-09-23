@@ -13,7 +13,7 @@
 #include <string>
 
 #include "assert.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
 
@@ -77,16 +77,12 @@ RunTimeOptions::RunTimeOptions() {
     ParseWatcherEnv();
     ParseInspectorEnv();
 
-    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-        ParseFeatureEnv((RunTimeDebugFeatures)i);
-    }
-
     test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
     profiler_enabled = false;
     profile_dispatch_cores = false;
     profiler_sync_enabled = false;
-    profiler_mid_run_tracy_push = false;
+    profiler_mid_run_dump = false;
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
 #if defined(TRACY_ENABLE)
@@ -105,9 +101,9 @@ RunTimeOptions::RunTimeOptions() {
         if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
             profiler_trace_profiler = true;
         }
-        const char* profiler_force_push_enabled_str = std::getenv("TT_METAL_TRACY_MID_RUN_PUSH");
-        if (profiler_force_push_enabled_str != nullptr && profiler_force_push_enabled_str[0] == '1') {
-            profiler_mid_run_tracy_push = true;
+        const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
+        if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
+            profiler_mid_run_dump = true;
         }
     }
 
@@ -256,6 +252,15 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
     }
+
+    if (getenv("TT_METAL_USE_MGD_2_0")) {
+        this->use_mesh_graph_descriptor_2_0 = true;
+    }
+
+    const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
+    float timeout_duration_for_operations =
+        timeout_duration_for_operations_value ? std::stof(timeout_duration_for_operations_value) : 0.f;
+    this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration_for_operations);
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
@@ -382,14 +387,14 @@ void RunTimeOptions::ParseInspectorEnv() {
     }
 }
 
-void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
+void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
     std::string feature_env_prefix("TT_METAL_");
     feature_env_prefix += RunTimeDebugFeatureNames[feature];
 
     ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
     ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
-    ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
+    ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS", hal);
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
     ParseFeaturePrependDeviceCoreRisc(feature, feature_env_prefix + "_PREPEND_DEVICE_CORE_RISC");
@@ -402,7 +407,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
         }
     }
     for (auto& core_type_and_cores : feature_targets[feature].cores) {
-        if (core_type_and_cores.second.size() > 0) {
+        if (!core_type_and_cores.second.empty()) {
             feature_targets[feature].enabled = true;
         }
     }
@@ -499,56 +504,33 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
     }
 
     // Default is no chips are specified is all
-    if (chips.size() == 0) {
+    if (chips.empty()) {
         feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;
 }
 
-void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var) {
-    uint32_t riscv_mask = 0;
-    char* env_var_str = std::getenv(env_var.c_str());
+void RunTimeOptions::ParseFeatureRiscvMask(
+    RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal) {
+    const char* env_var_str = std::getenv(env_var.c_str());
 
     if (env_var_str != nullptr) {
-        if (strstr(env_var_str, "BR")) {
-            riscv_mask |= RISCV_BR;
-        }
-        if (strstr(env_var_str, "NC")) {
-            riscv_mask |= RISCV_NC;
-        }
-        if (strstr(env_var_str, "TR0")) {
-            riscv_mask |= RISCV_TR0;
-        }
-        if (strstr(env_var_str, "TR1")) {
-            riscv_mask |= RISCV_TR1;
-        }
-        if (strstr(env_var_str, "TR2")) {
-            riscv_mask |= RISCV_TR2;
-        }
-        if (strstr(env_var_str, "TR*")) {
-            riscv_mask |= (RISCV_TR0 | RISCV_TR1 | RISCV_TR2);
-        }
-        if (strstr(env_var_str, "ER0")) {
-            riscv_mask |= RISCV_ER0;
-        }
-        if (strstr(env_var_str, "ER1")) {
-            riscv_mask |= RISCV_ER1;
-        }
-        if (strstr(env_var_str, "ER*")) {
-            riscv_mask |= (RISCV_ER0 | RISCV_ER1);
-        }
-        if (riscv_mask == 0) {
-            TT_THROW(
-                "Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", env_var_str);
-        }
+        feature_targets[feature].processors = hal.parse_processor_set_spec(env_var_str);
     } else {
         // Default is all RISCVs enabled.
         bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
-        riscv_mask =
-            default_disabled ? 0 : (RISCV_ER0 | RISCV_ER1 | RISCV_BR | RISCV_TR0 | RISCV_TR1 | RISCV_TR2 | RISCV_NC);
+        if (!default_disabled) {
+            auto& processors = feature_targets[feature].processors;
+            uint32_t num_core_types = hal.get_programmable_core_type_count();
+            for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
+                auto core_type = hal.get_programmable_core_type(core_type_index);
+                uint32_t num_processors = hal.get_num_risc_processors(core_type);
+                for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
+                    processors.add(core_type, processor_index);
+                }
+            }
+        }
     }
-
-    feature_targets[feature].riscv_mask = riscv_mask;
 }
 
 void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var) {

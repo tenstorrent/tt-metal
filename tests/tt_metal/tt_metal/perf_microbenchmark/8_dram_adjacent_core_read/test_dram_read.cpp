@@ -43,9 +43,10 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -174,7 +175,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 }
 
 bool validation(
-    tt_metal::IDevice* device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     std::vector<CoreCoord>& all_cores,
@@ -191,7 +192,8 @@ bool validation(
     uint32_t core_id = 0;
     for (auto core : all_cores) {
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromDeviceL1(device, core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
+        tt_metal::detail::ReadFromDeviceL1(
+            device->get_devices()[0], core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
 
         uint32_t num_datum_per_block = block_h * block_w * num_datum_per_slice;
         uint32_t tensor_slice_stride = core_id * num_datum_per_slice;
@@ -411,7 +413,7 @@ int main(int argc, char** argv) {
         if (tile_format == tt::DataFormat::Bfp8_b) {
             // input_vec = create_constant_vector_of_bfp8(
             //     input_size, 100, true);
-            input_vec = create_random_vector_of_bfp8(input_size, true, 100, 1234);
+            input_vec = test_utils::create_random_vector_of_bfp8(input_size, true, 100, 1234);
         } else {
             // input_vec = create_constant_vector_of_bfloat16(
             //     input_size * total_banks / num_banks, 100);
@@ -478,7 +480,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
 
         pass = validation(
-            device.get(),
+            device,
             input_vec,
             num_cores,
             all_cores_list,

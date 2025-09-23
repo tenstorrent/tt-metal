@@ -253,8 +253,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     auto input_tensor_shape = input_tensor.padded_shape();
     auto input_tensor_memory_config = input_tensor.memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
-    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
-    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
     log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);

@@ -44,7 +44,7 @@ private:
 };
 
 template <typename Callable>
-auto make_cleanup(Callable&& callable) {
+[[nodiscard]] auto make_cleanup(Callable&& callable) {
     return Cleanup(std::forward<Callable>(callable));
 }
 

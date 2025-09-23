@@ -15,14 +15,14 @@ from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
     TtCLIPTextTransformer,
     TtCLIPTextTransformerParameters,
 )
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 from tqdm import tqdm
 import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 42000
+SDXL_L1_SMALL_SIZE = 27000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 
@@ -552,7 +552,7 @@ def run_tt_image_gen(
             tt_latents = ttnn.div(tt_latents, scaling_factor)
 
             logger.info("Running TT VAE")
-            output_tensor, [C, H, W] = vae.forward(tt_latents, input_shape)
+            output_tensor, [C, H, W] = vae.decode(tt_latents, input_shape)
             ttnn.deallocate(tt_latents)
 
             if capture_trace:

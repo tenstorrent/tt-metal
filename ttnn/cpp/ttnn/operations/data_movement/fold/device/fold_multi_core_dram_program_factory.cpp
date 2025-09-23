@@ -4,7 +4,6 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -32,7 +31,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
-    const uint32_t input_height = input_tensor.logical_shape()[1];
     const uint32_t input_width = input_tensor.logical_shape()[2];
 
     // Get compute grid size and buffer pointers
@@ -162,7 +160,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         });
 
     // Create cliff compute kernel if needed (for handling edge cases)
-    if (core_range_cliff.ranges().size() > 0) {
+    if (!core_range_cliff.ranges().empty()) {
         tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,

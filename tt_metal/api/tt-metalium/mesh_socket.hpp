@@ -8,6 +8,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
@@ -95,11 +96,11 @@ private:
         std::shared_ptr<MeshBuffer> config_buffer,
         const SocketConfig& config,
         SocketEndpoint socket_endpoint_type) :
-        data_buffer_(data_buffer),
-        config_buffer_(config_buffer),
+        data_buffer_(std::move(data_buffer)),
+        config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
-    void connect_with_peer(std::shared_ptr<multihost::DistributedContext> context);
+    void connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context);
 
     std::shared_ptr<MeshBuffer> data_buffer_;
     std::shared_ptr<MeshBuffer> config_buffer_;

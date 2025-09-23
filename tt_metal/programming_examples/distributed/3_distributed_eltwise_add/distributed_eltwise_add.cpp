@@ -147,7 +147,7 @@ int main() {
     EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
 
     // Verify results
-    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
+    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };
     std::vector<uint32_t> golden_data =
         pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
 
@@ -159,7 +159,7 @@ int main() {
     size_t num_failures = 0;
     auto total_values = result_data.size() * 2;
     for (int i = 0; i < total_values; i++) {
-        if (!is_close(c_bf16[i].to_float(), golden_bf16[i].to_float())) {
+        if (!is_close(static_cast<float>(c_bf16[i]), static_cast<float>(golden_bf16[i]))) {
             num_failures++;
         }
     }

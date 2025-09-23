@@ -8,7 +8,6 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -326,7 +325,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
     EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
-    EXPECT_EQ(input_host_tensor_sharded.distributed_tensor_config(), mapper->config());
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 
     std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
@@ -341,8 +339,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
         }
     }();
 
-    EXPECT_EQ(device_tensor.distributed_tensor_config(), mapper->config());
-
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_THAT(device_storage->coords, ElementsAreArray(coord_matchers));
@@ -356,7 +352,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             return tensor_impl::to_host_wrapper(device_tensor);
         }
     }();
-    EXPECT_EQ(output_host_tensor.distributed_tensor_config(), mapper->config());
 
     std::vector<Tensor> output_host_shards = get_device_tensors(output_host_tensor);
     ASSERT_EQ(output_host_shards.size(), input_host_shards.size());

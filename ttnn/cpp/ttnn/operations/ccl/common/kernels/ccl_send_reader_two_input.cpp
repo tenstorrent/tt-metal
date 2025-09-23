@@ -18,9 +18,10 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
-#include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 #include <utility>
+
+using namespace tt::tt_metal;
 
 using arg_idx_t = uint16_t;
 

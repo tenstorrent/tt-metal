@@ -8,6 +8,7 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
+const path = require('path');
 
 // Constants
 const DEFAULT_LOOKBACK_DAYS = 15;
@@ -327,6 +328,7 @@ async function run() {
   try {
     // Get inputs
     const cachePath = core.getInput('cache-path', { required: true });
+    const previousCachePath = core.getInput('previous-cache-path', { required: false });
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
 
@@ -343,12 +345,15 @@ async function run() {
 
     // Load cached data
     const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    const hasPrevious = previousCachePath && fs.existsSync(previousCachePath);
+    const previousGrouped = hasPrevious ? JSON.parse(fs.readFileSync(previousCachePath, 'utf8')) : null;
 
     // Track failed workflows
     const failedWorkflows = [];
 
     // Filter and process each workflow configuration
     const filteredGrouped = new Map();
+    const filteredPreviousGrouped = new Map();
     for (const config of workflowConfigs) {
       core.info(`Processing config: ${JSON.stringify(config)}`);
       for (const [name, runs] of grouped) {
@@ -371,19 +376,114 @@ async function run() {
           }
         }
       }
+
+      if (hasPrevious && Array.isArray(previousGrouped)) {
+        for (const [name, runs] of previousGrouped) {
+          if ((config.wkflw_name && name === config.wkflw_name) ||
+              (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
+            const filteredRuns = filterRunsByDate(runs, days);
+            if (filteredRuns.length > 0) {
+              filteredPreviousGrouped.set(name, filteredRuns);
+            }
+          }
+        }
+      }
     }
 
     // Create authenticated Octokit client for PR info
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
 
-    // Generate report
-    const report = await buildReport(filteredGrouped, octokit, github.context);
+    // Generate primary report
+    const mainReport = await buildReport(filteredGrouped, octokit, github.context);
+
+    // Compute status changes vs previous and write JSON
+    const computeLatestConclusion = (runs) => {
+      const mainBranchRuns = runs
+        .filter(r => r.head_branch === 'main')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const latest = mainBranchRuns[0];
+      if (!latest) return null;
+      return latest.conclusion === 'success' ? 'success' : 'failure';
+    };
+    const computeLatestRunInfo = (runs) => {
+      const mainBranchRuns = runs
+        .filter(r => r.head_branch === 'main')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const latest = mainBranchRuns[0];
+      if (!latest) return null;
+      return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
+    };
+
+    const allNames = new Set([
+      ...Array.from(filteredGrouped.keys()),
+      ...Array.from(filteredPreviousGrouped.keys())
+    ]);
+
+    const changes = [];
+    const regressedDetails = [];
+    for (const name of allNames) {
+      const currentRuns = filteredGrouped.get(name);
+      const previousRuns = filteredPreviousGrouped.get(name);
+      if (!currentRuns || !previousRuns) continue; // require data on both sides
+      const current = computeLatestConclusion(currentRuns);
+      const previous = computeLatestConclusion(previousRuns);
+      if (!current || !previous) continue;
+
+      let change;
+      if (previous === 'success' && current === 'success') change = 'stayed_succeeding';
+      else if (previous !== 'success' && current !== 'success') change = 'stayed_failing';
+      else if (previous !== 'success' && current === 'success') change = 'fail_to_success';
+      else if (previous === 'success' && current !== 'success') change = 'success_to_fail';
+
+      if (change) {
+        const info = computeLatestRunInfo(currentRuns);
+        const workflowUrl = info?.path ? getWorkflowLink(github.context, info.path) : undefined;
+        const aggregateRunUrl = `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/actions/runs/${github.context.runId}`;
+        const commitUrl = info?.head_sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${info.head_sha}` : undefined;
+        const commitShort = info?.head_sha ? info.head_sha.substring(0, 7) : undefined;
+        changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at, workflow_url: workflowUrl, aggregate_run_url: aggregateRunUrl, commit_sha: info?.head_sha, commit_short: commitShort, commit_url: commitUrl });
+        if (change === 'success_to_fail' && info) {
+          regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
+        }
+      }
+    }
+
+    const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
+    const statusChangesPath = path.join(outputDir, 'workflow-status-changes.json');
+    fs.writeFileSync(statusChangesPath, JSON.stringify(changes));
+    core.setOutput('status_changes_path', statusChangesPath);
+
+    // Build a minimal regressions section (success -> fail only)
+    let regressionsSection = '';
+    let stayedFailingSection = '';
+    try {
+      const parsed = JSON.parse(fs.readFileSync(statusChangesPath, 'utf8')) || [];
+      const regressionsItems = parsed.filter(item => item.change === 'success_to_fail');
+      const stayedFailingItems = parsed.filter(item => item.change === 'stayed_failing');
+      if (regressionsItems.length > 0) {
+        const lines = regressionsItems.map(it => it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`);
+        regressionsSection = ['', '## Regressions (Pass → Fail)', ...lines, ''].join('\n');
+      } else {
+        regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
+      }
+      if (stayedFailingItems.length > 0) {
+        const lines = stayedFailingItems.map(it => it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`);
+        stayedFailingSection = ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
+      } else {
+        stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
+      }
+    } catch (_) {
+      // If parsing fails, omit the section silently
+    }
+
+    const finalReport = [mainReport, regressionsSection, stayedFailingSection].join('\n');
 
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
-    core.setOutput('report', report);
+    core.setOutput('report', finalReport);
+    core.setOutput('regressed_workflows', JSON.stringify(regressedDetails));
 
-    await core.summary.addRaw(report).write();
+    await core.summary.addRaw(finalReport).write();
 
   } catch (error) {
     core.setFailed(error.message);

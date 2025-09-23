@@ -31,7 +31,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -46,11 +46,11 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topology) {
+WorkerMemMap generate_worker_mem_map(
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
-    uint32_t NOTIFICATION_MAILBOX_ADDR_SIZE_BYTES = tt::tt_metal::hal::get_l1_alignment();
 
     uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
@@ -82,16 +82,15 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     }
 
     // Use first two devices for simple smoke test
-    auto* sender_device = devices[0];
-    auto* receiver_device = devices[1];
+    auto sender_device = devices[0];
+    auto receiver_device = devices[1];
 
-    auto src_physical_device_id = sender_device->id();
-    auto dst_physical_device_id = receiver_device->id();
+    auto src_physical_device_id = sender_device->get_devices()[0]->id();
+    auto dst_physical_device_id = receiver_device->get_devices()[0]->id();
 
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // Get fabric context and topology
@@ -101,7 +100,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 
     // Get available links between devices
     auto eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-    if (eth_chans.size() == 0) {
+    if (eth_chans.empty()) {
         GTEST_SKIP() << "No fabric connection available between device 0 and device 1";
     }
     auto edm_port = *eth_chans.begin();
@@ -187,7 +186,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     std::vector<uint32_t> receiver_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -195,7 +194,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
         CoreType::WORKER);
 
     tt_metal::detail::ReadFromDeviceL1(
-        receiver_device,
+        receiver_device->get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
