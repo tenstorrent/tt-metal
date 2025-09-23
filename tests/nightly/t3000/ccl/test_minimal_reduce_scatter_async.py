@@ -841,3 +841,85 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         mem_config_intermediate=mem_config_intermediate,
         mesh_mapper_config=mesh_mapper_config,
     )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        ([1, 1, 8, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+    ],
+    ids=[
+        "deepseek_rs",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 1),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "use_barrier, use_persistent_buffers",
+    [
+        (True, False),
+    ],
+    ids=["barrier_with_no_persistent_buffers"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_reduce_scatter_async_2x4(
+    mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    use_barrier,
+    use_persistent_buffers,
+    rs_topology,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    mesh_mapper_config = ttnn.MeshMapperConfig(
+        [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, submesh_device.get_num_devices())
+    )
+    run_reduce_scatter_impl(
+        submesh_device,
+        submesh_device.get_num_devices(),
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        ones_tensor=False,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
+        mesh_mapper_config=mesh_mapper_config,
+    )
