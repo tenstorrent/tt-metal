@@ -228,6 +228,7 @@ def run_all_broadcast_impl(
     mesh_device.clear_loaded_sub_device_manager()
     if not passed:
         assert eq, f"{i} FAILED: {output}"
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 # Enumerate the post-commit cases explicitly
@@ -252,7 +253,9 @@ def run_all_broadcast_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["FABRIC_1D"], indirect=True
+)
 def test_all_broadcast(
     t3k_mesh_device,
     # pcie_mesh_device,
@@ -402,7 +405,9 @@ def test_all_broadcast_trace(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["FABRIC_1D"], indirect=True
+)
 def test_all_broadcast_sharded(
     t3k_mesh_device,
     num_devices,

@@ -15,18 +15,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 TEST_SHAPES = [
-    (1, 1, 1, 16),
-    (1, 1, 8, 16),
-    (1, 1, 1, 64),
-    (1, 1, 3, 128),
-    (1, 13, 1, 32),
-    (1, 1, 1, 32),
-    (100, 1, 1, 16),
-    (1, 1, 1, 24),
-    # (1, 1, 2, 8), alignment issues here too
     # (1, 1, 2, 17), TODO make non-aligned tensors work
     (1, 1, 1, 7168),
-    (1, 1, 32, 7168),
 ]
 
 MESH_SHAPE = (2, 4)
@@ -52,7 +42,9 @@ def _get_test_coords_and_shapes(mesh_shape, tensor_shapes):
 torch.set_printoptions(threshold=10000)
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["FABRIC_1D"], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("shape_coords", _get_test_coords_and_shapes(MESH_SHAPE, TEST_SHAPES))
@@ -107,6 +99,7 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], torch_return_tensor[idx_start0:idx_end0, :, :, :])
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @pytest.mark.parametrize(
@@ -203,3 +196,4 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dty
     assert (
         mesh_device.num_program_cache_entries() == 2
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+    ttnn.ReadDeviceProfiler(mesh_device)

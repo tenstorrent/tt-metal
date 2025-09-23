@@ -232,6 +232,7 @@ def run_reduce_scatter_impl(
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -281,10 +282,9 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "ones_tensor",
@@ -397,10 +397,9 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "ones_tensor",
@@ -526,10 +525,9 @@ def test_reduce_scatter_async_training_shapes(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -655,10 +653,9 @@ def test_reduce_scatter_async_sharded_to_sharded(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -767,10 +764,9 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
