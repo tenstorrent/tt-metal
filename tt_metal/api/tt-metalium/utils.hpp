@@ -12,17 +12,6 @@
 
 namespace tt::tt_metal::detail {
 
-/**
- * Returns tile size of given data format in bytes
- *
- * Return value: uint32_t
- *
- * | Argument    | Description    | Type                | Valid Range | Required |
- * |-------------|----------------|---------------------|-------------|----------|
- * | data_format | Format of data | tt::DataFormat enum |             | Yes      |
- */
-inline uint32_t TileSize(const DataFormat& data_format) { return tt::tile_size(data_format); }
-
 inline DeviceAddr SizeBytesPerBank(
     DeviceAddr size_bytes, DeviceAddr page_size_bytes, uint32_t num_banks, uint32_t alignment_bytes) {
     TT_ASSERT(

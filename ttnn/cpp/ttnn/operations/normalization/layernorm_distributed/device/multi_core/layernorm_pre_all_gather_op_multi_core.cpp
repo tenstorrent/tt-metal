@@ -82,10 +82,10 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
@@ -350,10 +350,10 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);

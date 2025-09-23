@@ -628,7 +628,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
     if (local_tensor.layout() == Layout::TILE) {
-        unit_size = tt::tt_metal::detail::TileSize(data_format);
+        unit_size = tt::tile_size(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
     } else {
@@ -781,7 +781,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     if (input.layout() == Layout::TILE) {
-        page_size = tt::tt_metal::detail::TileSize(data_format);
+        page_size = tt::tile_size(data_format);
         unit_size = page_size;
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {

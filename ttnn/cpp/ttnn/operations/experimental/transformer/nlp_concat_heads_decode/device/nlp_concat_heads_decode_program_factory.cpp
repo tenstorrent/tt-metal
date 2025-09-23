@@ -25,7 +25,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -158,7 +158,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_h = tile_shape[0];
     auto tile_w = tile_shape[1];

@@ -360,7 +360,7 @@ int main(int argc, char** argv) {
         if (single_core) {
             data_format = dtype == 0 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
         }
-        uint32_t single_tile_size = tt_metal::detail::TileSize(data_format);
+        uint32_t single_tile_size = tt::tile_size(data_format);
         TT_ASSERT(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048));
 
         auto grid_size = device->compute_with_storage_grid_size();

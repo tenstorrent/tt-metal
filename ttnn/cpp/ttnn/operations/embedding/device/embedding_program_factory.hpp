@@ -152,9 +152,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     }
 
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    uint32_t weights_single_tile_size = tt::tt_metal::detail::TileSize(weights_cb_data_format);
+    uint32_t weights_single_tile_size = tt::tile_size(weights_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
     constexpr uint32_t max_double_buffer_tiles = 64;

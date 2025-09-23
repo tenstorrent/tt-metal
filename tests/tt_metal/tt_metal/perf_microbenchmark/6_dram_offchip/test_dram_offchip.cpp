@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
         }
 
         tt::DataFormat tile_format = tt::DataFormat::Float16_b;
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        uint32_t single_tile_size = tt::tile_size(tile_format);
         if (input_size % single_tile_size != 0) {
             auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
                 return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;

@@ -43,10 +43,10 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
                                             ? tt::DataFormat::Float32
                                             : tt::DataFormat::Float16_b;
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
-    uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     if (in0_data_format == tt::DataFormat::Float32 or in1_data_format == tt::DataFormat::Float32 or
         output_data_format == tt::DataFormat::Float32) {

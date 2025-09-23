@@ -706,8 +706,7 @@ int main(int argc, char** argv) {
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
-
+        uint32_t single_tile_size = tt::tile_size(tile_format);
 
         TT_FATAL(in1_size % single_tile_size == 0, "input size is not aligned to tile size");
         ////////////////////////////////////////////////////////////////////////////

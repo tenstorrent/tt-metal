@@ -630,7 +630,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const bool needs_act_block_zero_out =
         act_block_w_extra_align_scalars % 16 != 0 && tt::tt_metal::is_block_float(output.dtype());
 
-    const uint32_t tilized_act_tile_size = tt::tt_metal::detail::TileSize(tilized_act_df);
+    const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation

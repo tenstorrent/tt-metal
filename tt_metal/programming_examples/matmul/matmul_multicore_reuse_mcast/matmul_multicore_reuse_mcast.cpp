@@ -75,7 +75,7 @@ void matmul_multicore_reuse_mcast(
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    uint32_t single_tile_size = detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 
     auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();

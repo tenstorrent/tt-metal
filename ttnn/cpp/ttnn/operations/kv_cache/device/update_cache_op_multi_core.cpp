@@ -26,10 +26,10 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     Program program{};
 
     tt::DataFormat cache_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cache_tensor.dtype());
-    uint32_t cache_single_tile_size = tt::tt_metal::detail::TileSize(cache_cb_data_format);
+    uint32_t cache_single_tile_size = tt::tile_size(cache_cb_data_format);
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     tt::tt_metal::IDevice* device = input_tensor.device();
 
@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_cb_data_format);
+    uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
 
     uint32_t Wt = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
@@ -317,7 +317,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
     // For sharded, each core gets shard_shape[0] number of tiles along seq_len.

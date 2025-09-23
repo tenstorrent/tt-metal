@@ -220,7 +220,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         Program program;
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
-        uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
+        uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
         auto buffer_size = page_size * 128;
         tt::tt_metal::InterleavedBufferConfig buff_config{

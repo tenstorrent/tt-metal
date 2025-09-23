@@ -34,7 +34,7 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = input_tensor.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
@@ -291,7 +291,7 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;

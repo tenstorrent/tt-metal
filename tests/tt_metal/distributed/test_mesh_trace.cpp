@@ -353,7 +353,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     mesh_device_->load_sub_device_manager(sub_device_manager);
 
     // Create IO Buffers
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     uint32_t num_tiles = 32;
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size * num_tiles, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};

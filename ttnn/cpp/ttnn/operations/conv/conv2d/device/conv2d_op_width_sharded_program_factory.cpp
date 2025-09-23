@@ -480,7 +480,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         (uint32_t)act_mcast_start.y,
         (uint32_t)act_mcast_end.x,
         (uint32_t)act_mcast_end.y,
-        (uint32_t)act_block_num_tiles * tt::tt_metal::detail::TileSize(tilized_act_df),
+        (uint32_t)act_block_num_tiles * tt::tile_size(tilized_act_df),
         (uint32_t)output_num_cores,
         (uint32_t)all_reader_cores.size(),
         get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,

@@ -236,7 +236,7 @@ static void RunTest(
     auto& cq = mesh_device->mesh_command_queue();
 
     // Create an input CB with the right data format
-    uint32_t tile_size = detail::TileSize(data_format);
+    uint32_t tile_size = tt::tile_size(data_format);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
                                               .set_page_size(CBIndex::c_0, tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);

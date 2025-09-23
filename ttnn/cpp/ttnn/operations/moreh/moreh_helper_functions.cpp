@@ -231,9 +231,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         auto _core_range = (arg.core_range != std::nullopt) ? arg.core_range : core_range;
 
         tt_metal::CircularBufferConfig cb_config =
-            tt_metal::CircularBufferConfig(
-                _num_tiles * tt_metal::detail::TileSize(_data_format), {{_buffer_index, _data_format}})
-                .set_page_size(_buffer_index, tt_metal::detail::TileSize(_data_format));
+            tt_metal::CircularBufferConfig(_num_tiles * tt::tile_size(_data_format), {{_buffer_index, _data_format}})
+                .set_page_size(_buffer_index, tt::tile_size(_data_format));
 
         cb_id = tt_metal::CreateCircularBuffer(program, _core_range.value(), cb_config);
     }

@@ -175,12 +175,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         out_data_format);
 
     // tile sizes
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t gamma_beta_single_tile_size = tt::tt_metal::detail::TileSize(gamma_beta_cb_data_format);
-    uint32_t in_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_mask_cb_data_format);
-    uint32_t in_negative_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_negative_mask_cb_data_format);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
+    uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
+    uint32_t in_negative_mask_single_tile_size = tt::tile_size(in_negative_mask_cb_data_format);
     // shard shape per core
     uint32_t per_core_M = a.shard_spec().value().shape[0];
     uint32_t per_core_N = a.shard_spec().value().shape[1];
@@ -1209,11 +1209,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         out_data_format);
 
     // tile sizes
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t gamma_beta_single_tile_size = tt::tt_metal::detail::TileSize(gamma_beta_cb_data_format);
-    uint32_t in_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_mask_cb_data_format);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
+    uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
 
     IDevice* device = a.device();
 

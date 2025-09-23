@@ -67,7 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -221,7 +221,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -248,7 +248,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     if (batch_offset.has_value()) {
         tt::DataFormat cb_batch_offset_data_format =
             tt_metal::datatype_to_dataformat_converter(batch_offset.value().dtype());
-        uint32_t single_batch_offset_tile_size = tt_metal::detail::TileSize(cb_batch_offset_data_format);
+        uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
         tt_metal::CircularBufferConfig cb_batch_offset_config_reader =
@@ -499,7 +499,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     const uint32_t head_tiles = head_dim / TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
@@ -526,7 +526,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     if (batch_offset.has_value()) {
         tt::DataFormat cb_batch_offset_data_format =
             tt_metal::datatype_to_dataformat_converter(batch_offset.value().dtype());
-        uint32_t single_batch_offset_tile_size = tt_metal::detail::TileSize(cb_batch_offset_data_format);
+        uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
         tt_metal::CircularBufferConfig cb_batch_offset_config_reader =

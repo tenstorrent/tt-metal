@@ -20,7 +20,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
@@ -209,7 +209,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup

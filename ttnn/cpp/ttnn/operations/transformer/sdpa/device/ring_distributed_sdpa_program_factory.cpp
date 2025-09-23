@@ -327,14 +327,14 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
-    uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
-    uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
-    uint32_t v_tile_size = tt::tt_metal::detail::TileSize(v_df);
-    uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
-    uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
-    uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
-    uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
-    uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
+    uint32_t q_tile_size = tt::tile_size(q_df);
+    uint32_t k_tile_size = tt::tile_size(k_df);
+    uint32_t v_tile_size = tt::tile_size(v_df);
+    uint32_t mask_tile_size = tt::tile_size(mask_df);
+    uint32_t out_tile_size = tt::tile_size(out_df);
+    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
+    uint32_t im_tile_size = tt::tile_size(im_df);
+    uint32_t stats_tile_size = tt::tile_size(stats_df);
 
     // Q input
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
