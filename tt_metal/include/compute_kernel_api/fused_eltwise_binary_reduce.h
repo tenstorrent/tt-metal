@@ -47,8 +47,8 @@ ALWI void fused_eltwise_binary_init(uint32_t cb_inp0, uint32_t cb_inp1, bool acc
     // if constexpr (full_init) {
     //     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_inp0, cb_inp1, 0 /*transpose*/, acc_to_dest)));
     // }
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16)));
     PACK((llk_pack_init()));
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
@@ -92,10 +92,9 @@ ALWI void fused_reduce_init() {
     // MATH initialization - init reduce operation (no unpacker calls)
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
 
-    // PACK initialization - for fused operations, we don't need the reduce mask
-    // since the math operation has already produced the final reduced result
-    // The destination register contains valid data that shouldn't be masked
-    // PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>())); // Disabled for fused ops
+    // PACK initialization - configure the reduce mask to ensure only the final
+    // reduced result is packed and intermediate/partial results are masked out
+    PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 }
 
 // =============================================================================
@@ -107,6 +106,7 @@ ALWI void fused_reduce_compute(uint32_t idst) {
     // **FIXED: Use llk_math_reduce_fused which doesn't clear data valid flags**
     MATH((llk_math_reduce_fused<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(idst)));
     UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
+    // PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>())); // Disabled for fused ops
 }
 
 // =============================================================================

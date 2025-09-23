@@ -128,8 +128,8 @@ void MAIN {
         // DPRINT_PACK({ DPRINT << "After reduce_compute" << ENDL(); });
         // DPRINT_UNPACK({ DPRINT << "After reduce_compute" << ENDL(); });
 
-        // tile_regs_wait();
-        acquire_dst();
+        tile_regs_wait();
+        // acquire_dst();
 
         // Pack and output the reduced result
         cb_reserve_back(cb_out0, onetile);
@@ -139,6 +139,8 @@ void MAIN {
         DPRINT_UNPACK({ DPRINT << "After tile wait" << ENDL(); });  // does not hang
 
         pack_tile(reduce_dst_idx, cb_out0);
+
+        PACK(for (uint32_t i = 0; i < 32; ++i) { TTI_NOP; });
 
         DPRINT_PACK({  // - does not hang, prints out garbage data
             DPRINT << "Output tile in cb_out0:" << ENDL();
@@ -162,8 +164,8 @@ void MAIN {
 
         cb_push_back(cb_out0, onetile);
 
-        // tile_regs_release();  // Finally release the tile registers
-        release_dst();
+        tile_regs_release();  // Finally release the tile registers
+        // release_dst();
     }
 
     // =============================================================================
