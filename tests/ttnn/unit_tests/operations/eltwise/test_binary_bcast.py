@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
 
-binary_fns = (
+binary_fns = {
     "ge",
     "gt",
     "le",
@@ -36,7 +36,7 @@ binary_fns = (
     "mul",
     "divide",
     "bias_gelu",
-)
+}
 
 activation_fns = {
     "EXP": torch.exp,
@@ -107,40 +107,6 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
     return pt, tt
 
 
-# Build deterministic parameter lists for complex parametrizations
-def _mk_pairs(functions, activations_list):
-    return [(fn, acts) for fn in functions for acts in activations_list]
-
-
-_activations_basic_list = [
-    no_activations,
-    square_lhs,
-    sin_rhs,
-    floor_lhs_ceil_rhs_cos_post,
-    exp_floor_lhs_exp_rhs,
-    log_lhs_sqrt_abs_post,
-]
-
-_add_post_activations_list = [((), (), (op,)) for op in activation_fns.keys()]
-
-_all_pairs = _mk_pairs(binary_fns, _activations_basic_list) + _mk_pairs(("add",), _add_post_activations_list)
-
-_disallowed_pairs = set()
-_disallowed_pairs |= set(_mk_pairs(("eq", "ne"), [square_lhs, sin_rhs, exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post]))
-_disallowed_pairs |= set(_mk_pairs(("logaddexp", "logaddexp2"), [floor_lhs_ceil_rhs_cos_post]))
-_disallowed_pairs |= set(_mk_pairs(("ge", "lt", "le"), [exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post]))
-_disallowed_pairs |= set(_mk_pairs(("logical_and", "logical_or", "logical_xor", "bias_gelu"), [log_lhs_sqrt_abs_post]))
-_disallowed_pairs |= set(_mk_pairs(("divide",), [exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post]))
-_disallowed_pairs |= set(_mk_pairs(("sub",), [log_post, log2_post, log10_post]))
-_disallowed_pairs |= set(_mk_pairs(("ldexp",), [erfinv_post, tan_post, floor_post, ceil_post]))
-_disallowed_pairs |= set(_mk_pairs(("squared_difference",), [erfinv_post, i0_post]))
-_disallowed_pairs |= set(_mk_pairs(("add",), [tan_post, tanh_post]))
-_disallowed_pairs.add(("mul", log_lhs_sqrt_abs_post))
-
-deterministic_binary_params = [pair for pair in _all_pairs if pair not in _disallowed_pairs]
-deterministic_binary_params.sort(key=lambda p: (p[0], repr(p[1])))
-
-
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -149,7 +115,34 @@ deterministic_binary_params.sort(key=lambda p: (p[0], repr(p[1])))
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
     ),
 )
-@pytest.mark.parametrize("ttnn_fn, activations", deterministic_binary_params)
+@pytest.mark.parametrize(
+    "ttnn_fn, activations",
+    {
+        *parameters(
+            binary_fns,
+            {
+                no_activations,
+                square_lhs,
+                sin_rhs,
+                floor_lhs_ceil_rhs_cos_post,
+                exp_floor_lhs_exp_rhs,
+                log_lhs_sqrt_abs_post,
+            },
+        ),
+        *parameters({"add"}, {((), (), (op,)) for op in activation_fns.keys()}),
+    }.difference(
+        parameters({"eq", "ne"}, {square_lhs, sin_rhs, exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+        parameters({"logaddexp", "logaddexp2"}, {floor_lhs_ceil_rhs_cos_post}),
+        parameters({"ge", "lt", "le"}, {exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
+        parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu"}, {log_lhs_sqrt_abs_post}),
+        parameters({"divide"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
+        parameters({"sub"}, {log_post, log2_post, log10_post}),
+        parameters({"ldexp"}, {erfinv_post, tan_post, floor_post, ceil_post}),
+        parameters({"squared_difference"}, {erfinv_post, i0_post}),
+        parameters({"add"}, {tan_post, tanh_post}),
+        {("mul", log_lhs_sqrt_abs_post)},
+    ),
+)
 def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
     torch.manual_seed(0)
     ttnn_op = getattr(ttnn, ttnn_fn)
