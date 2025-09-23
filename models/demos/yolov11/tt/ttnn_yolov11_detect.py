@@ -113,11 +113,42 @@ class TtnnDetect:
         deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
         # ya = ttnn.reallocate(ya)
         # yb = ttnn.reallocate(yb)
+        # ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16)) ######################
+        # ya = ttnn.softmax(ya, dim=-1)
+        ya = ttnn.to_layout(ya, layout=ttnn.ROW_MAJOR_LAYOUT)
+        memory_config = ttnn.create_sharded_memory_config(
+            shape=ya.shape,  # Your tensor shape
+            core_grid=ttnn.CoreGrid(y=8, x=8),  # Core grid
+            strategy=ttnn.ShardStrategy.HEIGHT,  # or WIDTH/BLOCK
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,  # Key parameter
+        )
+        # grid_size = device.compute_with_storage_grid_size()
+        # grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+        # shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+
+        # # For shape (1, 8400, 4, 16), shard shape should match the last two dimensions
+        # shard_shape = [8416,64]  # Height and width of each shard
+        # shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+
+        # # Step 2: Create sharded memory config
+        # sharded_mem_config = ttnn.MemoryConfig(
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     ttnn.BufferType.L1,
+        #     shard_spec
+        # )
+
+        # Step 3: Convert tensor to sharded memory config
+        ya = ttnn.to_memory_config(ya, memory_config)
+        p(ya, "after sharding , ya is")
         ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))
-        # ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 16, 4))
-        ya = ttnn.softmax(ya, dim=-1)
-        # ya = ttnn.softmax_in_place(ya, dim=-1,numeric_stable=False)
-        # ya = ttnn.permute(ya, (0,3,1,2))
+        program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            subblock_w=8,  # or appropriate value for your tensor
+            block_h=1,  # height blocks
+            block_w=1,  # width blocks (16/32 = 0.5, so use 1)
+        )
+        ya = ttnn.softmax_in_place(ya, dim=-1, numeric_stable=False, program_config=program_config)
         ya = ttnn.permute(ya, (0, 2, 1, 3))
         c = self.dfl(ya)
         ttnn.deallocate(ya)
