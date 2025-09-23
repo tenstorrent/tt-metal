@@ -23,7 +23,6 @@ def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
         if hasattr(torch_model, "ln1") and hasattr(torch_model, "ln2"):
-            print("xxxx")
             parameters["ln1_weight"] = preprocess_linear_weight(torch_model.ln1.weight, dtype=weight_dtype)
             parameters["ln1_bias"] = preprocess_linear_weight(torch_model.ln1.bias, dtype=weight_dtype)
             parameters["ln2_weight"] = preprocess_linear_weight(torch_model.ln2.weight, dtype=weight_dtype)
@@ -36,10 +35,10 @@ def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16):
             )
             parameters["attn"] = self_attn_params
         if hasattr(torch_model, "mlp"):
-            parameters["mlp"][0]["weight"] = preprocess_linear_weight(torch_model.mlp[0].weight, dtype=weight_dtype)
-            parameters["mlp"][0]["bias"] = preprocess_linear_weight(torch_model.mlp[0].bias, dtype=weight_dtype)
-            parameters["mlp"][1]["weight"] = preprocess_linear_weight(torch_model.mlp[2].weight, dtype=weight_dtype)
-            parameters["mlp"][1]["bias"] = preprocess_linear_weight(torch_model.mlp[2].bias, dtype=weight_dtype)
+            parameters["mlp_0_weight"] = preprocess_linear_weight(torch_model.mlp[0].weight, dtype=weight_dtype)
+            parameters["mlp_0_bias"] = preprocess_linear_weight(torch_model.mlp[0].bias, dtype=weight_dtype)
+            parameters["mlp_2_weight"] = preprocess_linear_weight(torch_model.mlp[2].weight, dtype=weight_dtype)
+            parameters["mlp_2_bias"] = preprocess_linear_weight(torch_model.mlp[2].bias, dtype=weight_dtype)
 
         return parameters
 
@@ -52,7 +51,7 @@ def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16):
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
-def test_self_attn(device, n_embed, n_head, block_exp, attn_pdrop, resid_pdrop, input_shape, input_dtype, weight_dtype):
+def test_gpt_block(device, n_embed, n_head, block_exp, attn_pdrop, resid_pdrop, input_shape, input_dtype, weight_dtype):
     x = torch.randn(input_shape)
 
     ref_layer = Block(
@@ -66,7 +65,7 @@ def test_self_attn(device, n_embed, n_head, block_exp, attn_pdrop, resid_pdrop, 
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: ref_layer,
-        custom_preprocessor=create_self_attn_preprocessor(device, weight_dtype),
+        custom_preprocessor=create_gpt_block_preprocessor(device, weight_dtype),
         device=device,
     )
     tt_layer = TTGptBlock(device, parameters, n_head, dtype=weight_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
