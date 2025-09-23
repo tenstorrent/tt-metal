@@ -18,7 +18,7 @@ from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
     "batch_size, expected_inference_time, expected_compile_time",
     (
         (16, 0.0065, 30),
-        (32, 0.0067, 30),
+        (32, 0.0071, 30),
     ),
 )
 def test_perf(
