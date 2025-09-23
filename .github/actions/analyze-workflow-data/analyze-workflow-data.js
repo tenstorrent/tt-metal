@@ -64,9 +64,11 @@ function normalizeOwners(value) {
 function extractSignificantTokens(str) {
   if (typeof str !== 'string') return [];
   return str
-    .split(/\s+/)
-    .map(token => token.replace(/^[^A-Za-z0-9_\-]+|[^A-Za-z0-9_\-]+$/g, ''))
-    .filter(token => token.length > 1);
+    .split(/\s+[^A-Za-z0-9\s]+\s+/)
+    .map(segment => segment.trim())
+    .filter(Boolean)
+    .map(segment => segment.replace(/^[^A-Za-z0-9_\-]+|[^A-Za-z0-9_\-]+$/g, ''))
+    .filter(segment => segment.replace(/\s+/g, '').length > 1);
 }
 
 function getNeedleTail(needle) {
