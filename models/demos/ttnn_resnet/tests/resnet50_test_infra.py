@@ -332,23 +332,9 @@ class ResNet50TestInfra:
 
         batch_size = output_tensor.shape[0]
 
-        valid_pcc = 1.0
-        if self.batch_size >= 8:
-            valid_pcc = golden_pcc[self.device.arch()][self.batch_size][
-                (self.math_fidelity, self.weight_dtype, self.act_dtype)
-            ]
-        else:
-            if self.act_dtype == ttnn.bfloat8_b:
-                if self.math_fidelity == ttnn.MathFidelity.LoFi:
-                    valid_pcc = 0.87
-                else:
-                    valid_pcc = 0.94
-            else:
-                if self.math_fidelity == ttnn.MathFidelity.LoFi:
-                    valid_pcc = 0.93
-                else:
-                    valid_pcc = 0.982
+        valid_pcc = 0.98
         self.pcc_passed, self.pcc_message = check_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
+        assert self.pcc_passed, self.pcc_message
 
         logger.info(
             f"ResNet50 batch_size={batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, math_fidelity={self.math_fidelity}, PCC={self.pcc_message}"

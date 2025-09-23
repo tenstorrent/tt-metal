@@ -22,6 +22,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     ReduceScatterAsyncConfig,
     ReshardConfig,
+    SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     MAX_BATCH_SIZE,
@@ -29,7 +30,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
-    save_and_get_path,
+    shard_and_save,
     sub_state_dicts,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -105,18 +106,16 @@ class MLA(AbstractModule):
         # Regular non-split weights
         linear_weight_configs = {  # TODO: add dequant
             ttnn_name: {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": cls._convert_metaweight(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    cls._convert_metaweight(
-                        dequantize(
-                            get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
-                            get_state_dicts(state_dicts, f"{hf_name}.weight_scale_inv", dtype=torch.float32),
-                            (1, weight_block_height, weight_block_width),
-                        ),
-                        mesh_dims,
-                        mesh_device,
+                    dequantize(
+                        get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
+                        get_state_dicts(state_dicts, f"{hf_name}.weight_scale_inv", dtype=torch.float32),
+                        (1, weight_block_height, weight_block_width),
                     ),
-                )
+                    mesh_dims,
+                    mesh_device,
+                ),
             }
             for hf_name, ttnn_name, shape, mesh_dims in [
                 ("q_a_proj", "wq_a", (q_lora_rank, dim), (0, -2)),
@@ -147,32 +146,31 @@ class MLA(AbstractModule):
             **norm_weight_configs,
             **linear_weight_configs,
             "wkv_b1": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / "wkv_b1.input_tensor_b",
-                    cls._convert_metaweight(torch_weights_k, (0, -3), mesh_device),
-                )
+                "input_tensor_b": cls._convert_metaweight(
+                    output_path / "wkv_b1.input_tensor_b", torch_weights_k, (0, -3), mesh_device
+                ),
             },
             "wkv_b2": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / "wkv_b2.input_tensor_b",
-                    cls._convert_metaweight(torch_weights_v, (0, -3), mesh_device),
-                )
+                "input_tensor_b": cls._convert_metaweight(
+                    output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, -3), mesh_device
+                ),
             },
         }
 
     @classmethod
     def _convert_metaweight(
-        cls, torch_metaweight: torch.Tensor, dims: tuple[int | None, int | None], mesh_device: ttnn.MeshDevice
-    ) -> WeightConfig:
-        return ttnn.as_tensor(
+        cls,
+        path: Path,
+        torch_metaweight: torch.Tensor,
+        dims: tuple[int | None, int | None],
+        mesh_device: ttnn.MeshDevice,
+    ) -> SavedWeight:
+        return shard_and_save(
+            path,
             torch_metaweight.transpose(-2, -1),
+            shard_dims=dims,
+            mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                mesh_device.shape,
-                dims,
-            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
