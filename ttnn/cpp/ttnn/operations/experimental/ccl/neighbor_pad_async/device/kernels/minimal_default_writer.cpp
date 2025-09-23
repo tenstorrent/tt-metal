@@ -47,6 +47,8 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t target_device_offset = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
@@ -62,11 +64,45 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_reserve_back(reserved_packet_header_cb_id, 1);
+    auto packet_header_buffer_barriersem = get_write_ptr(reserved_packet_header_cb_id);
+    cb_push_back(reserved_packet_header_cb_id, 1);
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     pkt_hdr->to_chip_unicast(target_device_offset);
 
     fabric_connection.open();
+
+    // Barrier semaphore
+    if (use_barrier_sem) {
+        if (!is_last_chip) {
+            // unicast output ready semaphore
+            uint64_t barrier_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+            auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_barriersem);
+            pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                barrier_sem_noc_addr_in_pkt,
+                static_cast<uint16_t>(1),  // increment 1
+                32});
+            // Write the unicast packet
+            if (direction) {
+                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
+                fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                    packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
+            } else {
+                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                pkt_hdr_sem_inc->to_chip_unicast(target_device_offset);
+                fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                    packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
+            }
+        }
+
+        if (!is_first_chip) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+        }
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
