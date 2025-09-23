@@ -287,11 +287,10 @@ ttnn::Tensor composite_all_to_all(
     ttnn::DataType input_dtype = input_tensor.dtype();
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
 
+    bool is_sharded = input_tensor.is_sharded();
     auto input_memory_config = input_tensor.memory_config();
-    auto sliced_memory_config = input_memory_config;
-    auto concat_memory_config = input_memory_config;
+    auto interim_memory_config = is_sharded ? ttnn::DRAM_MEMORY_CONFIG : input_memory_config;
     auto output_memory_config = memory_config.value_or(input_memory_config);
-    bool is_sharded = input_memory_config.is_sharded();
 
     // Convert to row major
     if (is_tiled_and_not_tile_aligned) {
@@ -302,46 +301,30 @@ ttnn::Tensor composite_all_to_all(
         input_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
     }
 
+    // Sharded input is challenging to work with, because we perform slice and concat separately
+    // and the user can't give us intermediate shard specs. So the most foolproof solution is
+    // to simply undo sharding by converting to DRAM interleaved storage.
+    if (is_sharded) {
+        input_tensor = ttnn::to_memory_config(input_tensor, interim_memory_config);
+    }
+
     // Step 1: make every device have a copy of every tensor
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
         input_tensor,
         num_links,
-        input_memory_config,
+        interim_memory_config,
         ttnn::ccl::Topology::Linear,
         /* cluster_axis */ std::nullopt,
         subdevice_id);
 
-    // Note on sharded inputs:
-    // We perform slice and concat as two separate operations, but the user can't give us
-    // intermediate shard specs. One solution is to always convert the input to interleaved
-    // to undo sharding. Another solution, which is what we do here, is to manipulate the
-    // input shard spec to account for what the slice and concat operations do.
-    if (is_sharded) {
-        auto input_shard_spec = input_memory_config.shard_spec().value();
-        if (out_dim == 3) {
-            input_shard_spec.shape[1] /= broadcasted_tensors.size();
-            sliced_memory_config = input_memory_config.with_shard_spec(input_shard_spec);
-        } else {
-            input_shard_spec.shape[0] /= broadcasted_tensors.size();
-            sliced_memory_config = input_memory_config.with_shard_spec(input_shard_spec);
-        }
-        if (in_dim == 3) {
-            input_shard_spec.shape[1] *= broadcasted_tensors.size();
-            concat_memory_config = input_memory_config.with_shard_spec(input_shard_spec);
-        } else {
-            input_shard_spec.shape[0] *= broadcasted_tensors.size();
-            concat_memory_config = input_memory_config.with_shard_spec(input_shard_spec);
-        }
-    }
-
     // Step 2: Slice out the index range each device cares about, along out_dim
     for (size_t i = 0; i < broadcasted_tensors.size(); i++) {
         broadcasted_tensors[i] = ttnn::mesh_partition(
-            broadcasted_tensors[i], out_dim, /* cluster_axis */ std::nullopt, sliced_memory_config);
+            broadcasted_tensors[i], out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
     }
 
     // Step 3: Concatenate along in_dim
-    ttnn::Tensor output_tensor = ttnn::concat(broadcasted_tensors, in_dim, concat_memory_config);
+    ttnn::Tensor output_tensor = ttnn::concat(broadcasted_tensors, in_dim, interim_memory_config);
 
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {
@@ -353,7 +336,7 @@ ttnn::Tensor composite_all_to_all(
         }
     }
 
-    if (input_memory_config.memory_layout() != output_memory_config.memory_layout()) {
+    if (output_memory_config.memory_layout() != interim_memory_config.memory_layout()) {
         output_tensor = ttnn::to_memory_config(output_tensor, output_memory_config);
     }
 
