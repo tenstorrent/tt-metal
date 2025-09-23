@@ -75,46 +75,11 @@ static constexpr uint32_t NUM_DRAM_CHANNELS = 8;
 static constexpr uint32_t ETH_STATIC_TLB_START = 0;
 static constexpr uint32_t TENSIX_STATIC_TLB_START = 38;
 
-int32_t get_static_tlb_index_virtual(CoreCoord target) {
-    bool is_eth_location =
-        std::find(
-            std::cbegin(tt::umd::blackhole::ETH_LOCATIONS), std::cend(tt::umd::blackhole::ETH_LOCATIONS), target) !=
-        std::cend(tt::umd::blackhole::ETH_LOCATIONS);
-    bool is_tensix_location =
-        std::find(
-            std::cbegin(tt::umd::blackhole::T6_X_LOCATIONS), std::cend(tt::umd::blackhole::T6_X_LOCATIONS), target.x) !=
-            std::cend(tt::umd::blackhole::T6_X_LOCATIONS) &&
-        std::find(
-            std::cbegin(tt::umd::blackhole::T6_Y_LOCATIONS), std::cend(tt::umd::blackhole::T6_Y_LOCATIONS), target.y) !=
-            std::cend(tt::umd::blackhole::T6_Y_LOCATIONS);
-    // implementation migrated from blackhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/blackhole.py` from tensix
-    // repo (t6py-blackhole-bringup branch)
-
-    auto dram_tlb_index =
-        std::find(tt::umd::blackhole::DRAM_LOCATIONS.begin(), tt::umd::blackhole::DRAM_LOCATIONS.end(), target);
-    if (dram_tlb_index != tt::umd::blackhole::DRAM_LOCATIONS.end()) {
-        auto dram_index = dram_tlb_index - tt::umd::blackhole::DRAM_LOCATIONS.begin();
-        // We have 3 ports per DRAM channel so we divide index by 3 to map all the channels of the same core to the same
-        // TLB
-        return tt::umd::blackhole::TLB_BASE_INDEX_4G + (dram_index / NUM_PORTS_PER_DRAM_CHANNEL);
-    }
-
-    // One row of BH ethernet cores starting at x = 1, y = 1
-    //  and BH tensix cores are starting from x = 1, y = 2
-    target.y--;
-    target.x--;
-    if (target.x >= 8) {
-        target.x -= 2;
-    }
-
-    TT_ASSERT(is_eth_location or is_tensix_location);
-    int y = is_eth_location ? target.y : (target.y - 1);
-    int flat_index = y * 14 + target.x;
-    int tlb_index = (is_eth_location ? ETH_STATIC_TLB_START : TENSIX_STATIC_TLB_START) + flat_index;
-    return tlb_index;
-}
-
 int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
+    if (target.y >= tt::umd::blackhole::ETH_LOCATIONS.size()) {
+        TT_ASSERT(false, "Invalid TLB location for ETH core");
+        return -1;
+    }
     auto eth_location = tt::umd::blackhole::ETH_LOCATIONS.at(target.y);
     eth_location.y--;
     eth_location.x--;
@@ -129,22 +94,34 @@ int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
 }
 
 int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
+    if ((target.x >= tt::umd::blackhole::T6_X_LOCATIONS.size()) ||
+        (target.y >= tt::umd::blackhole::T6_Y_LOCATIONS.size())) {
+        TT_ASSERT(false, "Invalid TLB location for TENSIX core");
+        return -1;
+    }
     return TENSIX_STATIC_TLB_START + target.y * 14 + target.x;
 }
 
+int32_t get_static_tlb_index_logical_dram(CoreCoord target) {
+    auto dram_tlb_index = target.x;
+    if (dram_tlb_index > 7) {
+        return -1;
+    }
+    // Each DRAM channel has 3 ports, and the logical x coordinate directly corresponds to the channel.
+    // Therefore, the x coordinate alone is sufficient for determining the TLB mapping.
+    return tt::umd::blackhole::TLB_BASE_INDEX_4G + (dram_tlb_index);
+}
+
 int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
-    if (target.coord_system == CoordSystem::VIRTUAL) {
-        return get_static_tlb_index_virtual({target.x, target.y});
+    if (target.coord_system != CoordSystem::LOGICAL) {
+        return -1;
     }
-    if (target.coord_system == CoordSystem::LOGICAL) {
-        if (target.core_type == CoreType::ETH) {
-            return get_static_tlb_index_logical_eth({target.x, target.y});
-        }
-        if (target.core_type == CoreType::TENSIX) {
-            return get_static_tlb_index_logical_tensix({target.x, target.y});
-        }
+    switch (target.core_type) {
+        case CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
+        case CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
+        case CoreType::DRAM: return get_static_tlb_index_logical_dram({target.x, target.y});
+        default: return -1;
     }
-    return -1;
 }
 
 // Returns last port of dram channel passed as the argument to align with dram_preferred_worker_endpoint
@@ -183,6 +160,17 @@ void configure_static_tlbs(
             dram_channel_0_y = tt::umd::blackhole::DRAM_CHANNEL_0_Y;
             break;
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
+    }
+
+    std::cout << "LOGICAL\n";
+    auto dram_logical = sdesc.get_cores(CoreType::DRAM, tt::umd::CoordSystem::LOGICAL);
+    for (auto& i : dram_logical) {
+        std::cout << i.str() << "\n";
+    }
+    std::cout << "VIRTUAL\n";
+    auto dram_virtual = sdesc.get_cores(CoreType::DRAM, tt::umd::CoordSystem::VIRTUAL);
+    for (auto& i : dram_virtual) {
+        std::cout << i.str() << "\n";
     }
 
     std::int32_t address = 0;
