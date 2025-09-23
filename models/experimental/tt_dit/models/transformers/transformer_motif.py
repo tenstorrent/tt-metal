@@ -14,7 +14,6 @@ from ...layers.embeddings import PatchEmbed
 from ...layers.feedforward import FeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.normalization import DistributedLayerNorm
 from ...layers.transformer_block import TransformerBlock
 from ...utils.substate import rename_substate
 from ...utils.tensor import bf16_tensor
@@ -38,13 +37,18 @@ class TimeTextProjection(Module):
 
         self.mesh_device = mesh_device
 
-        self.timestep_embedder = FeedForward(
-            dim=time_embed_dim, inner_dim=4 * time_embed_dim, dim_out=embedding_dim, mesh_device=mesh_device
+        self.timestep_embedder = FeedForward(  # TODO: ParallelFeedForward?
+            dim=time_embed_dim,
+            inner_dim=4 * time_embed_dim,
+            dim_out=embedding_dim,
+            activation_fn="silu",
+            mesh_device=mesh_device,
         )
-        self.text_embedder = FeedForward(
+        self.text_embedder = FeedForward(  # TODO: ParallelFeedForward?
             dim=pooled_projection_dim,
             inner_dim=4 * pooled_projection_dim,
             dim_out=embedding_dim,
+            activation_fn="silu",
             mesh_device=mesh_device,
         )
 
