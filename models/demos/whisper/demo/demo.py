@@ -56,7 +56,7 @@ def load_conditional_generation_ref_model(model_repo):
     Args:
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
     """
-    allowed_models = ["distil-whisper/distil-large-v3", "openai/whisper-large-v3"]
+    allowed_models = ["distil-whisper/distil-large-v3", "openai/whisper-large-v3", "openai/whisper-large-v3-turbo"]
     if model_repo not in allowed_models:
         raise ValueError(f"Unknown model_repo: {model_repo}. Valid options are {allowed_models}")
 
@@ -484,24 +484,38 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, is_ci_env):
 )
 @pytest.mark.parametrize(
     "model_repo",
-    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
+    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3", "openai/whisper-large-v3-turbo"),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, model_repo, is_ci_env):
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, device, num_inputs, model_repo
     )
-    if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
-        if is_blackhole():
-            if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
-            else:
-                expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0}
-        else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
-        expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1
-        measurements = {"prefill_t/s": 1 / ttft, "decode_t/s": decode_throughput, "decode_t/s/u": decode_throughput}
-        verify_perf(measurements, expected_perf_metrics)
+    if is_ci_env:
+        if model_repo == "distil-whisper/distil-large-v3":
+            if is_blackhole():
+                if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
+                    expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
+                else:
+                    expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0}
+            else:  # wormhole_b0
+                expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
+            expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1
+            measurements = {"prefill_t/s": 1 / ttft, "decode_t/s": decode_throughput, "decode_t/s/u": decode_throughput}
+            verify_perf(measurements, expected_perf_metrics)
+        elif model_repo == "openai/whisper-large-v3-turbo":
+            # Add performance expectations for turbo model
+            if is_blackhole():
+                if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
+                    expected_perf_metrics = {"prefill_t/s": 7.0, "decode_t/s/u": 85.0}  # Adjust these
+                else:
+                    expected_perf_metrics = {"prefill_t/s": 7.5, "decode_t/s/u": 90.0}  # Adjust these
+            else:  # wormhole_b0
+                expected_perf_metrics = {"prefill_t/s": 3.5, "decode_t/s/u": 50.0}  # Adjust these
+
+            expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]
+            measurements = {"prefill_t/s": 1 / ttft, "decode_t/s": decode_throughput, "decode_t/s/u": decode_throughput}
+            verify_perf(measurements, expected_perf_metrics)
 
 
 @pytest.mark.parametrize(
@@ -510,7 +524,7 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
 )
 @pytest.mark.parametrize(
     "model_repo",
-    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
+    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3", "openai/whisper-large-v3-turbo"),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation_dataset(ttnn_model, device, model_repo, is_ci_env):
