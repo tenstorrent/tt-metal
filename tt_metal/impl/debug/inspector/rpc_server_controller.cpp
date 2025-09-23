@@ -15,7 +15,14 @@ RpcServerController::~RpcServerController() {
 }
 
 void RpcServerController::start(const std::string& host, uint16_t port) {
-    if (is_running()) {
+    if (is_running) {
+        log_warning(tt::LogInspector, "Inspector RPC server already running");
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(start_stop_mutex);
+
+    if (is_running) {
         log_warning(tt::LogInspector, "Inspector RPC server already running");
         return;
     }
@@ -27,11 +34,18 @@ void RpcServerController::start(const std::string& host, uint16_t port) {
     rpc_server_implementation = temp_rpc_server_implementation.get();
 
     should_stop = false;
+    is_running = true;
     server_thread = std::thread(&RpcServerController::run_server, this);
 }
 
 void RpcServerController::stop() {
-    if (!is_running()) {
+    if (!is_running) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(start_stop_mutex);
+
+    if (!is_running) {
         return;
     }
 
@@ -42,6 +56,7 @@ void RpcServerController::stop() {
     }
 
     log_info(tt::LogInspector, "Inspector RPC server stopped");
+    is_running = false;
 }
 
 void RpcServerController::run_server() {
@@ -56,9 +71,11 @@ void RpcServerController::run_server() {
 
         while (!should_stop) {
             auto count = waitScope.poll();
+            // If external client is querying, avoid sleeping too much
             if (count > 0) {
                 last_events = std::chrono::high_resolution_clock::now();
             }
+            // If no events for a while, sleep a bit to reduce CPU usage
             else if (std::chrono::high_resolution_clock::now() - last_events > std::chrono::milliseconds(10)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <capnp/ez-rpc.h>
 #include <memory>
 #include <thread>
@@ -18,7 +19,6 @@ public:
 
     void start(const std::string& host, uint16_t port);
     void stop();
-    bool is_running() const { return rpc_server != nullptr; }
 
     RpcServer& get_rpc_server();
 
@@ -26,7 +26,9 @@ private:
     std::thread server_thread;
     std::unique_ptr<::capnp::EzRpcServer> rpc_server;
     RpcServer* rpc_server_implementation;
-    bool should_stop;
+    std::mutex start_stop_mutex;
+    std::atomic<bool> should_stop;
+    std::atomic<bool> is_running;
 
     // temp data used in background thread as initialization
     std::string host;

@@ -228,7 +228,7 @@ namespace tt::tt_metal::inspector {
         {callback_call}
         return ::kj::READY_NOW;
     }} catch (const std::exception& e) {{
-        log_warning(tt::LogInspector, "Failed to execute {method.name}: {{}}", e.what());
+        log_debug(tt::LogInspector, "Failed to execute {method.name}: {{}}", e.what());
         return kj::Promise<void>(KJ_EXCEPTION(FAILED, e.what()));
     }}
 }}
