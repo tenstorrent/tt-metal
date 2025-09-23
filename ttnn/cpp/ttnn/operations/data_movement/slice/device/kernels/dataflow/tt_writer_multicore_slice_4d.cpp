@@ -42,47 +42,38 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
-    // Runtime arguments for 4D slice support with multi-core work distribution
+    // Runtime arguments - optimized like production writer
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(1);
-    uint32_t output_w = get_arg_val<uint32_t>(2);
-    uint32_t output_h = get_arg_val<uint32_t>(3);
-    uint32_t output_d = get_arg_val<uint32_t>(4);
-    uint32_t output_n = get_arg_val<uint32_t>(5);
-    uint32_t element_size = get_arg_val<uint32_t>(6);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(7);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(8);
+    uint32_t stick_size = get_arg_val<uint32_t>(1);
+    uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
+    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(3);
+    uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(4);
+    uint32_t num_read_per_barrier = get_arg_val<uint32_t>(5);
+    uint32_t start_id = get_arg_val<uint32_t>(6);
 
     // Compile-time arguments
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    // Calculate sizes - working with rows, not tiles
-    uint32_t output_bytes_per_row = output_w * element_size;  // Dynamic element size
+    // Use TensorAccessor like production
+    const auto s0 = TensorAccessor(dst_args, dst_addr, stick_size);
 
-    // Set up InterleavedAddrGenFast for output data - use row size as page size
-    const InterleavedAddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-        .page_size = output_bytes_per_row,  // Each page is one output row
-    };
+    // Batch processing like production writer
+    uint32_t i_stick = start_id;
+    uint32_t sticks_read = 0;
 
-    // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
-    // Write each row from circular buffer to output tensor at the correct logical position
-    for (uint32_t local_row = 0; local_row < num_rows_for_this_core; ++local_row) {
-        cb_wait_front(cb_id_in, 1);
+    for (uint32_t iter = 0; iter < num_sticks_per_core_read && sticks_read < num_sticks_per_core; ++iter) {
+        cb_wait_front(cb_id_in, num_read_per_barrier);
         uint32_t l1_read_addr = get_read_ptr(cb_id_in);
 
-        // Calculate global output row index for this local row
-        uint32_t global_output_row = start_row_for_this_core + local_row;
-
-        // Calculate output address for this row
-        uint64_t output_row_noc_addr = get_noc_addr(global_output_row, s);
-
-        // Write the complete row to output tensor
-        noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
+        for (uint32_t i = 0; i < num_read_per_barrier && sticks_read < num_sticks_per_core; ++i) {
+            sticks_read++;
+            uint64_t dst_noc_addr = get_noc_addr(i_stick, s0);
+            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+            l1_read_addr += stick_size_offset;
+            i_stick += 1;
+        }
         noc_async_write_barrier();
-
-        cb_pop_front(cb_id_in, 1);
+        cb_pop_front(cb_id_in, num_read_per_barrier);
     }
 }

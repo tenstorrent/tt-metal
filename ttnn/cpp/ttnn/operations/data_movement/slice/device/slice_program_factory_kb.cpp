@@ -243,9 +243,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 /**
- * Main KB multi-core slice program factory.
- * Implements the intelligent multi-core slice strategy from kernel_bench.
- * Translated from Python MulticoreSlice.__call__ and get_multicore_slice_descriptor methods.
+ * Optimized KB multi-core slice program factory using production's approach
  */
 operation::ProgramWithCallbacks slice_rm_multi_core_kb(
     const Tensor& input_tensor,
@@ -253,114 +251,88 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& slice_step) {
-    std::cout << "LLONG slice_rm_multi_core_kb" << std::endl;
+    std::cout << "LLONG slice_rm_multi_core_kb optimized" << std::endl;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
     tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
-    uint32_t element_size = get_element_size_kb(input_tensor.dtype());
+    // Calculate work distribution like production - use sticks instead of rows
+    uint32_t num_unpadded_sticks = output_tensor.physical_volume() / output_tensor.padded_shape()[-1];
 
-    // Calculate total output rows based on tensor rank - this is what we distribute across cores
-    uint32_t total_output_rows = calculate_total_output_rows_kb(output_shape);
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    // MULTI-CORE ALLOCATION STRATEGY:
-    // The key insight is to use only as many cores as we have work for
-    // This avoids the overhead of idle cores and optimizes resource utilization
-    auto [grid_x, grid_y, num_cores, max_cores_available, num_cores_needed] =
-        calculate_core_allocation_kb(device, total_output_rows);
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    // DEBUG OUTPUT: Show core allocation decisions for performance analysis
-    log_debug(
-        tt::LogOp,
-        "KB Multi-core slice allocation - Total output rows: {}, Available cores: {}",
-        total_output_rows,
-        max_cores_available);
-    log_debug(tt::LogOp, "Tensor shape: {}D {}", input_shape.rank(), output_shape);
-    log_debug(tt::LogOp, "Using grid: {}x{} = {} cores", grid_x, grid_y, num_cores);
+    // Use production's work splitting
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {grid_x - 1, grid_y - 1};
-    CoreRange full_grid_range(start_core, end_core);
-    CoreRangeSet core_grid({full_grid_range});
+    tt::tt_metal::Buffer* src0_buffer = input_tensor.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output_tensor.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // Use KB 4D kernels
-    std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_reader_multicore_slice_4d.cpp";
-    std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_writer_multicore_slice_4d.cpp";
-
-    // Circular buffer configuration - same as single-core but for multiple cores
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t actual_output_w = output_shape[-1];
-    uint32_t output_bytes_per_row = actual_output_w * element_size;
-    uint32_t cb_page_size = output_bytes_per_row;
+    constexpr uint32_t src0_cb_index = 0;
 
-    // Align to 32-byte boundaries for optimal DRAM memory controller performance
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? tt::tt_metal::hal::get_dram_alignment()
-                                    : tt::tt_metal::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? tt::tt_metal::hal::get_dram_alignment()
-                                    : tt::tt_metal::hal::get_l1_alignment();
-    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
-
-    uint32_t cb_page_size_aligned = tt::round_up(cb_page_size, alignment);
-    // Double buffering allows continuous data flow (producer/consumer overlap)
-    uint32_t cb_total_size = 2 * cb_page_size_aligned;
-
-    // Circular buffer indices following TTNN conventions
-    constexpr uint32_t in_cb = 0;  // Input data buffer (reader -> writer)
+    // Use production's CB size calculation
+    const auto [cb_page_size, num_read_per_barrier, misalignment] = compute_cb_size(
+        input_tensor, output_tensor, slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_total_size, {{in_cb, cb_data_format}})
-            .set_page_size(in_cb, cb_page_size_aligned);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_src0_config);
+        tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, cb_page_size);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    // Prepare kernel compilation arguments
-    uint32_t is_dram_input = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t is_dram_output = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    // Use production kernels instead of KB kernels
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args_vec);
 
-    // Reader kernel compile-time args: DRAM flag, CB index, element size
-    std::vector<uint32_t> reader_compile_time_args = {is_dram_input, in_cb, element_size};
-    // Writer kernel compile-time args: CB index, DRAM flag, element size
-    std::vector<uint32_t> writer_compile_time_args = {in_cb, is_dram_output, element_size};
+    std::vector<uint32_t> reader_compile_time_args_vec;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args_vec);
 
-    // Create kernels
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, reader_kernel_path, core_grid, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "slice_reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
+        total_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program, writer_kernel_path, core_grid, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "slice_writer_unary_stick_layout_interleaved_start_id.cpp",
+        total_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
 
-    // Get runtime arguments for all cores
-    auto all_runtime_args = get_slice_runtime_args_kb(
+    // Use production's runtime args calculation
+    auto all_runtime_args = get_slice_runtime_args_rm(
         input_tensor,
         output_tensor,
         slice_start,
-        slice_end,
-        slice_step,
-        grid_x,
-        grid_y,
+        num_cores_total,
         num_cores,
-        total_output_rows,
-        reader_kernel_path,
-        writer_kernel_path);
+        num_cores_y,
+        core_group_1,
+        core_group_2,
+        num_sticks_per_core_group_1,
+        num_sticks_per_core_group_2,
+        MAX_READ_SIZE);
 
-    // Set runtime arguments for each core
-    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        uint32_t x = core_idx % grid_x;
-        uint32_t y = core_idx / grid_x;
-        CoreCoord core = {x, y};
-
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[core_idx].first);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[core_idx].second);
+    for (uint32_t i = 0; i < num_cores_total; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
     }
 
-    // Runtime arguments override callback for buffer address updates
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, grid_x, grid_y, num_cores](
+    // Production-style callback
+    auto override_runtime_args_callback = [unary_reader_kernel_id,
+                                           unary_writer_kernel_id,
+                                           compute_with_storage_grid_size,
+                                           src0_cb_index,
+                                           cb_src0](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -368,18 +340,49 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
                                               const std::vector<Tensor>& output_tensors) {
         const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        uint32_t num_cores_total = num_cores_x * num_cores_y;
+        uint32_t num_unpadded_sticks = dst_tensor.physical_volume() / dst_tensor.padded_shape()[-1];
 
-        // Update buffer addresses in runtime arguments for all cores
-        for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-            uint32_t x = core_idx % grid_x;
-            uint32_t y = core_idx / grid_x;
-            CoreCoord core = {x, y};
+        auto
+            [num_cores,
+             all_cores,
+             core_group_1,
+             core_group_2,
+             num_sticks_per_core_group_1,
+             num_sticks_per_core_group_2] =
+                tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-            reader_runtime_args[0] = src_tensor.buffer()->address();
+        const auto tensor_start =
+            static_cast<const ttnn::operations::data_movement::SliceDeviceOperation*>(operation)->slice_start;
 
-            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-            writer_runtime_args[0] = dst_tensor.buffer()->address();
+        const auto [cb_page_size, num_read_per_barrier, misalignment] = compute_cb_size(
+            src_tensor, dst_tensor, tensor_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+
+        const uint32_t cb_size_bytes = num_read_per_barrier * 2 * cb_page_size;
+        UpdateCircularBufferTotalSize(program, cb_src0, cb_size_bytes);
+        UpdateCircularBufferPageSize(program, cb_src0, src0_cb_index, cb_page_size);
+
+        auto all_runtime_args = get_slice_runtime_args_rm(
+            src_tensor,
+            dst_tensor,
+            tensor_start,
+            num_cores_total,
+            num_cores,
+            num_cores_y,
+            core_group_1,
+            core_group_2,
+            num_sticks_per_core_group_1,
+            num_sticks_per_core_group_2,
+            MAX_READ_SIZE);
+
+        for (uint32_t i = 0; i < num_cores_total; i++) {
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            std::copy(all_runtime_args[i].first.begin(), all_runtime_args[i].first.end(), reader_runtime_args.data());
+            auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            std::copy(all_runtime_args[i].second.begin(), all_runtime_args[i].second.end(), writer_runtime_args.data());
         }
     };
 
