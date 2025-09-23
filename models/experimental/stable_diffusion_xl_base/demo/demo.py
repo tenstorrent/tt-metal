@@ -18,6 +18,10 @@ from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 
+MAX_SEQUENCE_LENGTH = 77
+TEXT_ENCODER_2_PROJECTION_DIM = 1280
+CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
+
 
 @torch.no_grad()
 def run_demo_inference(
@@ -79,10 +83,10 @@ def run_demo_inference(
         tt_sdxl.compile_text_encoding()
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        prompt_embeds_torch=(torch.randn(batch_size, 77, 2048),),
-        pooled_prompt_embeds_torch=(torch.randn(batch_size, 1280),),
-        negative_prompt_embeds_torch=(torch.randn(batch_size, 77, 2048),),
-        negative_pooled_prompt_embeds_torch=(torch.randn(batch_size, 1280),),
+        prompt_embeds_torch=(torch.randn(batch_size, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),),
+        pooled_prompt_embeds_torch=(torch.randn(batch_size, TEXT_ENCODER_2_PROJECTION_DIM),),
+        negative_prompt_embeds_torch=(torch.randn(batch_size, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),),
+        negative_pooled_prompt_embeds_torch=(torch.randn(batch_size, TEXT_ENCODER_2_PROJECTION_DIM),),
     )
     tt_sdxl.compile_image_processing()
 
