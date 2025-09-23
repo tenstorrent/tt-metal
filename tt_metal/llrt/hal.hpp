@@ -106,6 +106,12 @@ enum class FWMailboxMsg : uint8_t {
     ETH_MSG_RELEASE_CORE,
     // Heartbeat counter
     HEARTBEAT,
+    // Retrain Count
+    RETRAIN_COUNT,
+    // Rx Link Up
+    RX_LINK_UP,
+    // Port Status
+    PORT_STATUS,
     // Number of mailbox message types
     COUNT,
 };
@@ -144,13 +150,22 @@ public:
     HalCoreInfoType(
         HalProgrammableCoreType programmable_core_type,
         CoreType core_type,
-        const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
-        const std::vector<DeviceAddr>& mem_map_bases,
-        const std::vector<uint32_t>& mem_map_sizes,
-        const std::vector<uint32_t>& eth_fw_mailbox_msgs,
+        std::vector<std::vector<HalJitBuildConfig>> processor_classes,
+        std::vector<DeviceAddr> mem_map_bases,
+        std::vector<uint32_t> mem_map_sizes,
+        std::vector<uint32_t> eth_fw_mailbox_msgs,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds,
-        dev_msgs::Factory dev_msgs_factory);
+        dev_msgs::Factory dev_msgs_factory) :
+        programmable_core_type_(programmable_core_type),
+        core_type_(core_type),
+        processor_classes_(std::move(processor_classes)),
+        mem_map_bases_(std::move(mem_map_bases)),
+        mem_map_sizes_(std::move(mem_map_sizes)),
+        eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
+        supports_cbs_(supports_cbs),
+        supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
+        dev_msgs_factory_(dev_msgs_factory) {}
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
@@ -238,6 +253,8 @@ public:
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
     using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
+    using SetIRAMTextSizeFunc = std::function<void(
+        dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -248,6 +265,10 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
+    uint32_t max_processors_per_core_{};
+    // Architecture-defined PCIe address range
+    uint64_t pcie_addr_lower_bound_{};
+    uint64_t pcie_addr_upper_bound_{};
     uint32_t num_nocs_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
@@ -276,6 +297,7 @@ private:
 
     void initialize_wh(bool is_base_routing_fw_enabled);
     void initialize_bh();
+    void initialize_qa();
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -293,6 +315,7 @@ private:
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
     DispatchFeatureQueryFunc device_features_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
+    SetIRAMTextSizeFunc set_iram_text_size_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -410,6 +433,7 @@ public:
     HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
+    uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
@@ -440,6 +464,24 @@ public:
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
     uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+
+    // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
+    void set_iram_text_size(
+        dev_msgs::launch_msg_t::View launch_msg,
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx,
+        uint32_t iram_text_size) const {
+        if (this->set_iram_text_size_func_) {
+            this->set_iram_text_size_func_(
+                launch_msg, programmable_core_type, processor_class, processor_type_idx, iram_text_size);
+        }
+    }
+
+    // Returns the supported PCIe address range for the current architecture
+    uint64_t get_pcie_addr_lower_bound() const;
+    // Inclusive upper bound
+    uint64_t get_pcie_addr_upper_bound() const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -565,6 +607,7 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
         num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
                          .get_processor_types_count(processor_class_idx);
     }
+    TT_ASSERT(num_riscs <= max_processors_per_core_);
     return num_riscs;
 }
 inline uint32_t Hal::get_processor_index(

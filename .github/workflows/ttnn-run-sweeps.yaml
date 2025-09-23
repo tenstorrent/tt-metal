@@ -557,11 +557,12 @@ on:
         description: "Which sweep suite to run?"
         type: string
       upload_results:
-        description: "Upload sweep results to SFTP server?"
+        description: "Upload sweep results to Superset?"
         type: boolean
         default: true
   schedule:
     - cron: "0 4 * * 4" # This cron schedule runs the workflow at 4:00 AM UTC on Thursdays (Wednesday 11 PM EST)
+    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (Friday 9 PM PST)
 
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}
@@ -645,7 +646,12 @@ jobs:
           import os, json, math
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
-          BATCH_SIZE = 10
+          # Use smaller batch size for Friday night runs (more comprehensive tests)
+          # Use larger batch size for Thursday runs (nightly suite only)
+          if "${{ github.event.schedule }}" == "0 5 * * 6":
+              BATCH_SIZE = 4  # Smaller batches for Friday night comprehensive runs
+          else:
+              BATCH_SIZE = 10  # Larger batches for Thursday nightly runs
           batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
           print(json.dumps({"module": modules, "batches": batches}))
           PY
@@ -785,7 +791,12 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (batch)
-        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+        run: |
+          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]]; then
+            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
+          else
+            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+          fi
       - name: Compute artifact suffix
         shell: bash
         run: |

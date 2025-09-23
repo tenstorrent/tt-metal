@@ -15,7 +15,6 @@
 #include "hal_types.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/debug/inspector_impl.hpp"
@@ -86,7 +85,7 @@ void MetalContext::initialize(
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
                 force_reinit_ = false;
-                log_warning(
+                log_debug(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
                 teardown();
@@ -411,7 +410,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -421,7 +420,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();
@@ -452,7 +451,7 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    if (is_2d_fabric_config(fabric_config) && cluster_->get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (is_2d_fabric_config(fabric_config) && !cluster_->is_ubb_galaxy()) {
         const auto fabric_type = get_fabric_type(fabric_config);
         if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
             fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
@@ -553,7 +552,7 @@ void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
+    if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
@@ -585,7 +584,7 @@ void MetalContext::initialize_control_plane() {
     std::string suffix = ".textproto";
 
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+    if (cluster_->is_ubb_galaxy()) {
         std::string mesh_graph_descriptor;
         switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
             case tt::tt_fabric::FabricType::TORUS_XY:
@@ -849,10 +848,8 @@ void MetalContext::initialize_firmware(
                                        .get_target_out_path("");
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
-                    if (riscv_id + build_idx == 1) {  // TODO: clean up how brisc/ncrisc are handled
-                        // In this context, ncrisc_kernel_size16 is the size of the fw
-                        launch_msg.kernel_config().ncrisc_kernel_size16() = (fw_size + 15) >> 4;
-                    }
+                    hal_->set_iram_text_size(
+                        launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), riscv_id, fw_size);
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
@@ -947,7 +944,7 @@ void MetalContext::initialize_firmware(
         std::copy(
             launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
     }
-    auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     cluster_->write_core(
         init_launch_msg_data.data(),
         init_launch_msg_data.size(),
@@ -967,17 +964,12 @@ void MetalContext::initialize_firmware(
 dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     chip_id_t device_id, HalProgrammableCoreType programmable_core_type) const {
     const metal_SocDescriptor& soc_d = cluster_->get_soc_desc(device_id);
-    uint64_t pcie_chan_base_addr = cluster_->get_pcie_base_addr_from_device(device_id);
-    uint32_t num_host_channels = cluster_->get_num_host_channels(device_id);
-    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
-    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
-        pcie_chan_end_addr += cluster_->get_host_channel_size(device_id, pcie_chan);
-    }
+    // Use architecture-defined supported PCIe address bounds
     auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
     dev_msgs::core_info_msg_t buffer = factory.create<dev_msgs::core_info_msg_t>();
     auto core_info = buffer.view();
-    core_info.noc_pcie_addr_base() = pcie_chan_base_addr;
-    core_info.noc_pcie_addr_end() = pcie_chan_end_addr;
+    core_info.noc_pcie_addr_base() = hal_->get_pcie_addr_lower_bound();
+    core_info.noc_pcie_addr_end() = hal_->get_pcie_addr_upper_bound();
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
@@ -1156,8 +1148,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                     core_info.data(),
                     core_info.size(),
                     {device_id, worker_core},
-                    hal_->get_dev_addr(
-                        get_programmable_core_type(worker_core, device_id), HalL1MemAddrType::CORE_INFO));
+                    hal_->get_dev_addr(llrt::get_core_type(device_id, worker_core), HalL1MemAddrType::CORE_INFO));
                 initialize_firmware(
                     device_id, HalProgrammableCoreType::TENSIX, worker_core, launch_msg.view(), go_msg.view());
                 not_done_cores.insert(worker_core);
@@ -1197,7 +1188,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             core_info.data(),
             core_info.size(),
             {device_id, virtual_core},
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_->get_eth_fw_is_cooperative()) {
@@ -1220,7 +1211,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             core_info.data(),
             core_info.size(),
             {device_id, virtual_core},
-            hal_->get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::CORE_INFO));
+            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);
@@ -1253,6 +1244,16 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");
+}
+
+// Command queue id stack for thread
+thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
+
+MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
+    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 uint32_t MetalContext::get_active_erisc_launch_flag_addr() {

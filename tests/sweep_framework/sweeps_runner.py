@@ -55,6 +55,7 @@ class SweepsConfig:
     sweeps_tag: Optional[str] = None
     skip_modules: Optional[str] = None
     skip_on_timeout: bool = False
+    keep_invalid: bool = False
     elastic_connection_string: Optional[str] = None
     elastic_username: Optional[str] = None
     elastic_password: Optional[str] = None
@@ -81,6 +82,7 @@ def create_config_from_args(args) -> SweepsConfig:
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
         skip_on_timeout=args.skip_on_timeout,
+        keep_invalid=args.keep_invalid,
         summary=args.summary,
         debug=args.debug,
     )
@@ -368,6 +370,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
     # runs a single suite in a test vector
     results = []
+    invalid_vectors_count = 0
     input_queue = Queue()
     output_queue = Queue()
     p = None
@@ -392,13 +395,19 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
+        validity = deserialize(test_vector["validity"])
         result["start_time_ts"] = dt.datetime.now()
-        validity = deserialize(test_vector["validity"]).split(".")[-1]
-
-        if validity == VectorValidity.INVALID:
-            result["status"] = TestStatus.NOT_RUN
-            result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
-            result["e2e_perf"] = None
+        if validity.value == "INVALID":
+            invalid_vectors_count += 1
+            if not config.keep_invalid:
+                # Skip this vector entirely - don't add to results
+                suite_pbar.update()
+                continue
+            else:
+                # Include invalid vector in results with NOT_RUN status
+                result["status"] = TestStatus.NOT_RUN
+                result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
+                result["e2e_perf"] = None
         else:
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
@@ -552,7 +561,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         p.join()
 
     suite_pbar.close()
-    return results
+    return results, invalid_vectors_count
 
 
 def run_sweeps(
@@ -613,6 +622,7 @@ def run_sweeps(
     # Summary counters
     total_vectors_run = 0  # total number of test cases (vectors)
     total_tests_run = 0  # total number of suites executed
+    total_invalid_vectors = 0  # total number of invalid vectors (skipped)
     module_suite_test_count = {}  # module_name -> {suite_name: count}
     max_test_cases_module = None  # find the module with the most test cases
     max_test_cases_per_module = 0
@@ -654,8 +664,10 @@ def run_sweeps(
                     logger.warning(f"No vectors found for module {module_name}, suite {suite}")
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
-                results = execute_suite(test_vectors, pbar_manager, suite, module_name, header_info, config)
-
+                results, invalid_vectors_count = execute_suite(
+                    test_vectors, pbar_manager, suite, module_name, header_info, config
+                )
+                total_invalid_vectors += invalid_vectors_count
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
@@ -708,6 +720,10 @@ def run_sweeps(
                 logger.info("=== EXECUTION SUMMARY ===")
                 logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
                 logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+                if config.keep_invalid:
+                    logger.info(f"Total invalid vectors (included in results as NOT_RUN): {total_invalid_vectors}")
+                else:
+                    logger.info(f"Total invalid vectors (excluded from results): {total_invalid_vectors}")
                 # Status breakdown across all executed tests
                 if status_counts:
                     logger.info("\n=== TEST STATUS COUNTS ===")
@@ -881,6 +897,13 @@ if __name__ == "__main__":
         action="store_true",
         required=False,
         help="Skip remaining tests in suite when a test times out. Default behavior is to not skip.",
+    )
+
+    parser.add_argument(
+        "--keep-invalid",
+        action="store_true",
+        required=False,
+        help="Include invalid vectors in results with NOT_RUN status. Default behavior is to exclude invalid vectors from results entirely.",
     )
 
     parser.add_argument(

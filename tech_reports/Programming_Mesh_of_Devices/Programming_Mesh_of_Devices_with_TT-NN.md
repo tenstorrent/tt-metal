@@ -34,6 +34,9 @@ Author: Joseph Chu
   - [8.3 Hybrid Tensor and Data Parallel Programming Example](#83-hybrid-tensor-and-data-parallel-programming-example)
     - [8.3.1 Overview of Changes](#831-overview-of-changes)
     - [8.3.2 Key Components](#832-key-components)
+- [9. MeshDevice vs PyTorch Multi-Device Programming](#9-meshdevice-vs-pytorch-multi-device-programming)
+  - [9.1 Overview of Multi-Device Handling](#91-overview-of-multi-device-handling)
+  - [9.2 Code Comparison: Matrix Multiplication with All-Gather](#92-code-comparison-matrix-multiplication-with-all-gather)
 
 ## 1. Overview
 
@@ -50,28 +53,57 @@ These concepts are key to understanding how we scale models using **Data-Paralle
 
 ## 2. MeshDevice
 
+MeshDevice is a virtual device abstraction that bundles together multiple physical devices to enable efficient parallel execution across a mesh topology. This abstraction is natively supported at the runtime level, allowing for deep integration with the hardware and dispatch mechanisms. When operations are dispatched to a MeshDevice, command queues are utilized to distribute work across all constituent devices in parallel, significantly reducing dispatch overhead compared to sequential device-by-device execution.
+
+To optimize performance, MeshDevice implements several key optimizations:
+- **Kernel Compilation Broadcasting**: When kernels are compiled for execution on a MeshDevice, the compilation artifacts are automatically broadcasted to all devices in the mesh where applicable, avoiding redundant per-device compilation.
+- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), MeshDevice leverages the mesh topology to efficiently broadcast data across devices rather than performing individual writes to each device.
+- **Unified Command Dispatch**: Operations are dispatched through mesh-aware command queues that coordinate execution across all devices, ensuring lock-step parallel execution.
+
+While MeshDevice provides these performance optimizations, it maintains explicit control over data distribution and communication patterns. MeshDevice does not hide the distributed nature of the computation - users must explicitly specify:
+- **Data Distribution**: How input tensors are distributed across devices (sharded or replicated) using mesh mappers
+- **Collective Communication**: When and how devices need to communicate using CCL operations like all-gather, reduce-scatter, etc.
+
+This explicit control allows users to optimize their applications for specific hardware topologies and workload characteristics. For detailed information on data distribution strategies, refer to [Section 3 (Distributing Tensor to MeshDevice)](#3-distributing-tensor-to-meshdevice). For collective communication patterns, see [Section 5 (MeshDevice and Collective Communication Library)](#5-meshdevice-and-collective-communication-library-ccl).
+
 ### 2.1 System Topology
 
-A MeshDevice can be instantiated over a collection of physically connected devices. The supported configurations are N300 (1x2), T3000 (2x4), Galaxy (8x4).
+A MeshDevice can be instantiated over a collection of physically connected devices. Examples of the supported configurations are: N300 (1x2), QuietBox (Wormhole) (2x4), Galaxy (8x4).
 
-With the N300 form-factor, it houses two wormhole chips. The host is connected to the "left" chip via PCIe and the "left" chip is connected to the "right" chip via two ethernet links. Each ethernet link has a 200 Gbps bi-directional bandwidth. For N300, one of the ethernet links connecting the "left" chip to the "right" chip is reserved for fast-dispatch. At the user-level, this means only a single ethernet link is made available for use. The N300 represents the smallest multi-device configuration that we can instantiate a MeshDevice over.
+The N300 form-factor houses two wormhole chips. The host is connected to the "left" chip via PCIe and the "left" chip is connected to the "right" chip via two ethernet links. Each ethernet link has a 200 Gbps bi-directional bandwidth. For N300, one of the ethernet links connecting the "left" chip to the "right" chip is reserved for fast-dispatch. At the user-level, this means only a single ethernet link is made available for use. The N300 represents the smallest multi-device configuration that we can instantiate a MeshDevice over.
 
 <!-- ![image1](images/image1.png){width=15 height=15} -->
 <img src="../EthernetMultichip/images/t3000.png" style="width:500px;"/>
 
-*Figure 1: T3000 System Topology. T3000 is composed of 4x N300 wormhole cards, totalling 8 wormhole chips, connected in a 2x4 mesh configuration. Each pair of wormhole-chips are connected via two ethernet links.*
+*Figure 1: QuietBox (Wormhole) System Topology. QuietBox (Wormhole) is composed of 4x N300 wormhole cards, totalling 8 wormhole chips, connected in a 2x4 mesh configuration. Each pair of wormhole-chips are connected via two ethernet links.*
 
 
 <img src="../EthernetMultichip/images/TG.png" style="width:500px;"/>
 
-*Figure 2: TG System Topology. TG is composed of 32x galaxy wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
+*Figure 2: Galaxy System Topology. Galaxy is composed of 32x galaxy wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
 
 
 [tt-topology](https://github.com/tenstorrent/tt-topology) can be used to flash multiple wormhole cards on a system to a specific ethernet routing configuration (linear, ring, mesh) and used to visualize the organization of the chip layout.
 
 <img src="images/image3.png" style="width:500px;"/>
 
-*Figure 3: T3000 Chip Layout dumped from tt-topology*
+*Figure 3: QuietBox (Wormhole) Chip Layout dumped from tt-topology*
+
+#### 2.1.1 SystemMesh Visualization
+
+```py
+ttnn.visualize_system_mesh()
+>
+SystemMesh Global Shape: MeshShape([1, 2])
+
+SystemMesh Local Shape: MeshShape([1, 2])
+
+   SystemMesh Global Shape: (1, 2) | Local Shape: (1, 2)
+┌──────────────────────────────┬──────────────────────────────┐
+│          Dev. ID: 0          │          Dev. ID: 1          │
+│            (0, 0)            │            (0, 1)            │
+└──────────────────────────────┴──────────────────────────────┘
+```
 
 
 ### 2.2 MeshDevice Management
@@ -137,10 +169,23 @@ torch_tensor = torch.zeros(1, 1, 32, 64)
 torch_tensor[..., 0:32] = 1.0
 torch_tensor[..., 32:64] = 2.0
 
+# Create a mesh mapper. Given a mesh device shape, placements specify replication or sharding of data per each dimension of the mesh shape.
+mesh_mapper = ttnn.create_mesh_mapper(
+    mesh_device,
+    ttnn.MeshMapperConfig(
+        placements=[
+            # Replicate data across first dimension of the mesh
+            ttnn.PlacementReplicate(),
+            # Shard dimension 3 of tensor across second dimension of the mesh
+            ttnn.PlacementShard(3),
+        ],
+    ),
+)
+
 # Convert to ttnn.Tensor; MeshTensor holds buffers to two shards in host-memory
 mesh_tensor = ttnn.from_torch(
     torch_tensor,
-    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    mesh_mapper=mesh_mapper,
     layout=ttnn.TILE_LAYOUT,
 )
 ```
@@ -161,6 +206,14 @@ ttnn.Tensor([[[[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
                [ 2.00000,  2.00000,  ...,  2.00000,  2.00000]]]], shape=Shape([1, 1, 32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
 
 ```
+
+We can visualize this tensor to see how it's stored in host-memory.
+
+```py
+ttnn.visualize_tensor(mesh_tensor)
+```
+
+<img src="images/image6_host_tensor_vis.png" style="width:500px;"/>
 
 Let's now transfer to device:
 
@@ -188,19 +241,13 @@ We now see that the following:
 - 32x32 chunk with elements of 1.0 is residing in Device 0 DRAM
 - 32x32 chunk with elements of 2.0 is residing in Device 1 DRAM
 
-We can also visualize this tensor distributed across our MeshDevice. The visualization will color devices that have shards resident to the device.
+We can also visualize this tensor distributed across our MeshDevice. The visualization will color devices that have shards resident to the device. For a strategy that uses replication to distribute a tensor across our MeshDevice, replicated shards will have the same color mapped to them.
 
 ```py
-ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
-
->
-                  MeshDevice(rows=1, cols=2):
-┌──────────────────────────────┬──────────────────────────────┐
-│         Dev. ID: 0           │         Dev. ID: 1           │
-│            (0, 0)            │            (0, 1)            │
-│  ttnn.Shape([1, 1, 32, 32])  │  ttnn.Shape([1, 1, 32, 32])  │
-└──────────────────────────────┴──────────────────────────────┘
+ttnn.visualize_tensor(mesh_tensor)
 ```
+
+<img src="images/image7_device_tensor_vis.png" style="width:500px;"/>
 
 ## 4. Single-Program Multiple Device
 
@@ -561,23 +608,24 @@ ttnn_output = ttnn_model(hidden_states)
 with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=3)):
     assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), 0.98)
 ```
+
 ## 8. Programming Mesh of Devices Using Hybrid Tensor and Data Parallel
 
 ### 8.1 Llama-3.1 70B Hybrid Tensor and Data Parallel
 
 <img src="images/llama-3.1-70b-hybrid-dp-tp.png" style="width:500px;"/>
 
-*Figure 7: Llama-3.1 70B model mapped onto T3000 and Galaxy systems.*
+*Figure 7: Llama-3.1 70B model mapped onto QuietBox (Wormhole) and Galaxy systems.*
 
 
 ### 8.2 Llama-3.1 70B Performance Scaling
 
-| System  | Batch Size | tok/s/u | tok/s  |
-|---------|------------|---------|--------|
-| T3000   | 32         | 15.1    | 483.2  |
-| Galaxy  | 128        | 14.3    | 1835.5 |
+| System                | Batch Size  | tok/s/u | tok/s  |
+|-----------------------|-------------|---------|--------|
+| QuietBox (Wormhole)   | 32          | 15.1    | 483.2  |
+| Galaxy                | 128         | 14.3    | 1835.5 |
 
-*Table 1: Llama-3.1 70B model scaling from T3000 to Galaxy. Tokens per second (toks/s) throughput scales near-linear (3.8x) as we tile our model replicas across the Galaxy mesh.*
+*Table 1: Llama-3.1 70B model scaling from QuietBox (Wormhole) to Galaxy. Tokens per second (toks/s) throughput scales near-linear (3.8x) as we tile our model replicas across the Galaxy mesh.*
 
 
 ### 8.3 Hybrid Tensor and Data Parallel Programming Example
@@ -631,3 +679,128 @@ See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_p
 ```
 
 APIs will be further refined in future releases. A proposal for refined set of APIs can be found [here](https://github.com/tenstorrent/tt-metal/issues/13852).
+
+
+## 9. TT-NN MeshDevice vs PyTorch Multi-Device Programming
+
+### 9.1 Overview of Multi-Device Handling
+
+This section compares TT-NN's MeshDevice with PyTorch's approach to **single-node multi-device** programming. Note that PyTorch Distributed (torch.distributed) is designed for multi-node systems and is not the appropriate comparison here. Similarly, TT-NN's multi-node MeshDevice support is currently under development and not covered in this comparison.
+
+**MeshDevice in TT-NN (Single-Node):**
+
+MeshDevice provides a unified abstraction for managing multiple devices within a single node as a single logical entity. It bundles devices together for coordinated execution, enabling:
+- Automatic kernel compilation broadcasting across devices
+- Efficient data distribution and replication
+- Native runtime-level support for mesh topology-aware command dispatch
+- Explicit control over data distribution and collective communication operations
+
+**PyTorch Single-Node Multi-GPU Approach:**
+
+In PyTorch, single-node multi-GPU programming requires developers to either:
+- **Manual Management**: Explicitly place tensors on specific devices (`cuda:0`, `cuda:1`, etc.) and manually orchestrate data movement and synchronization between devices
+- **DataParallel**: Use `torch.nn.DataParallel` which automatically splits data across GPUs but operates in a single process with potential GIL bottlenecks
+- **DistributedDataParallel**: While primarily designed for multi-node, DDP can be used on single-node with multiple processes (one per GPU) for better performance than DataParallel
+
+For manual multi-GPU management in a single process, PyTorch provides no built-in abstractions for:
+- Coordinated command dispatch across devices
+- Efficient collective communication operations
+- Automatic kernel or data broadcasting
+
+### 9.2 Code Comparison: Matrix Multiplication with All-Gather
+
+The following examples demonstrate how to perform matrix multiplication followed by an all-gather operation across multiple devices.
+
+<table>
+<tr>
+<th>TT-NN MeshDevice</th>
+<th>PyTorch Single-Node Multi-GPU</th>
+</tr>
+<tr>
+<td>
+
+
+```python
+import ttnn
+import torch
+
+# Open a 1x2 MeshDevice
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
+
+# Create input tensors
+# Note that ttnn.rand can be used here, however this example
+# demonstrates the use of mesh distribution APIs for generic inputs
+torch_input_a = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
+torch_input_b = torch.randn(1, 1, 128, 256, dtype=torch.bfloat16)
+
+# Replicate input A and shard input B (each device gets 128x128)
+# Supplying `mesh_device` argument implicitly transfers the tensor to device
+input_a = ttnn.from_torch(
+    torch_input_a,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+)
+
+input_b = ttnn.from_torch(
+    torch_input_b,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+)
+
+# Perform matrix multiplication - done in parallel on 2 devices
+output = ttnn.matmul(input_a, input_b)
+
+# All-gather to collect results from all devices
+# The gathered tensor stores a copy of the concatenated tensor on each device
+gathered = ttnn.all_gather(output, dim=3, cluster_axis=0)
+
+```
+
+</td>
+<td>
+
+
+```python
+import torch
+
+# Check available GPUs
+num_gpus = torch.cuda.device_count()  # Assumes 2 GPUs
+devices = [torch.device(f'cuda:{i}') for i in range(num_gpus)]
+
+# Create input tensors
+torch_input_a = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
+torch_input_b = torch.randn(1, 1, 128, 256, dtype=torch.bfloat16)
+
+# Replicate input A on all devices
+replicated_a = [torch_input_a.to(device) for device in devices]
+
+# Manually shard input B across devices (columns)
+shard_size = 256 // num_gpus
+sharded_b = []
+for i in range(num_gpus):
+    start_idx = i * shard_size
+    end_idx = start_idx + shard_size
+    shard = torch_input_b[:, :, :, start_idx:end_idx].to(devices[i])
+    sharded_b.append(shard)
+
+# Perform matrix multiplication on each device
+outputs = []
+for i in range(num_gpus):
+    with torch.cuda.device(devices[i]):
+        output = torch.matmul(replicated_a[i], sharded_b[i])
+        outputs.append(output)
+
+# Manual all-gather: copy all outputs to first device
+gathered = []
+for output in outputs:
+    gathered.append(output.to(devices[0]))
+
+# Concatenate gathered outputs along the column dimension to complete all-gather
+final_result = torch.cat(gathered, dim=3)
+```
+
+</td>
+</tr>
+</table>

@@ -10,7 +10,7 @@ namespace py = pybind11;
 
 void py_bind_llama_rs_create_heads(py::module& module) {
     auto doc =
-        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
 
             Reduce_scatter after FF1/3 for Llama70B.
 
@@ -26,7 +26,6 @@ void py_bind_llama_rs_create_heads(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
            Returns:
                ttnn.Tensor: the output tensor.
@@ -65,10 +64,8 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
                const bool use_noc1_only,
-               const bool use_optimal_ccl_for_llama,
-               QueueId queue_id) {
+               const bool use_optimal_ccl_for_llama) {
                 return self(
-                    queue_id,
                     input_tensor,
                     intermediate_packet_buffer,
                     dim,
@@ -100,9 +97,7 @@ void py_bind_llama_rs_create_heads(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("qkv_memory_config") = std::nullopt,
             py::arg("use_noc1_only") = false,
-            py::arg("use_optimal_ccl_for_llama") = false,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("use_optimal_ccl_for_llama") = false});
 }
 
 }  // namespace ttnn::operations::experimental::ccl
