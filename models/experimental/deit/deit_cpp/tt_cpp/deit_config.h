@@ -28,31 +28,31 @@ struct DeiTConfig {
     int num_attention_heads = 12;
     int intermediate_size = 3072;
     std::string hidden_act = "gelu";
-    
+
     // Dropout parameters
     float hidden_dropout_prob = 0.0f;
     float attention_probs_dropout_prob = 0.0f;
-    
+
     // Initialization parameters
     float initializer_range = 0.02f;
     float layer_norm_eps = 1e-12f;
-    
+
     // Image processing parameters
     int image_size = 224;
     int patch_size = 16;
     int num_channels = 3;
-    
+
     // Attention parameters
     bool qkv_bias = true;
-    
+
     // Encoder parameters
     int encoder_stride = 16;
-    
+
     /**
      * Default constructor
      */
     DeiTConfig() = default;
-    
+
     /**
      * Parameterized constructor
      */

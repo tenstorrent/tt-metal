@@ -26,7 +26,9 @@ def test_deit_embeddings_inference(device, hf_cat_image_sample_input, pcc=0.99):
     head_mask = None
 
     # real input
-    image_processor = AutoImageProcessor.from_pretrained("/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1")
+    image_processor = AutoImageProcessor.from_pretrained(
+        "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1"
+    )
     image = hf_cat_image_sample_input
     input_image = image_processor(images=image, return_tensors="pt")
     input_image = input_image["pixel_values"]

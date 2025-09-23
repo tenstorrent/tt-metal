@@ -16,7 +16,7 @@ namespace helper_funcs {
 /**
  * Linear transformation function
  * Performs weight * input + bias operation
- * 
+ *
  * @param input Input tensor
  * @param weight Weight tensor
  * @param bias Optional bias tensor
@@ -33,7 +33,7 @@ ttnn::Tensor linear_transform(
 /**
  * Convert torch::Tensor to ttnn::Tensor with TILE layout
  * Ensures tensor has at least 4 dimensions and uses TILE layout
- * 
+ *
  * @param tensor Input torch tensor
  * @param device Target mesh device
  * @param shape Optional target shape (defaults to tensor's shape with padding to 4D)
@@ -47,7 +47,7 @@ ttnn::Tensor torch_to_tt_tensor_tile(
 
 /**
  * Template function to create concrete tensor from torch tensor and tensor spec
- * 
+ *
  * @param contiguous_tensor Input torch tensor (must be contiguous)
  * @param spec Tensor specification for the output tensor
  * @return ttnn::Tensor created from the input data
@@ -57,7 +57,7 @@ ttnn::Tensor create_concrete(torch::Tensor &contiguous_tensor, tt::tt_metal::Ten
 
 /**
  * Template function to create row-major host buffer
- * 
+ *
  * @param host_buffer Input host buffer
  * @param tensor_spec Tensor specification
  * @param padded_output Whether to return padded output
@@ -65,26 +65,26 @@ ttnn::Tensor create_concrete(torch::Tensor &contiguous_tensor, tt::tt_metal::Ten
  */
 template <typename T>
 tt::tt_metal::HostBuffer create_row_major_host_buffer(
-    tt::tt_metal::HostBuffer host_buffer, 
-    const tt::tt_metal::TensorSpec& tensor_spec, 
+    tt::tt_metal::HostBuffer host_buffer,
+    const tt::tt_metal::TensorSpec& tensor_spec,
     const bool padded_output
 );
 
 /**
  * Get host buffer from tensor
- * 
+ *
  * @param tt_tensor Input ttnn tensor (must be on host)
  * @param padded_output Whether to return padded output
  * @return Host buffer extracted from tensor
  */
 tt::tt_metal::HostBuffer get_host_buffer_from_tensor(
-    const ttnn::Tensor& tt_tensor, 
+    const ttnn::Tensor& tt_tensor,
     const bool padded_output = false
 );
 
 /**
  * Convert torch::Tensor to ttnn::Tensor
- * 
+ *
  * @param tensor Input torch tensor
  * @param dtype Optional target data type
  * @param layout Optional target layout
@@ -97,7 +97,7 @@ ttnn::Tensor from_torch(
 
 /**
  * Convert ttnn::Tensor to torch::Tensor
- * 
+ *
  * @param tensor Input ttnn tensor
  * @param padded_output Whether to return padded output
  * @return Converted torch tensor
@@ -106,7 +106,7 @@ torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output = fa
 
 /**
  * Apply layer normalization
- * 
+ *
  * @param input Input tensor
  * @param weight Weight tensor for normalization
  * @param bias Bias tensor for normalization

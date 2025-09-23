@@ -20,7 +20,7 @@
 /**
  * TtDeiTEncoder class - C++ implementation of DeiT encoder
  * Equivalent to the Python TtDeiTEncoder class
- * 
+ *
  * This class manages multiple DeiT layers and handles the forward pass
  * through all transformer layers in the encoder.
  */
@@ -72,10 +72,10 @@ private:
     // Configuration and device
     DeiTConfig config;
     std::shared_ptr<ttnn::MeshDevice> device;
-    
+
     // Encoder layers
     std::vector<std::unique_ptr<TtDeiTLayer>> layers;
-    
+
     // Gradient checkpointing flag (not used in inference)
     bool gradient_checkpointing;
 };

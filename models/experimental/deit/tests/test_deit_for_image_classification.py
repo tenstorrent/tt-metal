@@ -30,12 +30,8 @@ def test_deit_for_image_classification_inference(device, hf_cat_image_sample_inp
 
         torch_output = torch_model(**inputs).logits
 
-        tt_inputs = torch_to_tt_tensor_tile(
-            inputs["pixel_values"], device, put_on_device=False
-        )
-        tt_model = TtDeiTForImageClassification(
-            config, device=device, state_dict=state_dict, base_address=""
-        )
+        tt_inputs = torch_to_tt_tensor_tile(inputs["pixel_values"], device, put_on_device=False)
+        tt_model = TtDeiTForImageClassification(config, device=device, state_dict=state_dict, base_address="")
 
         tt_model.deit.get_head_mask = torch_model.deit.get_head_mask
         tt_output = tt_model(tt_inputs)[0]

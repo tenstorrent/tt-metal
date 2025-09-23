@@ -7,7 +7,8 @@ CPMAddPackage(
     URL
         https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
     DOWNLOAD_ONLY ON
-    PATCHES ${CMAKE_CURRENT_SOURCE_DIR}/aten.patch
+    PATCHES
+        ${CMAKE_CURRENT_SOURCE_DIR}/aten.patch
 )
 
 set(TORCH_LIBRARIES
@@ -21,9 +22,7 @@ include_directories(
     ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
 )
 
-link_directories(
-    ${libtorch_SOURCE_DIR}/lib
-)
+link_directories(${libtorch_SOURCE_DIR}/lib)
 
 ###################################################################################################################
 # OpenCV : Use system installed OpenCV

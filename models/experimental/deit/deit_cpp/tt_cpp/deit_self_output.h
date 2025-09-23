@@ -16,8 +16,8 @@
 /**
  * TtDeiTSelfOutput class - C++ implementation of DeiT self-attention output layer
  * Equivalent to the Python TtDeiTSelfOutput class
- * 
- * Note: The residual connection is defined in DeiTLayer instead of here 
+ *
+ * Note: The residual connection is defined in DeiTLayer instead of here
  * (as is the case with other models), due to the layernorm applied before each block.
  */
 class TtDeiTSelfOutput {
@@ -56,7 +56,7 @@ private:
     // Configuration and device
     DeiTConfig config;
     std::shared_ptr<ttnn::MeshDevice> device;
-    
+
     // Dense layer weights and bias
     ttnn::Tensor dense_weight;
     std::optional<ttnn::Tensor> dense_bias;
