@@ -20,8 +20,9 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, co
     mesh_workload.add_program(device_range, std::move(program));
 }
 
-void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, bool compile_only) {
-    if (compile_only) {
+void EnqueueMeshWorkload(
+    MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, CompilationMode compilation_mode) {
+    if (compilation_mode == CompilationMode::CompileOnly) {
         mesh_workload.impl().compile_in_background(mesh_cq.device());
         return;
     }

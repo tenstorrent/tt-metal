@@ -14,6 +14,7 @@
 namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 
+enum class CompilationMode;
 class MeshCommandQueue;
 class FDMeshCommandQueue;
 
@@ -61,7 +62,7 @@ private:
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(
-        MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, bool compile_only);
+        MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, CompilationMode compilation_mode);
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
 

@@ -198,7 +198,10 @@ void enqueue_mesh_workload(
         if (tt::tt_metal::GraphTracker::instance().is_compilation_enabled_in_no_dispatch()) {
             ZoneScopedN("EnqueueMeshWorkload");
             tt::tt_metal::distributed::EnqueueMeshWorkload(
-                mesh_device->mesh_command_queue(), workload, /*blocking=*/false, /*compile_only=*/true);
+                mesh_device->mesh_command_queue(),
+                workload,
+                /*blocking=*/false,
+                tt::tt_metal::distributed::CompilationMode::CompileOnly);
         }
         return;
     }

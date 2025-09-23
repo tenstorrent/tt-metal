@@ -10,13 +10,14 @@
 
 namespace tt::tt_metal::distributed {
 
+enum class CompilationMode;
 class MeshWorkload;
 class MeshWorkloadImpl;
 
 class MeshCommandQueue;
 class FDMeshCommandQueue;
 void EnqueueMeshWorkload(
-    MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, bool compile_only = false);
+    MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, CompilationMode compilation_mode);
 
 class MeshWorkload {
     // A MeshWorkload can be fully described using a set of programs mapped to different Logical Device Regions
@@ -48,7 +49,7 @@ private:
     std::unique_ptr<MeshWorkloadImpl> pimpl_;
 
     friend void EnqueueMeshWorkload(
-        MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, bool compile_only);
+        MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, CompilationMode compilation_mode);
     friend FDMeshCommandQueue;
 };
 }  // namespace tt::tt_metal::distributed
