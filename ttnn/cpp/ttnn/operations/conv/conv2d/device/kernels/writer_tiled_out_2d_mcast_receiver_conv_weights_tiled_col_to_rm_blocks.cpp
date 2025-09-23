@@ -105,6 +105,9 @@ void kernel_main() {
         get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
 
 #ifdef SPLIT_READER
+    if constexpr (needs_act_block_zero_out) {
+        zero_out_tiles<cb_id_act_second_reader>();
+    }
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
@@ -112,24 +115,17 @@ void kernel_main() {
     uint32_t start_reader_idx = (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1;
     uint32_t reader_idx = start_reader_idx;
 
-#if ENABLE_DEBUG
-    DPRINT << "WRITER RECEIVER: Split reader initialized, start_reader_idx=" << start_reader_idx << ENDL();
-#endif
-
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr uint32_t coalesced_read_bytes =
         ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
+    // TODO add config tensor if in DRAM
+
     const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
-    if constexpr (needs_act_block_zero_out) {
-        zero_out_tiles<cb_id_act_second_reader>();
-    }
-
 #endif
-
 // read in bias if enabled (done only once for all batches)
 #ifdef FUSE_BIAS
     bool load_bias = true;
@@ -139,108 +135,87 @@ void kernel_main() {
     // Write out col major blocks in row major layout to output
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
-            // MCAST RECEIVE WEIGHTS
-            // read weight blocks inner dim
-            // read weight slice - 1 block of weights in width dim and full weight matrix height
-            // read slice only once for all activation blocks
-
+            DPRINT << "WRITER RECEIVER: bw=" << bw << " bh=" << bh << ENDL();
+#ifdef SPLIT_READER
             // Read activation data using block sharded pattern (for second reader)
             uint32_t reader_offset = act_l1_read_addr;
-            for (uint32_t weight_tile_h_outer_i = 0;
-                 weight_tile_h_outer_i < weight_block_height_num_outer * num_blocks_weight_h;
-                 weight_tile_h_outer_i++) {
+#endif
+            for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
 #ifdef SPLIT_READER
-                if (weight_tile_h_outer_i % weight_block_height_num_outer == 0) {
-                    reader_idx = start_reader_idx;
+                noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+                reader_idx = start_reader_idx;
+                cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 
-                    DPRINT << "WRITER RECEIVER: Before cb_reserve_back (split reader), tiles="
-                           << act_block_num_tiles_split_last << ENDL();
-
-                    cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-
-                    DPRINT << "WRITER RECEIVER: After cb_reserve_back (split reader), tiles="
-                           << act_block_num_tiles_split_last << ENDL();
-
-                    if (is_sender_core) {
-                        uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
-
-                        if constexpr (sliced_inner_dim) {
-                            read_sticks<
-                                dilation_w,
-                                coalesced_read_bytes,
-                                conv_act_c_read_bytes,
-                                act_block_w_extra_align_bytes,
-                                stride_w_bytes,
-                                weight_size_w,
-                                stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
-                        } else {
-                            uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                            while (num_elems--) {
-                                reader_idx++;
-                                uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                                uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
-                                for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
-                                    if constexpr (dilation_w == 1) {
-                                        read_channels(
-                                            l1_write_addr_act,
-                                            act_l1_read_addr,
-                                            ind,
-                                            conv_act_c_read_bytes,
-                                            coalesced_read_bytes,
-                                            stride_h_bytes);
-                                        if constexpr (act_block_w_extra_align_bytes) {
-                                            l1_write_addr_act += act_block_w_extra_align_bytes;
-                                        }
-                                    } else {
-                                        read_dilated_channels<weight_size_h, weight_size_w>(
-                                            l1_write_addr_act,
-                                            act_l1_read_addr,
-                                            ind,
-                                            conv_act_c_read_bytes,
-                                            stride_h_bytes,
-                                            stride_w_bytes);
+                if (is_sender_core) {
+                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+                    if constexpr (sliced_inner_dim) {
+                        read_sticks<
+                            dilation_w,
+                            coalesced_read_bytes,
+                            conv_act_c_read_bytes,
+                            act_block_w_extra_align_bytes,
+                            stride_w_bytes,
+                            weight_size_w,
+                            stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                    } else {
+                        uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                        while (num_elems--) {
+                            reader_idx++;
+                            uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                            uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+                            for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
+                                if constexpr (dilation_w == 1) {
+                                    read_channels(
+                                        l1_write_addr_act,
+                                        act_l1_read_addr,
+                                        ind,
+                                        conv_act_c_read_bytes,
+                                        coalesced_read_bytes,
+                                        stride_h_bytes);
+                                    if constexpr (act_block_w_extra_align_bytes) {
+                                        l1_write_addr_act += act_block_w_extra_align_bytes;
                                     }
+                                } else {
+                                    read_dilated_channels<weight_size_h, weight_size_w>(
+                                        l1_write_addr_act,
+                                        act_l1_read_addr,
+                                        ind,
+                                        conv_act_c_read_bytes,
+                                        stride_h_bytes,
+                                        stride_w_bytes);
                                 }
                             }
                         }
                         reader_idx++;
-                        DPRINT << "WRITER SENDER: Before noc_async_read_barrier (split reader)" << ENDL();
-                        noc_async_read_barrier();
-                        DPRINT << "WRITER SENDER: After noc_async_read_barrier (split reader)" << ENDL();
                     }
-                    DPRINT << "WRITER RECEIVER: Before cb_push_back (split reader), tiles="
-                           << act_block_num_tiles_split_last << ENDL();
-                    cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-                    DPRINT << "WRITER RECEIVER: After cb_push_back (split reader), tiles="
-                           << act_block_num_tiles_split_last << ENDL();
-                    reader_offset += window_outer_offset;
-                    // Update reader index for next iteration (split reader increment)
-                    start_reader_idx =
-                        reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+                    noc_async_read_barrier();
                 }
+                cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                reader_offset += window_outer_offset;
 #endif
+                for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
+                     weight_tile_h_outer_i++) {
+                    // MCAST RECEIVE WEIGHTS
+                    // read weight blocks inner dim
+                    // read weight slice - 1 block of weights in width dim and full weight matrix height
+                    // read slice only once for all activation blocks
+                    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+                    // Set weights semaphore value to INVALID
+                    noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                DPRINT << "WRITER RECEIVER: Before cb_reserve_back (weights), tiles=" << weight_block_num_tiles
-                       << ENDL();
-                cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-                DPRINT << "WRITER RECEIVER: After cb_reserve_back (weights), tiles=" << weight_block_num_tiles
-                       << ENDL();
-                // Set weights semaphore value to INVALID
-                noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    // Atomic increment source core counter
+                    noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
-                // Atomic increment source core counter
-                noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
+                    noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-                DPRINT << "WRITER RECEIVER: Before noc_semaphore_wait" << ENDL();
-                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
-                DPRINT << "WRITER RECEIVER: After noc_semaphore_wait" << ENDL();
-
-                DPRINT << "WRITER RECEIVER: Before cb_push_back (weights), tiles=" << weight_block_num_tiles << ENDL();
-                cb_push_back(cb_id_weight, weight_block_num_tiles);
-                DPRINT << "WRITER RECEIVER: After cb_push_back (weights), tiles=" << weight_block_num_tiles << ENDL();
-            }  // for weight_block_height_num_outer
-
+                    cb_push_back(cb_id_weight, weight_block_num_tiles);
+                }  // for weight_block_height_num_outer
+            }
+#ifdef SPLIT_READER
+            // Update reader index for next iteration (split reader increment)
+            start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+#endif
 #ifdef FUSE_BIAS
             if (load_bias) {
                 cb_reserve_back(bias_cb_id, bias_ntiles);

@@ -118,7 +118,7 @@ std::vector<CBInfo> get_cb_info(
             conv_config.enable_activation_reuse));
 
     // Block dims
-    if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !split_reader_enabled || is_1d_depthwise_conv) {
+    if (!split_reader_enabled || is_1d_depthwise_conv) {
         if (!conv_config.enable_activation_reuse) {
             act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
         } else {
@@ -223,17 +223,22 @@ std::vector<CBInfo> get_cb_info(
         const tt::DataFormat act_cb_data_format =
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
         const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
+        // ACT CB plays a different role depending on the sharding scheme
+        // TODO make this more clear between BS and HS
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
-            .num_pages = overlap_act_cb ? 0 : act_block_num_tiles,
+            .num_pages = overlap_act_cb ? 0
+                         : (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED)
+                             ? act_block_num_tiles
+                             : act_block_num_tiles + act_block_split_num_tiles,
             .page_size = act_cb_tile_size,
             .data_format = act_cb_data_format,
             .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_SECOND_READER,
             .num_pages = act_block_split_num_tiles,
-            .page_size = act_cb_tile_size,
-            .data_format = act_cb_data_format});
+            .page_size = input_tile_size,
+            .data_format = conv_input_df});
     }
 
     // Temp sum CB (1d depthwise conv only)
@@ -328,6 +333,14 @@ void allocate_cbs(
             // Skip circular buffers with zero pages
             continue;
         }
+        log_info(
+            tt::LogOp,
+            "Allocating circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
+            enchantum::to_string(cb.name),
+            cb.index,
+            cb.num_pages,
+            cb.page_size,
+            cb.is_globally_allocated);
 
         // cbs for sharded tensors.
         Buffer* buffer = nullptr;
