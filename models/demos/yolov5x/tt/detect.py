@@ -4,8 +4,8 @@
 
 
 import ttnn
+from models.demos.yolov5x.tt.common import TtYOLOv5xConv2D
 from models.experimental.yolo_common.yolo_utils import concat
-from models.experimental.yolov5x.tt.common import TtYOLOv5xConv2D
 
 
 class TtnnDetect:
