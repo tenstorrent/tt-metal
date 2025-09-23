@@ -315,6 +315,8 @@ class TtnnRepncspelan4:
         conv_pt,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         use_1d_systolic_array=True,
+        shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout_last_layer=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         conv_parameter.cv1.conv["out_channels"] //= 2
         self.cv1_a = TtYOLOv9cConv2D(
@@ -350,6 +352,7 @@ class TtnnRepncspelan4:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv3.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=shard_layout_last_layer_k4,
         )
         self.cv4 = TtYOLOv9cConv2D(
             device=device,
@@ -357,6 +360,7 @@ class TtnnRepncspelan4:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv4",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=shard_layout_last_layer,
         )
 
     def __call__(self, x):
@@ -373,17 +377,21 @@ class TtnnRepncspelan4:
         cv5_out = self.k4(cv4_out)
         ttnn.deallocate(cv4_out)
 
-        if cv5_out.memory_config() != y1.memory_config():
-            y1 = ttnn.to_memory_config(y1, memory_config=cv5_out.memory_config())
+        if cv3_out.memory_config() != y1.memory_config():
+            y1 = ttnn.to_memory_config(y1, memory_config=cv3_out.memory_config())
 
-        if cv5_out.memory_config() != y2.memory_config():
-            y2 = ttnn.to_memory_config(y2, memory_config=cv5_out.memory_config())
+        if cv3_out.memory_config() != y2.memory_config():
+            y2 = ttnn.to_memory_config(y2, memory_config=cv3_out.memory_config())
+
+        if cv3_out.memory_config() != cv5_out.memory_config():
+            cv5_out = ttnn.to_memory_config(cv5_out, memory_config=cv3_out.memory_config())
+
         output_sharded_memory_config = ttnn.create_sharded_memory_config(
             [
-                cv5_out.memory_config().shard_spec.shape[0],
-                4 * cv5_out.memory_config().shard_spec.shape[1],
+                cv3_out.memory_config().shard_spec.shape[0],
+                4 * cv3_out.memory_config().shard_spec.shape[1],
             ],
-            core_grid=cv5_out.memory_config().shard_spec.grid,
+            core_grid=cv3_out.memory_config().shard_spec.grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
@@ -665,6 +673,7 @@ class TtnnDetect:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
             deallocate_activation=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_1_1 = TtYOLOv9cConv2D(
             device=device,
@@ -674,6 +683,7 @@ class TtnnDetect:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
             deallocate_activation=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_1_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[1][2],
@@ -702,6 +712,7 @@ class TtnnDetect:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
             deallocate_activation=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[2][2],
@@ -956,16 +967,47 @@ class YoloV9:
         )  # 3
         self.repncspelan4_2 = TtnnRepncspelan4(device, parameters.conv_args[4], parameters, "model.4")  # 4
         self.adown_2 = TtnnADown(device, parameters.conv_args[5], parameters, "model.5")  # 5
-        self.repncspelan4_3 = TtnnRepncspelan4(device, parameters.conv_args[6], parameters, "model.6")  # 6
+        self.repncspelan4_3 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[6],
+            parameters,
+            "model.6",
+            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 6
         self.adown_3 = TtnnADown(device, parameters.conv_args[7], parameters, "model.7")  # 7
-        self.repncspelan4_4 = TtnnRepncspelan4(device, parameters.conv_args[8], parameters, "model.8")  # 8
+        self.repncspelan4_4 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[8],
+            parameters,
+            "model.8",
+            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 8
         self.ttnn_sppelan = TtnnSPPELAN(device, parameters.conv_args[9], parameters, "model.9")  # 9
-        self.repncspelan4_5 = TtnnRepncspelan4(device, parameters.conv_args[12], parameters, "model.12")  # 12
+        self.repncspelan4_5 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[12],
+            parameters,
+            "model.12",
+            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 12
         self.repncspelan4_6 = TtnnRepncspelan4(device, parameters.conv_args[15], parameters, "model.15")  # 15
         self.adown_6 = TtnnADown(device, parameters.conv_args[16], parameters, "model.16")  # 16
-        self.repncspelan4_7 = TtnnRepncspelan4(device, parameters.conv_args[18], parameters, "model.18")  # 18
+        self.repncspelan4_7 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[18],
+            parameters,
+            "model.18",
+            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 18
         self.adown_7 = TtnnADown(device, parameters.conv_args[19], parameters, "model.19")  # 19
-        self.repncspelan4_8 = TtnnRepncspelan4(device, parameters.conv_args[21], parameters, "model.21")  # 21
+        self.repncspelan4_8 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[21],
+            parameters,
+            "model.21",
+            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 21
         if enable_segment:
             self.segment_detect = TtnnSegment(device, parameters.model_args.model[22], parameters, "model.22")  # 22
         else:
