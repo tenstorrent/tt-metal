@@ -756,8 +756,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
                 tt::tt_metal::Alignment alignment = {};
                 if (!input_tensor.is_sharded()) {
-                    // In case we need to run Interleaved2Sharded switch fron physical sharding
-                    // to logical sharding, in order to get smaller allocation size of sharded buffer.
+                    // In case we need to run Interleaved2Sharded, adjust the shard spec,
+                    // in order to get smaller allocation size of sharded buffer.
                     const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
                     input_tensor_sharded_memory_config_to_layout =
                         input_tensor_sharded_memory_config_to_layout.with_shard_spec(
