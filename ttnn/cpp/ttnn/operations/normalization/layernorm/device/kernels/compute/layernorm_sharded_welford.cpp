@@ -21,11 +21,11 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
+    constexpr uint32_t block_wt = get_compile_time_arg_val(5);
+    constexpr uint32_t block_ht_const = get_compile_time_arg_val(4);
+    volatile uint32_t block_ht_volatile = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_wt_const = get_compile_time_arg_val(6);
+    volatile uint32_t subblock_wt_volatile = get_compile_time_arg_val(6);
     constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
     const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
@@ -82,8 +82,8 @@ void MAIN {
     binary_op_init_common(cb_in0, cb_in0, cb_x);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
-    const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
-    const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
+    const uint32_t block_h = (block_wt == 1) ? block_ht_volatile : block_ht_const;
+    const uint32_t subblock_w = (block_wt <= 2) ? subblock_wt_volatile : subblock_wt_const;
 
     int index_subblock_w_offset = 0;
     int index_h_offset = 0;
@@ -127,28 +127,38 @@ void MAIN {
     reconfig_data_format_srcb(cb_in0, cb_scaler);
 #endif  // FUSE_PRE_ADD
 
-    // E[x],
-    index_h_offset = 0;
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex_partial);
+    // Compute E[x] and Var[x] using Welford's algorithm
+    constexpr uint32_t block_w = block_wt * tile_width;
+    constexpr uint32_t num_partial_tiles = 2 * block_h;  // 1 mean tile and 1 var tile per block_h tile
     cb_wait_front(cb_scaler, 1);
-    cb_reserve_back(cb_ex_partial, block_h);
+    cb_wait_front(cb_x, num_tiles_per_block);
+    cb_reserve_back(cb_ex_partial, num_partial_tiles);
+    reconfig_data_format_srca(cb_x);
+    welford_init();
+    // Note: Using full init instead of short due to a bug
+    // See PR tt-metal #650
+    transpose_wh_init(cb_x, cb_x);
+    index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
+            transpose_wh_tile(cb_x, w + index_h_offset, dst0);
+            welford_tile<in_dst, mean_dst, var_dst, true, false>(w * tile_width, block_w, 0, 0);
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial);
+        pack_tile(mean_dst, cb_ex_partial);
+        pack_tile(var_dst, cb_ex_partial);
         tile_regs_release();
-        index_h_offset += block_w;
+        index_h_offset += block_wt;
     }
-    reduce_uninit();
-    cb_push_back(cb_ex_partial, block_h);
+    cb_push_back(cb_ex_partial, num_partial_tiles);
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
-    // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
+    // Welford combine local partials with external partials
+    // cb_ex <-- cb_ex_external, cb_ex_partial
+    // where ex is ex and varx interleaved
     if constexpr (is_allgather_worker) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
