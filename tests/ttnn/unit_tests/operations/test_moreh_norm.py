@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_allclose, is_wormhole_b0
+from models.common.utility_functions import comp_allclose, is_wormhole_b0
 from tests.ttnn.unit_tests.operations.test_utils import (
     check_dim,
     compute_kernel_ids,

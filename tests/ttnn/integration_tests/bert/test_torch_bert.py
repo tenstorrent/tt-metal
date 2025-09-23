@@ -10,7 +10,7 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.demos.bert.reference import torch_bert
-from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

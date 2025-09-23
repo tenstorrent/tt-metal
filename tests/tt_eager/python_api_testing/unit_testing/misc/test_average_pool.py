@@ -9,7 +9,7 @@ import torch
 
 
 from tt_lib.utils import _nearest_32
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 
 import ttnn
 

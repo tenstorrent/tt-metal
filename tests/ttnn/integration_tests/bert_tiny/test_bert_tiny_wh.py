@@ -15,7 +15,7 @@ from models.demos.wormhole.bert_tiny.tt.bert_tiny import (
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0
+from models.common.utility_functions import skip_for_grayskull, is_wormhole_b0
 
 
 @skip_for_grayskull()

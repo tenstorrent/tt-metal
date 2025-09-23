@@ -10,7 +10,7 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 TILE_WIDTH = 32

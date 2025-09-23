@@ -9,7 +9,7 @@ import ttnn
 import os
 from tracy import signpost
 
-from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
 from conftest import is_6u
