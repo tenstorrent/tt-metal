@@ -106,7 +106,7 @@ def prepare_conv_weights_func(
         "slice_config": slice_config,
     }
 
-    input_memory_config = ttnn.DRAM_MEMORY_CONFIG if slice_config else ttnn.L1_MEMORY_CONFIG
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
