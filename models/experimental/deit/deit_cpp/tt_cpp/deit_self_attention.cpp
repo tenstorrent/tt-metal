@@ -158,7 +158,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> TtDeiTSelfAttention::forwa
     // Create new_context_layer_shape similar to Python version: (1,) + padded_shape[:-2] + (all_head_size,)
     // context_layer is [1, 198, 12, 64], we want [1, 198, 768]
     ttnn::Shape new_context_layer_shape({1, padded_shape[1], static_cast<uint32_t>(all_head_size)});
-    auto final_context = ttnn::reshape(ttnn::DefaultQueueId, context_layer, new_context_layer_shape);
+    auto final_context = ttnn::reshape(context_layer, new_context_layer_shape);
     final_context = ttnn::to_layout(final_context, ttnn::TILE_LAYOUT);
 
     // Return results
