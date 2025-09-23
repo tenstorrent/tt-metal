@@ -97,7 +97,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
                 }
             }
         }
-        if (intermed_trace_data.size()) {
+        if (!intermed_trace_data.empty()) {
             // Invalidate programs with partial intersections with current programs.
             for (auto& program : trace_data) {
                 if (std::find(

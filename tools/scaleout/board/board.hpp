@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
@@ -31,7 +32,7 @@ using ChanId = ttsl::StrongType<uint32_t, struct ChanIdTag>;
 
 enum class PortType {
     TRACE,
-    QSFP,  // TODO: Should distinguish between QSFP types?
+    QSFP_DD,
     WARP100,
     WARP400,
     LINKING_BOARD_1,
@@ -45,6 +46,8 @@ struct AsicChannel {
 
     auto operator<=>(const AsicChannel& other) const = default;
 };
+
+std::ostream& operator<<(std::ostream& os, const AsicChannel& asic_channel);
 
 struct Port {
     PortType port_type = PortType::TRACE;
@@ -66,7 +69,9 @@ public:
             std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>& ports_and_connections,
         const tt::umd::BoardType& board_type);
 
-    const tt::umd::BoardType& get_board_type() const;
+    tt::ARCH get_arch() const;
+
+    tt::umd::BoardType get_board_type() const;
 
     // Get available port IDs for a specific port type
     const std::vector<PortId>& get_available_port_ids(PortType port_type) const;
@@ -92,7 +97,7 @@ protected:
     // Note: Internal connections currently just use dummy trace ports
     // Could switch to just direct channel mapping in the future
     std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> internal_connections_;
-
+    tt::ARCH arch_ = tt::ARCH::Invalid;
     std::unordered_map<AsicChannel, Port> asic_to_port_map_;
     tt::umd::BoardType board_type_ = tt::umd::BoardType::UNKNOWN;
     std::unordered_set<uint32_t> asic_locations_;
