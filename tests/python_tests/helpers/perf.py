@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 import pytest
 
 from helpers.device import (
+    BootMode,
     reset_mailboxes,
     run_elf_files,
     wait_for_tensix_operations_finished,
@@ -119,7 +120,9 @@ class PerfRunType(Enum):
 ALL_RUN_TYPES = [type for type in PerfRunType]
 
 
-def perf_benchmark(test_config, run_types: list[PerfRunType], run_count=2):
+def perf_benchmark(
+    test_config, run_types: list[PerfRunType], run_count=2, boot_mode=BootMode.DEFAULT
+):  # global override boot mode for perf tests here
 
     RUN_CONFIGURATIONS = {
         PerfRunType.L1_TO_L1: timing_l1_to_l1,
@@ -137,12 +140,12 @@ def perf_benchmark(test_config, run_types: list[PerfRunType], run_count=2):
         get_timing = RUN_CONFIGURATIONS[type]
 
         test_config["perf_run_type"] = type
-        build_test(test_config, profiler_build=ProfilerBuild.Yes)
+        build_test(test_config, boot_mode, ProfilerBuild.Yes)
 
         runs = []
         for _ in range(run_count):
             reset_mailboxes()
-            run_elf_files(test_config["testname"])
+            run_elf_files(test_config["testname"], boot_mode)
             wait_for_tensix_operations_finished()
 
             profiler_data = Profiler.get_data(test_config["testname"])

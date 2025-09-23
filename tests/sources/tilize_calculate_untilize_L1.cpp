@@ -16,8 +16,8 @@ uint32_t math_sync_tile_dst_index = 0;
 
 // TODO: CLEANUP
 
-volatile uint32_t* const buffer_A_tilized = reinterpret_cast<volatile uint32_t*>(0x16000);
-volatile uint32_t* const buffer_B_tilized = reinterpret_cast<volatile uint32_t*>(0x17000);
+constexpr uint32_t buffer_A_tilized = 0x16000;
+constexpr uint32_t buffer_B_tilized = 0x17000;
 
 #ifdef LLK_TRISC_UNPACK
 

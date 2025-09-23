@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "build.h"
 #include "ckernel.h"
 
 inline void device_setup()
