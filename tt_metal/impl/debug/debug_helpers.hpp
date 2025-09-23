@@ -27,7 +27,7 @@ struct CoreDescriptorComparator {
 using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
-[[maybe_unused]] static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
+inline static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size =
