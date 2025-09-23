@@ -1,4 +1,4 @@
-name: "[internal] Blackhole nightly tests impl"
+name: "[internal] Blackhole nightly tests 20 cores impl"
 
 on:
   workflow_call:
@@ -31,10 +31,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
-            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
+            { model: panoptic-deeplab, owner_id: U08ARDXARPF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py }, # Ilija Anastasijevic
           ]
-    name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
+    name: Nightly 20 cores ${{ matrix.test-group.model }}
     runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
     container:
       image: ${{ inputs.docker-image }}
@@ -43,6 +42,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
+        TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
+        TT_GH_CI_INFRA: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -62,11 +63,7 @@ jobs:
 
       - name: Run frequent reg tests scripts
         timeout-minutes: 180
-        run: |
-          if [[ "${{ matrix.test-group.model }}" == *"llama"* ]]; then
-            pip install -r models/tt_transformers/requirements.txt
-          fi
-          ${{ matrix.test-group.cmd }}
+        run: ${{ matrix.test-group.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -77,7 +74,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
