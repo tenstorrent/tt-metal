@@ -3,13 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11.tt.common import (
-    TtnnConv,
-    Yolov11Conv2D,
-    deallocate_tensors,
-    sharded_concat_2,
-    sharded_concat_3,
-)
+from models.demos.yolov11.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors, sharded_concat_2
 
 
 def p(x, a="x"):
@@ -91,18 +85,20 @@ class TtnnDetect:
         # x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
         # x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
         # x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # if x1.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-        #     x1 = ttnn.to_layout(x1, ttnn.ROW_MAJOR_LAYOUT)
-        # if x4.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-        #     x4 = ttnn.to_layout(x4, ttnn.ROW_MAJOR_LAYOUT)
+
         y1 = sharded_concat_2(x1, x4)
         p(y1, "y1")
         y2 = sharded_concat_2(x2, x5)
         p(y2, "y2")
         y3 = sharded_concat_2(x3, x6)
         p(y3, "y3")
-        y = sharded_concat_3(y1, y2, y3, dim=2)
-        y = ttnn.sharded_to_interleaved(y, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y1 = ttnn.sharded_to_interleaved(y1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y2 = ttnn.sharded_to_interleaved(y2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y3 = ttnn.sharded_to_interleaved(y3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y = ttnn.concat(
+            (y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # sharded_concat_3(y1, y2, y3, dim=2) # sahrding this caused demo wrongness and pcc drop (0.98)
+        y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
         # p(x2,"x2")
         # p(x3,"x3")
         # p(x4,"x4")
@@ -115,10 +111,13 @@ class TtnnDetect:
         y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]
         deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
-        ya = ttnn.reallocate(ya)
-        yb = ttnn.reallocate(yb)
+        # ya = ttnn.reallocate(ya)
+        # yb = ttnn.reallocate(yb)
         ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))
+        # ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 16, 4))
         ya = ttnn.softmax(ya, dim=-1)
+        # ya = ttnn.softmax_in_place(ya, dim=-1,numeric_stable=False)
+        # ya = ttnn.permute(ya, (0,3,1,2))
         ya = ttnn.permute(ya, (0, 2, 1, 3))
         c = self.dfl(ya)
         ttnn.deallocate(ya)
@@ -142,7 +141,6 @@ class TtnnDetect:
         z = ttnn.concat((z2, z1), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         z = ttnn.multiply(z, strides)
         yb = ttnn.permute(yb, (0, 2, 1))
-        yb = ttnn.to_layout(yb, layout=ttnn.TILE_LAYOUT)
         yb = ttnn.sigmoid(yb)
         deallocate_tensors(c, z1, z2, c1, c2, anchor, strides)
         z = ttnn.reallocate(z)
