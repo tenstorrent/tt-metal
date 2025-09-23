@@ -701,8 +701,8 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("📊 FINAL SUMMARY")
     print("=" * 60)
-    if pytorch_results:
-        print(f"✅ PyTorch OBB: {len(pytorch_results)} images processed successfully")
+    #if pytorch_results:
+    #    print(f"✅ PyTorch OBB: {len(pytorch_results)} images processed successfully")
     
     if simple_pcc > 0:
         print(f"✅ TTNN Simple Test: PCC = {simple_pcc:.6f}")
