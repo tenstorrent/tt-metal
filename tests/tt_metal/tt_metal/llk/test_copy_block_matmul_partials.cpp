@@ -62,7 +62,7 @@ struct CopyBlockMatmulPartialsConfig {
 };
 
 void run_single_core_copy_block_matmul_partials(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////

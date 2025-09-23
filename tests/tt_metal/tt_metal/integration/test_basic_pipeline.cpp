@@ -67,7 +67,7 @@ struct PipelineRowConfig {
 };
 
 void create_and_run_row_pipeline(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const PipelineRowConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const PipelineRowConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
 
     tt_metal::Program program = tt_metal::CreateProgram();

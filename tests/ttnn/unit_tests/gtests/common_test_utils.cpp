@@ -6,11 +6,13 @@
 
 #include <stdexcept>
 #include <cmath>
+#include <variant>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::test_utils {
 
@@ -48,15 +50,18 @@ Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id) {
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 
-    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
+    auto guard = ttnn::with_command_queue_id(cq_id);
+
+    Tensor output_tensor = ttnn::mul_sfpu(input_tensor, 2);
     for (int i = 0; i < 3; i++) {
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
+        output_tensor = ttnn::neg(output_tensor);
+        output_tensor = ttnn::neg(output_tensor);
+        output_tensor = ttnn::mul_sfpu(output_tensor, 2);
     }
-    output_tensor = ttnn::neg(cq_id, output_tensor);
-    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 128);
+    output_tensor = ttnn::neg(output_tensor);
+    output_tensor = ttnn::mul_sfpu(output_tensor, 2);
+    output_tensor = ttnn::add_sfpu(output_tensor, 128);
+
     return output_tensor;
 }
 

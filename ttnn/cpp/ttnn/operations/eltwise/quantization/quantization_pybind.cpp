@@ -78,9 +78,8 @@ void bind_quantize_operation(
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
+               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
             py::arg("scale"),
@@ -89,8 +88,7 @@ void bind_quantize_operation(
             py::arg("axis") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename T>
@@ -184,10 +182,8 @@ void bind_requantize_operation(
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               QueueId queue_id) -> ttnn::Tensor {
+               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
                 return self(
-                    queue_id,
                     input_tensor,
                     in_scale,
                     in_zero_point,
@@ -207,9 +203,8 @@ void bind_requantize_operation(
             py::arg("axis") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
-}
+            py::arg("output_tensor") = std::nullopt});
+};
 
 template <typename T>
 void bind_dequantize_operation(
@@ -271,9 +266,8 @@ void bind_dequantize_operation(
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
+               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
             py::arg("scale"),
@@ -282,9 +276,8 @@ void bind_dequantize_operation(
             py::arg("axis") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
-}
+            py::arg("output_tensor") = std::nullopt});
+};
 
 }  // namespace
 

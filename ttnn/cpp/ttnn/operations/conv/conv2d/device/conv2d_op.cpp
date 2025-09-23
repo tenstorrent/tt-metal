@@ -46,7 +46,8 @@ Tensor optimized_conv_new(
     bool enable_weights_double_buffer,
     bool full_inner_dim,
     bool enable_activation_reuse,
-    bool config_tensors_in_dram) {
+    bool config_tensors_in_dram,
+    std::optional<bool> force_split_reader) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -78,7 +79,8 @@ Tensor optimized_conv_new(
         enable_weights_double_buffer,
         full_inner_dim,
         enable_activation_reuse,
-        config_tensors_in_dram);
+        config_tensors_in_dram,
+        force_split_reader);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -257,7 +259,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             enable_weights_double_buffer,
             full_inner_dim,
             enable_activation_reuse,
-            config_tensors_in_dram);
+            config_tensors_in_dram,
+            force_split_reader);
     }
 
     const uint32_t post_op_l1_allocation_size =
@@ -287,7 +290,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
             .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_activation_reuse = enable_activation_reuse},
+            .enable_activation_reuse = enable_activation_reuse,
+            .force_split_reader = force_split_reader},
         input_tensor_a.dtype(),
         this->dtype,
         output_image_width,
@@ -333,16 +337,11 @@ tt::tt_metal::operation::OpPerformanceModel OptimizedConvNew::create_op_performa
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
-    const auto& t = output_tensors.at(0);
-    if (t.storage_type() != StorageType::DEVICE) {
-        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
-    }
-
-    auto arch = t.storage_type() == StorageType::DEVICE
-                    ? t.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
-    const int tensix_mul_adds_per_cycle_lofi = (arch == tt::ARCH::WORMHOLE_B0) ? 4096 : 2048;
+    const CoreCoord compute_grid = output_tensors.at(0).device()->compute_with_storage_grid_size();
+    const int num_cores = compute_grid.x * compute_grid.y;
+    // The Wormhole/Blackhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+    // This is 2*8*16*16 = 4096 muladds in a single cycle.
+    constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
     auto [output_height, output_width] = calculate_output_image_size(
