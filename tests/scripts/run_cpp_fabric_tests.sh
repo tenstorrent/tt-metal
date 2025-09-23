@@ -59,8 +59,12 @@ tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_
 
 # T3K Multi-host
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks"
-tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build_Debug/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Fabric1DSanity"
-tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build_Debug/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Fabric2DSanity"
+tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="InterMeshRoutingDual2x4Fixture.Fabric1DSanity"
+tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="InterMeshRoutingDual2x4Fixture.Fabric2DSanity"
+
+# T3k intermesh multi-
+tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x2_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="InterMeshRoutingSplit2x2Fixture.Fabric1DSanity"
+tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x2_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="InterMeshRoutingSplit2x2Fixture.Fabric2DSanity"
 
 #############################################
 # FABRIC SANITY TESTS                       #
