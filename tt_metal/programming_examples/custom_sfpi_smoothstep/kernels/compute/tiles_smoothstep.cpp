@@ -30,13 +30,14 @@
 inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
     constexpr size_t vectors_per_face = 8;
     for (size_t i = 0; i < vectors_per_face; i++) {
-        vFloat x = dst_reg[i];
+        vFloat x = dst_reg[0];
         vFloat t = (x - edge0) * inv_delta;
         v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
         v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
         v_endif;
         vFloat result = t * t * (3.0f - 2.0f * t);
-        dst_reg[i] = result;
+        dst_reg[0] = result;
+        dst_reg++;
     }
 }
 
