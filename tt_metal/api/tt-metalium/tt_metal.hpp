@@ -375,7 +375,7 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
  *
  * Return value: std::string
  */
-std::string get_physical_architecture_name();
+std::string get_platform_architecture_name();
 
 }  // namespace detail
 }  // namespace tt::tt_metal
