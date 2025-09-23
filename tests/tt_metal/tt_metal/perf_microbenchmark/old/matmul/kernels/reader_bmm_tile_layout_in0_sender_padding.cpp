@@ -18,28 +18,28 @@ void kernel_main() {
     uint32_t last_block_h = get_arg_val<uint32_t>(4);
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-
     // in0 tensor args
-    constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_tensor_stride_h = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_tensor_next_block_stride = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
+    constexpr uint32_t in0_tensor_stride_h = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_tensor_next_block_stride = get_compile_time_arg_val(2);
     // in0 block args
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(5);
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_block_h = get_compile_time_arg_val(4);
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(5);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(6);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_dest_noc_start_x = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(9);
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(12);
+    constexpr uint32_t in0_mcast_dest_noc_start_x = get_compile_time_arg_val(7);
+    constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(8);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(11);
     // batch args
-    constexpr uint32_t MtKt = get_compile_time_arg_val(13);  // if 0
-    constexpr uint32_t batch = get_compile_time_arg_val(14);
+    constexpr uint32_t MtKt = get_compile_time_arg_val(12);  // if 0
+    constexpr uint32_t batch = get_compile_time_arg_val(13);
+
+    // interleaved accessor args
+    constexpr auto in0_args = TensorAccessorArgs<14>();
 
     constexpr uint32_t cb_id_in0 = 0;
 

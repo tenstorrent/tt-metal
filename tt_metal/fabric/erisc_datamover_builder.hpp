@@ -9,7 +9,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/edm_fabric_counters.hpp>
@@ -170,6 +170,14 @@ struct StreamRegAssignments {
     static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
     static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
     static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    // Used by Lite Fabric
+    // Consult tt_metal/lite_fabric/hw/inc/constants.hpp to ensure no conflicts
+    static constexpr uint32_t reserved_lite_fabric_0_stream_id = 23;
+    static constexpr uint32_t reserved_lite_fabric_1_stream_id = 24;
+    static constexpr uint32_t reserved_lite_fabric_2_stream_id = 25;
+    static constexpr uint32_t reserved_lite_fabric_3_stream_id = 26;
+    static constexpr uint32_t reserved_lite_fabric_4_stream_id = 27;
+    static constexpr uint32_t reserved_lite_fabric_5_stream_id = 28;
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
@@ -230,6 +238,9 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC = 1;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
 
     // If a mesh axis spans eight or more devices, use more buffer slot configuration.
     // Threshold (8 devices) was determined empirically.
@@ -332,10 +343,10 @@ struct FabricEriscDatamoverConfig {
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
     // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
     // use use a different crediting scheme.
-    std::array<std::size_t, num_sender_channels> to_sender_channel_remote_ack_counter_addrs = {};
-    std::array<std::size_t, num_sender_channels> to_sender_channel_remote_completion_counter_addrs = {};
-    std::array<std::size_t, num_receiver_channels> receiver_channel_remote_ack_counter_addrs = {};
-    std::array<std::size_t, num_receiver_channels> receiver_channel_remote_completion_counter_addrs = {};
+    size_t to_sender_channel_remote_ack_counters_base_addr = 0;
+    size_t to_sender_channel_remote_completion_counters_base_addr = 0;
+    size_t receiver_channel_remote_ack_counters_base_addr = 0;
+    size_t receiver_channel_remote_completion_counters_base_addr = 0;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
@@ -425,6 +436,7 @@ struct FabricRiscConfig {
         is_sender_channel_serviced_[channel_idx] = enabled;
     }
 
+    void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
     size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;

@@ -51,4 +51,6 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: build/test/umd/${{ inputs.arch }}/unit_tests
+        run: |
+          ./build/test/umd/${{ inputs.arch }}/unit_tests
+          ./build/test/umd/api/api_tests

@@ -14,6 +14,17 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/sqrt.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "dprint_tensix.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -26,6 +37,8 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
+    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
+    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -122,11 +135,11 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, onetile);
-        reduce_init(cb_x, cb_scaler, cb_ex);
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile(cb_x, cb_scaler, wt + j, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x, cb_scaler, wt + j, scaler0, dst0);
             }
             // we don't pop cb_x until we compute Ex
         }
@@ -193,16 +206,15 @@ void MAIN {
             reconfig_data_format(cb_xmm2, cb_scaler);
         }
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_xmm2, cb_scaler, cb_ex2);
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                reduce_tile(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
             }
-            // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
         cb_pop_front(cb_xmm2, Wt);
         pack_tile(dst0, cb_ex2);
@@ -223,10 +235,8 @@ void MAIN {
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        rsqrt_tile_init<LEGACY_RSQRT>();
+        rsqrt_tile<LEGACY_RSQRT>(dst0);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, 1);
         REL();

@@ -22,6 +22,7 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "dev_mem_map.h"
+#include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -96,6 +97,7 @@ int main() {
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
+            lite_fabric::service_lite_fabric_channels();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
@@ -125,13 +127,13 @@ int main() {
 
             flush_erisc_icache();
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
 
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            uint32_t enables = launch_msg_address->kernel_config.enables;
 
             // Run the ERISC kernel, no kernel config buffer on active eth
-            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+            int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+            if (enables & (1u << index)) {
                 WAYPOINT("R");
 #ifdef ARCH_BLACKHOLE
                 // #18384: This register was left dirty by eth training.
@@ -141,7 +143,6 @@ int main() {
 #endif
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
-                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 uint32_t kernel_lma =
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();

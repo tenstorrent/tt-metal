@@ -24,6 +24,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <tt-metalium/distributed.hpp>
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -39,9 +40,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -214,11 +214,11 @@ int main(int argc, char** argv) {
 
     bool pass = true;
     try {
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0 /*device_id*/);
+        auto& cq = mesh_device->mesh_command_queue();
+        auto device_id = mesh_device->get_devices()[0]->id();
 
-        CommandQueue& cq = device->command_queue();
-
+        auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();
 
         std::string src_mem;
@@ -231,17 +231,16 @@ int main(int argc, char** argv) {
         uint32_t mcast_noc_addr_end_y = 0;
 
         chip_id_t mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         void* host_pcie_base =
             (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
         uint64_t dev_pcie_base =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device_id);
         uint64_t pcie_offset = 1024 * 1024 * 50;  // beyond where FD will write...maybe
 
-        const metal_SocDescriptor& soc_d =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         switch (source_mem_g) {
             case 0:
             default: {
@@ -261,7 +260,7 @@ int main(int argc, char** argv) {
             } break;
             case 2: {
                 src_mem = test_write ? "TO_L1" : "FROM_L1";
-                CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
+                CoreCoord w = mesh_device->worker_core_from_logical_core(src_worker_g);
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
             } break;
@@ -275,7 +274,7 @@ int main(int argc, char** argv) {
             case 4: {
                 src_mem = "FROM_L1_TO_HOST";
                 log_info(LogTest, "Host bw test overriding page_count to 1");
-                CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
+                CoreCoord w = mesh_device->worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
@@ -283,7 +282,7 @@ int main(int argc, char** argv) {
             case 5: {
                 src_mem = "FROM_HOST_TO_L1";
                 log_info(LogTest, "Host bw test overriding page_count to 1");
-                CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
+                CoreCoord w = mesh_device->worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
@@ -291,8 +290,8 @@ int main(int argc, char** argv) {
             case 6: {
                 src_mem = "FROM_L1_TO_MCAST";
                 issue_mcast = 1;
-                CoreCoord start = device->worker_core_from_logical_core(mcast_src_workers_g.start_coord);
-                CoreCoord end = device->worker_core_from_logical_core(mcast_src_workers_g.end_coord);
+                CoreCoord start = mesh_device->worker_core_from_logical_core(mcast_src_workers_g.start_coord);
+                CoreCoord end = mesh_device->worker_core_from_logical_core(mcast_src_workers_g.end_coord);
                 noc_addr_x = start.x;
                 noc_addr_y = start.y;
                 mcast_noc_addr_end_x = end.x;
@@ -338,10 +337,10 @@ int main(int argc, char** argv) {
         if (page_size_as_runtime_arg_g) {
             tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, {page_size_g});
         }
+        tt::tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()));
 
-        std::shared_ptr<Event> sync_event = std::make_shared<Event>();
-
-        CoreCoord w = device->worker_core_from_logical_core(worker_g.start_coord);
+        CoreCoord w = mesh_device->worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());
         std::string direction = test_write ? "Writing" : "Reading";
         if (source_mem_g == 3) {
@@ -391,28 +390,28 @@ int main(int argc, char** argv) {
         if (source_mem_g < 4 || source_mem_g == 6) {
             // Cache stuff
             for (int i = 0; i < warmup_iterations_g; i++) {
-                EnqueueProgram(cq, program, false);
+                tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             }
-            Finish(cq);
+            tt::tt_metal::distributed::Finish(cq);
 
             auto start = std::chrono::system_clock::now();
-            EnqueueProgram(cq, program, false);
+            tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             if (time_just_finish_g) {
                 start = std::chrono::system_clock::now();
             }
             if (hammer_write_reg_g || hammer_pcie_g) {
-                EnqueueRecordEvent(cq, sync_event);
+                auto sync_event = tt::tt_metal::distributed::EnqueueRecordEvent(cq);
 
                 bool done = false;
                 uint32_t addr = 0xfafafafa;
                 uint32_t offset = 0;
                 uint32_t page = 0;
                 uint32_t* pcie_base = (uint32_t*)host_pcie_base + pcie_offset / sizeof(uint32_t);
-                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {
                         tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-                            &addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
+                            &addr, tt_cxy_pair(device_id, w), l1_unreserved_base);
                     }
                     if (hammer_pcie_g) {
                         if (page == page_count_g) {
@@ -430,13 +429,13 @@ int main(int argc, char** argv) {
                         }
                         page++;
                     }
-                    if (EventQuery(sync_event)) {
+                    if (tt::tt_metal::distributed::EventQuery(sync_event)) {
                         done = true;
                     }
                 }
             }
 
-            Finish(cq);
+            tt::tt_metal::distributed::Finish(cq);
             auto end = std::chrono::system_clock::now();
             elapsed_seconds = (end - start);
         } else if (source_mem_g == 4 || source_mem_g == 5) {
@@ -449,12 +448,12 @@ int main(int argc, char** argv) {
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
+                        vec, sizeof(uint32_t), tt_cxy_pair(device_id, w), dispatch_l1_unreserved_base);
                 } else {
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
-                        tt_cxy_pair(device->id(), w),
+                        tt_cxy_pair(device_id, w),
                         dispatch_l1_unreserved_base);
                 }
             }
@@ -463,12 +462,12 @@ int main(int argc, char** argv) {
             for (int i = 0; i < iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        vec, page_size_g, tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
+                        vec, page_size_g, tt_cxy_pair(device_id, w), dispatch_l1_unreserved_base);
                 } else {
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
-                        tt_cxy_pair(device->id(), w),
+                        tt_cxy_pair(device_id, w),
                         dispatch_l1_unreserved_base);
                 }
             }
@@ -493,10 +492,10 @@ int main(int argc, char** argv) {
         }
 
         if (read_profiler_results) {
-            tt_metal::detail::ReadDeviceProfilerResults(device);
+            tt_metal::detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= mesh_device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_fatal(tt::LogTest, "{}", e.what());

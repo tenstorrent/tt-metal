@@ -37,7 +37,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
     auto in_shard_spec = input_tensor.shard_spec().value();
     auto in_cores = in_shard_spec.grid;
-    auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_q_output_config =
@@ -55,7 +54,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, true);
 
     // cores for input
-    uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
     auto in_core_grid = in_cores.bounding_box();
     uint32_t in_num_cores_x = in_core_grid.end_coord.x + 1, in_num_cores_y = in_core_grid.end_coord.y + 1;
 
@@ -123,8 +121,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-
             auto dst_buffer_query = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
@@ -183,7 +179,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
     const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / tile_hw;
     const auto in_shard_spec = input_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
-    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / tile_hw;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_q_output_config =
@@ -272,8 +267,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-
             auto dst_buffer_query = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);

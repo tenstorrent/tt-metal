@@ -27,7 +27,7 @@
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"

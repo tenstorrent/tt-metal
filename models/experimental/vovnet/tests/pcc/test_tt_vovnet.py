@@ -43,6 +43,7 @@ def test_vovnet_model_inference(device, model_name, reset_seeds, model_location_
     )
     input = input.permute(0, 2, 3, 1)
     input = input.reshape(1, 1, h * w * n, c)
+
     min_channels = 16
     if c < min_channels:
         padding_c = min_channels - c
@@ -53,4 +54,4 @@ def test_vovnet_model_inference(device, model_name, reset_seeds, model_location_
     tt_output = tt_model.forward(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output)
     # Low pcc is expected and is tracked here - https://github.com/tenstorrent/tt-metal/issues/23474
-    assert_with_pcc(model_output, tt_output_torch, 0.7)
+    assert_with_pcc(model_output, tt_output_torch, 0.79)

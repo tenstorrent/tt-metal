@@ -9,6 +9,7 @@ from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull, torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
@@ -20,7 +21,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     post_process_output_and_move_to_host,
     preprocess_and_push_input_to_device,
 )
-from models.utility_functions import skip_for_grayskull, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

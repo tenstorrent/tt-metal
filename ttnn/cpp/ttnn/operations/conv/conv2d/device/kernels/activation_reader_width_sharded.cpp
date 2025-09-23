@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "height_sharded_reader_common.hpp"
+
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
@@ -92,6 +94,9 @@ void kernel_main() {
     if (this_core_id >= num_mcast_cores) {
         return;
     }
+
+    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(0);
+
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 

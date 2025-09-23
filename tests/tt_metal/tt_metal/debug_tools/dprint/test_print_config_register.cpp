@@ -22,7 +22,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -380,7 +380,7 @@ static std::string generate_golden_output(
 
 static void print_config_reg(
     DPrintMeshFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const ConfigRegPrintTestConfig& config) {
     // Create program
     distributed::MeshWorkload workload;
@@ -388,7 +388,6 @@ static void print_config_reg(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
 
     // Prepare write kernel
     [[maybe_unused]] auto write_kernel = prepare_writer(workload, config);
@@ -423,7 +422,7 @@ TEST_F(DPrintMeshFixture, ConfigRegAluTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);
@@ -453,7 +452,7 @@ TEST_F(DPrintMeshFixture, ConfigRegTileDescriptorTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);
@@ -482,7 +481,7 @@ TEST_F(DPrintMeshFixture, ConfigRegUnpackTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);
@@ -521,7 +520,7 @@ TEST_F(DPrintMeshFixture, ConfigRegPackTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);
@@ -546,7 +545,7 @@ TEST_F(DPrintMeshFixture, ConfigRegReluTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);
@@ -571,7 +570,7 @@ TEST_F(DPrintMeshFixture, ConfigRegDestRdCtrlTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);
@@ -599,7 +598,7 @@ TEST_F(DPrintMeshFixture, ConfigRegPackEdgeOffsetTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);
@@ -627,7 +626,7 @@ TEST_F(DPrintMeshFixture, ConfigRegPackCountersTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             print_config_reg(fixture, mesh_device, test_config);
         },
         this->devices_[0]);

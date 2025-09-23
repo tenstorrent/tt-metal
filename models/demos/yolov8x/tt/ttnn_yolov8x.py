@@ -7,7 +7,6 @@ import math
 import ttnn
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 try:
     from tracy import signpost
@@ -74,7 +73,6 @@ class TtConv:
         width_shard=False,
         act_blocks=32,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
         reshard_if_not_optimal=False,
         batch_size=1,
         core_count=None,
@@ -97,27 +95,21 @@ class TtConv:
         self.width_shard = width_shard
         self.act_blocks = act_blocks
         self.enable_act_double_buffer = enable_act_double_buffer
-        self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
 
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config()
         self.weights, self.bias = self.parameters[path]
-        if self.core_count is not None:
-            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
-            self.conv_config.core_grid = shard_grid
-            self.conv_config.override_sharding_config = True
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            activation="" if self.is_detect_cv2 else "silu",
+            activation=None if self.is_detect_cv2 else ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_w_div=1,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
-            enable_split_reader=self.enable_split_reader,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,

@@ -12,7 +12,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
@@ -287,7 +287,7 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channels_turn_
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
 // fabric_erisc_router_ct_args.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
+    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,
@@ -362,7 +362,7 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void send_next_data(
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& sender_buffer_channel,
+    tt::tt_fabric::SenderEthChannel<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& sender_buffer_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         sender_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
@@ -401,8 +401,7 @@ FORCE_INLINE void send_next_data(
         BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
     receiver_buffer_channel.set_cached_next_buffer_slot_addr(
         receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
-    sender_buffer_channel.set_cached_next_buffer_slot_addr(
-        sender_buffer_channel.get_buffer_address(local_sender_write_counter.get_buffer_index()));
+    sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
     remote_receiver_num_free_slots--;
     // update the remote reg
     static constexpr uint32_t packets_to_forward = 1;
@@ -751,7 +750,7 @@ FORCE_INLINE void receiver_forward_packet(
     uint8_t transaction_id) {
     constexpr bool ENABLE_STATEFUL_NOC_APIS =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
-        true;
+        !FORCE_ALL_PATHS_TO_USE_SAME_NOC && true;
 #else
         false;
 #endif
@@ -1536,7 +1535,7 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 void run_sender_channel_step_impl(
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& local_sender_channel,
+    tt::tt_fabric::SenderEthChannel<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS>& local_sender_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         local_sender_channel_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
@@ -1555,7 +1554,7 @@ void run_sender_channel_step_impl(
     bool has_unsent_packet = free_slots != SENDER_NUM_BUFFERS;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if constexpr (enable_first_level_ack) {
         bool sender_backpressured_from_sender_side = free_slots == 0;
@@ -1564,15 +1563,14 @@ void run_sender_channel_step_impl(
     if (can_send) {
         did_something = true;
         if constexpr (enable_packet_header_recording) {
-            auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(
-                local_sender_channel_worker_interface.local_write_counter.get_buffer_index()));
+            auto packet_header =
+                reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_cached_next_buffer_slot_addr());
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
-        // In run_sender_channel_step_impl, before send_next_data
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
@@ -1830,7 +1828,7 @@ void run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (unsent_completions) {
             // completion ptr incremented in callee
@@ -1850,7 +1848,7 @@ void run_receiver_channel_step_impl(
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
@@ -2329,15 +2327,17 @@ FORCE_INLINE void teardown(
 
 void initialize_state_for_txq1_active_mode() {
     eth_enable_packet_mode(receiver_txq_id);
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        *reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counter_addrs[i]) = 0;
-        *reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counter_addrs[i]) = 0;
-    }
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-        *reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counter_ptrs[i]) = 0;
-        *reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counter_ptrs[i]) = 0;
+        reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+}
+void initialize_state_for_txq1_active_mode_sender_side() {
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
+    }
 }
 
 void kernel_main() {
@@ -2349,6 +2349,9 @@ void kernel_main() {
         constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
+        }
+        if constexpr (is_sender_channel_serviced[0]) {
+            initialize_state_for_txq1_active_mode_sender_side();
         }
     }
 
@@ -2602,8 +2605,9 @@ void kernel_main() {
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
     // create the sender channel buffers with input array of number of buffers
-    auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
-        std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+    auto local_sender_channels =
+        tt::tt_fabric::SenderEthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
+            std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2699,7 +2703,7 @@ void kernel_main() {
                     receiver_channel_forwarding_data_cmd_buf_ids[0],
                     receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
-                if constexpr (NUM_ACTIVE_ERISCS == 1) {
+                if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[edm_index]
                         .template setup_edm_noc_cmd_buf<
                             tt::tt_fabric::edm_to_downstream_noc,
@@ -2752,7 +2756,7 @@ void kernel_main() {
             // If there is only one active erisc, then it is guaranteed we are the receiver channel
             // servicing core. Otherwise, in multi-erisc mode, this initialization happens later due
             // to a noc dependency. See the comment for the initialization that happens later in multi-erisc mode.
-            if constexpr (NUM_ACTIVE_ERISCS == 1) {
+            if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                 downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
                     tt::tt_fabric::edm_to_downstream_noc,
                     tt::tt_fabric::forward_and_local_write_noc_vc>();
@@ -2900,14 +2904,14 @@ void kernel_main() {
                 downstream_edm_noc_interfaces_vc0[0]
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
                 ASSERT(
-                    get_ptr_val(downstream_edm_noc_interfaces_vc0[0].worker_credits_stream_id) ==
+                    get_ptr_val(downstream_edm_noc_interfaces_vc0[0].get_worker_credits_stream_id()) ==
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
             }
             if (has_downstream_edm_vc1_buffer_connection) {
                 downstream_edm_noc_interface_vc1
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
                 ASSERT(
-                    get_ptr_val(downstream_edm_noc_interface_vc1.worker_credits_stream_id) ==
+                    get_ptr_val(downstream_edm_noc_interface_vc1.get_worker_credits_stream_id()) ==
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
             }
         }
@@ -2918,17 +2922,19 @@ void kernel_main() {
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
-        for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
-            downstream_edm_noc_interfaces_vc0[edm_index]
-                .template setup_edm_noc_cmd_buf<
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc>();
-        }
-        if constexpr (enable_deadlock_avoidance) {
-            if (has_downstream_edm_vc1_buffer_connection) {
-                downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc>();
+        if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
+            for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
+                downstream_edm_noc_interfaces_vc0[edm_index]
+                    .template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+            }
+            if constexpr (enable_deadlock_avoidance) {
+                if (has_downstream_edm_vc1_buffer_connection) {
+                    downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+                }
             }
         }
     }

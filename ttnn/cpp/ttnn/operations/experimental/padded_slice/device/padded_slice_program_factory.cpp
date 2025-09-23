@@ -70,9 +70,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
+    [[maybe_unused]] uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
     uint32_t input_page_size = input_shape[-1] * input_tensor.element_size();
-    uint32_t input_row_size_bytes = tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
+    [[maybe_unused]] uint32_t input_row_size_bytes =
+        tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
@@ -241,7 +242,6 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
@@ -374,7 +374,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
-    log_info(tt::LogOp, "Num Cores Channels = {}", num_cores_channels);
+    log_debug(tt::LogOp, "Num Cores Channels = {}", num_cores_channels);
     uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
     num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
     TT_FATAL(
@@ -677,7 +677,6 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
@@ -730,7 +729,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         output_cb_data_format,
         output.buffer());
 
-    auto cb_padding_source_tuple = tt::tt_metal::create_cb(
+    tt::tt_metal::create_cb(
         cb_padding_index,
         program,
         total_cores,

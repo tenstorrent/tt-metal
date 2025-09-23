@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dev_msgs.h"
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
@@ -25,7 +24,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 
@@ -200,6 +199,10 @@ void set_core_go_message_mapping_on_device(
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     SystemMemoryManager& manager,
     uint8_t cq_id);
+
+template <typename WorkloadType, typename DeviceType>
+uint32_t program_base_addr_on_core(
+    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
 
 }  // namespace program_dispatch
 

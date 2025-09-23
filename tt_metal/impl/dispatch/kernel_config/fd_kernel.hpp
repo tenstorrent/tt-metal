@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <stdint.h>
 #include <map>
 #include <string>
@@ -13,9 +14,8 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {

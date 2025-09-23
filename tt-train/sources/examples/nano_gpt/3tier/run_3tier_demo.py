@@ -20,18 +20,20 @@ DEFAULT_CONFIG = "training_shakespeare_nanogpt_3tier_mpi.yaml"
 SSH_USER = "ttuser"
 BINARIES = ("nano_gpt", "nano_gpt_aggregator", "nano_gpt_optimizer")
 SCP_OPTS = ["-p"]  # preserve times & modes
+
 HOSTS = [
-    "10.140.20.202",  # metal-wh-08
-    "10.140.20.204",  # metal-wh-01
-    "10.140.20.208",  # metal-wh-02
-    "10.140.20.210",  # metal-wh-03
-    "10.140.20.213",  # metal-wh-05
+    "metal-wh-01",
+    "metal-wh-05",
+    "metal-wh-03",
+    "metal-wh-04",
+    "metal-wh-06",
 ]
+
 # Default MESH_IDS per global rank; falls back to rank id if list is shorter than TOTAL_RANKS
 DEFAULT_MESH_IDS = [0, 0, 0, 0, 0]
 # If config contains "socket_type: fabric", override MESH_IDS with this:
-FABRIC_MESH_IDS = [1, 4, 3, 0, 2]
-MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.yaml"
+FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
+MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.yaml"
 
 
 # --------------------------
