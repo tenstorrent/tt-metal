@@ -69,8 +69,6 @@ class TTSelfAttention(LightweightModule):
         scale = 1.0 / sqrt_dim
         att = ttnn.multiply(att, scale, memory_config=self.memory_config, dtype=self.dtype)
         att = ttnn.softmax(att, dim=-1, memory_config=self.memory_config)
-        print("tt")
-        print(att.shape, value.shape)
         y = ttnn.matmul(
             att,
             value,
