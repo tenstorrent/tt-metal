@@ -764,9 +764,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // CB0 = predicate, CB1 = false tensor (true is scalar for TST)
         reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
         reader_defines["SRC_BCAST_B"] = false_is_bcast ? "1" : "0";  // Second tensor (CB1)
-
-        // Add BCAST_LLK define
-        reader_defines["BCAST_LLK"] = "0";
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::COL_BCAST) {
         // TTS column broadcast
         reader_defines = make_dataflow_defines(
