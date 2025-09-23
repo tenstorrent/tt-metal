@@ -30,7 +30,7 @@ bool can_deallocate(const Tensor& input_tensor) {
 
 static inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    auto input_mem_config = input_tensor.memory_config();
+    const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
