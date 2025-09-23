@@ -119,6 +119,9 @@ private:
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
 
+    // Storage for all trace ids
+    std::vector<uint32_t> trace_ids;
+
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
@@ -266,6 +269,8 @@ public:
     void setLastFDReadAsNotDone();
 
     bool isLastFDReadDone() const;
+
+    void addTraceId(uint32_t trace_id);
 };
 
 bool useFastDispatch(IDevice* device);

@@ -1101,6 +1101,12 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
         core_control_buffers[virtual_core] = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device_id, virtual_core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
     }
+    log_info(
+        tt::LogMetal,
+        "Read global trace count from control buffer for core {}, {}: {}",
+        virtual_core.x,
+        virtual_core.y,
+        core_control_buffers[virtual_core][kernel_profiler::GLOBAL_TRACE_COUNT]);
 }
 
 void DeviceProfiler::readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
@@ -1230,6 +1236,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             uint32_t riscNumRead = 0;
             uint32_t coreFlatIDRead = 0;
+            uint32_t traceCounterRead = 0;
             uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
@@ -1254,14 +1261,23 @@ void DeviceProfiler::readRiscProfilerResults(
                     // TODO(MO): Cleanup magic numbers
                     riscNumRead = data_buffer.at(index) & 0x7;
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
+                    traceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
                     runHostCounterRead = data_buffer.at(index + 1);
+                    log_info(
+                        tt::LogMetal,
+                        "data source {}, virtual core {}, {} traceIDRead: {}",
+                        data_source,
+                        worker_core.x,
+                        worker_core.y,
+                        traceCounterRead);
                     uint32_t base_program_id =
                         tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
 
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
                 } else if (oneStartFound) {
-                    uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
+                    uint32_t timer_id =
+                        (data_buffer.at(index) >> 12) & 0x7FFFF;  // will this conflict with traceCounterRead?
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
                     switch (packet_type) {
@@ -1397,6 +1413,17 @@ void DeviceProfiler::readDeviceMarkerData(
     nlohmann::json meta_data;
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
+
+    log_info(tt::LogMetal, "trace_ids size: {}", trace_ids.size());
+    for (const auto& trace_id : trace_ids) {
+        log_info(tt::LogMetal, "trace_id: {}", trace_id);
+    }
+
+    TT_ASSERT(
+        trace_ids.size() == traceCounterRead,
+        "trace_ids size: {}, traceCounterRead: {}",
+        trace_ids.size(),
+        traceCounterRead);
 
     const auto& [_, new_marker_inserted] = device_markers.emplace(
         run_host_id,
@@ -1603,6 +1630,8 @@ void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = fal
 void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; }
 
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
+
+void DeviceProfiler::addTraceId(uint32_t trace_id) { this->trace_ids.push_back(trace_id); }
 
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)

@@ -47,8 +47,9 @@ def run_yolov8s(
         signpost(header="start")
 
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(2):
         _ = performant_runner.run(torch_input_tensor)
+        ttnn.ReadDeviceProfiler(device)
     ttnn.synchronize_device(device)
     t1 = time.time()
 
