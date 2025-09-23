@@ -8,7 +8,6 @@ using namespace tt::tt_metal::wormhole::tensix;
 
 #include <cstdint>
 
-#include <tt_stl/assert.hpp>
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
