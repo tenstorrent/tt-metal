@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(14);
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
@@ -201,8 +202,9 @@ void kernel_main() {
             }
         }
     };
-#ifndef RMSNORM
-    global_reduce_sender(cb_ex_partial, cb_ex_external, cb_ex, cb_ex_global, cb_ex);
-#endif
+
+    if constexpr (!rms_norm) {
+        global_reduce_sender(cb_ex_partial, cb_ex_external, cb_ex, cb_ex_global, cb_ex);
+    }
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2pe, cb_ex_global, cb_ex2);
 }

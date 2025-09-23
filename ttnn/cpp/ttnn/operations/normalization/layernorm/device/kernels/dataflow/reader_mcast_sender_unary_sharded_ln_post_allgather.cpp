@@ -14,6 +14,7 @@ void kernel_main() {
     constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
     constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
+    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
@@ -27,11 +28,7 @@ void kernel_main() {
         mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
 
     const uint64_t reduce_sender_semaphore_noc_addr = multicast_data_noc | reduce_sender_semaphore_addr;
-#ifdef RMSNORM
-    constexpr uint32_t stats_tiles = 1;
-#else
-    constexpr uint32_t stats_tiles = 2;
-#endif
+    constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 
     volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
