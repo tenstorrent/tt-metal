@@ -286,6 +286,26 @@ def get_tt_cache_path():
     return get_tt_cache_path_
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _set_unique_tt_metal_cache(tmp_path_factory):
+    """
+    When running under pytest-xdist, ensure each worker uses a unique TT_METAL_CACHE directory.
+    Respect a pre-set TT_METAL_CACHE if provided by the environment. No-op without xdist.
+    """
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if not worker_id:
+        return
+
+    preset = os.environ.get("TT_METAL_CACHE")
+    if preset:
+        logger.info(f"TT_METAL_CACHE preset to {preset}, leaving as-is")
+        return
+
+    cache_dir = tmp_path_factory.mktemp(f"tt_metal_cache_{worker_id}")
+    os.environ["TT_METAL_CACHE"] = str(cache_dir)
+    logger.info(f"Set TT_METAL_CACHE={os.environ['TT_METAL_CACHE']}")
+
+
 @pytest.fixture(scope="function")
 def device_params(request):
     return getattr(request, "param", {})
