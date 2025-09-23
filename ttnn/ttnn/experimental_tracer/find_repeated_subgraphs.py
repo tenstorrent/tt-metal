@@ -996,8 +996,13 @@ def trace_model_structure(
     combine_conv_bn_relu(operation_graph)
     merge_nested_tree(tree, operation_graph)
     composite_ops: Dict[str, CompositeOperation] = {}
-    compute_subgraph_fingerprints(operation_graph, composite_ops)
-    make_every_node_composite(operation_graph)
+    new_operation_graph = OperationGraph.from_operation_graph(operation_graph)
+    try:
+        compute_subgraph_fingerprints(operation_graph, composite_ops)
+        operation_graph = new_operation_graph
+    except:
+        pass
+    make_every_node_composite(new_operation_graph)
     json_structure = create_graph_json_structure(operation_graph)
     # Write the JSON structure to the specified output file
     with open("combined_operation_graph_viz.json", "w") as f:
