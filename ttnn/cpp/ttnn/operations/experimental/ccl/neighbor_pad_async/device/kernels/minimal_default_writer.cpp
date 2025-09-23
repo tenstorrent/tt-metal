@@ -78,31 +78,33 @@ void kernel_main() {
 
     // Barrier semaphore
     if (use_barrier_sem) {
-        // unicast output ready semaphore
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_barriersem);
-        pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            barrier_sem_noc_addr_in_pkt,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
-        // Write the unicast packet
-        if (direction) {
-            if (fabric_connection.has_backward_connection()) {
-                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                pkt_hdr_sem_inc->to_chip_unicast(opposite_target_device_offset);
-                fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                    packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
+        if (!is_last_chip) {
+            // unicast output ready semaphore
+            uint64_t barrier_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+            auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_barriersem);
+            pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                barrier_sem_noc_addr_in_pkt,
+                static_cast<uint16_t>(1),  // increment 1
+                32});
+            // Write the unicast packet
+            if (direction) {
+                if (fabric_connection.has_backward_connection()) {
+                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                    pkt_hdr_sem_inc->to_chip_unicast(opposite_target_device_offset);
+                    fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                        packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
+                }
+            } else {
+                if (fabric_connection.has_forward_connection()) {
+                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    pkt_hdr_sem_inc->to_chip_unicast(opposite_target_device_offset);
+                    fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                        packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
+                }
             }
-        } else {
-            if (fabric_connection.has_forward_connection()) {
-                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                pkt_hdr_sem_inc->to_chip_unicast(opposite_target_device_offset);
-                fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
-            }
+            noc_async_writes_flushed();
         }
-        noc_async_writes_flushed();
 
         if (!is_last_chip) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
