@@ -112,6 +112,7 @@ jobs:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
@@ -125,6 +126,7 @@ jobs:
           install_wheel: true
           run_args: |
             ./create_venv.sh
+            source ./python_env/bin/activate
             # tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks"
             # tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit"
             # tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity"
