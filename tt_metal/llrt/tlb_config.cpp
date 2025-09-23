@@ -26,23 +26,13 @@ namespace ll_api {
 namespace wormhole {
 
 static constexpr uint32_t TENSIX_STATIC_TLB_START = 16;
+static constexpr uint32_t ETH_STATIC_TLB_START = 0;
 
 int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
     if (target.y >= tt::umd::wormhole::ETH_LOCATIONS.size()) {
         return -1;
     }
-    auto eth_location = tt::umd::wormhole::ETH_LOCATIONS.at(target.y);
-    if (eth_location.y == 6) {
-        eth_location.y = 1;
-    }
-
-    if (eth_location.x >= 5) {
-        eth_location.x -= 1;
-    }
-    eth_location.x -= 1;
-
-    int flat_index = eth_location.y * 8 + eth_location.x;
-    int tlb_index = flat_index;
+    int32_t tlb_index = ETH_STATIC_TLB_START + target.y;
     return tlb_index;
 }
 
@@ -80,16 +70,7 @@ int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
         TT_ASSERT(false, "Invalid TLB location for ETH core");
         return -1;
     }
-    auto eth_location = tt::umd::blackhole::ETH_LOCATIONS.at(target.y);
-    eth_location.y--;
-    eth_location.x--;
-    if (eth_location.x >= 8) {
-        eth_location.x -= 2;
-    }
-
-    int y = eth_location.y;
-    int flat_index = y * 14 + eth_location.x;
-    int tlb_index = ETH_STATIC_TLB_START + flat_index;
+    int tlb_index = ETH_STATIC_TLB_START + target.y;
     return tlb_index;
 }
 
