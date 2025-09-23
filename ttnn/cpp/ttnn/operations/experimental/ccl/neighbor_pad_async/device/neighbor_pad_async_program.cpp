@@ -252,7 +252,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 virtual_opposite_core.y,                                   // barrier_sem_noc0_y
                 barrier_semaphore.address(),
                 direction ? backward_device_offset : forward_device_offset,
-                direction ? forward_device_offset : backward_device_offset};
+                direction ? backward_device_offset : forward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
                 writer_rt_args.push_back(backward_device.has_value());
