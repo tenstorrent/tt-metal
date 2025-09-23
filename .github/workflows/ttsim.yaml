@@ -152,31 +152,31 @@ ttnn-pytests:
       shell: bash
       working-directory: /work # https://github.com/actions/runner/issues/878
   steps:
-              - name: ⬇️  Setup Job
-                uses: tenstorrent/tt-metal/.github/actions/setup-job@main
-                timeout-minutes: 10
-                with:
-                  wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+    - name: ⬇️  Setup Job
+      uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+      timeout-minutes: 10
+      with:
+        wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-              - name: Checkout ttsim
-                uses: actions/checkout@v4
-                with:
-                  repository: tenstorrent/ttsim
-                  ref: ${{ inputs.ttsim-ref }}
-                  path: docker-job/ttsim
-                  token: ${{ secrets.TTSIM_TOKEN }}
+    - name: Checkout ttsim
+      uses: actions/checkout@v4
+      with:
+        repository: tenstorrent/ttsim
+        ref: ${{ inputs.ttsim-ref }}
+        path: docker-job/ttsim
+        token: ${{ secrets.TTSIM_TOKEN }}
 
-              - name: Build ttsim
-                run: |
-                  cd /work/ttsim/src
-                  ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+    - name: Build ttsim
+      run: |
+        cd /work/ttsim/src
+        ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
 
-              - name: Install ttsim
-                run: |
-                  mkdir -p $TT_METAL_SIMULATOR_HOME
-                  cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
-                  cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+    - name: Install ttsim
+      run: |
+        mkdir -p $TT_METAL_SIMULATOR_HOME
+        cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+        cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
-              - name: Run TTNN Pytests
-                run: |
-                  pytest tests/ttnn/unit_tests/operations/eltwise/test_sub.py
+    - name: Run TTNN Pytests
+      run: |
+        pytest tests/ttnn/unit_tests/operations/eltwise/test_sub.py
