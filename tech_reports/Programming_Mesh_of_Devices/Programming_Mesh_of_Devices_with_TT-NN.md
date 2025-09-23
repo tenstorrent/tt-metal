@@ -58,7 +58,7 @@ MeshDevice is a virtual device abstraction that bundles together multiple physic
 To optimize performance, MeshDevice implements several key optimizations:
 - **Kernel Compilation Broadcasting**: When kernels are compiled for execution on a MeshDevice, the compilation artifacts are automatically broadcasted to all devices in the mesh where applicable, avoiding redundant per-device compilation.
 - **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), MeshDevice leverages the mesh topology to efficiently broadcast data across devices rather than performing individual writes to each device.
-- **Unified Command Dispatch**: Operations are dispatched through mesh-aware command queues that coordinate execution across all devices, ensuring synchronized parallel execution.
+- **Unified Command Dispatch**: Operations are dispatched through mesh-aware command queues that coordinate execution across all devices, ensuring lock-step parallel execution.
 
 While MeshDevice provides these performance optimizations, it maintains explicit control over data distribution and communication patterns. MeshDevice does not hide the distributed nature of the computation - users must explicitly specify:
 - **Data Distribution**: How input tensors are distributed across devices (sharded or replicated) using mesh mappers
@@ -711,7 +711,14 @@ For manual multi-GPU management in a single process, PyTorch provides no built-i
 
 The following examples demonstrate how to perform matrix multiplication followed by an all-gather operation across multiple devices.
 
-#### TT-NN MeshDevice:
+<table>
+<tr>
+<th>TT-NN MeshDevice</th>
+<th>PyTorch Single-Node Multi-GPU</th>
+</tr>
+<tr>
+<td>
+
 
 ```python
 import ttnn
@@ -721,10 +728,13 @@ import torch
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
 
 # Create input tensors
+# Note that ttnn.rand can be used here, however this example
+# demonstrates the use of mesh distribution APIs for generic inputs
 torch_input_a = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
 torch_input_b = torch.randn(1, 1, 128, 256, dtype=torch.bfloat16)
 
 # Replicate input A and shard input B (each device gets 128x128)
+# Supplying `mesh_device` argument implicitly transfers the tensor to device
 input_a = ttnn.from_torch(
     torch_input_a,
     layout=ttnn.TILE_LAYOUT,
@@ -743,11 +753,14 @@ input_b = ttnn.from_torch(
 output = ttnn.matmul(input_a, input_b)
 
 # All-gather to collect results from all devices
+# The gathered tensor stores a copy of the concatenated tensor on each device
 gathered = ttnn.all_gather(output, dim=3, cluster_axis=0)
 
 ```
 
-#### PyTorch Single-Node Multi-GPU:
+</td>
+<td>
+
 
 ```python
 import torch
@@ -787,3 +800,7 @@ for output in outputs:
 # Concatenate gathered outputs along the column dimension to complete all-gather
 final_result = torch.cat(gathered, dim=3)
 ```
+
+</td>
+</tr>
+</table>
