@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+
 #ifndef DEIT_CPP_TT_CPP_HELPER_FUNCS_H
 #define DEIT_CPP_TT_CPP_HELPER_FUNCS_H
 
