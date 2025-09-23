@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+
 #include "helper_funcs.h"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"

@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+
 #include "deit_intermediate.h"
 #include <ttnn/operations/eltwise/unary/unary.hpp>
 #include <stdexcept>
