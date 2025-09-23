@@ -8,6 +8,7 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "ckernel_sfpu_softsign.h"
 #include "ckernel_sfpu_softshrink.h"
+#include "ckernel_sfpu_celu.h"
 
 namespace ckernel {
 
@@ -40,18 +41,18 @@ inline void llk_math_eltwise_unary_sfpu_softsign(uint dst_index, int vector_mode
         ckernel::sfpu::calculate_softsign<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 
+// celu
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_celu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::celu, APPROXIMATE>(
-        ckernel::sfpu::_init_exponential_<APPROXIMATE, /*FAST_APPROX=*/APPROXIMATE, /*SCALE=*/p_sfpu::kCONST_1_FP16B>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::celu, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_celu(
     uint dst_index, uint32_t alpha, uint32_t alpha_recip, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         [](uint32_t alpha, uint32_t alpha_recip) {
-            ckernel::sfpu::_calculate_activation_<APPROXIMATE, ACTIVATION, ITERATIONS>(alpha, alpha_recip);
+            ckernel::sfpu::calculate_celu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>(alpha, alpha_recip);
         },
         dst_index,
         vector_mode,

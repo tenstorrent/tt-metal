@@ -486,7 +486,7 @@ bool DeviceData::validate(IDevice* device) {
 
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
-            if (one_core_data.data.size() == 0) {
+            if (one_core_data.data.empty()) {
                 continue;
             }
 
@@ -1038,7 +1038,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     }
 
     std::vector<CoreCoord> gets_data;
-    while (gets_data.size() == 0) {
+    while (gets_data.empty()) {
         for (auto& [core, one_worker] : device_data.get_data()) {
             if (device_data.core_and_bank_present(core, 0) && one_worker[0].core_type == CoreType::WORKER) {
                 if (send_to_all_g || std::rand() % 2) {
