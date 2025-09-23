@@ -6,8 +6,6 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_metal::detail {
