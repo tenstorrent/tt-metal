@@ -65,9 +65,10 @@ function extractSignificantTokens(str) {
   if (typeof str !== 'string') return [];
   return str
     .split(/\s+[^A-Za-z0-9\s]+\s+/)
+    .flatMap(segment => segment.split(/[\r\n]+/))
     .map(segment => segment.trim())
     .filter(Boolean)
-    .map(segment => segment.replace(/^[^A-Za-z0-9_\-]+|[^A-Za-z0-9_\-]+$/g, ''))
+    .map(segment => segment.replace(/^[^A-Za-z0-9_\-\s]+|[^A-Za-z0-9_\-\s]+$/g, '').trim())
     .filter(segment => segment.replace(/\s+/g, '').length > 1);
 }
 
@@ -95,12 +96,22 @@ function findOwnerForLabel(label) {
     // Fallback to contains list
     if (Array.isArray(mapping.contains)) {
       for (const entry of mapping.contains) {
-        if (entry && typeof entry.needle === 'string' && lbl.includes(entry.needle)) {
+        if (!entry || typeof entry.needle !== 'string') continue;
+        const needle = entry.needle;
+        if (lbl.includes(needle)) {
           return normalizeOwners(entry.owner);
         }
-        if (entry && typeof entry.needle === 'string') {
-          const tail = getNeedleTail(entry.needle);
-          if (tail && labelTokens.includes(tail)) {
+        // Fuzzy match: try last token from needle
+        const tail = getNeedleTail(needle);
+        if (tail && labelTokens.includes(tail)) {
+          return normalizeOwners(entry.owner);
+        }
+        // Additional heuristic: if label tokens end with the last two tokens of the needle
+        const needleTokens = extractSignificantTokens(needle);
+        if (needleTokens.length >= 2 && labelTokens.length >= 2) {
+          const needleTailPair = needleTokens.slice(-2).join(' ');
+          const labelTailPair = labelTokens.slice(-2).join(' ');
+          if (needleTailPair === labelTailPair) {
             return normalizeOwners(entry.owner);
           }
         }
