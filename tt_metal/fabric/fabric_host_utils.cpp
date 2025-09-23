@@ -166,8 +166,7 @@ void set_routing_mode(uint16_t routing_mode) {
     control_plane.set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(
-    Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -360,9 +359,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id) {
     // Check number of corners for 2D meshes
     TT_FATAL(
-        topology_info.corners.size() == 4,
-        "Error during physical chip discovery: missing connections in 2D mesh. Please check ethernet connection "
-        "status");
+        topology_info.corners.size() == 4, "Error during physical chip discovery: missing connections in 2D mesh. Please check ethernet connection status");
 
     // Determine the northwest corner
     chip_id_t nw_corner;
