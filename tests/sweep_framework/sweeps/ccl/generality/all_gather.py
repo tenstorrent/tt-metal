@@ -38,7 +38,7 @@ LEAD_MODEL_SHARD_SPECS = [
         input_shape=(32, 32),
         input_cores=(1, 1),
         input_strategy="w",
-        output_shape=(32, 128),
+        output_shape=None,  # (32, 128) in production on Galaxy
         output_cores=(1, 1),
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 32]],
@@ -47,7 +47,7 @@ LEAD_MODEL_SHARD_SPECS = [
         input_shape=(32, 128),
         input_cores=(2, 4),
         input_strategy="h",
-        output_shape=(32, 128),
+        output_shape=None,  # (32, 128) in production on Galaxy
         output_cores=(2, 4),
         output_strategy="h",
         valid_tensor_shapes=[[1, 8, 8, 128]],
@@ -82,8 +82,8 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 1440],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
-            [1, 1, 32, 32],  # Qwen3
-            [1, 8, 8, 128],  # Qwen3
+            [1, 1, 32, 32],  # Qwen3 dim:3 cluster_axis: 1
+            [1, 8, 8, 128],  # Qwen3 dim:3 cluster_axis: 1
             [3, 1, 4096, 192],  # Gemma3 Dim: 3
             [3, 1, 4096, 144],  # Gemma3 Dim: 3
         ],
@@ -132,21 +132,25 @@ def mesh_device_fixture():
     yield None, "Device creation in sweep body"
 
 
-def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, layout, mem_config, device):
+def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, buffer_type, shard_specs, layout, device):
     torch_input = torch.rand(input_shape).bfloat16()
-
-    tt_input = ttnn.from_torch(
-        torch_input,
-        layout=layout,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        device=device,
-    )
 
     replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
     torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
 
-    return tt_input, torch_reference
+    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+
+    assert input_memory_config.memory_layout == output_memory_config.memory_layout
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        device=device,
+    )
+
+    return tt_input, torch_reference, output_memory_config
 
 
 def run(
@@ -177,17 +181,15 @@ def run(
 
         logger.info("device set up")
 
-        shard_cores, shard_shape = shard_cores_shape
-
-        input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs)
-        tt_input, torch_reference = _get_tensors(
+        tt_input, torch_reference, output_memory_config = _get_tensors(
             input_shape,
             mesh_shape,
             dim,
             cluster_axis,
             input_dtype,
+            buffer_type,
+            shard_specs,
             layout,
-            input_memory_config,
             device,
         )
 

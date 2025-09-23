@@ -70,10 +70,19 @@ LEAD_MODEL_SHARD_SPECS = [
         input_shape=(32, 64),
         input_cores=(4, 6),
         input_strategy="w",
-        output_shape=(32, 128),
-        output_cores=(2, 5),
+        output_shape=None,
+        output_cores=(1, 10),
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 1280]],
+    ),
+    get_serializable_shard_specs(
+        input_shape=(32, 128),
+        input_cores=(4, 6),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(1, 10),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 2560]],
     ),
 ]
 
@@ -116,12 +125,10 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 1280],  # Qwen3 Galaxy. cluster_axis: 0
-            [
-                1,
-                1,
-            ],
+            [1, 1, 32, 2560],  # Qwen3 2x8. Cluster axis 0
         ],
         "cluster_axis": [0],
+        "math_op": [ttnn.ReduceType.Sum],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "buffer_type": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
@@ -175,7 +182,7 @@ def _reference_map_op(math_op):
         raise NotImplementedError(f"Math op: {math_op} not yet implemented in sweep")
 
 
-def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, mem_config, device):
+def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, buffer_type, shard_specs, device):
     """
     Generates a replicated input tensor for the mesh and computes the golden reference tensor.
     """
@@ -186,21 +193,24 @@ def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, 
         torch_input = torch.randint(0, 100, input_shape, dtype=torch.int32)
     else:
         torch_input = torch.rand(input_shape).bfloat16()
-    tt_input = ttnn.from_torch(
-        torch_input,
-        layout=layout,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        memory_config=mem_config,
-        device=device,
-        dtype=dtype,
-    )
 
     # For all-reduce, the golden output is the sum of all replicated inputs.
     # Since the input is the same on all devices, this is equivalent to input * num_devices.
     # The final result is then replicated back to all devices.
     torch_reference = _reference_map_op(math_op)(torch.stack([torch_input] * num_devices_in_cluster), dim=0)
 
-    return tt_input, torch_reference
+    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        memory_config=input_memory_config,
+        device=device,
+        dtype=dtype,
+    )
+
+    return tt_input, torch_reference, output_memory_config
 
 
 def run(
@@ -231,9 +241,8 @@ def run(
         assert tuple(device.shape) == mesh_shape
         logger.info(f"Running test with vector: {locals()}")
 
-        input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs)
-        tt_input, torch_reference = _get_tensors(
-            input_shape, cluster_axis, mesh_shape, math_op, input_dtype, layout, input_memory_config, device
+        tt_input, torch_reference, output_memory_config = _get_tensors(
+            input_shape, cluster_axis, mesh_shape, math_op, input_dtype, layout, buffer_type, shard_specs, device
         )
 
         compute_grid_size = device.compute_with_storage_grid_size()
