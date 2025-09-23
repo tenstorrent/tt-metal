@@ -85,9 +85,8 @@ class Generator:
             rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
-            user_id=transformed_inputs[3],
+            user_id=user_id,  # user_id
             kv_cache=kv_cache,
-            get_last_token=(last_token_idx // 32) * 32,
         )
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Compiling Model")
@@ -100,9 +99,8 @@ class Generator:
             rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
-            user_id=transformed_inputs[3],
+            user_id=user_id,  # user_id
             kv_cache=kv_cache,
-            get_last_token=(last_token_idx // 32) * 32,
         )
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
@@ -117,9 +115,8 @@ class Generator:
             rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
-            user_id=transformed_inputs[3],
+            user_id=user_id,  # user_id
             kv_cache=kv_cache,
-            get_last_token=(last_token_idx // 32) * 32,
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
@@ -188,7 +185,7 @@ class Generator:
 
         device_inputs = copy_host_to_device(host_inputs, device_tensors=device_inputs)
 
-        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=True)
 
         return tt_out_trace
 
@@ -275,6 +272,19 @@ class Generator:
                 )
             # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
             # otherwise, we can process the logits after prefill immediately
+            if enable_trace:
+                logits = ttnn.slice(
+                    logits,
+                    (0, 0, (last_token_idx // 32) * 32, 0),
+                    (1, 1, (last_token_idx // 32) * 32 + 32, logits.shape[-1]),
+                )
+                logits = self.model[model_id].norm(logits, mode="prefill")
+                if self.model[model_id].model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
+                    logits = ttnn.interleaved_to_sharded(
+                        logits, self.model[model_id].model_config["LM_HEAD_INPUT_MEMCFG"]
+                    )
+                logits = self.model[model_id].lm_head(logits)
+                logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if self.data_parallel > 1:
                 out_list.append(logits)
             else:

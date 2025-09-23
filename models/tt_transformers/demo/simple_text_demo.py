@@ -272,8 +272,8 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
-            False,  # paged_attention
+            50,  # max_generated_tokens
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -289,8 +289,8 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
-            False,  # paged_attention
+            50,  # max_generated_tokens
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
