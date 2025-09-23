@@ -41,6 +41,43 @@ ttnn::Tensor torch_to_tt_tensor_tile(
 );
 
 /**
+ * Template function to create concrete tensor from torch tensor and tensor spec
+ * 
+ * @param contiguous_tensor Input torch tensor (must be contiguous)
+ * @param spec Tensor specification for the output tensor
+ * @return ttnn::Tensor created from the input data
+ */
+template<typename T>
+ttnn::Tensor create_concrete(torch::Tensor &contiguous_tensor, tt::tt_metal::TensorSpec &spec);
+
+/**
+ * Template function to create row-major host buffer
+ * 
+ * @param host_buffer Input host buffer
+ * @param tensor_spec Tensor specification
+ * @param padded_output Whether to return padded output
+ * @return Row-major host buffer
+ */
+template <typename T>
+tt::tt_metal::HostBuffer create_row_major_host_buffer(
+    tt::tt_metal::HostBuffer host_buffer, 
+    const tt::tt_metal::TensorSpec& tensor_spec, 
+    const bool padded_output
+);
+
+/**
+ * Get host buffer from tensor
+ * 
+ * @param tt_tensor Input ttnn tensor (must be on host)
+ * @param padded_output Whether to return padded output
+ * @return Host buffer extracted from tensor
+ */
+tt::tt_metal::HostBuffer get_host_buffer_from_tensor(
+    const ttnn::Tensor& tt_tensor, 
+    const bool padded_output = false
+);
+
+/**
  * Convert torch::Tensor to ttnn::Tensor
  * 
  * @param tensor Input torch tensor
@@ -53,7 +90,14 @@ ttnn::Tensor from_torch(
     std::optional<ttnn::DataType> dtype = std::nullopt,
     std::optional<ttnn::Layout> layout = std::nullopt);
 
-at::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output = false);
+/**
+ * Convert ttnn::Tensor to torch::Tensor
+ * 
+ * @param tensor Input ttnn tensor
+ * @param padded_output Whether to return padded output
+ * @return Converted torch tensor
+ */
+torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output = false);
 
 /**
  * Apply layer normalization
