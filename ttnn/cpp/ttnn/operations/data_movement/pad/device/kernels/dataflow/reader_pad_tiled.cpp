@@ -5,19 +5,7 @@
 #include <stdint.h>
 #include <algorithm>
 #include "dataflow_api.h"
-
-static inline int next_index_u32(volatile tt_l1_ptr uint32_t* idx, volatile tt_l1_ptr uint32_t* dims, uint32_t ndims) {
-    // increment least-significant dim first
-    for (uint32_t d = ndims; d-- > 0;) {
-        uint32_t v = idx[d] + 1;
-        if (v < dims[d]) {
-            idx[d] = v;
-            return 1;
-        }
-        idx[d] = 0;  // wrap and carry
-    }
-    return 0;  // overflowed most-significant dim
-}
+#include "common.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
@@ -30,8 +18,8 @@ void kernel_main() {
     const uint32_t start_offset = get_arg_val<uint32_t>(rt_ind++);
     volatile tt_l1_ptr uint32_t* input_page_shape = (tt_l1_ptr uint32_t*)(get_arg_addr(rt_ind));
     volatile tt_l1_ptr uint32_t* output_page_shape = input_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* input_odo = output_page_shape + num_dims;
-    volatile tt_l1_ptr uint32_t* output_odo = input_odo + num_dims;
+    volatile tt_l1_ptr uint32_t* input_id_per_dim = output_page_shape + num_dims;
+    volatile tt_l1_ptr uint32_t* output_id_per_dim = input_id_per_dim + num_dims;
 
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
@@ -40,10 +28,14 @@ void kernel_main() {
     bool within_input_region;
     uint32_t input_page_offset = start_offset;
 
+    // This kernel keeps track of which page (tile) we are on from a logical tensor perspective
+    // and reads from the input tensor only when we are within the input region
+    // The writer will be waiting for the correct page to be available in the input circular buffer
+
     for (uint32_t out_pages_written = 0; out_pages_written < num_pages_to_write; out_pages_written++) {
         within_input_region = true;
         for (uint32_t d = 0; d < num_dims; d++) {
-            if (input_odo[d] < output_odo[d]) {
+            if (input_id_per_dim[d] < output_id_per_dim[d]) {
                 within_input_region = false;
                 break;
             }
@@ -57,8 +49,8 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(input_cb_id, 1);
             input_page_offset++;
-            next_index_u32(input_odo, input_page_shape, num_dims);
+            advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
         }
-        next_index_u32(output_odo, output_page_shape, num_dims);
+        advance_tensor_index(output_id_per_dim, output_page_shape, num_dims);
     }
 }

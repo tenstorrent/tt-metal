@@ -78,7 +78,7 @@ def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value
 @pytest.mark.parametrize("value", [0, 1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout):
+def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout):
     if layout == ttnn.TILE_LAYOUT and dtype != ttnn.bfloat16:
         pytest.skip("tiled multicore pad only supported for bf16")
     for _ in range(2):
