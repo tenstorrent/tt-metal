@@ -27,57 +27,10 @@ namespace wormhole {
 
 static constexpr uint32_t TENSIX_STATIC_TLB_START = 16;
 
-int32_t get_static_tlb_index_virtual(CoreCoord target) {
-    bool is_eth_location =
-        std::find(std::cbegin(tt::umd::wormhole::ETH_LOCATIONS), std::cend(tt::umd::wormhole::ETH_LOCATIONS), target) !=
-        std::cend(tt::umd::wormhole::ETH_LOCATIONS);
-    bool is_tensix_location =
-        std::find(
-            std::cbegin(tt::umd::wormhole::T6_X_LOCATIONS), std::cend(tt::umd::wormhole::T6_X_LOCATIONS), target.x) !=
-            std::cend(tt::umd::wormhole::T6_X_LOCATIONS) &&
-        std::find(
-            std::cbegin(tt::umd::wormhole::T6_Y_LOCATIONS), std::cend(tt::umd::wormhole::T6_Y_LOCATIONS), target.y) !=
-            std::cend(tt::umd::wormhole::T6_Y_LOCATIONS);
-    // implementation migrated from wormhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/wormhole.py` from tensix
-    // repo (t6py-wormhole-bringup branch)
-
-    if (is_eth_location) {
-        if (target.y == 6) {
-            target.y = 1;
-        }
-
-        if (target.x >= 5) {
-            target.x -= 1;
-        }
-        target.x -= 1;
-
-        int flat_index = target.y * 8 + target.x;
-        int tlb_index = flat_index;
-        return tlb_index;
-
-    } else if (is_tensix_location) {
-        if (target.x >= 5) {
-            target.x -= 1;
-        }
-        target.x -= 1;
-
-        if (target.y >= 6) {
-            target.y -= 1;
-        }
-        target.y -= 1;
-
-        int flat_index = target.y * 8 + target.x;
-
-        // All 80 get single 1MB TLB.
-        int tlb_index = tt::umd::wormhole::ETH_LOCATIONS.size() + flat_index;
-
-        return tlb_index;
-    } else {
+int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
+    if (target.y >= tt::umd::wormhole::ETH_LOCATIONS.size()) {
         return -1;
     }
-}
-
-int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
     auto eth_location = tt::umd::wormhole::ETH_LOCATIONS.at(target.y);
     if (eth_location.y == 6) {
         eth_location.y = 1;
@@ -94,22 +47,22 @@ int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
 }
 
 int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
+    if ((target.x >= tt::umd::wormhole::T6_X_LOCATIONS.size()) ||
+        (target.y >= tt::umd::wormhole::T6_Y_LOCATIONS.size())) {
+        return -1;
+    }
     return TENSIX_STATIC_TLB_START + target.y * 8 + target.x;
 }
 
 int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
-    if (target.coord_system == CoordSystem::VIRTUAL) {
-        return get_static_tlb_index_virtual({target.x, target.y});
+    if (target.coord_system != CoordSystem::LOGICAL) {
+        return -1;
     }
-    if (target.coord_system == CoordSystem::LOGICAL) {
-        if (target.core_type == CoreType::ETH) {
-            return get_static_tlb_index_logical_eth({target.x, target.y});
-        }
-        if (target.core_type == CoreType::TENSIX) {
-            return get_static_tlb_index_logical_tensix({target.x, target.y});
-        }
+    switch (target.core_type) {
+        case CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
+        case CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
+        default: return -1;
     }
-    return -1;
 }
 
 }  // namespace wormhole
@@ -234,8 +187,10 @@ void configure_static_tlbs(
 
     std::int32_t address = 0;
     // Setup static TLBs for all worker cores
+    std::cout << "tlb_index part 1\n";
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::LOGICAL)) {
         auto tlb_index = get_static_tlb_index(core);
+        std::cout << "tlb_index: " << tlb_index << "\n";
         // TODO
         // Note: see issue #10107
         // Strict is less performant than Posted, however, metal doesn't presently
@@ -245,8 +200,10 @@ void configure_static_tlbs(
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
     // Setup static TLBs for all eth cores
+    std::cout << "tlb_index part 2\n";
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::ETH, tt::umd::CoordSystem::LOGICAL)) {
         auto tlb_index = get_static_tlb_index(core);
+        std::cout << "tlb_index: " << tlb_index << "\n";
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
 
