@@ -35,7 +35,7 @@ from models.experimental.tt_dit.utils.check import assert_quality
     ids=["encoder_1", "encoder_2"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4), (1, 2)], ids=["t3k", "n300"], indirect=True)
-@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (1, 1)], ids=["1x4", "2x2", "1x1"])
+@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (1, 1), (1, 2)], ids=["1x4", "2x2", "1x1", "1x2"])
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
@@ -58,7 +58,7 @@ def test_clip_encoder(
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
 
     # For N300 with parallel factor = 1, use factor=1 regardless of submesh shape
-    if mesh_device.shape == (1, 2) and submesh_shape == (1, 1):
+    if mesh_device.shape == (1, 2) and (submesh_shape == (1, 1) or submesh_shape == (1, 2)):
         parallel_factor = 1
     else:
         parallel_factor = encoder_submesh.shape[1]
@@ -66,6 +66,7 @@ def test_clip_encoder(
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=parallel_factor, mesh_axis=1),
     )
+    logger.info(f"Parallel factor: {parallel_factor}")
     ccl_manager = CCLManager(
         mesh_device=encoder_submesh,
         num_links=1,
@@ -119,7 +120,13 @@ def test_clip_encoder(
         hidden_act=hf_model.config.hidden_act,
     )
 
-    tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config, eos_token_id)
+    tt_clip = CLIPEncoder(
+        config=config,
+        mesh_device=encoder_submesh,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        eos_token_id=eos_token_id,
+    )
     tt_clip.load_state_dict(hf_model.state_dict())
 
     # times TT model inference only
