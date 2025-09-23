@@ -1,0 +1,41 @@
+# Yolov5x
+
+## Platforms:
+
+Wormhole N150, N300
+
+## Introduction
+**YOLOv5x** is the largest variant in the YOLOv5 series, delivering top-tier accuracy and performance for advanced object detection tasks. It features a deeper and wider architecture, making it ideal for high-precision applications where accuracy is prioritized over model size or inference speed.
+
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+
+## How to Run:
+Use the following command to run the model:
+
+```
+pytest --disable-warnings models/demos/yolov5x/tests/pcc/test_ttnn_yolov5x.py::test_yolov5x
+```
+
+### Model performant running with Trace+2CQ
+- end-2-end perf is 52 FPS
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/yolov5x/tests/perf/test_e2e_performant.py
+```
+
+### Demo
+Note: Output images will be saved in the `models/demos/yolov5x/demo/runs/<model_type>` folder.
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/yolov5x/demo/demo.py
+```
+
+## Details
+- The entry point to the yolov5x is located at:`models/demos/yolov5x/tt/yolov5x.py`
+- Batch Size :1
+- Supported Input Resolution - (640,640) (Height,Width)
