@@ -8,6 +8,7 @@
 #include <core_coord.hpp>
 #include <kernel_types.hpp>
 #include <sub_device_types.hpp>
+#include <tt-metalium/assert.hpp>
 
 namespace tt::tt_metal {
 

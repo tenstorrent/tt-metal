@@ -14,6 +14,7 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/data_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_metal {
 
