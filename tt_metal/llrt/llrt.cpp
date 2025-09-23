@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
-#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
@@ -68,29 +67,29 @@ const ll_api::memory& get_risc_binary(
     ll_api::memory::Loading loading,
     const std::function<void(ll_api::memory&)>& update_callback) {
     static struct {
-      std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
-      std::mutex mutex;
-      std::condition_variable cvar;
+        std::unordered_map<std::string, std::unique_ptr<const ll_api::memory>> map;
+        std::mutex mutex;
+        std::condition_variable cvar;
     } cache;
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
     const ll_api::memory* ptr = nullptr;
     if (inserted) {
-      // We're the first with PATH. Create and insert.
-      lock.unlock();
-      ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
-      if (update_callback) {
-          update_callback(*mutable_ptr);
-      }
+        // We're the first with PATH. Create and insert.
+        lock.unlock();
+        ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
+        if (update_callback) {
+            update_callback(*mutable_ptr);
+        }
 
-      lock.lock();
-      // maps have iterator stability, so SLOT is still valid.
-      slot->second = decltype(slot->second)(mutable_ptr);
-      ptr = mutable_ptr;
-      // We can't wake just those waiting on this slot, so wake them
-      // all. Should be a rare event anyway.
-      cache.cvar.notify_all();
+        lock.lock();
+        // maps have iterator stability, so SLOT is still valid.
+        slot->second = decltype(slot->second)(mutable_ptr);
+        ptr = mutable_ptr;
+        // We can't wake just those waiting on this slot, so wake them
+        // all. Should be a rare event anyway.
+        cache.cvar.notify_all();
     } else {
         if (!slot->second) {
             // Someone else is creating the initial entry, wait for them.
@@ -106,7 +105,7 @@ const ll_api::memory& get_risc_binary(
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ethernet_core) {
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord& ethernet_core) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
         chip_id, ethernet_core);
 }
@@ -172,8 +171,8 @@ void write_launch_msg_to_core(
     }
 }
 
-ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
-
+ll_api::memory read_mem_from_core(
+    chip_id_t chip, const CoreCoord& core, const ll_api::memory& mem, uint64_t local_init_addr) {
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
@@ -184,7 +183,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
 }
 
 bool test_load_write_read_risc_binary(
-    ll_api::memory const& mem,
+    const ll_api::memory& mem,
     chip_id_t chip_id,
     const CoreCoord& core,
     uint32_t core_type_idx,
@@ -205,7 +204,7 @@ bool test_load_write_read_risc_binary(
     // TODO: Move this query into the HAL
     bool local_mem_offset = processor_class_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
 
-    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
+    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr =
             tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
@@ -226,7 +225,7 @@ bool test_load_write_read_risc_binary(
     return true;
 }
 
-void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address) {
+void write_binary_to_address(const ll_api::memory& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address) {
     log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t /*addr*/, uint32_t len_words) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -242,7 +241,7 @@ bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
     return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
 }
 
-static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
+static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord& core, int run_state) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip_id, core);
     const auto& hal = tt_metal::MetalContext::instance().hal();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
@@ -273,13 +272,15 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
 }
 
 void wait_until_cores_done(
-    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms) {
+    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms) {
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-    if (is_simulator) timeout_ms = 0;
+    if (is_simulator) {
+        timeout_ms = 0;
+    }
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -308,8 +309,8 @@ void wait_until_cores_done(
         }
 #endif
 
-        for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
-            const auto &phys_core = *it;
+        for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end();) {
+            const auto& phys_core = *it;
 
             bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
 
