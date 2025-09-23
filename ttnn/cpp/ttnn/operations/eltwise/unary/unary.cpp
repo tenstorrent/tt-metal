@@ -257,7 +257,7 @@ Tensor Sigmoid_accurate::invoke(
     return detail::unary_impl(
         input,
         {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP, 1.0f),
+         UnaryWithParam(UnaryOpType::EXP),
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
