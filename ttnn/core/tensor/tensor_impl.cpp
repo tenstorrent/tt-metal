@@ -622,16 +622,19 @@ DeviceStorage to_device_mesh_buffer(
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     const TensorAttributes& host_tensor_attributes,
+    bool& fully_replicated,
     std::optional<ttnn::QueueId> cq_id) {
     return std::visit(
         tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const HostStorage& storage) {
+            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &fully_replicated](
+                const HostStorage& storage) {
                 const auto& host_storage_shape = storage.buffer().shape();
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();
                 if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
                     host_storage_shape == distributed::MeshShape(1, 1)) {
                     // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
                     const auto device_buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+                    fully_replicated = true;
                     return replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id);
                 } else {
                     TT_FATAL(
@@ -667,9 +670,15 @@ Tensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
-    DeviceStorage mesh_storage =
-        to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, cq_id);
-    return Tensor(std::move(mesh_storage), *tensor_spec, tensor.tensor_topology());
+    bool fully_replicated = false;
+    DeviceStorage mesh_storage = to_device_mesh_buffer<T>(
+        tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, fully_replicated, cq_id);
+    auto tensor_topology =
+        fully_replicated
+            ? TensorTopology(
+                  mesh_device->shape(), tensor.tensor_topology().placements(), tensor.tensor_topology().mesh_coords())
+            : tensor.tensor_topology();
+    return Tensor(std::move(mesh_storage), *tensor_spec, tensor_topology);
 }
 
 template <typename T>
@@ -741,13 +750,24 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         "Host tensor has different page config");
 
     auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
+    bool fully_replicated = false;
 
     DeviceStorage mesh_storage = to_device_mesh_buffer<T>(
-        host_tensor.storage(), mesh_buffer, device_tensor.tensor_spec(), *host_tensor.tensor_attributes, cq_id);
+        host_tensor.storage(),
+        mesh_buffer,
+        device_tensor.tensor_spec(),
+        *host_tensor.tensor_attributes,
+        fully_replicated,
+        cq_id);
+    auto tensor_topology = fully_replicated ? TensorTopology(
+                                                  device_tensor.device()->shape(),
+                                                  device_tensor.tensor_topology().placements(),
+                                                  device_tensor.tensor_topology().mesh_coords())
+                                            : device_tensor.tensor_topology();
     device_tensor = Tensor(
         std::move(mesh_storage),
         host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        device_tensor.tensor_topology());  // TODO (#25340): Add test for this
+        tensor_topology);  // TODO (#25340): Add test for this
 }
 
 template Tensor to_device<bfloat16>(
