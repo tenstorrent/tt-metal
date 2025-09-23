@@ -564,18 +564,24 @@ class TtLlamaAttention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        if chunk_start_idx is not None:
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+        # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
+        # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
+        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
+        if ring_distributed_sdpa:
+            # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
+            # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
+            # This ensures each device processes two complementary chunks of the attention matrix
+            attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
-                keys_BKSD,
-                values_BKSD,
-                page_table,
-                chunk_start_idx,
+                k_heads_1KSD_8b,
+                v_heads_1VSD_8b,
+                ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
+                scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
-            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+            attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
@@ -590,10 +596,6 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = (
-            attn_output_84SD  # ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
-        )
-
         ###
         # Output matmul
         ###
@@ -603,6 +605,35 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
+        if ring_distributed_sdpa:
+            # Split the attention output into two chunks along the sequence dimension for ring all-gather
+            # 4 = ring_size (number of devices in ring), 2 = number of chunks per device
+            attn_output_11SH_chunks = ttnn.split(attn_output_11SH, seq_len // 4 // 2, dim=2)
+            attn_output_11SH.deallocate(True)
+
+            # Perform ring all-gather on the first chunk (normal order)
+            attn_output_11SH_chunk_0 = self.tt_ccl.ring_all_gather(
+                attn_output_11SH_chunks[0],
+                dim=2,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SDPA",
+            )
+            attn_output_11SH_chunks[0].deallocate(True)
+
+            # Perform ring all-gather on the second chunk (reverse order)
+            attn_output_11SH_chunk_1 = self.tt_ccl.ring_all_gather(
+                attn_output_11SH_chunks[1],
+                dim=2,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                reverse_order=True,
+                buffer_key="SDPA_REVERSE",
+            )
+            attn_output_11SH_chunks[1].deallocate(True)
+
+            # Concatenate the gathered chunks along the sequence dimension to form the final output
+            attn_output_11SH = ttnn.concat([attn_output_11SH_chunk_0, attn_output_11SH_chunk_1], dim=2)
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 

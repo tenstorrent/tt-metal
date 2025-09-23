@@ -1,4 +1,3 @@
-# models/demos/deepseek_v3/tests/test_embedding_1d.py
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +7,10 @@ import torch
 from loguru import logger
 
 # Import from local reference files instead of HuggingFace
-from torch.nn import Embedding
+from torch.nn import Embedding as EmbeddingReference
 
 import ttnn
-from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
+from models.demos.deepseek_v3.tt.embedding import Embedding
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -56,7 +55,7 @@ def test_embedding_forward_pass(
     module_path = "model.embed_tokens"
 
     if generate_reference_io:
-        reference_model = Embedding(
+        reference_model = EmbeddingReference(
             hf_config.vocab_size,
             hf_config.hidden_size,
             hf_config.pad_token_id,
@@ -71,9 +70,9 @@ def test_embedding_forward_pass(
 
     # Generate module configs and state
     logger.info("Setting up TTNN configs")
-    weight_config = Embedding1D.convert_weights(hf_config, [state_dict], tmp_path, mesh_device)
-    model_config = get_model_config(Embedding1D, mode, hf_config, mesh_device)
-    model_state = Embedding1D.create_state(hf_config, mesh_device, ccl)
+    weight_config = Embedding.convert_weights(hf_config, [state_dict], tmp_path, mesh_device)
+    model_config = get_model_config(Embedding, mode, hf_config, mesh_device)
+    model_state = Embedding.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN
@@ -89,7 +88,7 @@ def test_embedding_forward_pass(
 
     # TTNN forward pass
     logger.info("Running TTNN forward pass")
-    tt_output = run_module_forward(Embedding1D, mode, tt_input_ids, run_config)
+    tt_output = run_module_forward(Embedding, mode, tt_input_ids, run_config)
 
     # Convert output back to torch
     logger.info("Validating output")
