@@ -305,10 +305,11 @@ void FabricControlChannelConfig::get_compile_time_args(std::vector<uint32_t>& ct
         this->local_buffer_remote_read_counter_base_address,
         this->staging_packet_buffer_address};
     ct_args.insert(ct_args.end(), control_channel_args.begin(), control_channel_args.end());
-    static bool requires_forced_assignment_to_noc1() {
-        return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-               get_num_riscv_cores() == 1;
-    }
+}
+
+static bool requires_forced_assignment_to_noc1() {
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
+}
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
