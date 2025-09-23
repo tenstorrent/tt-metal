@@ -299,7 +299,7 @@ def main(
     \b
     Mock testing:
 
-    For Control plane internal testing, we can use a mock cluster descriptor to initilaize control plane without
+    For Control plane internal testing, we can use a mock cluster descriptor to initialize control plane without
     any hardware dependencies. To enable mock cluster, use the --mock-cluster-rank-binding flag to specify the mock cluster descriptor mapping file.
     The mock cluster descriptor mapping file is a YAML file that maps each rank to a mock cluster descriptor file.
 
