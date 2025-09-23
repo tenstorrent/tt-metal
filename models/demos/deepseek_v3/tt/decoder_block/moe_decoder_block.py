@@ -43,7 +43,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             ),
             "moe": [
                 (
-                    MoE.convert_weights(hf_config, [state_dict], output_path / f"moe_{i}", mesh_device)
+                    MoE.convert_weights(hf_config, (state_dict,), output_path / f"moe_{i}", mesh_device)
                     if state_dict is not None
                     else None
                 )
