@@ -197,9 +197,9 @@ ttnn::Tensor TtDeiTForImageClassificationWithTeacher::extract_cls_token(const tt
         uint32_t batch_size = shape[0];
         uint32_t hidden_size = shape[2];
 
-        std::array<uint32_t, 3> slice_start = {0, 0, 0};
-        std::array<uint32_t, 3> slice_end = {batch_size, 1, hidden_size};
-        std::array<uint32_t, 3> slice_step = {1, 1, 1};
+        ttnn::SmallVector<uint32_t> slice_start = {0, 0, 0};
+        ttnn::SmallVector<uint32_t> slice_end = {batch_size, 1, hidden_size};
+        ttnn::SmallVector<uint32_t> slice_step = {1, 1, 1};
 
         auto cls_token = ttnn::slice(sequence_output, slice_start, slice_end, slice_step);
 
@@ -236,9 +236,9 @@ ttnn::Tensor TtDeiTForImageClassificationWithTeacher::extract_distillation_token
         uint32_t batch_size = shape[0];
         uint32_t hidden_size = shape[2];
 
-        std::array<uint32_t, 3> slice_start = {0, 1, 0};
-        std::array<uint32_t, 3> slice_end = {batch_size, 2, hidden_size};
-        std::array<uint32_t, 3> slice_step = {1, 1, 1};
+        ttnn::SmallVector<uint32_t> slice_start = {0, 1, 0};
+        ttnn::SmallVector<uint32_t> slice_end = {batch_size, 2, hidden_size};
+        ttnn::SmallVector<uint32_t> slice_step = {1, 1, 1};
 
         auto distillation_token = ttnn::slice(sequence_output, slice_start, slice_end, slice_step);
 
