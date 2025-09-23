@@ -220,6 +220,7 @@ def test_motif(
         modulation_dim=modulation_dim,
         context_pre_only=is_last_block,
         context_head_scaling=True,
+        add_attention_to_output=False,
         mesh_device=submesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -253,7 +254,7 @@ def test_motif(
         tt_spatial_out,
         mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
     )
-    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.9978, relative_rmse=0.07)
+    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.99998, relative_rmse=0.006)
 
     if is_last_block:
         assert tt_prompt_out is None
@@ -265,4 +266,4 @@ def test_motif(
         tt_prompt_out,
         mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
     )[:batch_size]
-    assert_quality(torch_prompt, tt_prompt_torch, pcc=0.9978, relative_rmse=0.07)
+    assert_quality(torch_prompt, tt_prompt_torch, pcc=0.99998, relative_rmse=0.006)

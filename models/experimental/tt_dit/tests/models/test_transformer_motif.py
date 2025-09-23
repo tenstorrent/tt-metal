@@ -181,7 +181,7 @@ def test_transformer_motif(
         mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
     )[:batch_size].permute(0, 3, 1, 2)
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.997, relative_rmse=8.1)
+    assert_quality(torch_output, tt_output_torch, pcc=0.9986, relative_rmse=5.6)
 
 
 def _combine_prompt_embeddings(t5: torch.Tensor, clip_a: torch.Tensor, clip_b: torch.Tensor) -> torch.Tensor:
