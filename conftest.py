@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import re
 import torch
 import random
 import os
@@ -1106,3 +1107,29 @@ def pytest_configure(config):
         new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
         new_xmlpath = os.path.join(directory, new_filename)
         config.option.xmlpath = new_xmlpath
+
+
+# -----------------------------------------------------------------------------
+# Normalize pytest nodeids to remove non-deterministic memory addresses
+# This helps xdist workers agree on collected tests when parameter reprs include
+# process-specific pointers like 'at 0x7f...>' or '0x7f...'
+# -----------------------------------------------------------------------------
+_ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
+_AT_ADDR_RE = re.compile(r"\s+at\s+0x[0-9a-fA-F]+(?=>)")
+
+
+def _normalize_nodeid(nid: str) -> str:
+    # Replace common ' at 0x...>' tails first to keep surrounding formatting
+    nid = _AT_ADDR_RE.sub(" at 0xADDR", nid)
+    # Replace any remaining raw hex pointer patterns
+    nid = _ADDR_RE.sub("0xADDR", nid)
+    return nid
+
+
+def pytest_collection_modifyitems(session, config, items):
+    for item in items:
+        try:
+            item._nodeid = _normalize_nodeid(item.nodeid)
+        except Exception:
+            # Best-effort normalization; ignore if pytest internals change
+            pass
