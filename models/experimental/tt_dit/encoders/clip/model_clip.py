@@ -9,7 +9,7 @@ from ...utils.tensor import bf16_tensor
 from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
-from ...layers.feedforward import ParallelFeedForward
+from ...layers.feedforward import ParallelFeedForward, FeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ttnn.distributed.distributed import ConcatMeshToTensor
 
@@ -215,7 +215,7 @@ class CLIPEncoder:
                 dtype=seq_emb.get_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
             )
 
 
@@ -285,14 +285,22 @@ class CLIPEncoderLayer:
         self.layer_norm_eps = config.layer_norm_eps
         self.self_attn = CLIPAttention(config, mesh_device, ccl_manager, parallel_config)
         self.parallel_config = parallel_config
-        self.mlp = ParallelFeedForward(
-            dim=config.embed_dim,
-            dim_out=config.embed_dim,
-            activation_fn=config.hidden_act,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            ccl_manager=ccl_manager,
-        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            self.mlp = ParallelFeedForward(
+                dim=config.embed_dim,
+                dim_out=config.embed_dim,
+                activation_fn=config.hidden_act,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.mlp = FeedForward(
+                dim=config.embed_dim,
+                dim_out=config.embed_dim,
+                activation_fn=config.hidden_act,
+                mesh_device=mesh_device,
+            )
         self.ccl_manager = ccl_manager
 
     def load_state_dict(self, state_dict):
