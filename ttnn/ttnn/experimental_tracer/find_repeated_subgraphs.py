@@ -17,9 +17,18 @@ from tracer_backend_utils import (
     AtenConvolution,
     AtenScaledDotProductFlashAttention,
     WRAPPED_OPERATION_REGISTRY,
-    to_valid_variable_name,
 )
-from tracer_backend import create_graph_json_structure, OperationGraph
+from tracer_backend import (
+    create_graph_json_structure,
+    OperationGraph,
+    Trackable_Tensor,
+    get_input_tensors,
+    TracerData,
+    set_is_graph_output,
+    generate_graph_and_visualize,
+    wrap_state_dict,
+    register_module_hooks,
+)
 from typing import ClassVar, List, Dict, Any, Tuple, Optional
 from collections import defaultdict
 
@@ -148,6 +157,10 @@ class CompositeOperation(Operation):
                     elif isinstance(arg, ConstantTensor):
                         CompositeOperation.ALL_CONSTANTS[arg.id] = arg
                         consts.append(arg.generate_code())
+                    elif arg is None or isinstance(arg, (int, float, str, bool)):
+                        pass
+                    else:
+                        print(f"Warning: Unsupported arg type {type(arg)} in operation {op}")
             if var_name is not None:
                 local_var_names.append(var_name)
             if len(arg_list) > 0:
@@ -166,18 +179,18 @@ class CompositeOperation(Operation):
         self.local_var_names, self.code_lines, self.vars, self.consts = local_var_names, code_lines, args, consts
         return local_var_names, code_lines, args, consts
 
+    @property
+    def fun_name(self) -> str:
+        return to_valid_variable_name(self.id)
+
     def generate_code(self) -> str:
         """Generate PyTorch code for this operation."""
         _, fun_body = self.get_fun_body()
         var_names, code_lines, arg_names, consts = self.get_code_lines_and_args()
         args_not_in_var_names = list(dict.fromkeys(arg for arg in arg_names if arg not in var_names))
         args_not_in_var_names = list(args_not_in_var_names) + consts
-        if not self.is_duplicate(fun_body):
-            CompositeOperation.generated_code[fun_body] = self.id
-        else:
-            CompositeOperation.duplicate_ops[self.id] = CompositeOperation.generated_code[fun_body]
         if not self.is_duplicate(fun_body) or not CompositeOperation.prune:
-            result = f"{self.output_var_name()} = {self.id}({','.join(args_not_in_var_names)  if len(args_not_in_var_names) > 0 else ''})"
+            result = f"{self.output_var_name()} = {self.fun_name}({','.join(args_not_in_var_names)  if len(args_not_in_var_names) > 0 else ''})"
         else:
             result = f"{self.output_var_name()} = {CompositeOperation.generated_code[fun_body]}({','.join(args_not_in_var_names) if len(args_not_in_var_names) > 0 else ''})"
         return result
@@ -193,8 +206,7 @@ class CompositeOperation(Operation):
         args_not_in_var_names = list(dict.fromkeys([arg for arg in arg_names if arg not in var_names]))
         args_not_in_var_names = list(args_not_in_var_names)
         new_line = "\n    "
-        orig_func = f"""
-def {self.id}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_names) > 0 else ""}{"*args" if len(consts) > 0 else ""}):
+        orig_func = f"""def {self.fun_name}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_names) > 0 else ""}{"*args" if len(consts) > 0 else ""}):
     {new_line.join(code_lines)}
     return {self.output_var_name()} END
 """
@@ -240,10 +252,13 @@ def {self.id}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_nam
         ## Add graph outputs here.
         if self.id == "main":
             new_func = new_func.replace("return OUTPUT END", "return")
-        for arg in var_names + arg_names:
-            if arg in new_func:
-                print(f"WARNING: {arg} is still in {self.id}, this may cause issues.")
-        fun_body = new_func.split(f"def {self.id}")[1]
+        fun_body = new_func.split(f"def {self.fun_name}")[1]
+        args_not_in_var_names = list(dict.fromkeys(arg for arg in arg_names if arg not in var_names))
+        args_not_in_var_names = list(args_not_in_var_names) + consts
+        if not self.is_duplicate(fun_body):
+            CompositeOperation.generated_code[fun_body] = self.fun_name
+        else:
+            CompositeOperation.duplicate_ops[self.fun_name] = CompositeOperation.generated_code[fun_body]
         if CompositeOperation.prune:
             for op in CompositeOperation.duplicate_ops:
                 new_func = new_func.replace(f"{op}(", f"{CompositeOperation.duplicate_ops[op]}(")
@@ -252,10 +267,11 @@ def {self.id}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_nam
         return new_func, fun_body
 
     def is_duplicate(self, fun_body: Optional[str] = None) -> bool:
-        self.get_fun_body()
+        if fun_body is None:
+            _, fun_body = self.get_fun_body()
         return (
-            self.fun_body in CompositeOperation.generated_code
-            and self.id != CompositeOperation.generated_code[self.fun_body]
+            fun_body in CompositeOperation.generated_code
+            and self.fun_name != CompositeOperation.generated_code[fun_body]
         )
 
     def generate_import_code(self) -> List[str]:
@@ -265,15 +281,15 @@ def {self.id}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_nam
             "_tensor_io_log = []",
         ]
         new_func, fun_body = self.get_fun_body()
+        for op in self.sub_operations:
+            import_code.extend(op.generate_import_code())
         if not self.is_duplicate():
-            CompositeOperation.generated_code[fun_body] = self.id
-            for op in self.sub_operations:
-                import_code.extend(op.generate_import_code())
+            CompositeOperation.generated_code[fun_body] = self.fun_name
             import_code.append("@track_input_output(_tensor_io_log=_tensor_io_log)\n" + new_func)
         else:
-            CompositeOperation.duplicate_ops[self.id] = CompositeOperation.generated_code[fun_body]
+            CompositeOperation.duplicate_ops[self.fun_name] = CompositeOperation.generated_code[fun_body]
             if not CompositeOperation.prune:
-                import_code.append(f"{self.id} = {CompositeOperation.generated_code[fun_body]}")
+                import_code.append(f"{self.fun_name} = {CompositeOperation.generated_code[fun_body]}")
         return import_code
 
 
@@ -324,7 +340,11 @@ def hash_dict(d: Dict[str, Any]) -> str:
 
 
 def merge_nodes_as_composite(
-    operation_graph: OperationGraph, main_output: str, ancestors: List[str]
+    operation_graph: OperationGraph,
+    main_output: Optional[str],
+    ancestors: List[str],
+    prefix="COMPOSITE",
+    keep_existing_name=False,
 ) -> Optional[CompositeOperation]:
     """
     Merge a set of nodes into a CompositeOperation node in the graph G.
@@ -334,7 +354,9 @@ def merge_nodes_as_composite(
     incoming = set()
     outgoing = set()
     G = operation_graph.graph
-    nodes_to_merge = [main_output] + ancestors
+    nodes_to_merge = [i for i in ancestors]
+    if main_output is not None:
+        nodes_to_merge = [main_output] + nodes_to_merge
     nodes_to_merge_set = set(nodes_to_merge)
     try:
         for n in nodes_to_merge_set:
@@ -348,22 +370,20 @@ def merge_nodes_as_composite(
         # If any node in nodes_to_merge is not in G, we cannot merge. Continue iteration
         return None
 
+    H = G.subgraph(nodes_to_merge)
+    # Get the topological order for the subset
+    order = list(nx.topological_sort(H))
+    if main_output is None and len(order):
+        main_output = order[-1]
     if len(set([out_edge[0] for out_edge in outgoing if out_edge[0] != main_output])) != 0:
         return None
 
     if len(ancestors) == 0 and isinstance(G.nodes[main_output]["operation"], CompositeOperation):
         return None
-
-    composite_node = f"COMPOSITE_{CompositeOperation.counter}"
-    if composite_node in G.nodes:
-        # If the composite node already exists, we cannot merge
-        print(f"FOUND NODE {composite_node} ALREADY IN GRAPH, CANNOT MERGE")
-        return None
-    H = G.subgraph(nodes_to_merge)
-
-    # Get the topological order for the subset
-    order = list(nx.topological_sort(H))
-
+    if keep_existing_name:
+        prefix = G.nodes[main_output]["operation"].unique_name + "_" + prefix
+    composite_node = f"{prefix}_{CompositeOperation.counter}"
+    assert composite_node not in G.nodes, f"FOUND NODE {composite_node} ALREADY IN GRAPH, CANNOT MERGE"
     composite_op = CompositeOperation(
         id=composite_node,
         unique_name=G.nodes[main_output]["operation"].unique_name,
@@ -422,11 +442,39 @@ def combine_conv_bn_relu(operation_graph: OperationGraph):
                         if isinstance(bn_pred_op, AtenConvolution):
                             # We have a conv -> bn -> relu pattern, merge them
                             composite_op = merge_nodes_as_composite(
-                                operation_graph, main_output=node, ancestors=[pred_node, pred_node2, bn_pred_node]
+                                operation_graph,
+                                main_output=node,
+                                ancestors=[pred_node, pred_node2, bn_pred_node],
+                                keep_existing_name=True,
                             )
                             if composite_op is not None:
                                 changed = True
                                 break
+            elif isinstance(op, TupleOp):
+                predecessors = list(G.predecessors(node))
+                if len(predecessors) != 1:
+                    continue
+                pred_node2 = predecessors[0]
+                pred_op2 = G.nodes[pred_node2]["operation"]
+                if isinstance(pred_op2, AtenNativeBatchNorm):
+                    bn_predecessors = list(G.predecessors(pred_node2))
+                    if len(bn_predecessors) != 1:
+                        continue
+                    bn_pred_node = bn_predecessors[0]
+                    if bn_pred_node not in G.nodes:
+                        continue
+                    bn_pred_op = G.nodes[bn_pred_node]["operation"]
+                    if isinstance(bn_pred_op, AtenConvolution):
+                        # We have a conv -> bn -> relu pattern, merge them
+                        composite_op = merge_nodes_as_composite(
+                            operation_graph,
+                            main_output=node,
+                            ancestors=[pred_node2, bn_pred_node],
+                            keep_existing_name=True,
+                        )
+                        if composite_op is not None:
+                            changed = True
+                            break
     return operation_graph
 
 
@@ -435,7 +483,9 @@ def make_every_node_composite(operation_graph: OperationGraph):
     for node in list(G.nodes):
         op = G.nodes[node]["operation"]
         if not isinstance(op, (CompositeOperation, InputOp)):
-            composite_op = merge_nodes_as_composite(operation_graph, main_output=node, ancestors=[])
+            composite_op = merge_nodes_as_composite(
+                operation_graph, main_output=node, ancestors=[], keep_existing_name=True
+            )
             if composite_op is not None:
                 G.nodes[composite_op.id]["operation"] = composite_op
     return operation_graph
@@ -678,7 +728,12 @@ def combine_ops(
             if nodes[0] not in old_fingerprints or old_fingerprints[nodes[0]] != fp:
                 changed = True
                 old_fingerprints[nodes[0]] = fp
-                composite_op = merge_nodes_as_composite(operation_graph, nodes[0], nodes[1])
+                composite_op = merge_nodes_as_composite(
+                    operation_graph,
+                    nodes[0],
+                    nodes[1],
+                    keep_existing_name=True,
+                )
                 if composite_op is not None:
                     composite_ops[composite_op.id] = composite_op
     return changed
@@ -780,3 +835,174 @@ def find_repeated_subgraphs(
         )
     ConstantTensor.ConstantTensorFromModel = orig_config
     return new_operation_graph, composite_ops
+
+
+def make_tree():
+    """Helper to create recursive dict structure."""
+    return {"nodes": [], "children": {}}
+
+
+def group_nodes_hierarchical(node_map):
+    """
+    Build hierarchical grouping of nodes.
+
+    Args:
+        node_map (dict): {node_id: path}
+
+    Returns:
+        dict: nested structure of groups
+    """
+    root = {}
+
+    for node_id, path in node_map.items():
+        # Extract counter
+        if "/" in path:
+            base, counter = path.rsplit("/", 1)
+        else:
+            base, counter = path, "0"
+
+        # Parent path (drop last ".suffix" if present)
+        if "." in base:
+            parent_base = base.rsplit(".", 1)[0]
+        else:
+            parent_base = None
+
+        # Current group key
+        group_key = f"{parent_base or base} -> {counter}"
+
+        # Traverse down the hierarchy
+        current = root
+        segments = (parent_base or base).split(".")
+        full_path = []
+        for seg in segments:
+            full_path.append(seg)
+            key = ".".join(full_path) + f" -> {counter}"
+            if key not in current:
+                current[key] = make_tree()
+            current = current[key]["children"]
+
+        # Place node here
+        if group_key not in current:
+            current[group_key] = make_tree()
+        current[group_key]["nodes"].append(node_id)
+
+    return root
+
+
+def get_most_nested_children(tree):
+    """
+    Recursively find the most nested children (deepest leaves) from the hierarchical tree.
+    """
+    result = {}
+
+    def dfs(node, path):
+        # If node has no children, it's a leaf -> add to result
+        if not node.get("children"):
+            result[path] = node["nodes"]
+        else:
+            for child_name, child_node in node["children"].items():
+                dfs(child_node, child_name)
+
+    for group_name, group_node in tree.items():
+        dfs(group_node, group_name)
+
+    return result
+
+
+def merge_nodes(operation_graph, ancestors, group_name):
+    G = operation_graph.graph
+    composite_op = merge_nodes_as_composite(
+        operation_graph,
+        main_output=None,
+        ancestors=ancestors,
+        prefix="_".join(group_name.split(" -> ")) + "_COMPOSITE",
+    )
+    if composite_op is not None:
+        G.nodes[composite_op.id]["operation"] = composite_op
+        return [composite_op.id]
+    return ancestors
+
+
+def merge_nested_tree(tree, operation_graph):
+    all_nodes = []
+    for group_name, group_node in tree.items():
+        if len(group_node["children"]) > 0:
+            assert group_node["nodes"] == [], "Group node should not have both children and nodes"
+            nodes = []
+            for child_name, child_node in group_node["children"].items():
+                nodes.extend(merge_nested_tree({child_name: child_node}, operation_graph))
+            group_node["nodes"] = list(set(nodes))
+        if len(group_node["nodes"]) > 1:
+            all_nodes.extend(merge_nodes(operation_graph, group_node["nodes"], group_name))
+        elif len(group_node["nodes"]) == 1:
+            all_nodes.extend(group_node["nodes"])
+    return list(set(all_nodes))
+
+
+def trace_model_structure(
+    model,
+    input_shapes,
+    input_dtypes=None,
+    dump_visualization=False,
+    wrap_operations=True,
+    save_original_tensors=True,
+    track_params=True,
+) -> OperationGraph:
+    """
+    Trace the PyTorch model with the given input tensor.
+
+    Args:
+        model: The PyTorch model to trace.
+        input_shapes: List of shapes for the input tensors.
+        dump_visualization: If True, dump the visualization to a JSON file.
+
+    Returns:
+        OperationGraph: The operation graph generated from the traced model.
+
+        if wrap_operations is True, the OperationGraph will be wrapped in WrappedOperationGraph.
+
+    """
+
+    assert len(input_shapes) > 0, "Input shapes must be provided"
+
+    tracer = TracerData(save_original_tensors=save_original_tensors)
+    if track_params:
+        state_dict = model.state_dict()
+        Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
+        wrapped_state_dict = wrap_state_dict(state_dict)
+        model.load_state_dict(wrapped_state_dict, assign=True)
+    else:
+        Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
+    input_tensors = get_input_tensors(input_shapes, input_dtypes)
+    module_calls = {}
+    handles = register_module_hooks(model, module_calls=module_calls)
+    outputs = model(*input_tensors)
+    set_is_graph_output(outputs)
+    # remove the hooks after tracing
+    for handle in handles:
+        handle.remove()
+
+    tracer.finalize_graph()
+    operation_graph = generate_graph_and_visualize(tracer, dump_visualization, wrap_operations)
+
+    id_to_module = {}
+    for op in operation_graph.graph.nodes:
+        operation = operation_graph.graph.nodes[op]["operation"]
+        id_to_module[op] = operation.unique_name
+    tree = group_nodes_hierarchical(id_to_module)
+    with open("tree.json", "w") as f:
+        json.dump(tree, f, indent=2)
+    combine_constants(operation_graph)
+    combine_conv_bn_relu(operation_graph)
+    merge_nested_tree(tree, operation_graph)
+    composite_ops: Dict[str, CompositeOperation] = {}
+    compute_subgraph_fingerprints(operation_graph, composite_ops)
+    make_every_node_composite(operation_graph)
+    json_structure = create_graph_json_structure(operation_graph)
+    # Write the JSON structure to the specified output file
+    with open("combined_operation_graph_viz.json", "w") as f:
+        json.dump(json_structure, f, indent=2)
+        print(
+            f"Dumped visualization to combined_operation_graph_viz.json. Load it into netron.app to visualize the model."
+        )
+    return operation_graph

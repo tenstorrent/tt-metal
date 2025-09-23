@@ -140,7 +140,7 @@ def extract_composite_functions(filename):
     composite_funcs = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and (
-            re.match(r"COMPOSITE_\w+", node.name) or re.match(r"main", node.name)
+            re.match(r".*COMPOSITE_\w+", node.name) or re.match(r"main", node.name)
         ):
             # Extract the function source code using line numbers
             start = node.lineno - 1

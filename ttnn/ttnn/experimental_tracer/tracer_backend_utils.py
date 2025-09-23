@@ -1013,9 +1013,6 @@ class InputOp(Operation):
 class TupleOp(Operation):
     """Represents a tuple operation in the graph."""
 
-    def __post_init__(self):
-        self.unique_name = self.output_var_name()
-
     def generate_code(self) -> str:
         """Generate PyTorch code for this operation."""
         index = self.kwargs["index"]

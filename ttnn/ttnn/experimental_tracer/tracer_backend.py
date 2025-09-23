@@ -38,19 +38,20 @@ def no_dispatch() -> Iterator[None]:
 
 
 class TracerData:
+    id: int = 0
+
     def __init__(self, save_original_tensors=False):
         self.graph_output_to_input: Dict[str, List[TrackableTensorArgument]] = {}
         self.graph_output_to_node: Dict[str, Dict[str, Any]] = {}
         self.post_run_output_to_input: Dict[str, List[TrackableTensorArgument]] = {}
         self.post_run_output_to_node: Dict[str, Dict[str, Any]] = {}
         self.constants: Dict[str, ConstantTensor] = {}
-        self.id = 0
         self.save_original_tensors = save_original_tensors
         ConstantTensor.ConstantTensorFromModel = save_original_tensors
 
     def get_next_id(self):
-        current_id = self.id
-        self.id += 1
+        current_id = TracerData.id
+        TracerData.id += 1
         return current_id
 
     def topological_sort_reorder(self):
@@ -122,6 +123,190 @@ class TracerData:
         }
         return json.dumps(stats, indent=2)
 
+    # Remove all instances of Trackable_Tensor from tracer data structures
+    def remove_trackable_tensors(self):
+        for key, value in self.graph_output_to_input.items():
+            self.graph_output_to_input[key] = [
+                arg.to_frozen() if isinstance(arg, (Trackable_Tensor, TrackableTensorArgument)) else arg
+                for arg in value
+            ]
+        for key, value in self.graph_output_to_node.items():
+            if isinstance(value["args"], (list, tuple)):
+                value["args"] = tree_map(
+                    lambda arg: arg.to_frozen() if isinstance(arg, Trackable_Tensor) else arg,
+                    value["args"],
+                )
+
+            if isinstance(value["res"], Trackable_Tensor):
+                self.graph_output_to_node[key]["res"] = value["res"].to_frozen()
+            if isinstance(value["res"], (list, tuple)):
+                value["res"] = tree_map(
+                    lambda res: res.to_frozen() if isinstance(res, Trackable_Tensor) else res,
+                    value["res"],
+                )
+
+    def remove_None_and_fix_inplace(self):
+        """
+        Remove None values from the input tensors and fix in-place operations.
+
+        Args:
+            graph_output_to_input (dict): Mapping of node IDs to their input tensors.
+            graph_output_to_node (dict): Mapping of node IDs to their attributes.
+
+        Returns:
+            outputs_to_inputs (dict): Mapping of node IDs to node IDS of their inputs.
+        """
+        indirection = {}
+        for elem in self.graph_output_to_node:
+            assert elem in self.graph_output_to_input, f"Could not find inputs for node {elem}"
+            data = [tensor.tensor.id for tensor in self.graph_output_to_input[elem]]
+            for index, parent in enumerate(self.graph_output_to_input[elem]):
+                if parent.tensor.id in indirection:
+                    if parent.index2 is not None:
+                        self.graph_output_to_node[elem]["args"][parent.index][parent.index2].id = indirection[
+                            parent.tensor.id
+                        ]
+                    else:
+                        self.graph_output_to_node[elem]["args"][parent.index].id = indirection[parent.tensor.id]
+                    self.graph_output_to_input[elem][index].tensor.id = indirection[parent.tensor.id]
+            if (
+                self.graph_output_to_node[elem]["op_type"][-1] == "_"
+                or self.graph_output_to_node[elem]["op_type"].split(".Tensor")[0][-1] == "_"
+            ):
+                for parent in data:
+                    indirection[parent] = elem
+
+    def remove_tuple_get_item_detach_clone_with_no_consumers(self):
+        """
+        Iteratively remove TUPLE_GET_ITEM, aten::detach, and aten::clone nodes
+        that end up with no consumers, using a reference-count approach.
+
+        Args:
+            graph_output_to_input (dict): Mapping of node IDs to their input tensors.
+            graph_output_to_node (dict): Mapping of node IDs to their attributes.
+        """
+        removable_ops = {"TUPLE_GET_ITEM", "aten::detach", "aten::clone"}
+
+        # Step 1: Build consumer counts
+        consumer_count = defaultdict(int)
+        for inputs in self.graph_output_to_input.values():
+            for inp_ts in inputs:
+                consumer_count[inp_ts.tensor.id] += 1
+
+        # Step 2: Initialize queue with removable nodes that have no consumers
+        queue = deque(
+            node_id
+            for node_id, node_data in self.graph_output_to_node.items()
+            if node_data["op_type"] in removable_ops and consumer_count[node_id] == 0
+        )
+
+        # Step 3: Process queue
+        while queue:
+            node_id = queue.popleft()
+
+            # Skip if already removed
+            if node_id not in self.graph_output_to_node:
+                continue
+
+            # Remove the node
+            node_inputs = self.graph_output_to_input.pop(node_id, [])
+            self.graph_output_to_node.pop(node_id, None)
+
+            # Decrement consumer count for its inputs
+            for inp_ts in node_inputs:
+                producer_id = inp_ts.tensor.id
+                consumer_count[producer_id] -= 1
+                if (
+                    consumer_count[producer_id] == 0
+                    and producer_id in self.graph_output_to_node
+                    and self.graph_output_to_node[producer_id]["op_type"] in removable_ops
+                ):
+                    queue.append(producer_id)
+
+    def propagate_module_name(self):
+        """
+        Post-process the graph to propagate module names and append operation types.
+
+        Args:
+            graph_output_to_input (dict): Mapping of node IDs to their input nodes.
+            graph_output_to_node (dict): Mapping of node IDs to their attributes.
+
+        Returns:
+            common_prefix: The prefix in the name that is common to all nodes.
+        """
+        for node_id, node_data in self.graph_output_to_node.items():
+            # Get the operation type
+            operation_type = node_data["op_type"]
+
+            # Get the module name from the inputs
+            input_module_names = [
+                self.graph_output_to_node[input_t.tensor.id]["name"]
+                for input_t in self.graph_output_to_input.get(node_id, [])
+                if input_t.tensor.id in self.graph_output_to_node
+                and self.graph_output_to_node[input_t.tensor.id]["name"] is not None
+            ]
+            # Determine the base module name (use the longest one for specificity)
+            base_module_name = min(input_module_names, key=lambda x: x.count("."), default=None)
+            op = None
+            if isinstance(node_data["res"], FrozenTrackableTensor) and node_data["res"].module_name is not None:
+                op = node_data["res"].module_name
+            elif isinstance(node_data["res"], (tuple, list)) and node_data["res"][0].module_name is not None:
+                op = node_data["res"][0].module_name
+
+            # Append the operation type as a postfix
+            if op is not None:
+                node_data["name"] = op
+            elif base_module_name:
+                prefix = base_module_name
+                suffix = ""
+                if base_module_name.count("/") == 1:
+                    prefix = base_module_name.split("/")[0]
+                    suffix = "/" + base_module_name.split("/")[1]
+                operation_type_clean = operation_type.replace("aten::", "").replace(".Tensor", "")
+                if len(prefix) > 0:
+                    prefix += "."
+                node_data["name"] = f"{prefix}{operation_type_clean}" + suffix
+        # Remove the largest common prefix from all names
+        all_names = [
+            node_data["name"]
+            for node_data in self.graph_output_to_node.values()
+            if "name" in node_data and node_data["name"]
+        ]
+        common_prefix = commonprefix(all_names)
+
+        for node_data in self.graph_output_to_node.values():
+            assert "name" in node_data, "Node data must contain 'name' key"
+            if node_data["name"] is None:
+                continue
+            if common_prefix and common_prefix in node_data["name"]:
+                node_data["name"] = node_data["name"].removeprefix(common_prefix)
+            node_data["name"] = ".".join(node_data["name"].split(".")[:20])  # Limit to first 20 parts
+
+        # Ensure all names are unique by appending a unique identifier
+        seen_counts = defaultdict(int)
+        for node_data in self.graph_output_to_node.values():
+            name = node_data["name"] or "autogenerated"
+            assert name.count("/") < 2, "Name should contain at most one '/'"
+            name = name.split("/")[0]
+            name = name.replace("_", "")
+            count = seen_counts[name]
+            if count > 0:
+                unique_name = f"{name}/{count}"
+            else:
+                unique_name = name
+            seen_counts[name] += 1
+            node_data["name"] = unique_name
+        return common_prefix
+
+    def finalize_graph(self):
+        print(f"Raw tracer statistics:\n{self.get_node_statistics()}")
+        self.remove_trackable_tensors()
+        self.remove_None_and_fix_inplace()
+        self.finalize()
+        self.remove_trackable_tensors()
+        self.remove_tuple_get_item_detach_clone_with_no_consumers()
+        self.propagate_module_name()
+
 
 class TrackableTensorArgument:
     def __init__(self, tensor, index, index2=None):
@@ -131,7 +316,14 @@ class TrackableTensorArgument:
         self.index2 = index2
 
     def __repr__(self):
-        return f"TrackableTensorArgument(pid={self.tensor.id}, tensor={self.tensor.trackable_shape}, index={self.index}, index2={self.index2})"
+        shape = []
+        try:
+            shape = self.tensor.trackable_shape
+        except:
+            pass
+        return (
+            f"TrackableTensorArgument(pid={self.tensor.id}, tensor={shape}, index={self.index}, index2={self.index2})"
+        )
 
     def to_frozen(self):
         """
@@ -428,6 +620,16 @@ class OperationGraph:
                 if intermediate_indices:
                     graph_output_indices = intermediate_indices
             if node_data["op_type"] == "TUPLE_GET_ITEM":
+                if "." not in name:
+                    name = "." + name
+                bn_name = name.split(".")[-1].split("/")
+                if len(bn_name) > 0:
+                    bn_name[0] = f"{bn_name[0]}{kwargs['index']}"
+                prefix = ".".join(name.split(".")[:-1])
+                if len(prefix) > 0:
+                    prefix += "."
+                node_data["name"] = prefix + "/".join(bn_name)
+                name = node_data["name"]
                 args = self.parse_args(node_data.get("args", []), node_data["name"])
                 parent_index = node_data["kwargs"]["index"]
                 parent_id = node_data["args"][parent_index].id.split("_")[0]
@@ -596,7 +798,7 @@ class WrappedOperationGraph(OperationGraph):
         self.remove_detach_on_constants()
 
 
-def register_module_hooks(module, parent_name=""):
+def register_module_hooks(module, parent_name="", module_calls=None):
     """
     Register hooks to track tensors passing through leaf modules only.
 
@@ -609,9 +811,16 @@ def register_module_hooks(module, parent_name=""):
     """
     module_name = f"{parent_name}.{module.__class__.__name__}" if parent_name else module.__class__.__name__
     hook_handles = []
+    if module_calls is None:
+        module_calls = {}
 
     # Check if the module is a leaf (has no submodules)
     if len(list(module.named_children())) == 0:
+        if module_name in module_calls:
+            module_calls[module_name] += 1
+            module_name = f"{module_name}/{module_calls[module_name]}"
+        else:
+            module_calls[module_name] = 0
 
         def forward_hook(module, inputs, outputs):
             def set_module_name(tensor):
@@ -627,7 +836,7 @@ def register_module_hooks(module, parent_name=""):
     else:
         # Recursively register hooks for submodules
         for name, submodule in module.named_children():
-            hook_handles.extend(register_module_hooks(submodule, parent_name=module_name))
+            hook_handles.extend(register_module_hooks(submodule, parent_name=module_name, module_calls=module_calls))
 
     return hook_handles
 
@@ -658,148 +867,6 @@ def serialize_attrs(attrs):
     for key, value in attrs.items():
         serialized[key] = get_serialized_info(value)
     return serialized
-
-
-def remove_None_and_fix_inplace(graph_output_to_input, graph_output_to_node):
-    """
-    Remove None values from the input tensors and fix in-place operations.
-
-    Args:
-        graph_output_to_input (dict): Mapping of node IDs to their input tensors.
-        graph_output_to_node (dict): Mapping of node IDs to their attributes.
-
-    Returns:
-        outputs_to_inputs (dict): Mapping of node IDs to node IDS of their inputs.
-    """
-    indirection = {}
-    for elem in graph_output_to_node:
-        assert elem in graph_output_to_input, f"Could not find inputs for node {elem}"
-        data = [tensor.tensor.id for tensor in graph_output_to_input[elem]]
-        for index, parent in enumerate(graph_output_to_input[elem]):
-            if parent.tensor.id in indirection:
-                if parent.index2 is not None:
-                    graph_output_to_node[elem]["args"][parent.index][parent.index2].id = indirection[parent.tensor.id]
-                else:
-                    graph_output_to_node[elem]["args"][parent.index].id = indirection[parent.tensor.id]
-                graph_output_to_input[elem][index].tensor.id = indirection[parent.tensor.id]
-        if (
-            graph_output_to_node[elem]["op_type"][-1] == "_"
-            or graph_output_to_node[elem]["op_type"].split(".Tensor")[0][-1] == "_"
-        ):
-            for parent in data:
-                indirection[parent] = elem
-
-
-def remove_tuple_get_item_detach_clone_with_no_consumers(graph_output_to_input, graph_output_to_node):
-    """
-    Iteratively remove TUPLE_GET_ITEM, aten::detach, and aten::clone nodes
-    that end up with no consumers, using a reference-count approach.
-
-    Args:
-        graph_output_to_input (dict): Mapping of node IDs to their input tensors.
-        graph_output_to_node (dict): Mapping of node IDs to their attributes.
-    """
-    removable_ops = {"TUPLE_GET_ITEM", "aten::detach", "aten::clone"}
-
-    # Step 1: Build consumer counts
-    consumer_count = defaultdict(int)
-    for inputs in graph_output_to_input.values():
-        for inp_ts in inputs:
-            consumer_count[inp_ts.tensor.id] += 1
-
-    # Step 2: Initialize queue with removable nodes that have no consumers
-    queue = deque(
-        node_id
-        for node_id, node_data in graph_output_to_node.items()
-        if node_data["op_type"] in removable_ops and consumer_count[node_id] == 0
-    )
-
-    # Step 3: Process queue
-    while queue:
-        node_id = queue.popleft()
-
-        # Skip if already removed
-        if node_id not in graph_output_to_node:
-            continue
-
-        # Remove the node
-        node_inputs = graph_output_to_input.pop(node_id, [])
-        graph_output_to_node.pop(node_id, None)
-
-        # Decrement consumer count for its inputs
-        for inp_ts in node_inputs:
-            producer_id = inp_ts.tensor.id
-            consumer_count[producer_id] -= 1
-            if (
-                consumer_count[producer_id] == 0
-                and producer_id in graph_output_to_node
-                and graph_output_to_node[producer_id]["op_type"] in removable_ops
-            ):
-                queue.append(producer_id)
-
-
-def propagate_module_name(graph_output_to_input, graph_output_to_node):
-    """
-    Post-process the graph to propagate module names and append operation types.
-
-    Args:
-        graph_output_to_input (dict): Mapping of node IDs to their input nodes.
-        graph_output_to_node (dict): Mapping of node IDs to their attributes.
-
-    Returns:
-        common_prefix: The prefix in the name that is common to all nodes.
-    """
-    for node_id, node_data in graph_output_to_node.items():
-        # Get the operation type
-        operation_type = node_data["op_type"]
-
-        # Get the module name from the inputs
-        input_module_names = [
-            graph_output_to_node[input_t.tensor.id]["name"]
-            for input_t in graph_output_to_input.get(node_id, [])
-            if input_t.tensor.id in graph_output_to_node and graph_output_to_node[input_t.tensor.id]["name"] is not None
-        ]
-        # Determine the base module name (use the longest one for specificity)
-        base_module_name = max(input_module_names, key=len, default=None)
-        op = None
-        if isinstance(node_data["res"], FrozenTrackableTensor) and node_data["res"].module_name is not None:
-            op = node_data["res"].module_name
-        elif isinstance(node_data["res"], (tuple, list)) and node_data["res"][0].module_name is not None:
-            op = node_data["res"][0].module_name
-
-        # Append the operation type as a postfix
-        if op is not None:
-            node_data["name"] = op
-        elif base_module_name:
-            node_data["name"] = f"{base_module_name}.{operation_type}".replace("aten::", "").replace(".Tensor.", ".")
-
-    # Remove the largest common prefix from all names
-    all_names = [
-        node_data["name"] for node_data in graph_output_to_node.values() if "name" in node_data and node_data["name"]
-    ]
-    common_prefix = commonprefix(all_names)
-
-    for node_data in graph_output_to_node.values():
-        assert "name" in node_data, "Node data must contain 'name' key"
-        if node_data["name"] is None:
-            continue
-        if common_prefix and common_prefix in node_data["name"]:
-            node_data["name"] = node_data["name"].removeprefix(common_prefix)
-        node_data["name"] = ".".join(node_data["name"].split(".")[:20])  # Limit to first 20 parts
-
-    # Ensure all names are unique by appending a unique identifier
-    seen_counts = defaultdict(int)
-    for node_data in graph_output_to_node.values():
-        name = node_data["name"] or "autogenerated"
-        name = name.replace("_", "")
-        count = seen_counts[name]
-        if count > 0:
-            unique_name = f"{name}/{count}"
-        else:
-            unique_name = name
-        seen_counts[name] += 1
-        node_data["name"] = unique_name
-    return common_prefix
 
 
 # Assuming `graph_output_to_node` and `outputs_to_inputs` are already populated
@@ -1026,6 +1093,55 @@ def wrap_state_dict(state_dict):
     return wrapped_state_dict
 
 
+def get_input_tensors(input_shapes, input_dtypes=None):
+    input_tensors = []
+    if input_dtypes is None:
+        input_dtypes = [torch.float32] * len(input_shapes)
+    for index, input_shape in enumerate(input_shapes):
+        rand_tensor = (torch.rand(tuple(input_shape))) * 10
+        # create torch dtype from string if input_dtypes is a list of strings
+        if isinstance(input_dtypes[index % len(input_dtypes)], str):
+            input_dtypes[index % len(input_dtypes)] = getattr(torch, input_dtypes[index % len(input_dtypes)])
+        if isinstance(input_dtypes[index % len(input_dtypes)], torch.dtype):
+            rand_tensor = rand_tensor.to(dtype=input_dtypes[index % len(input_dtypes)])
+        input_tensor = Trackable_Tensor(rand_tensor)
+        input_tensor.set_id(f"{(index+2)*-1}")
+        input_tensor.elem = rand_tensor
+        input_tensor.set_module_name(f"input_tensor_{index}")
+        input_tensors.append(input_tensor)
+    return input_tensors
+
+
+def generate_graph_and_visualize(tracer, dump_visualization=False, wrap_operations=True):
+    try:
+        if wrap_operations:
+            operation_graph = WrappedOperationGraph(tracer, verbose=True)
+        else:
+            operation_graph = OperationGraph(tracer)
+        operation_graph.generate()
+        print(f"Found {len(operation_graph.graph)} operations in the traced model.")
+        print(f"Tracer statistics after parsing:\n{tracer.get_node_statistics()}")
+        if dump_visualization:
+            json_structure = create_graph_json_structure(operation_graph)
+            # Write the JSON structure to the specified output file
+            with open("operation_graph_viz.json", "w") as f:
+                json.dump(json_structure, f, indent=2)
+            print(
+                f"Dumped visualization to {os.path.abspath('operation_graph_viz.json')}. Load it into netron.app to visualize the model."
+            )
+    except Exception as e:
+        if dump_visualization:
+            json_structure = create_json_structure(tracer.graph_output_to_node, tracer.graph_output_to_input)
+            # Write the JSON structure to the specified output file
+            with open("trace_viz.json", "w") as f:
+                json.dump(json_structure, f, indent=2)
+            print(
+                f"Dumped visualization to {os.path.abspath('trace_viz.json')}. Load it into netron.app to visualize the model."
+            )
+        raise e
+    return operation_graph
+
+
 def trace_torch_model(
     model,
     input_shapes,
@@ -1060,85 +1176,17 @@ def trace_torch_model(
         model.load_state_dict(wrapped_state_dict, assign=True)
     else:
         Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
-    input_tensors = []
-    if input_dtypes is None:
-        input_dtypes = [torch.float32] * len(input_shapes)
-    for index, input_shape in enumerate(input_shapes):
-        rand_tensor = (torch.rand(tuple(input_shape))) * 10
-        # create torch dtype from string if input_dtypes is a list of strings
-        if isinstance(input_dtypes[index % len(input_dtypes)], str):
-            input_dtypes[index % len(input_dtypes)] = getattr(torch, input_dtypes[index % len(input_dtypes)])
-        if isinstance(input_dtypes[index % len(input_dtypes)], torch.dtype):
-            rand_tensor = rand_tensor.to(dtype=input_dtypes[index % len(input_dtypes)])
-        input_tensor = Trackable_Tensor(rand_tensor)
-        input_tensor.set_id(f"{(index+2)*-1}")
-        input_tensor.elem = rand_tensor
-        input_tensor.set_module_name(f"input_tensor_{index}")
-        input_tensors.append(input_tensor)
-
-    handles = register_module_hooks(model)
+    input_tensors = get_input_tensors(input_shapes, input_dtypes)
+    module_calls = {}
+    handles = register_module_hooks(model, module_calls=module_calls)
     outputs = model(*input_tensors)
     set_is_graph_output(outputs)
     # remove the hooks after tracing
     for handle in handles:
         handle.remove()
 
-    # Remove all instances of Trackable_Tensor from tracer data structures
-    def remove_trackable_tensors(tracer):
-        for key, value in tracer.graph_output_to_input.items():
-            tracer.graph_output_to_input[key] = [
-                arg.to_frozen() if isinstance(arg, (Trackable_Tensor, TrackableTensorArgument)) else arg
-                for arg in value
-            ]
-        for key, value in tracer.graph_output_to_node.items():
-            if isinstance(value["args"], (list, tuple)):
-                value["args"] = tree_map(
-                    lambda arg: arg.to_frozen() if isinstance(arg, Trackable_Tensor) else arg,
-                    value["args"],
-                )
-
-            if isinstance(value["res"], Trackable_Tensor):
-                tracer.graph_output_to_node[key]["res"] = value["res"].to_frozen()
-            if isinstance(value["res"], (list, tuple)):
-                value["res"] = tree_map(
-                    lambda res: res.to_frozen() if isinstance(res, Trackable_Tensor) else res,
-                    value["res"],
-                )
-
-    print(f"Raw tracer statistics:\n{tracer.get_node_statistics()}")
-    remove_trackable_tensors(tracer)
-    remove_None_and_fix_inplace(tracer.graph_output_to_input, tracer.graph_output_to_node)
-    tracer.finalize()
-    remove_trackable_tensors(tracer)
-    remove_tuple_get_item_detach_clone_with_no_consumers(tracer.graph_output_to_input, tracer.graph_output_to_node)
-    propagate_module_name(tracer.graph_output_to_input, tracer.graph_output_to_node)
-
-    try:
-        if wrap_operations:
-            operation_graph = WrappedOperationGraph(tracer, verbose=True)
-        else:
-            operation_graph = OperationGraph(tracer)
-        operation_graph.generate()
-        print(f"Found {len(operation_graph.graph)} operations in the traced model.")
-        print(f"Tracer statistics after parsing:\n{tracer.get_node_statistics()}")
-        if dump_visualization:
-            json_structure = create_graph_json_structure(operation_graph)
-            # Write the JSON structure to the specified output file
-            with open("operation_graph_viz.json", "w") as f:
-                json.dump(json_structure, f, indent=2)
-            print(
-                f"Dumped visualization to {os.path.abspath('operation_graph_viz.json')}. Load it into netron.app to visualize the model."
-            )
-    except Exception as e:
-        if dump_visualization:
-            json_structure = create_json_structure(tracer.graph_output_to_node, tracer.graph_output_to_input)
-            # Write the JSON structure to the specified output file
-            with open("trace_viz.json", "w") as f:
-                json.dump(json_structure, f, indent=2)
-            print(
-                f"Dumped visualization to {os.path.abspath('trace_viz.json')}. Load it into netron.app to visualize the model."
-            )
-        raise e
+    tracer.finalize_graph()
+    operation_graph = generate_graph_and_visualize(tracer, dump_visualization, wrap_operations)
     return operation_graph
 
 

@@ -12,7 +12,7 @@ from generate_pytorch_unittest_graph import (
 )
 from generate_pytorch_graph import PytorchGraph, CompositePytorchGraph
 from generate_pytorch_excel_graph import PytorchExcelGraph
-from find_repeated_subgraphs import dump_graph_patterns
+from find_repeated_subgraphs import dump_graph_patterns, trace_model_structure
 
 allowed_modes = [
     "yolov4",
@@ -105,6 +105,11 @@ def get_parser():
         "--dump-constants",
         action="store_true",
         help="Dump constant tensors during tracing.",
+    )
+    parser.add_argument(
+        "--maintain-module-structure",
+        action="store_true",
+        help="Maintain the original module structure during tracing.",
     )
     return parser
 
@@ -285,26 +290,44 @@ def main(args_dict):
         summary(torch_model, input_size=args.input_shape, dtypes=[eval(f"torch.{dtype}") for dtype in args.input_dtype])
         print("Finished torch summary.\n\n\n")
     print("Started info tracing: ")
-    operation_graph = trace_torch_model(
-        torch_model,
-        args.input_shape,
-        input_dtypes=args.input_dtype,
-        dump_visualization=True,
-        save_original_tensors=not args.no_infer,
-        track_params=not args.no_track_params,
-    )
-    pytorch_excel_graph = PytorchExcelGraph(operation_graph)
-    pytorch_excel_graph.dump_to_excel_file("graph.xlsx")
-    graph = PytorchLayerUnitTestGraph(
-        PytorchLayerUnitTestGraphConfig(
-            operation_graph,
+    if args.maintain_module_structure:
+        operation_graph = trace_model_structure(
+            torch_model,
+            args.input_shape,
+            input_dtypes=args.input_dtype,
+            dump_visualization=True,
+            save_original_tensors=not args.no_infer,
+            track_params=not args.no_track_params,
         )
+        file_name = "clustered_graph.py"
+    else:
+        operation_graph = trace_torch_model(
+            torch_model,
+            args.input_shape,
+            input_dtypes=args.input_dtype,
+            dump_visualization=True,
+            save_original_tensors=not args.no_infer,
+            track_params=not args.no_track_params,
+        )
+        file_name = "graph.py"
+    if not args.maintain_module_structure:
+        pytorch_excel_graph = PytorchExcelGraph(operation_graph)
+        pytorch_excel_graph.dump_to_excel_file("graph.xlsx")
+        graph = PytorchLayerUnitTestGraph(
+            PytorchLayerUnitTestGraphConfig(
+                operation_graph,
+            )
+        )
+        graph.dump_to_python_file("test.py", True)
+        dump_graph_patterns(operation_graph, "graph_patterns.py")
+    pytorch_graph = CompositePytorchGraph(
+        operation_graph,
+        dump_const_meta=True,
+        dump_constants=args.dump_constants,
+        clustered_graph=args.maintain_module_structure,
     )
-    graph.dump_to_python_file("test.py", True)
-    dump_graph_patterns(operation_graph, "graph_patterns.py")
-    pytorch_graph = CompositePytorchGraph(operation_graph, dump_constants=args.dump_constants)
 
-    pytorch_graph.dump_to_python_file("graph.py", True)
+    pytorch_graph.dump_to_python_file(file_name, True)
 
 
 if __name__ == "__main__":

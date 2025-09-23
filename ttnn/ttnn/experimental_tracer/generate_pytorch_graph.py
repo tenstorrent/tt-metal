@@ -65,9 +65,10 @@ class CompositePytorchGraph(PytorchGraph):
     It overrides the `find_repeated_subgraphs` method to use the custom implementation.
     """
 
-    def __init__(self, graph: OperationGraph, clustered_graph=False, dump_constants=False):
+    def __init__(self, graph: OperationGraph, clustered_graph=False, dump_const_meta=False, dump_constants=False):
         super().__init__(graph)
         self.clustered_graph = clustered_graph
+        self.dump_const_meta = dump_const_meta
         self.dump_constants = dump_constants
 
     def get_imports_and_code_lines(self) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
@@ -85,6 +86,8 @@ class CompositePytorchGraph(PytorchGraph):
             args=[],
             kwargs={},
         )
+        code_lines["main"] = ""
+        main_op_code = main_op.generate_code()
         imports["main"] = [
             "import gzip",
             "import torch",
@@ -93,8 +96,15 @@ class CompositePytorchGraph(PytorchGraph):
             "from find_repeated_subgraphs import PatternObjFactory as POFactory, find_repeated_subgraphs",
             "from generate_pytorch_graph import CompositePytorchGraph",
             "from utils import LazyParams",
-        ] + main_op.generate_import_code()
-        if not self.clustered_graph:
+        ]
+        main_import_code = main_op.generate_import_code()
+        imports["main"] += main_import_code
+        input_ops = [
+            self.graph.graph.nodes[node_id]["operation"]
+            for node_id in self.graph.graph.nodes
+            if isinstance(self.graph.graph.nodes[node_id]["operation"], InputOp)
+        ]
+        if self.dump_const_meta:
 
             def get_min_max(v):
                 try:
@@ -113,16 +123,9 @@ class CompositePytorchGraph(PytorchGraph):
             # dump const meta
             with open("const_meta.json", "w") as f:
                 json.dump(const_meta, f, indent=2)
-        code_lines["main"] = ""
-        main_op_code = main_op.generate_code()
-        input_ops = [
-            self.graph.graph.nodes[node_id]["operation"]
-            for node_id in self.graph.graph.nodes
-            if isinstance(self.graph.graph.nodes[node_id]["operation"], InputOp)
-        ]
         for const in CompositeOperation.ALL_CONSTANTS:
-            main_op_code = main_op_code.replace(f"{const},", f"params['{const}'],")
-            main_op_code = main_op_code.replace(f"{const})", f"params['{const}'])")
+            main_op_code = main_op_code.replace(f" {const},", f"params['{const}'],")
+            main_op_code = main_op_code.replace(f" {const})", f"params['{const}'])")
             main_op_code = main_op_code.replace(f"({const})", f"(params['{const}'])")
             main_op_code = main_op_code.replace(f'"{const}",', f"params['{const}'],")
             main_op_code = main_op_code.replace(f'"{const}")', f"params['{const}'])")
