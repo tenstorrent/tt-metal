@@ -56,78 +56,10 @@ public:
             const std::vector<int32_t> tokens_i32(tokens.begin(), tokens.end());
             std::string result = m_tokenizer->Decode(tokens_i32);
             
-            // Remove null bytes from the result
+            // Only remove null bytes, keep the original text as much as possible
             result.erase(std::remove(result.begin(), result.end(), '\0'), result.end());
             
-            // Clean up potential encoding artifacts
-            // Remove leading/trailing whitespace that might cause display issues
-            auto start = result.find_first_not_of(" \t\n\r\f\v");
-            if (start == std::string::npos) {
-                return ""; // String is all whitespace
-            }
-            auto end = result.find_last_not_of(" \t\n\r\f\v");
-            result = result.substr(start, end - start + 1);
-            
-            // Validate UTF-8 and replace invalid sequences
-            std::string cleaned_result;
-            cleaned_result.reserve(result.size());
-            
-            for (size_t i = 0; i < result.size(); ) {
-                unsigned char c = static_cast<unsigned char>(result[i]);
-                
-                // ASCII characters (0-127)
-                if (c < 0x80) {
-                    // Skip control characters except newline, tab, and carriage return
-                    if (c >= 0x20 || c == '\n' || c == '\t' || c == '\r') {
-                        cleaned_result += c;
-                    }
-                    i++;
-                }
-                // Multi-byte UTF-8 sequences
-                else if (c < 0xC0) {
-                    // Invalid start byte, skip
-                    i++;
-                }
-                else if (c < 0xE0) {
-                    // 2-byte sequence
-                    if (i + 1 < result.size() && 
-                        (static_cast<unsigned char>(result[i + 1]) & 0xC0) == 0x80) {
-                        cleaned_result += result.substr(i, 2);
-                        i += 2;
-                    } else {
-                        i++; // Invalid sequence, skip
-                    }
-                }
-                else if (c < 0xF0) {
-                    // 3-byte sequence
-                    if (i + 2 < result.size() && 
-                        (static_cast<unsigned char>(result[i + 1]) & 0xC0) == 0x80 &&
-                        (static_cast<unsigned char>(result[i + 2]) & 0xC0) == 0x80) {
-                        cleaned_result += result.substr(i, 3);
-                        i += 3;
-                    } else {
-                        i++; // Invalid sequence, skip
-                    }
-                }
-                else if (c < 0xF8) {
-                    // 4-byte sequence
-                    if (i + 3 < result.size() && 
-                        (static_cast<unsigned char>(result[i + 1]) & 0xC0) == 0x80 &&
-                        (static_cast<unsigned char>(result[i + 2]) & 0xC0) == 0x80 &&
-                        (static_cast<unsigned char>(result[i + 3]) & 0xC0) == 0x80) {
-                        cleaned_result += result.substr(i, 4);
-                        i += 4;
-                    } else {
-                        i++; // Invalid sequence, skip
-                    }
-                }
-                else {
-                    // Invalid UTF-8 start byte
-                    i++;
-                }
-            }
-            
-            return cleaned_result;
+            return result;
         } catch (const std::exception& e) {
             throw std::runtime_error(fmt::format("Error decoding tokens: {}", e.what()));
         }
