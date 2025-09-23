@@ -24,10 +24,7 @@ namespace tt::tt_fabric::fabric_tests {
 using NodeGraph = std::unordered_map<FabricNodeId, std::vector<FabricNodeId>>;  // Directed graph: node -> neighbors
 using CyclePath = std::vector<FabricNodeId>;  // A single cycle as a path (e.g., A -> B -> C -> A)
 
-// Function to get complete fabric path using control plane API
-// This is kept within the test infrastructure to avoid modifying core control plane
-std::vector<FabricNodeId> get_fabric_path_from_control_plane(
-    const tt::tt_fabric::ControlPlane& control_plane, FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
+// Removed get_fabric_path_from_control_plane - not needed for cycle detection
 
 // DFS state for cycle detection
 enum class DFSState { UNVISITED, VISITING, VISITED };
@@ -71,7 +68,8 @@ void dump_cycles_to_yaml(
     int level,
     const std::string& output_dir = "generated/fabric");
 
-// Main cycle detection function for inter-mesh traffic
+// Main cycle detection function for inter-mesh traffic ONLY
+// Intra-mesh traffic uses dimension-ordered routing and cannot have cycles
 bool detect_cycles_in_random_inter_mesh_traffic(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
     const IRouteManager& route_manager,
