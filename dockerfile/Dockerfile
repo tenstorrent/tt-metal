@@ -207,5 +207,4 @@ RUN apt-get update && apt-get install -y \
     gosu \
     libgl1 \
     libsndfile1 \
-    xxd \
     && rm -rf /var/lib/apt/lists/*
