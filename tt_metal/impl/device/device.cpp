@@ -32,7 +32,6 @@
 #include "allocator.hpp"
 #include "allocator_types.hpp"
 #include <tt_stl/assert.hpp>
-#include "buffer_types.hpp"
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
