@@ -405,9 +405,9 @@ def test_all_to_all_unaligned(
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("Row-major layout is not supported for bfloat8_b")
 
-    # TODO add link to github issue
+    # The below fails because of a bug in all_broadcast_async (Issue #29183)
     if mem_config.buffer_type == ttnn.BufferType.L1 and in_dim == 3:
-        pytest.skip("Mesh-sharding along last dim combined with L1 storage fails")
+        pytest.skip("Temporarily skipping due to bug in all_broadcast_async (Issue #29183)")
 
     run_all_to_all_impl(
         mesh_device,
@@ -491,12 +491,6 @@ def test_all_to_all_sharded_to_sharded(
     input_mem_layout,
     output_mem_layout,
 ):
-    # Skipping all sharded tests for now.
-    # Composite implementation is finnicky with sharding because of fussy intermediate
-    # ops and non-foolproof shard spec manipulation.
-    # Supporting sharding will likely require a proper native implementation.
-    pytest.skip("Sharding is not properly implemented")
-
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
@@ -508,11 +502,9 @@ def test_all_to_all_sharded_to_sharded(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    input_mem_config = ttnn.MemoryConfig(
-        input_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=input_shard_spec
-    )
+    input_mem_config = ttnn.MemoryConfig(input_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_mem_config = ttnn.MemoryConfig(
-        output_mem_layout, buffer_type=ttnn.BufferType.DRAM, shard_spec=output_shard_spec
+        output_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
     )
 
     run_all_to_all_impl(
