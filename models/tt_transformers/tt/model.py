@@ -416,9 +416,7 @@ class Transformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
-        rot_mats_local = (
-            self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") is not None else None
-        )
+        rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
         x_embed = self._transform_decode_inputs_device(x)
         tt_logits = self.forward(
             x_embed,
