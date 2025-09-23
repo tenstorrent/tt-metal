@@ -54,6 +54,13 @@ public:
         }
     }
 
+    void add_trace_id_to_device_profiler(chip_id_t device_id, uint32_t trace_id) {
+        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+
+        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
+        device_profiler.addTraceId(trace_id);
+    }
+
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
     ProfilerStateManager& operator=(ProfilerStateManager&&) = delete;
     ProfilerStateManager(const ProfilerStateManager&) = delete;
