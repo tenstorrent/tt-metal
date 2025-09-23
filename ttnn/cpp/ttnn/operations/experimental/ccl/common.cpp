@@ -178,15 +178,15 @@ bool use_composite_all_to_all(
                                      (input_shape[2] % tile_height == 0 && input_shape[3] % tile_width == 0);
 
     // the current native implementation works for very specific cases
-    if (input_tensor.layout() == ttnn::Layout::TILE && input_tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM &&
-        input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED &&
-        (!memory_config.has_value() ||
-         memory_config.value().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) &&
-        (in_dim == 2 || in_dim == 3) && (out_dim == 2 || out_dim == 3) && is_tiled_and_tile_aligned) {
-        return false;
-    }
-    // all other cases use composite implementation
-    return true;
+    bool use_native =
+        (input_tensor.layout() == ttnn::Layout::TILE &&
+         input_tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM &&
+         input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED &&
+         (!memory_config.has_value() ||
+          memory_config.value().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) &&
+         (in_dim == 2 || in_dim == 3) && (out_dim == 2 || out_dim == 3) && is_tiled_and_tile_aligned);
+
+    return !use_native;
 }
 
 ttnn::Tensor composite_all_gather(
@@ -292,20 +292,28 @@ ttnn::Tensor composite_all_to_all(
     auto interim_memory_config = is_sharded ? ttnn::DRAM_MEMORY_CONFIG : input_memory_config;
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
+    ttnn::Tensor temp_tensor;
+
     // Convert to row major
     if (is_tiled_and_not_tile_aligned) {
         // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
         if (convert_to_bfloat16_for_composite) {
-            input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
+            temp_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
+            input_tensor.deallocate();
+            input_tensor = temp_tensor;
         }
-        input_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
+        temp_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
+        input_tensor.deallocate();
+        input_tensor = temp_tensor;
     }
 
     // Sharded input is challenging to work with, because we perform slice and concat separately
     // and the user can't give us intermediate shard specs. So the most foolproof solution is
     // to simply undo sharding by converting to DRAM interleaved storage.
     if (is_sharded) {
-        input_tensor = ttnn::to_memory_config(input_tensor, interim_memory_config);
+        temp_tensor = ttnn::to_memory_config(input_tensor, interim_memory_config);
+        input_tensor.deallocate();
+        input_tensor = temp_tensor;
     }
 
     // Step 1: make every device have a copy of every tensor
@@ -316,28 +324,40 @@ ttnn::Tensor composite_all_to_all(
         ttnn::ccl::Topology::Linear,
         /* cluster_axis */ std::nullopt,
         subdevice_id);
+    input_tensor.deallocate();
 
     // Step 2: Slice out the index range each device cares about, along out_dim
     for (size_t i = 0; i < broadcasted_tensors.size(); i++) {
-        broadcasted_tensors[i] = ttnn::mesh_partition(
+        temp_tensor = ttnn::mesh_partition(
             broadcasted_tensors[i], out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
+        broadcasted_tensors[i].deallocate();
+        broadcasted_tensors[i] = temp_tensor;
     }
 
     // Step 3: Concatenate along in_dim
     ttnn::Tensor output_tensor = ttnn::concat(broadcasted_tensors, in_dim, interim_memory_config);
+    for (auto& tensor : broadcasted_tensors) {
+        tensor.deallocate();
+    }
 
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {
-        output_tensor = ttnn::to_layout(output_tensor, ttnn::Layout::TILE);
+        temp_tensor = ttnn::to_layout(output_tensor, ttnn::Layout::TILE);
+        output_tensor.deallocate();
+        output_tensor = temp_tensor;
         // If we had to convert the input dtype in order to execute the row-major composite op, convert back to the
         // input dtype
         if (convert_to_bfloat16_for_composite) {
-            output_tensor = ttnn::typecast(output_tensor, input_dtype);
+            temp_tensor = ttnn::typecast(output_tensor, input_dtype);
+            output_tensor.deallocate();
+            output_tensor = temp_tensor;
         }
     }
 
     if (output_memory_config.memory_layout() != interim_memory_config.memory_layout()) {
-        output_tensor = ttnn::to_memory_config(output_tensor, output_memory_config);
+        temp_tensor = ttnn::to_memory_config(output_tensor, output_memory_config);
+        output_tensor.deallocate();
+        output_tensor = temp_tensor;
     }
 
     return output_tensor;
