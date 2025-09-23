@@ -62,7 +62,7 @@ std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intramesh_connections
 }
 
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         return;
     }
@@ -77,7 +77,7 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         return;
     }
@@ -104,7 +104,7 @@ TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
 }
 
 TEST(MultiHost, TestDualGalaxyFabric1DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         return;
     }
