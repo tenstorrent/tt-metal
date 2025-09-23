@@ -485,16 +485,13 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(router_channels_mask);
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
-            if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-                risc_id = 1;
-            }
             auto kernel = tt::tt_metal::CreateKernel(
                 *fabric_program_ptr,
                 "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
                 eth_logical_core,
                 tt::tt_metal::EthernetConfig{
                     .noc = edm_builder.config.risc_configs[risc_id].get_configured_noc(),
-                    .processor = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id),
+                    .processor = static_cast<tt::tt_metal::DataMovementProcessor>(1),
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
