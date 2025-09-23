@@ -23,9 +23,11 @@ void enable_fabric(uint32_t num_devices) {
         if (!metal_home) {
             throw std::runtime_error("TT_METAL_HOME is not set");
         }
+
         auto mesh_graph_descriptor_path =
             std::string(metal_home) + "/tests/tt_metal/tt_fabric/custom_mesh_descriptors/";
 
+        bool set_env_var = (num_devices == 8U || num_devices == 32U);
         if (num_devices == 8U) {
             mesh_graph_descriptor_path += "t3k_1x8_mesh_graph_descriptor.yaml";
         } else if (num_devices == 32U) {
@@ -33,8 +35,10 @@ void enable_fabric(uint32_t num_devices) {
         }
 
         // set environment variable
-        setenv(kTTMeshGraphDescriptorEnvVar, mesh_graph_descriptor_path.c_str(), 1);
-        fmt::println("[tt-train] TT_MESH_GRAPH_DESC_PATH is set to {}", mesh_graph_descriptor_path);
+        if (set_env_var) {
+            setenv(kTTMeshGraphDescriptorEnvVar, mesh_graph_descriptor_path.c_str(), 1);
+            fmt::println("[tt-train] TT_MESH_GRAPH_DESC_PATH is set to {}", mesh_graph_descriptor_path);
+        }
     }
 
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
