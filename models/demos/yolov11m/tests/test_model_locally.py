@@ -293,7 +293,7 @@ def visualize_obb_predictions(image_path, output, confidence_threshold=0.05, sav
         return None, []
 
 
-def test_pytorch_obb_with_real_images(test_images):
+def pytorch_obb_with_real_images(test_images):
     """Test OBB model with actual images from the demo folder"""
     print("📸 Testing OBB Model with Real Images...")
     
@@ -471,7 +471,7 @@ def test_compare_ttnn_and_pytorch_obb_simple():
             pass
 
 
-def test_compare_ttnn_and_pytorch_obb_with_real_images(test_images):
+def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
     """Test TTNN OBB model with real images and compare with PyTorch"""
     print("🔥 Testing TTNN OBB Model with Real Images...")
     
@@ -684,7 +684,7 @@ if __name__ == "__main__":
         "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
     ]
 
-    pytorch_results = test_pytorch_obb_with_real_images(test_images)
+    #pytorch_results = pytorch_obb_with_real_images(test_images)
     
     # Test TTNN OBB model and compare with PyTorch
     print("\n" + "=" * 60)
@@ -695,7 +695,7 @@ if __name__ == "__main__":
     
     # Then run full test with real images
     print("\n📸 Running TTNN vs PyTorch test with real images...")
-    ttnn_results = test_compare_ttnn_and_pytorch_obb_with_real_images(test_images)
+    ttnn_results = compare_ttnn_and_pytorch_obb_with_real_images(test_images)
     
     # Final summary
     print("\n" + "=" * 60)
