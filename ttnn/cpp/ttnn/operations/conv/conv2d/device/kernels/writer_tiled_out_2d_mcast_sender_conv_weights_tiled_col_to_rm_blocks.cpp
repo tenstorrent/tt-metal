@@ -130,6 +130,9 @@ void kernel_main() {
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
 
 #ifdef SPLIT_READER
+#ifdef CONFIG_TENSOR_IN_DRAM
+    cb_wait_front(cb_reader_indices, 1);
+#endif
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_second_reader>();
     }
