@@ -240,7 +240,6 @@ def test_all_gather_async_big_mesh(
     num_buffers_per_channel,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
-    cluster_axis = 1
     run_all_gather_impl(
         submesh_device,
         num_devices,
@@ -254,7 +253,7 @@ def test_all_gather_async_big_mesh(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis,
+        cluster_axis=None,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
