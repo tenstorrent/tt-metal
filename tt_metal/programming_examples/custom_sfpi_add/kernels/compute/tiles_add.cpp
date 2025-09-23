@@ -161,7 +161,7 @@ void MAIN {
         copy_tile(cb_in0, 0, 0);
         copy_tile(cb_in1, 0, 1);
         my_add_tiles(0, 1, 0);  // <-- The custom SFPU addition happens here
-        // add_binary_tile(0, 1, 0);
+        mul_binary_tile(0, 1, 0);
         // Finished the computation, transfer register ownership to the unpacker
         tile_regs_commit();
         tile_regs_wait();
