@@ -109,7 +109,7 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
         }
     }
 
-    return tt::tt_metal::TensorTopology(std::move(dist_shape), std::move(placements), std::move(mesh_coords));
+    return tt::tt_metal::TensorTopology(dist_shape, placements, mesh_coords);
 }
 
 }  // namespace ttnn

@@ -180,6 +180,19 @@ Tensor from_flatbuffer(
     tt::tt_metal::TensorTopology topology{};
     if (const auto* fb_topology = fb_tensor->tensor_topology()) {
         topology = from_flatbuffer(fb_topology);
+    } else {
+        const auto& distribution_shape = ttnn_mesh_shape;
+        tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
+        placements.reserve(distribution_shape.dims());
+        for (std::size_t i = 0; i < distribution_shape.dims(); ++i) {
+            placements.emplace_back(tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+        }
+        std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+        coords.reserve(distribution_shape.mesh_size());
+        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(distribution_shape)) {
+            coords.push_back(coord);
+        }
+        topology = tt::tt_metal::TensorTopology(distribution_shape, placements, coords);
     }
 
     return Tensor(std::move(host_storage), spec, std::move(topology));

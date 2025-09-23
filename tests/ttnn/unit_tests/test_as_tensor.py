@@ -69,3 +69,20 @@ def test_as_tensor_with_cache(tmp_path, device, height, width):
 
     torch_output_tensor = ttnn.to_torch(tensor)
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+def test_as_tensor_with_cache_fully_replicated(tmp_path, mesh_device):
+    torch_input_tensor = torch.zeros((1, 1, 8192, 1280))
+    tt_output_buffer = ttnn.as_tensor(
+        torch_input_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        cache_file_name=tmp_path / "cache_file",
+    )
+
+    assert tt_output_buffer.tensor_topology().distribution_shape() == mesh_device.shape
+    assert tt_output_buffer.tensor_topology().placements() == [ttnn.PlacementReplicate()] * mesh_device.shape.dims()

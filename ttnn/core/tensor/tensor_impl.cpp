@@ -673,11 +673,18 @@ Tensor to_device(
     bool fully_replicated = false;
     DeviceStorage mesh_storage = to_device_mesh_buffer<T>(
         tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, fully_replicated, cq_id);
+    tt::stl::SmallVector<distributed::MeshMapperConfig::Placement> placements;
+    placements.reserve(mesh_device->shape().dims());
+    for (std::size_t i = 0; i < mesh_device->shape().dims(); ++i) {
+        placements.emplace_back(distributed::MeshMapperConfig::Replicate{});
+    }
+    std::vector<distributed::MeshCoordinate> mesh_coords;
+    mesh_coords.reserve(mesh_device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        mesh_coords.push_back(coord);
+    }
     auto tensor_topology =
-        fully_replicated
-            ? TensorTopology(
-                  mesh_device->shape(), tensor.tensor_topology().placements(), tensor.tensor_topology().mesh_coords())
-            : tensor.tensor_topology();
+        fully_replicated ? TensorTopology(mesh_device->shape(), placements, mesh_coords) : tensor.tensor_topology();
     return Tensor(std::move(mesh_storage), *tensor_spec, tensor_topology);
 }
 
@@ -759,10 +766,17 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         *host_tensor.tensor_attributes,
         fully_replicated,
         cq_id);
-    auto tensor_topology = fully_replicated ? TensorTopology(
-                                                  device_tensor.device()->shape(),
-                                                  device_tensor.tensor_topology().placements(),
-                                                  device_tensor.tensor_topology().mesh_coords())
+    tt::stl::SmallVector<distributed::MeshMapperConfig::Placement> placements;
+    placements.reserve(device_tensor.device()->shape().dims());
+    for (std::size_t i = 0; i < device_tensor.device()->shape().dims(); ++i) {
+        placements.emplace_back(distributed::MeshMapperConfig::Replicate{});
+    }
+    std::vector<distributed::MeshCoordinate> mesh_coords;
+    mesh_coords.reserve(device_tensor.device()->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(device_tensor.device()->shape())) {
+        mesh_coords.push_back(coord);
+    }
+    auto tensor_topology = fully_replicated ? TensorTopology(device_tensor.device()->shape(), placements, mesh_coords)
                                             : device_tensor.tensor_topology();
     device_tensor = Tensor(
         std::move(mesh_storage),
