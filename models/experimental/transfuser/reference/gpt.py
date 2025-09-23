@@ -113,7 +113,6 @@ class GPT(nn.Module):
             x = self.drop(self.pos_emb + token_embeddings)
 
         x = self.blocks(x)  # (B, an * T, C)
-        return x
         x = self.ln_f(x)  # (B, an * T, C)
 
         x = x.view(
