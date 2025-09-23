@@ -944,10 +944,12 @@ int main(int argc, char **argv) {
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            fmt::print(
-                "Full step time {} ms, cache entries: {}\n",
-                (double)duration / 1000,
-                device->num_program_cache_entries());
+            if (needs_to_call_loss) {
+                fmt::print(
+                    "Full step time {} ms, cache entries: {}\n",
+                    (double)duration / 1000,
+                    device->num_program_cache_entries());
+            }
         }
         if (optimizer->get_steps() >= config.max_steps) {
             break;

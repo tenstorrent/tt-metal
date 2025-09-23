@@ -50,7 +50,8 @@ PipelineParallelConfig read_config(const YAML::Node& config) {
 }
 
 PipelineParallelLlama::PipelineParallelLlama(
-    const LlamaConfig& config, const PipelineParallelConfig& pipeline_parallel_config, bool is_tensor_parallel) {
+    const LlamaConfig& config, const PipelineParallelConfig& pipeline_parallel_config, bool is_tensor_parallel) :
+    pipeline_parallel_config(pipeline_parallel_config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     this->embedding_dim = config.embedding_dim;
@@ -164,14 +165,14 @@ PipelineParallelLlama::PipelineParallelLlama(
 bool PipelineParallelLlama::is_first_rank() const {
     auto distributed_ctx = autograd::ctx().get_distributed_context();
     int rank = *distributed_ctx->rank();
-    return static_cast<unsigned>(rank) == 0U;
+    return rank == 0;
 }
 
 bool PipelineParallelLlama::is_last_rank() const {
     auto distributed_ctx = autograd::ctx().get_distributed_context();
     int rank = *distributed_ctx->rank();
     int size = *distributed_ctx->size();
-    return static_cast<unsigned>(rank) == static_cast<unsigned>(size - 1);
+    return rank + 1 == size;
 }
 
 uint32_t PipelineParallelLlama::get_blocks_to_skip() const {

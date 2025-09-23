@@ -49,11 +49,17 @@ SocketManager::SocketManager(SocketType type) : m_type(type) {
 }
 
 void SocketManager::send(const ttnn::Tensor& tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank) {
+    auto my_rank = *distributed_ctx->rank();
+    fmt::println("Sending tensor (shape={}) from rank {} to rank {}", tensor.logical_shape(), my_rank, rank);
+
     auto socket = get_socket(rank, distributed_ctx);
     socket->send(tensor);
 }
 
 ttnn::Tensor SocketManager::recv(ttnn::Tensor tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank) {
+    auto my_rank = *distributed_ctx->rank();
+    fmt::println("Receiving tensor (shape={}) from rank {} to rank {}", tensor.logical_shape(), my_rank, rank);
+
     auto socket = get_socket(rank, distributed_ctx);
     socket->recv(tensor);
     return tensor;

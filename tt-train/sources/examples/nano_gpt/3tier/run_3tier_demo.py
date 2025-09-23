@@ -397,7 +397,7 @@ def main():
             print("Content of app file:")
             print(f.read())
 
-        mpi_cmd = ["mpirun", "--hostfile", str(hostfile), "--app", str(appfile)]
+        mpi_cmd = ["mpirun", "--hostfile", str(hostfile), "--app", str(appfile), "--tag-output"]
 
         if args.pp_only:
             print("Launching MPI pipeline-parallel run with " f"{worker_count} workers (no aggregator/optimizer)...")
