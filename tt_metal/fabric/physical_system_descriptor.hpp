@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal {
@@ -70,6 +72,34 @@ struct ExitNodeConnection {
     }
 };
 
+}  // namespace tt::tt_metal
+
+// Hash specialization for ExitNodeConnection that provides associative hashing
+// The hash is the same regardless of src/dst order and eth_conn channel order
+namespace std {
+template <>
+struct hash<tt::tt_metal::ExitNodeConnection> {
+    std::size_t operator()(const tt::tt_metal::ExitNodeConnection& conn) const noexcept {
+        // Get the underlying values from the StrongType wrappers
+        uint64_t src_id = *conn.src_exit_node;
+        uint64_t dst_id = *conn.dst_exit_node;
+
+        // Sort the node IDs to make the hash associative
+        uint64_t min_node = std::min(src_id, dst_id);
+        uint64_t max_node = std::max(src_id, dst_id);
+
+        // Sort the channel IDs to make the eth_conn hash associative
+        uint8_t min_chan = std::min(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
+        uint8_t max_chan = std::max(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
+
+        return tt::stl::hash::hash_objects_with_default_seed(
+            min_node, max_node, min_chan, max_chan, conn.eth_conn.is_local);
+    }
+};
+}  // namespace std
+
+namespace tt::tt_metal {
+
 using ExitNodeConnectionTable = std::unordered_map<std::string, std::vector<ExitNodeConnection>>;
 using AsicConnectionEdge = std::pair<AsicID, std::vector<EthConnection>>;
 using HostConnectionEdge = std::pair<std::string, std::vector<ExitNodeConnection>>;
@@ -112,6 +142,7 @@ public:
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
+    bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
 
     // Generic Getters
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
