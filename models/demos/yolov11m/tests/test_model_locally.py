@@ -293,7 +293,7 @@ def visualize_obb_predictions(image_path, output, confidence_threshold=0.05, sav
         return None, []
 
 
-def test_obb_with_real_images():
+def test_pytorch_obb_with_real_images(test_images):
     """Test OBB model with actual images from the demo folder"""
     print("📸 Testing OBB Model with Real Images...")
     
@@ -301,21 +301,9 @@ def test_obb_with_real_images():
     torch_model = load_torch_model()
     torch_model.eval()
 
-    
-    # Also try some backup images from other YOLO demos if available
-    # Test images - use existing demo images
-    test_images = [
-        "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
-    ]
-    all_images = test_images
     results = []
     
-    for image_path in all_images:
+    for image_path in test_images:
         if not os.path.exists(image_path):
             print(f"⚠️  Image not found: {image_path}")
             continue
@@ -338,7 +326,7 @@ def test_obb_with_real_images():
         assert output.shape == expected_shape, f"Expected {expected_shape}, got {output.shape}"
         
         # Create output directory for visualizations
-        output_dir = "/Users/dgnidash/projects/tt-metal/obb_test_outputs"
+        output_dir = "./obb_test_outputs"
         image_name = os.path.splitext(os.path.basename(image_path))[0]
         save_path = os.path.join(output_dir, f"{image_name}_obb_predictions.jpg")
         
@@ -384,11 +372,6 @@ def test_obb_with_real_images():
         
         print("✅ Image processed successfully!")
         
-    if not results:
-        print("⚠️  No images were successfully processed. Using fallback test...")
-        # Fallback to synthetic test
-        return test_obb_simple()
-    
     # Summary
     print(f"\n📊 Summary of {len(results)} processed images:")
     for result in results:
@@ -407,7 +390,7 @@ def test_obb_with_real_images():
     return results
 
 
-def test_ttnn_obb_simple():
+def test_compare_ttnn_and_pytorch_obb_simple():
     """Simple test for TTNN OBB model with synthetic data"""
     print("🔥 Testing TTNN OBB Model (Simple)...")
     
@@ -488,7 +471,7 @@ def test_ttnn_obb_simple():
             pass
 
 
-def test_ttnn_obb_with_real_images():
+def test_compare_ttnn_and_pytorch_obb_with_real_images(test_images):
     """Test TTNN OBB model with real images and compare with PyTorch"""
     print("🔥 Testing TTNN OBB Model with Real Images...")
     
@@ -517,13 +500,7 @@ def test_ttnn_obb_with_real_images():
         ttnn_model = ttnn_yolov11.TtnnYoloV11(device, ttnn_model_parameters)
         print("✅ TTNN OBB model loaded")
         
-        # Test images
-        test_images = [
-            "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
-            "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
-            "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
-        ]
-        
+
         results = []
         
         for image_path in test_images:
@@ -593,8 +570,8 @@ def test_ttnn_obb_with_real_images():
             print(f"📊 PCC (PyTorch vs TTNN): {pcc:.6f}")
             
             # Create output directories
-            output_dir_torch = "/Users/dgnidash/projects/tt-metal/obb_test_outputs/pytorch"
-            output_dir_ttnn = "/Users/dgnidash/projects/tt-metal/obb_test_outputs/ttnn"
+            output_dir_torch = "./obb_test_outputs/pytorch"
+            output_dir_ttnn = "./obb_test_outputs/ttnn"
             image_name = os.path.splitext(os.path.basename(image_path))[0]
             
             # Visualize PyTorch predictions
@@ -611,7 +588,7 @@ def test_ttnn_obb_with_real_images():
             
             # Create side-by-side comparison of PyTorch vs TTNN
             if viz_torch is not None and viz_ttnn is not None:
-                comparison_dir = "/Users/dgnidash/projects/tt-metal/obb_test_outputs/comparison"
+                comparison_dir = "./obb_test_outputs/comparison"
                 os.makedirs(comparison_dir, exist_ok=True)
                 
                 # Resize to same dimensions
@@ -690,27 +667,35 @@ def test_ttnn_obb_with_real_images():
             pass
 
 
-if __name__ == "__main__":
-    print("🚀 Running Comprehensive OBB Tests...")
-    
+if __name__ == "__main__":    
     # Test PyTorch OBB model
     print("=" * 60)
     print("📊 Testing PyTorch OBB Model")
     print("=" * 60)
-    pytorch_results = test_obb_with_real_images()
+
+    # Also try some backup images from other YOLO demos if available
+    # Test images - use existing demo images
+    test_images = [
+        "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
+        "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
+        "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
+        "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
+        "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
+        "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
+    ]
+
+    pytorch_results = test_pytorch_obb_with_real_images(test_images)
     
     # Test TTNN OBB model and compare with PyTorch
     print("\n" + "=" * 60)
-    print("🔥 Testing TTNN OBB Model vs PyTorch")
+    print("🔥 Testing TTNN vs PyTorch OBB Model")
     print("=" * 60)
     
-    # First run simple test
-    print("🧪 Running simple TTNN test...")
-    simple_pcc = test_ttnn_obb_simple()
+    simple_pcc = test_compare_ttnn_and_pytorch_obb_simple()
     
     # Then run full test with real images
-    print("\n📸 Running TTNN test with real images...")
-    ttnn_results = test_ttnn_obb_with_real_images()
+    print("\n📸 Running TTNN vs PyTorch test with real images...")
+    ttnn_results = test_compare_ttnn_and_pytorch_obb_with_real_images(test_images)
     
     # Final summary
     print("\n" + "=" * 60)
@@ -727,7 +712,7 @@ if __name__ == "__main__":
     if ttnn_results:
         avg_pcc = np.mean([r['pcc'] for r in ttnn_results])
         print(f"✅ TTNN OBB with Real Images: {len(ttnn_results)} images processed, Average PCC: {avg_pcc:.4f}")
-        print(f"📁 Check /Users/dgnidash/projects/tt-metal/obb_test_outputs/ for visualizations")
+        print(f"📁 Check ./obb_test_outputs/ for visualizations")
     else:
         print("⚠️  TTNN real image test not available or failed")
     
