@@ -30,6 +30,7 @@
 
 // Constants
 const std::string output_dir = "generated/fabric";
+const std::string bandwidth_csv_dir = output_dir + "/bandwidth_results";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
@@ -404,11 +405,11 @@ public:
 
     void initialize_csv_file() {
         // Create output directory
-        std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+        std::filesystem::path bandwidth_results_path =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / bandwidth_csv_dir;
 
-        if (!std::filesystem::exists(output_path)) {
-            std::filesystem::create_directories(output_path);
+        if (!std::filesystem::exists(bandwidth_results_path)) {
+            std::filesystem::create_directories(bandwidth_results_path);
         }
 
         auto arch_name = tt::tt_metal::hal::get_arch_name();
@@ -416,7 +417,7 @@ public:
         // Generate detailed CSV filename
         std::ostringstream oss;
         oss << "bandwidth_results_" << arch_name << ".csv";
-        csv_file_path_ = output_path / oss.str();
+        csv_file_path_ = bandwidth_results_path / oss.str();
 
         // Create detailed CSV file with header
         std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
@@ -441,7 +442,7 @@ public:
         // Generate summary CSV filename
         std::ostringstream summary_oss;
         summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
-        csv_summary_file_path_ = output_path / summary_oss.str();
+        csv_summary_file_path_ = bandwidth_results_path / summary_oss.str();
 
         // Create summary CSV file with header
         std::ofstream summary_csv_stream(csv_summary_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
@@ -460,7 +461,7 @@ public:
         // Initialize diff CSV file for golden comparison
         std::ostringstream diff_oss;
         diff_oss << "bandwidth_summary_results_" << arch_name << "_diff.csv";
-        diff_csv_file_path_ = output_path / diff_oss.str();
+        diff_csv_file_path_ = bandwidth_results_path / diff_oss.str();
 
         // Create diff CSV file with header
         std::ofstream diff_csv_stream(diff_csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
