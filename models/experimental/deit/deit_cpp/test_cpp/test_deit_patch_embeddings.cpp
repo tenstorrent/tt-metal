@@ -13,31 +13,10 @@
 #include <torch/torch.h>
 
 #include "../tt_cpp/deit_config.h"
+#include "../helper_funcs.h"
 #include "../tt_cpp/deit_patch_embeddings.h"
 
 namespace {
-
-/**
- * Compute Pearson Correlation Coefficient (PCC) between two tensors
- * @param tensor1 First tensor
- * @param tensor2 Second tensor
- * @return PCC value
- */
-double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
-    auto flat1 = tensor1.flatten().to(torch::kFloat32);
-    auto flat2 = tensor2.flatten().to(torch::kFloat32);
-    
-    auto mean1 = flat1.mean();
-    auto mean2 = flat2.mean();
-    
-    auto centered1 = flat1 - mean1;
-    auto centered2 = flat2 - mean2;
-    
-    auto numerator = (centered1 * centered2).sum();
-    auto denominator = torch::sqrt((centered1 * centered1).sum() * (centered2 * centered2).sum());
-    
-    return numerator.item<double>() / denominator.item<double>();
-}
 
 /**
  * Test DeiT Patch Embeddings inference
@@ -93,7 +72,7 @@ void test_deit_patch_embeddings_inference(double pcc_threshold = 0.99) {
     auto tt_output = tt_patch_embeddings.forward(pixel_values);
     
     // Compute PCC between PyTorch and TT outputs (matching Python version logic)
-    double pcc = compute_pcc(torch_output, tt_output);
+    double pcc = helper_funcs::compute_pcc(torch_output, tt_output);
     
     // Log results (similar to Python version)
     std::cout << "PyTorch output shape: " << torch_output.sizes() << std::endl;

@@ -125,6 +125,14 @@ torch::Tensor load_and_preprocess_image(
     const std::string& image_path
 );
 
+/**
+ * Compute Pearson Correlation Coefficient (PCC) between two tensors
+ * @param tensor1 First tensor
+ * @param tensor2 Second tensor
+ * @return PCC value
+ */
+double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2);
+
 } // namespace helper_funcs
 
 #endif // DEIT_CPP_TT_CPP_HELPER_FUNCS_H
