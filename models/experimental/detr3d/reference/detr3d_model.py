@@ -525,11 +525,14 @@ class GenericMLP(nn.Module):
         for idx, x in enumerate(hidden_dims):
             # print("hiii")
             if use_conv:
-                layer = Conv1d(
-                    prev_dim, x, 1, bias=hidden_use_bias, norm=norm(x) if norm else None, activation=activation()
-                )
-                # layer = nn.Conv1d(prev_dim, x, 1, bias=hidden_use_bias)
+                # layer = Conv1d(
+                #     prev_dim, x, 1, bias=hidden_use_bias, norm=norm(x) if norm else None, activation=activation()
+                # )
+                layer = nn.Conv1d(prev_dim, x, 1, bias=hidden_use_bias)
                 layers.append(layer)
+                if norm:
+                    layers.append(norm(x))
+                layers.append(activation())
             else:
                 layer = nn.Linear(prev_dim, x, bias=hidden_use_bias)
                 layers.append(layer)
@@ -540,16 +543,22 @@ class GenericMLP(nn.Module):
                 layers.append(nn.Dropout(p=dropout[idx]))
             prev_dim = x
         if use_conv:
-            layer = Conv1d(
-                prev_dim,
-                output_dim,
-                1,
-                bias=output_use_bias,
-                norm=norm(output_dim) if output_use_norm else None,
-                activation=activation() if output_use_activation else None,
-            )
-            # layer = nn.Conv1d(prev_dim, output_dim, 1, bias=output_use_bias)
+            # layer = Conv1d(
+            #     prev_dim,
+            #     output_dim,
+            #     1,
+            #     bias=output_use_bias,
+            #     norm=norm(output_dim) if output_use_norm else None,
+            #     activation=activation() if output_use_activation else None,
+            # )
+            layer = nn.Conv1d(prev_dim, output_dim, 1, bias=output_use_bias)
             layers.append(layer)
+            if output_use_norm:
+                # print("iwbefiuwbefw")
+                layers.append(norm(output_dim))
+
+            if output_use_activation:
+                layers.append(activation())
         else:
             layer = nn.Linear(prev_dim, output_dim, bias=output_use_bias)
             layers.append(layer)
