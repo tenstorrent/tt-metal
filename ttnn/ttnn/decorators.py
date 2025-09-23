@@ -120,7 +120,6 @@ def command_queue(cq_id: int):
         raise ValueError("cq_id cannot be None in command_queue context")
 
     push_current_command_queue_id_for_thread(cq_id)
-    logger.info(f"Pushed command queue id {cq_id} for thread")
     try:
         yield
     finally:
@@ -132,7 +131,6 @@ def command_queue(cq_id: int):
                 f"This might indicate an operation didn't properly restore the command queue state. "
                 f"Restoring to original value {cq_id}."
             )
-        logger.info(f"Popping command queue id {cq_id} for thread")
         pop_current_command_queue_id_for_thread()
 
 
