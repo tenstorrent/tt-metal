@@ -19,11 +19,6 @@ namespace tt::tt_fabric {
 
 namespace control_channel {
 
-// maybe have a Nestedbuffer type for the local group
-// i.e. array of buffers, each with its own rd/wr ptrs and depth
-// for V1, we can start with a single nested buffer. Later we can extend to multiple buffers for QoS
-// one buffer for local producers and one for remote producers (forwarded packets from host and eth groups)
-
 template <uint8_t NUM_SLOTS>
 class FabricControlChannelBuffer {
 public:
@@ -33,7 +28,7 @@ public:
         return base_address_ + slot_index * slot_size_;
     }
 
-    FORCE_INLINE void init() {
+    void init() {
         for (uint8_t i = 0; i < NUM_SLOTS; i++) {
             size_t slot_address = get_buffer_address(i);
 // need to avoid unrolling to keep code size within limits
@@ -64,7 +59,7 @@ public:
         return base_address_ + (group_index * NUM_SLOTS_PER_GROUP + slot_index) * slot_size_;
     }
 
-    FORCE_INLINE void init() {
+    void init() {
         for (uint8_t g = 0; g < NUM_GROUPS; g++) {
             for (uint8_t s = 0; s < NUM_SLOTS_PER_GROUP; s++) {
                 size_t slot_address = get_buffer_address(g, s);
@@ -91,7 +86,7 @@ private:
 template <uint8_t NUM_BUFFER_SLOTS>
 class HostBufferConsumerInterface {
 public:
-    FORCE_INLINE void init() {
+    void init() {
         host_buffer_ = FabricControlChannelBuffer<NUM_BUFFER_SLOTS>(channel_base_address_);
         local_read_counter_.reset();
     }
@@ -149,7 +144,7 @@ private:
 template <uint8_t NUM_BUFFER_SLOTS>
 class EthBufferConsumerInterface {
 public:
-    FORCE_INLINE void init() {
+    void init() {
         eth_buffer_ = FabricControlChannelBuffer<NUM_BUFFER_SLOTS>(channel_base_address_);
         local_read_counter_.reset();
     }
@@ -213,7 +208,7 @@ private:
 template <uint8_t NUM_GROUPS, uint8_t NUM_SLOTS_PER_GROUP>
 class LocalBufferConsumerInterface {
 public:
-    FORCE_INLINE void init() {
+    void init() {
         local_buffer_ = FabricControlChannelNestedBuffer<NUM_GROUPS, NUM_SLOTS_PER_GROUP>(channel_base_address_);
 
 // need to avoid unrolling to keep code size within limits
@@ -323,7 +318,7 @@ private:
 template <uint8_t NUM_BUFFER_SLOTS>
 class EthProducerInterface {
 public:
-    FORCE_INLINE void init() { local_write_counter_.reset(); }
+    void init() { local_write_counter_.reset(); }
 
     FORCE_INLINE bool remote_has_space_for_packet() const {
         return local_write_counter_.counter -
@@ -372,7 +367,7 @@ private:
 template <uint8_t NUM_GROUPS, uint8_t NUM_SLOTS_PER_GROUP>
 class LocalProducerInterface {
 public:
-    FORCE_INLINE void init() {
+    void init() {
         // Initialize all local write counters
         for (uint8_t g = 0; g < NUM_GROUPS; g++) {
             local_write_counters_[g].reset();
@@ -467,9 +462,9 @@ public:
 
     bool is_active() const { return static_cast<Derived*>(this)->is_active(); }
 
-    FORCE_INLINE bool has_outbound_packet() const { return has_outbound_packet_; }
+    bool has_outbound_packet() const { return has_outbound_packet_; }
 
-    FORCE_INLINE void clear_outbound_packet() { has_outbound_packet_ = false; }
+    void clear_outbound_packet() { has_outbound_packet_ = false; }
 
 protected:
     bool has_outbound_packet_ = false;
@@ -477,9 +472,9 @@ protected:
 
 class HeartbeatFSMContext : public BaseFSMContext<HeartbeatFSMContext> {
 public:
-    FORCE_INLINE void init() { state_ = State::INIT; }
+    void init() { state_ = State::INIT; }
 
-    FORCE_INLINE void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+    void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         // drop any non-heartbeat packets
         if (packet_header->type != ControlPacketType::HEARTBEAT) {
             return;
@@ -514,7 +509,7 @@ public:
         }
     }
 
-    FORCE_INLINE bool is_active() const { return state_ != State::COMPLETED; }
+    bool is_active() const { return state_ != State::COMPLETED; }
 
 private:
     enum class State : uint32_t {
@@ -523,7 +518,7 @@ private:
         COMPLETED,
     };
 
-    FORCE_INLINE void prepare_request_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+    void prepare_request_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         auto* request_packet = reinterpret_cast<tt_l1_ptr ControlPacketHeader*>(staging_packet_address);
         request_packet->type = ControlPacketType::HEARTBEAT;
         request_packet->sub_type = ControlPacketSubType::ACK_REQUEST;
@@ -536,7 +531,7 @@ private:
         has_outbound_packet_ = true;
     }
 
-    FORCE_INLINE void prepare_response_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+    void prepare_response_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         auto* response_packet = reinterpret_cast<tt_l1_ptr ControlPacketHeader*>(staging_packet_address);
         response_packet->type = ControlPacketType::HEARTBEAT;
         response_packet->sub_type = ControlPacketSubType::ACK_RESPONSE;
@@ -729,45 +724,21 @@ private:
         }
     }
 
-    bool process_control_packet_from_host(ControlPacketHeader* packet_header) {
-        // the is multi-step only to see if we need to capture info about the source
-        // we can remove this if we dont need to capture info about the source
-        forward_control_packet(packet_header);
-        return true;
-    }
-
-    bool process_control_packet_from_eth(ControlPacketHeader* packet_header) {
-        // the is multi-step only to see if we need to capture info about the source
-        // we can remove this if we dont need to capture info about the source
-        forward_control_packet(packet_header);
-        return true;
-    }
-
-    bool process_control_packet_from_local(ControlPacketHeader* packet_header) {
-        // the is multi-step only to see if we need to capture info about the source
-        // we can remove this if we dont need to capture info about the source
-        forward_control_packet(packet_header);
-        return true;
-    }
-
     FORCE_INLINE void process_next_inbound_interface() {
         switch (next_inbound_interface_to_process_) {
             case InterfaceType::HOST:
-                host_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
-                    return this->process_control_packet_from_host(packet_header);
-                });
+                host_inbound_interface_.process_packet(
+                    [this](ControlPacketHeader* packet_header) { return this->forward_control_packet(packet_header); });
                 next_inbound_interface_to_process_ = InterfaceType::ETH;
                 break;
             case InterfaceType::ETH:
-                eth_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
-                    return this->process_control_packet_from_eth(packet_header);
-                });
+                eth_inbound_interface_.process_packet(
+                    [this](ControlPacketHeader* packet_header) { return this->forward_control_packet(packet_header); });
                 next_inbound_interface_to_process_ = InterfaceType::LOCAL;
                 break;
             case InterfaceType::LOCAL:
-                local_inbound_interface_.process_packet([this](ControlPacketHeader* packet_header) {
-                    return this->process_control_packet_from_local(packet_header);
-                });
+                local_inbound_interface_.process_packet(
+                    [this](ControlPacketHeader* packet_header) { return this->forward_control_packet(packet_header); });
                 next_inbound_interface_to_process_ = InterfaceType::HOST;
                 break;
             default: __builtin_unreachable();
