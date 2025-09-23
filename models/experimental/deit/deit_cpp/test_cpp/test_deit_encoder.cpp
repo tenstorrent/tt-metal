@@ -15,6 +15,7 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/types.hpp>
 #include <ttnn/device.hpp>
+#include <ttnn/distributed/api.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 
@@ -23,28 +24,6 @@
 #include "../helper_funcs.h"
 
 namespace {
-
-/**
- * Compute Pearson Correlation Coefficient (PCC) between two tensors
- * @param tensor1 First tensor
- * @param tensor2 Second tensor
- * @return PCC value
- */
-double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
-    auto flat1 = tensor1.flatten().to(torch::kFloat32);
-    auto flat2 = tensor2.flatten().to(torch::kFloat32);
-    
-    auto mean1 = flat1.mean();
-    auto mean2 = flat2.mean();
-    
-    auto centered1 = flat1 - mean1;
-    auto centered2 = flat2 - mean2;
-    
-    auto numerator = (centered1 * centered2).sum();
-    auto denominator = torch::sqrt((centered1 * centered1).sum() * (centered2 * centered2).sum());
-    
-    return numerator.item<double>() / denominator.item<double>();
-}
 
 /**
  * Test DeiT Encoder inference
@@ -130,9 +109,6 @@ void test_deit_encoder_inference(const std::string& model_path) {
     // Prepare input for encoder module
     auto hidden_states = input_tensor.squeeze(0); // Remove batch dimension: [224, 768]
     torch::Tensor torch_head_mask; // None equivalent
-    bool torch_output_attentions = false;
-    bool torch_output_hidden_states = false;
-    bool torch_return_dict = true; // not used in inference
     
     // Call encoder module forward
     std::vector<torch::jit::IValue> inputs;
@@ -176,7 +152,7 @@ void test_deit_encoder_inference(const std::string& model_path) {
     tt_output_torch = tt_output_torch.squeeze(0); // Remove batch dimension
     
     // Compute PCC between PyTorch and TT outputs
-    double pcc = compute_pcc(torch_output, tt_output_torch);
+    double pcc = helper_funcs::compute_pcc(torch_output, tt_output_torch);
     
     // Log results
     std::cout << "PCC between PyTorch and TT outputs: " << pcc << std::endl;
@@ -190,6 +166,8 @@ void test_deit_encoder_inference(const std::string& model_path) {
         std::cout << "FAILED: PCC (" << pcc << ") is below threshold (" << pcc_threshold << ")" << std::endl;
     }
 
+    // Clean up device resources
+    ttnn::distributed::close_mesh_device(device);
 }
 
 } // anonymous namespace

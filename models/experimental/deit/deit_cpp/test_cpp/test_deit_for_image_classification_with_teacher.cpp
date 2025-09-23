@@ -15,6 +15,7 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/types.hpp>
 #include <ttnn/device.hpp>
+#include <ttnn/distributed/api.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 
@@ -22,30 +23,7 @@
 #include "../tt_cpp/deit_for_image_classification_with_teacher.h"
 #include "../helper_funcs.h"
 
-
 namespace {
-
-/**
- * Compute Pearson Correlation Coefficient (PCC) between two tensors
- * @param tensor1 First tensor
- * @param tensor2 Second tensor
- * @return PCC value
- */
-double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
-    auto flat1 = tensor1.flatten().to(torch::kFloat32);
-    auto flat2 = tensor2.flatten().to(torch::kFloat32);
-    
-    auto mean1 = flat1.mean();
-    auto mean2 = flat2.mean();
-    
-    auto centered1 = flat1 - mean1;
-    auto centered2 = flat2 - mean2;
-    
-    auto numerator = (centered1 * centered2).sum();
-    auto denominator = torch::sqrt((centered1 * centered1).sum() * (centered2 * centered2).sum());
-    
-    return numerator.item<double>() / denominator.item<double>();
-}
 
 /**
  * Load DeiT for Image Classification with Teacher model from file
@@ -187,9 +165,9 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     }
     
     // Compute PCC between PyTorch and TT outputs
-    double pcc_averaged = compute_pcc(torch_averaged_logits, tt_averaged_output_torch);
-    double pcc_cls = torch_cls_logits.defined() ? compute_pcc(torch_cls_logits, tt_cls_output_torch) : 0.0;
-    double pcc_distillation = torch_distillation_logits.defined() ? compute_pcc(torch_distillation_logits, tt_distillation_output_torch) : 0.0;
+    double pcc_averaged = helper_funcs::compute_pcc(torch_averaged_logits, tt_averaged_output_torch);
+    double pcc_cls = torch_cls_logits.defined() ? helper_funcs::compute_pcc(torch_cls_logits, tt_cls_output_torch) : 0.0;
+    double pcc_distillation = torch_distillation_logits.defined() ? helper_funcs::compute_pcc(torch_distillation_logits, tt_distillation_output_torch) : 0.0;
     
     // Log results
     std::cout << "PCC between PyTorch and TT averaged logits: " << pcc_averaged << std::endl;
@@ -220,6 +198,8 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
         std::cout << "FAILED: One or more PCC values are below threshold (" << pcc_threshold << ")" << std::endl;
     }
 
+    // Clean up device resources
+    ttnn::distributed::close_mesh_device(device);
 }
 
 /**
@@ -291,7 +271,7 @@ void test_separate_logits_functionality(const std::string& model_path) {
         tt_averaged_output_torch = tt_averaged_output_torch.squeeze(0);
     }
     
-    double pcc_manual_vs_forward = compute_pcc(manual_averaged, tt_averaged_output_torch);
+    double pcc_manual_vs_forward = helper_funcs::compute_pcc(manual_averaged, tt_averaged_output_torch);
     
     std::cout << "PCC between manual averaged logits and forward averaged logits: " << pcc_manual_vs_forward << std::endl;
     
@@ -301,7 +281,8 @@ void test_separate_logits_functionality(const std::string& model_path) {
         std::cout << "FAILED: Manual averaging doesn't match forward method averaging" << std::endl;
     }
 
-
+    // Clean up device resources
+    ttnn::distributed::close_mesh_device(device);
 }
 
 } // anonymous namespace
