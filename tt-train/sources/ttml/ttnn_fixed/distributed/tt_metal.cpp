@@ -16,7 +16,7 @@ namespace ttml::ttnn_fixed::distributed {
 const char* kTTMetalHomeEnvVar = "TT_METAL_HOME";
 const char* kTTMeshGraphDescriptorEnvVar = "TT_MESH_GRAPH_DESC_PATH";
 
-void enable_fabric_config(uint32_t num_devices) {
+void enable_fabric(uint32_t num_devices) {
     const char* mesh_graph_descriptor_path_env = std::getenv(kTTMeshGraphDescriptorEnvVar);
     if (!mesh_graph_descriptor_path_env) {
         const char* metal_home = std::getenv(kTTMetalHomeEnvVar);

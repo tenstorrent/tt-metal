@@ -8,6 +8,6 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
-void enable_fabric_config(uint32_t num_devices);
+void enable_fabric(uint32_t num_devices);
 
 }  // namespace ttml::ttnn_fixed::distributed

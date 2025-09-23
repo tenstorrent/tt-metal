@@ -568,7 +568,7 @@ int main(int argc, char **argv) {
     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
     // enable fabric config for 3-tier architecture, tp, ddp
     if (config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
-        ttml::ttnn_fixed::distributed::enable_fabric_config(num_devices);
+        ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
