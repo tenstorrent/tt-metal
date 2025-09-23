@@ -232,16 +232,22 @@ def test_add_dram_and_l1_tensor(device, shape_a, shape_b):
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
-@pytest.mark.parametrize("activations", [[], [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]])
-def test_add_and_apply_activations(device, shape, activations):
+@pytest.mark.parametrize(
+    "activations_spec",
+    [[], ["RELU"]],
+    ids=["no_act", "relu"],
+)
+def test_add_and_apply_activations(device, shape, activations_spec):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    for activation in activations:
-        if activation == "relu":
+    # Build deterministic activations from spec and apply to golden
+    activations = [ttnn.UnaryWithParam(getattr(ttnn.UnaryOpType, name)) for name in activations_spec]
+    for name in activations_spec:
+        if name == "RELU":
             torch_output_tensor = torch.relu(torch_output_tensor)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
@@ -253,16 +259,22 @@ def test_add_and_apply_activations(device, shape, activations):
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
-@pytest.mark.parametrize("activations", [[], [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]])
-def test_in_place_add_and_apply_activations(device, shape, activations):
+@pytest.mark.parametrize(
+    "activations_spec",
+    [[], ["RELU"]],
+    ids=["no_act", "relu"],
+)
+def test_in_place_add_and_apply_activations(device, shape, activations_spec):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    for activation in activations:
-        if activation == "relu":
+    # Build deterministic activations from spec and apply to golden
+    activations = [ttnn.UnaryWithParam(getattr(ttnn.UnaryOpType, name)) for name in activations_spec]
+    for name in activations_spec:
+        if name == "RELU":
             torch_output_tensor = torch.relu(torch_output_tensor)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
