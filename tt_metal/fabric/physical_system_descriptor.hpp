@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal {

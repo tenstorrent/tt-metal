@@ -154,7 +154,7 @@ bool check_connection_requested(
     MeshId neighbor_mesh_id,
     const RequestedIntermeshConnections& requested_intermesh_connections,
     const RequestedIntermeshPorts& requested_intermesh_ports) {
-    if (requested_intermesh_ports.size() > 0) {
+    if (!requested_intermesh_ports.empty()) {
         return requested_intermesh_ports.find(*my_mesh_id) != requested_intermesh_ports.end() &&
                requested_intermesh_ports.at(*my_mesh_id).find(*neighbor_mesh_id) !=
                    requested_intermesh_ports.at(*my_mesh_id).end();
@@ -2361,10 +2361,10 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
 
     TT_FATAL(
-        !(requested_intermesh_connections.size() && requested_intermesh_ports.size()),
+        !requested_intermesh_connections.empty() || !requested_intermesh_ports.empty(),
         "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections.");
 
-    bool strict_binding = requested_intermesh_ports.size() > 0;
+    bool strict_binding = !requested_intermesh_ports.empty();
 
     // Track the Logical Ethernet Ports connecting to all neighbors of my_mesh
     PortDescriptorTable port_descriptors;
@@ -2407,7 +2407,7 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
     const RequestedIntermeshPorts& requested_intermesh_ports,
     const std::vector<uint64_t>& src_exit_node_chips) {
     std::unordered_set<FabricNodeId> requested_exit_nodes;
-    if (requested_intermesh_ports.size() > 0) {
+    if (!requested_intermesh_ports.empty()) {
         for (const auto& port : requested_intermesh_ports.at(*my_mesh_id).at(*neighbor_mesh_id)) {
             auto src_device = std::get<0>(port);
             auto dst_device = std::get<1>(port);
@@ -2538,7 +2538,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
     const auto& mesh_edge_ports_to_chip_id = mesh_graph->get_mesh_edge_ports_to_chip_id();
 
-    bool strict_binding = requested_intermesh_ports.size() > 0;
+    bool strict_binding = !requested_intermesh_ports.empty();
     std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
 
     for (const auto& [src_mesh, port_identifiers] : port_descriptors) {
@@ -2646,7 +2646,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
 
-    bool strict_binding = requested_intermesh_ports.size() > 0;
+    bool strict_binding = !requested_intermesh_ports.empty();
 
     auto should_process_direction_for_chip = [&](const FabricNodeId& edge_node,
                                                  chip_id_t candidate_chip_id,

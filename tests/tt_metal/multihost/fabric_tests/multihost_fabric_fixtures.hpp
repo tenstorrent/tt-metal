@@ -30,7 +30,7 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
         custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
         chip_to_eth_coord_mapping);
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().size() > 0,
+        !tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().empty(),
         "Multi-Host Routing tests require ethernet links to a remote host.");
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,
