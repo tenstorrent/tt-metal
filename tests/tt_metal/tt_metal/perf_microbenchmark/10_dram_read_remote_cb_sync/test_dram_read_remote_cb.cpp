@@ -628,7 +628,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
 
     std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer;
     if (address.has_value()) {
-        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address.value());
+        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address);
     } else {
         input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }

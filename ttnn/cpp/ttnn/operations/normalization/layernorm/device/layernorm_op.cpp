@@ -351,7 +351,7 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
 
                 auto mem_config = this->output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec().value());
+                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
                 }
 
                 return {ttnn::TensorSpec(
