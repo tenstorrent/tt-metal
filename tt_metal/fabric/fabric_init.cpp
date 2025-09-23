@@ -485,6 +485,9 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(router_channels_mask);
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+            if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+                risc_id = 1;
+            }
             auto kernel = tt::tt_metal::CreateKernel(
                 *fabric_program_ptr,
                 "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
