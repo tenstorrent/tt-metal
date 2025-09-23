@@ -28,7 +28,7 @@ pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_be
 > **Note:** SentenceBERT uses BERT-base as its backbone model.
 
 #### Single Device (BS=8):
-- End-to-end performance with mean-pooling post-processing is **431 sentences per second**
+- End-to-end performance with mean-pooling post-processing is **433 sentences per second**
 ```
 pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
 ```
