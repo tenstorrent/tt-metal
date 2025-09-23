@@ -334,6 +334,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
         input_tensor_mesh = ttnn.to_device(ttnn_tensor, mesh_device)
 
         # Run the op
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         for i in range(num_iters):
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
@@ -349,6 +350,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
                 subdevice_id=worker_sub_device_id,
             )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        captured_graph = ttnn.graph.end_graph_capture()
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     except Exception as e:
         raise e
@@ -383,6 +385,9 @@ def run_all_reduce_with_mesh_tensor_along_row(
         else:
             logger.info(f"output match for tensor {i}")
     assert not mismatch, f"{i} FAILED: {output}"
+    df = process_allocations(captured_graph)
+    peak_buffer = df["total_buffer"].max()
+    print(f"Peak buffer memory usage: {peak_buffer} bytes")
 
 
 # Enumerate the post-commit cases explicitly
@@ -392,7 +397,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
     [
         (4, 2, [1, 4, 32, 2304], ttnn.TILE_LAYOUT),
         (4, 2, [4, 1, 64, 1024], ttnn.TILE_LAYOUT),
-        (4, 2, [3, 2, 90, 2040], ttnn.TILE_LAYOUT),
+        (4, 2, [3, 2, 90, 2048], ttnn.TILE_LAYOUT),
         (4, 2, [16, 1, 16, 512], ttnn.ROW_MAJOR_LAYOUT),
         (4, 2, [1, 1, 250, 2048], ttnn.ROW_MAJOR_LAYOUT),
         (4, 2, [2, 2, 350, 350], ttnn.ROW_MAJOR_LAYOUT),
@@ -499,4 +504,66 @@ def test_line_all_reduce_on_TG_cols_post_commit(
         num_iters=num_iters,
         num_all_reduce_instances=replication_factor,
         cluster_axis=0,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, layout",
+    [
+        (32, 3, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("replication_factor", [1])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+def test_line_all_reduce_training(
+    mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    function_level_defaults,
+    replication_factor,
+    num_iters=1,
+):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        function_level_defaults,
+        num_iters=num_iters,
+        num_all_reduce_instances=replication_factor,
+        cluster_axis=1,
     )
