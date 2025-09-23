@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <ttnn/types.hpp>
 #include <ttnn/device.hpp>
 #include <tt-metalium/host_api.hpp>
