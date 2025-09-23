@@ -50,30 +50,29 @@ constexpr uint32_t ONE_PAGE = 1;
 constexpr uint32_t FIRST_STICK = 0;
 
 template <
-    typename elements_accessor_args_type,
-    typename test_elements_accessor_args_type,
+    typename input_accessor_args_type,
+    typename first_occurrences_accessor_args_type,
     typename output_accessor_args_type>
-struct IsInCTAs {
-    const uint32_t elements_tensor_addr;
-    const uint32_t test_elements_tensor_addr;
+struct UniqueCTAs {
+    const uint32_t input_tensor_addr;
+    const uint32_t first_occurrences_tensor_addr;
     const uint32_t output_tensor_addr;
-    const uint32_t elements_cb;
-    const uint32_t test_elements_cb;
+    const uint32_t input_cb;
+    const uint32_t first_occurrences_cb;
     const uint32_t output_cb;
-    const uint32_t elements_size;
-    const uint32_t test_elements_size;
-    const uint32_t single_fetch_subchunk_size;
-    const bool invert;
-    const elements_accessor_args_type elements_accessor_args;
-    const test_elements_accessor_args_type test_elements_accessor_args;
+    const uint32_t input_size;
+    const uint32_t input_element_size;
+    const uint32_t first_occurrences_element_size;
+    const input_accessor_args_type input_accessor_args;
+    const first_occurrences_accessor_args_type first_occurrences_accessor_args;
     const output_accessor_args_type output_accessor_args;
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto elements_args = TensorAccessorArgs<10>();
-    constexpr auto test_elements_args = TensorAccessorArgs<elements_args.next_compile_time_args_offset()>();
-    constexpr auto output_args = TensorAccessorArgs<test_elements_args.next_compile_time_args_offset()>();
-    return IsInCTAs<decltype(elements_args), decltype(test_elements_args), decltype(output_args)>{
+    constexpr auto input_args = TensorAccessorArgs<9>();
+    constexpr auto first_occurrences_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto output_args = TensorAccessorArgs<first_occurrences_args.next_compile_time_args_offset()>();
+    return UniqueCTAs{
         get_compile_time_arg_val(0),
         get_compile_time_arg_val(1),
         get_compile_time_arg_val(2),
@@ -83,21 +82,24 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7),
         get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9) != 0,
-        elements_args,
-        test_elements_args,
+        input_args,
+        first_occurrences_args,
         output_args};
 }
 
 template <typename addr_gen_type>
 FORCE_INLINE void load_to_cb(
-    const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset, const uint32_t& subchunk_size) {
+    uint32_t cb,
+    const addr_gen_type& addr_gtor,
+    uint32_t offset,
+    uint32_t subchunk_size,
+    uint32_t input_element_size = 4) {
     cb_reserve_back(cb, ONE_PAGE);
 
     const uint64_t source_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
     const uint32_t l1_write_address = get_write_ptr(cb);
-    const uint32_t subchunk_size_bytes = subchunk_size * 4;
-    const uint32_t offset_bytes = offset * 4;
+    const uint32_t subchunk_size_bytes = subchunk_size * input_element_size;
+    const uint32_t offset_bytes = offset * input_element_size;
     noc_async_read(source_noc_address + offset_bytes, l1_write_address, subchunk_size_bytes);
     noc_async_read_barrier();
 
@@ -106,13 +108,17 @@ FORCE_INLINE void load_to_cb(
 
 template <typename addr_gen_type>
 FORCE_INLINE void write_to_dram(
-    const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset, const uint32_t& subchunk_size) {
+    uint32_t cb,
+    const addr_gen_type& addr_gtor,
+    uint32_t offset,
+    uint32_t subchunk_size,
+    uint32_t output_element_size = 4) {
     cb_wait_front(cb, ONE_PAGE);
 
     const uint64_t destination_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
     const uint32_t l1_read_address = get_read_ptr(cb);
-    const uint32_t subchunk_size_bytes = subchunk_size * 4;
-    const uint32_t offset_bytes = offset * 4;
+    const uint32_t subchunk_size_bytes = subchunk_size * output_element_size;
+    const uint32_t offset_bytes = offset * output_element_size;
     noc_async_write(l1_read_address, destination_noc_address + offset_bytes, subchunk_size_bytes);
     noc_async_write_barrier();
 
