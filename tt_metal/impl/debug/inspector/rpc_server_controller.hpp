@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <capnp/ez-rpc.h>
+#include <condition_variable>
 #include <memory>
 #include <thread>
 #include <string>
@@ -24,16 +25,20 @@ public:
 
 private:
     std::thread server_thread;
-    std::unique_ptr<::capnp::EzRpcServer> rpc_server;
-    RpcServer* rpc_server_implementation = nullptr;
+    RpcServer rpc_server_implementation;
     std::mutex start_stop_mutex;
     std::atomic<bool> should_stop{false};
     std::atomic<bool> is_running{false};
 
+    // Used to signal when the server has started
+    std::condition_variable server_start_cv;
+    std::mutex server_start_mutex;
+    std::atomic<bool> server_start_finished{false};
+    std::string server_start_error_message{};
+
     // temp data used in background thread as initialization
     std::string host{};
     uint16_t port = 0;
-    ::kj::Own<RpcServer> temp_rpc_server_implementation;
 
     void run_server();
 };

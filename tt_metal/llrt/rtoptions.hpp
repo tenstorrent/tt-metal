@@ -86,7 +86,7 @@ struct InspectorSettings {
     bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
-    std::string rpc_server_host = "127.0.0.1";
+    std::string rpc_server_host = "localhost";
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
 };

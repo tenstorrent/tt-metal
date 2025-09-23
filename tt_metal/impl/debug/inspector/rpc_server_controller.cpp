@@ -30,12 +30,17 @@ void RpcServerController::start(const std::string& host, uint16_t port) {
     // Create the RPC implementation and set up callbacks
     this->host = host;
     this->port = port;
-    temp_rpc_server_implementation = ::kj::heap<RpcServer>();
-    rpc_server_implementation = temp_rpc_server_implementation.get();
 
     should_stop = false;
     is_running = true;
     server_thread = std::thread(&RpcServerController::run_server, this);
+
+    // Wait for server to start or fail
+    std::unique_lock start_lock(server_start_mutex);
+    server_start_cv.wait(start_lock, [this] { return this->server_start_finished.load(); });
+    if (!is_running) {
+        throw std::runtime_error(server_start_error_message);
+    }
 }
 
 void RpcServerController::stop() {
@@ -62,11 +67,21 @@ void RpcServerController::stop() {
 void RpcServerController::run_server() {
     try {
         // Create and configure the RPC server
-        rpc_server = std::make_unique<::capnp::EzRpcServer>(::kj::mv(temp_rpc_server_implementation), host, port);
+        ::capnp::EzRpcServer rpc_server(::kj::Own<RpcServer>(&rpc_server_implementation, ::kj::NullDisposer::instance), host, port);
+
+        // Check if server is started correctly
+        auto& waitScope = rpc_server.getWaitScope();
+        rpc_server.getPort().wait(waitScope);
+
+        // Signal back to RpcServerController::start that the server is ready to accept connections
+        {
+            std::lock_guard lock(server_start_mutex);
+            server_start_finished = true;
+        }
+        server_start_cv.notify_one();
         log_info(tt::LogInspector, "Inspector RPC server listening on {}:{}", host, port);
 
         // Keep server running until stopped
-        auto& waitScope = rpc_server->getWaitScope();
         auto last_events = std::chrono::high_resolution_clock::now();
 
         while (!should_stop) {
@@ -80,14 +95,23 @@ void RpcServerController::run_server() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
+    } catch (const kj::Exception& e) {
+        server_start_error_message = e.getDescription().cStr();
     } catch (const std::exception& e) {
-        log_error(tt::LogInspector, "Inspector RPC server error: {}", e.what());
+        server_start_error_message = e.what();
     }
-    rpc_server.reset();
+    is_running = false;
+
+    // In case of failure, signal back to RpcServerController::start that the server start failed
+    {
+        std::lock_guard lock(server_start_mutex);
+        server_start_finished = true;
+    }
+    server_start_cv.notify_one();
 }
 
 RpcServer& RpcServerController::get_rpc_server() {
-    return *rpc_server_implementation;
+    return rpc_server_implementation;
 }
 
 } // namespace tt::tt_metal::inspector
