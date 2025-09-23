@@ -65,8 +65,10 @@ void kernel_main() {
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_tensor_C = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t output_tensor_C = get_arg_val<uint32_t>(arg_idx++);
     uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
@@ -224,8 +226,12 @@ void kernel_main() {
 
     if (gather_dim == 3) {
         tile_id_start = position * input_tensor_Wt;
-    } else {
+    } else if (gather_dim == 2) {
         tile_id_start = position * input_tensor_Ht * input_tensor_Wt;
+    } else if (gather_dim == 1) {
+        tile_id_start = position * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
+    } else {
+        tile_id_start = position * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
     }
 
     auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(output_addrgen);
@@ -255,6 +261,7 @@ void kernel_main() {
     // 2. unicast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+    uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         chunk_count = 0;
@@ -371,7 +378,17 @@ void kernel_main() {
             }
         }
 
-        tile_id_start += output_tensor_Wt * output_tensor_Ht;
+        num_channels_processed_in_current_batch++;
+        if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
+            tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
+        } else {
+            tile_id_start += output_tensor_Wt * output_tensor_Ht;
+        }
+
+        if (num_channels_processed_in_current_batch == input_tensor_C) {
+            num_channels_processed_in_current_batch = 0;
+        }
+
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
         pages_read_in_row = start_pages_read_in_row;
@@ -434,10 +451,15 @@ void kernel_main() {
         uint32_t stride_Wt = output_tensor_Wt;
         if (gather_dim == 3) {
             tile_id_start = actual_slice_chip_id * input_tensor_Wt;
-        } else {
+        } else if (gather_dim == 2) {
             tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
+        } else if (gather_dim == 1) {
+            tile_id_start = actual_slice_chip_id * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
+        } else {
+            tile_id_start = actual_slice_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
         }
 
+        num_channels_processed_in_current_batch = 0;
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             chunk_count = 0;
 
@@ -515,7 +537,17 @@ void kernel_main() {
                     });
             }
 
-            tile_id_start += output_tensor_Wt * output_tensor_Ht;
+            num_channels_processed_in_current_batch++;
+            if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
+                tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
+            } else {
+                tile_id_start += output_tensor_Wt * output_tensor_Ht;
+            }
+
+            if (num_channels_processed_in_current_batch == input_tensor_C) {
+                num_channels_processed_in_current_batch = 0;
+            }
+
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
             row_offset = start_row_offset;

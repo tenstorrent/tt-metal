@@ -33,6 +33,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
+    BufferType input_tensor_buffer_type,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
@@ -159,6 +160,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool is_mm_conv,
     CoreCoord compute_grid_size,
     Layout input_tensor_layout,
+    BufferType input_tensor_buffer_type,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
     std::optional<uint32_t> act_block_h_override = std::nullopt);
 
@@ -249,6 +251,7 @@ struct ConvDRAMParamters {
     DataType weights_datatype;
     DataType input_datatype;
     DataType output_datatype;
+    Layout input_layout;
     bool enable_bias;
     bool mm_conv;
 };

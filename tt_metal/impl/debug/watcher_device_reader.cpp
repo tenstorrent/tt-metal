@@ -309,9 +309,6 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
-
-    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
