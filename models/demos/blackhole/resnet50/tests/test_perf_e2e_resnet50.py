@@ -13,7 +13,6 @@ from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
 
 
 @run_for_blackhole()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
@@ -42,7 +41,6 @@ def test_perf(
 
 
 @run_for_blackhole()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 5554176}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
@@ -71,7 +69,6 @@ def test_perf_trace(
 
 
 @run_for_blackhole()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
