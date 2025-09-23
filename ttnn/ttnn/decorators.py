@@ -27,7 +27,7 @@ def compare_tensors_using_pcc(
 ):
     import torch
 
-    from models.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc
 
     if isinstance(outputs, ttnn.Tensor):
         if not isinstance(golden_outputs, torch.Tensor):

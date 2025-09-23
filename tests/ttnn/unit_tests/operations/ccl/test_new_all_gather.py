@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,

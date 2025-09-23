@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, is_grayskull, skip_for_grayskull
+from models.common.utility_functions import torch_random, is_grayskull, skip_for_grayskull
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])

@@ -9,7 +9,7 @@ import ttnn
 from functools import partial
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(

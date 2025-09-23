@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
 
 

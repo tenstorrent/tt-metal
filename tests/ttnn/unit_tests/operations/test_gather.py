@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 import numpy as np
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 TILE_HEIGHT = 32

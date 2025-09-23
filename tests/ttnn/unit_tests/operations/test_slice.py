@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull, is_blackhole
+from models.common.utility_functions import is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from .test_utils import round_up
 import math

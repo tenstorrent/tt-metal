@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
