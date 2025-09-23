@@ -396,11 +396,11 @@ def test_compare_ttnn_and_pytorch_obb_simple():
     
     try:
         # Initialize TTNN device with proper configuration
-        device = ttnn.open_device(
-            device_id=0, 
+        device = ttnn.CreateDevice(
+            device_id=0,
+            num_command_queues=2,
             l1_small_size=YOLOV11_L1_SMALL_SIZE, 
-            trace_region_size=23887872, 
-            num_command_queues=2
+            trace_region_size=23887872
         )
         print("✅ TTNN device opened successfully")
         
@@ -477,11 +477,11 @@ def test_compare_ttnn_and_pytorch_obb_with_real_images(test_images):
     
     try:
         # Initialize TTNN device with proper configuration
-        device = ttnn.open_device(
-            device_id=0, 
+        device = ttnn.CreateDevice(
+            device_id=0,
+            num_command_queues=2,
             l1_small_size=YOLOV11_L1_SMALL_SIZE, 
-            trace_region_size=23887872, 
-            num_command_queues=2
+            trace_region_size=23887872
         )
         print("✅ TTNN device opened successfully")
         
