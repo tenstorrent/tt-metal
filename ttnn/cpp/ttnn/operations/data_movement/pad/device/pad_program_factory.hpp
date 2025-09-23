@@ -48,7 +48,7 @@ tt::tt_metal::operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     const ttnn::Shape& input_tensor_start,
     float pad_value);
 
-operation::ProgramWithCallbacks pad_tile_multicore(
+tt::tt_metal::operation::ProgramWithCallbacks pad_tile_multicore(
     const Tensor& a,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,

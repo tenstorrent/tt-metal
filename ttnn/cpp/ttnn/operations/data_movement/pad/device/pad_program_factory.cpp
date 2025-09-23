@@ -1465,7 +1465,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-static inline int next_index_u32(std::vector<uint32_t>& idx, ttnn::Shape& dims, uint32_t ndims) {
+static inline int advance_tensor_index(std::vector<uint32_t>& idx, ttnn::Shape& dims, uint32_t ndims) {
     // increment least-significant dim first
     for (uint32_t d = ndims; d-- > 0;) {
         uint32_t v = idx[d] + 1;
@@ -1562,10 +1562,10 @@ operation::ProgramWithCallbacks pad_tile_multicore(
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    std::vector<uint32_t> input_odo, output_odo;  // input and output odometers
+    std::vector<uint32_t> input_id_per_dim, output_id_per_dim;  // input and output odometers
     // initialize odos to vectors of length num_dims filled with 0
-    input_odo.resize(a_shape.rank(), 0);
-    output_odo.resize(output_padded_shape.rank(), 0);
+    input_id_per_dim.resize(a_shape.rank(), 0);
+    output_id_per_dim.resize(output_padded_shape.rank(), 0);
     // instantiate the input and output tensor padded shapes
     auto input_page_shape = a.padded_shape();
     auto output_page_shape = output_padded_shape;
@@ -1599,8 +1599,8 @@ operation::ProgramWithCallbacks pad_tile_multicore(
         };
         all_runtime_args.insert(all_runtime_args.end(), input_page_shape.cbegin(), input_page_shape.cend());
         all_runtime_args.insert(all_runtime_args.end(), output_page_shape.cbegin(), output_page_shape.cend());
-        all_runtime_args.insert(all_runtime_args.end(), input_odo.begin(), input_odo.end());
-        all_runtime_args.insert(all_runtime_args.end(), output_odo.begin(), output_odo.end());
+        all_runtime_args.insert(all_runtime_args.end(), input_id_per_dim.begin(), input_id_per_dim.end());
+        all_runtime_args.insert(all_runtime_args.end(), output_id_per_dim.begin(), output_id_per_dim.end());
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args);
         all_runtime_args[0] = output.buffer()->address();  // change input addr to output addr before setting writer
@@ -1611,16 +1611,17 @@ operation::ProgramWithCallbacks pad_tile_multicore(
 
         for (uint32_t p = 0; p < num_pages_per_core; p++) {
             within_input_region = true;
-            for (uint32_t d = 0; d < input_odo.size(); d++) {
-                if (input_odo[d] < output_odo[d]) {
+            for (uint32_t d = 0; d < input_id_per_dim.size(); d++) {
+                if (input_id_per_dim[d] < output_id_per_dim[d]) {
                     within_input_region = false;
+                    break;
                 }
             }
             if (within_input_region) {
-                next_index_u32(input_odo, input_page_shape, input_odo.size());
+                advance_tensor_index(input_id_per_dim, input_page_shape, input_id_per_dim.size());
                 input_page_offset++;
             }
-            next_index_u32(output_odo, output_page_shape, output_odo.size());
+            advance_tensor_index(output_id_per_dim, output_page_shape, output_id_per_dim.size());
             output_page_offset++;
         }
     }
@@ -1632,8 +1633,6 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            const auto& src_tensor = input_tensors.at(0);
-
             auto src_buffer = input_tensors.at(0).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
