@@ -277,6 +277,18 @@ jobs:
             echo "bh-url=" >> $GITHUB_OUTPUT
           fi
 
+          # Parse L2 Nightly test results
+          L2_RESULT="${{ needs.trigger-tt-metal-tests.outputs.tt-metal-l2-nightly-result || '' }}"
+          if [ -n "$L2_RESULT" ]; then
+            L2_STATUS=$(echo "$L2_RESULT" | cut -d: -f1)
+            L2_URL=$(echo "$L2_RESULT" | cut -d: -f2-)
+            echo "l2-status=$L2_STATUS" >> $GITHUB_OUTPUT
+            echo "l2-url=$L2_URL" >> $GITHUB_OUTPUT
+          else
+            echo "l2-status=" >> $GITHUB_OUTPUT
+            echo "l2-url=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Find tt-metal workflow run
         id: find-run
         if: needs.trigger-tt-metal-tests.result == 'success'
@@ -369,6 +381,16 @@ jobs:
           echo "$WH_RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+          # Format L2 Nightly results (runs with All post-commit tests)
+          L2_RESULT=$(format_test_result "L2 Nightly APC" \
+            "${{ needs.detect-changes.outputs.run-wormhole }}" \
+            "${{ steps.parse-results.outputs.l2-status }}" \
+            "${{ steps.parse-results.outputs.l2-url }}" \
+            "${{ needs.trigger-tt-metal-tests.result }}")
+          echo "l2-nightly-result<<EOF" >> $GITHUB_OUTPUT
+          echo "$L2_RESULT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
           # Format Blackhole results
           BH_RESULT=$(format_test_result "Blackhole" \
             "${{ needs.detect-changes.outputs.run-blackhole }}" \
@@ -398,6 +420,7 @@ jobs:
             **Test Results:**
             ${{ steps.format-results.outputs.wormhole-result }}
             ${{ steps.format-results.outputs.blackhole-result }}
+            ${{ steps.format-results.outputs.l2-nightly-result }}
 
             ## 🔗 Links
             📊 **Post-commit workflow:** [#${{ github.run_id }}](${{
