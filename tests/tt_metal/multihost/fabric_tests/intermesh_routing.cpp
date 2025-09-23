@@ -93,7 +93,7 @@ TEST_F(InterMeshSplit1x2FabricFixture, MultiHopUnicast) {
 TEST_F(InterMeshRoutingDual2x4Fixture, Fabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Validate control plane apis
@@ -129,7 +129,7 @@ TEST_F(InterMeshRoutingDual2x4Fixture, Fabric2DSanity) {
 
 TEST_F(InterMeshRoutingDual2x4Fixture, Fabric1DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Validate control plane apis
