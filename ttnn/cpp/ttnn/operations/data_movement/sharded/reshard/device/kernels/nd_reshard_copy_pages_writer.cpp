@@ -22,7 +22,7 @@ void kernel_main() {
     auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst, page_size);
 
     constexpr uint32_t one_tile = 1;
-    uint32_t cb_addr = get_read_ptr(cb_id);
+    uint32_t cb_addr = get_write_ptr(cb_id);
     auto pages = accessor_dst.pages(start_page, end_page);
     for (const auto& page : pages) {
         cb_wait_front(cb_id, one_tile);
