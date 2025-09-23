@@ -521,16 +521,15 @@ class TtSDXLPipeline(LightweightModule):
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
         # Instantiation of user host input tensors for the TT model.
-        if self.pipeline_config.use_cfg_parallel:
-            # Reorder all_prompt_embeds_torch for CFG parallel processing
-            num_prompts = all_prompt_embeds_torch.shape[0]
+        num_prompts = all_prompt_embeds_torch.shape[0]
 
-            indices = []
-            for i in range(self.batch_size):
-                for j in range(num_prompts // self.batch_size):
-                    indices.append(i + j * self.batch_size)
+        indices = []
+        for i in range(self.batch_size):
+            for j in range(num_prompts // self.batch_size):
+                indices.append(i + j * self.batch_size)
 
-            all_prompt_embeds_torch = all_prompt_embeds_torch[indices]
+        all_prompt_embeds_torch = all_prompt_embeds_torch[indices]
+        torch_add_text_embeds = torch_add_text_embeds[indices]
 
         profiler.start("create_user_tensors")
         is_mesh_device = isinstance(self.ttnn_device, ttnn._ttnn.multi_device.MeshDevice)
