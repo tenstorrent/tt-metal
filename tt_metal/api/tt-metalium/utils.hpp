@@ -38,26 +38,10 @@ inline DeviceAddr SizeBytesPerBank(
     return num_equally_distributed_pages * round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
 }
 
-inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
-    switch (arch) {
-        case ARCH::WORMHOLE_B0:
-        default: return NOC::NOC_0;
-    }
-}
-
-inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
-    switch (arch) {
-        case ARCH::WORMHOLE_B0:
-        default: return NOC::NOC_1;
-    }
-}
-
-
 }  // namespace tt::tt_metal::detail
 
 namespace tt {
 namespace utils {
-
 
 template <typename E, std::enable_if_t<std::is_enum<E>::value, bool> = true>
 auto underlying_type(const E& e) {
