@@ -39,7 +39,7 @@ void kernel_main() {
             i,
             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
             increment_value << REMOTE_DEST_BUF_WORDS_FREE_INC);
-        for (uint32_t i = 0; i < 1000; i++) {
+        for (uint32_t retry = 0; retry < 1000; retry++) {
             read_value = NOC_STREAM_READ_REG(i, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX) &
                          ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
             if (read_value == expected_value) {
