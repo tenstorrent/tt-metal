@@ -52,6 +52,9 @@ public:
     // MeshID.
     const std::vector<FabricNodeId>& get_exit_nodes_routing_to_mesh(MeshId mesh_id) const;
 
+    // Load Inter-Mesh Connectivity into the Routing Table Generator
+    void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
+
     std::unique_ptr<MeshGraph> mesh_graph;
 
 private:
