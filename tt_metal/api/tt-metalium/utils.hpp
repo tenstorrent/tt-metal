@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <type_traits>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -37,14 +36,3 @@ inline DeviceAddr SizeBytesPerBank(
 }
 
 }  // namespace tt::tt_metal::detail
-
-namespace tt {
-namespace utils {
-
-template <typename E, std::enable_if_t<std::is_enum<E>::value, bool> = true>
-auto underlying_type(const E& e) {
-    return static_cast<typename std::underlying_type<E>::type>(e);
-}
-
-}  // namespace utils
-}  // namespace tt

@@ -94,20 +94,20 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =
         MEM_SYSENG_ETH_MSG_STATUS_MASK;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_CALL)] = MEM_SYSENG_ETH_MSG_CALL;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_DONE)] = MEM_SYSENG_ETH_MSG_DONE;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_LINK_STATUS_CHECK)] =
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_CALL)] = MEM_SYSENG_ETH_MSG_CALL;
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_DONE)] = MEM_SYSENG_ETH_MSG_DONE;
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_LINK_STATUS_CHECK)] =
         MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::RETRAIN_COUNT)] =
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::RETRAIN_COUNT)] =
         (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->retrain_count;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::RX_LINK_UP)] =
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::RX_LINK_UP)] =
         (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->rx_link_up;
-    fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
+    fw_mailbox_addr[ttsl::underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->port_status;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
