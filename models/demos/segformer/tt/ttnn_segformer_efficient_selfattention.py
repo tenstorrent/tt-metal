@@ -199,7 +199,11 @@ class TtSegformerEfficientSelfAttention:
         attention_scores = ttnn.to_memory_config(attention_scores, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         scale_value = self.attention_head_size**-0.5
         attention_scores = ttnn.multiply(attention_scores, scale_value)
-        attention_probs = ttnn.softmax(attention_scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # TODO: remove numeric_stable=False once accuracy issue is resolved
+        # See issue: #29132
+        attention_probs = ttnn.softmax(
+            attention_scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, numeric_stable=False
+        )
         ttnn.deallocate(attention_scores)
         attention_probs = ttnn.to_layout(attention_probs, ttnn.TILE_LAYOUT)
 
