@@ -98,18 +98,18 @@ TEST_F(InterMeshRoutingDual2x4Fixture, Fabric2DSanity) {
 
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
-    MeshCoordinate src_mesh_coord(0, 3);
-    FabricNodeId dst_node_id(MeshId{0}, 4);  // On host rank 1
-    MeshCoordinate dst_mesh_coord(0, 4);
+    FabricNodeId src_node_id(MeshId{0}, 1);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 1);
+    FabricNodeId dst_node_id(MeshId{1}, 1);  // On host rank 1
+    MeshCoordinate dst_mesh_coord(0, 1);
 
     auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
     if (host_local_coord_range.contains(src_mesh_coord)) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
-        EXPECT_EQ(direction, RoutingDirection::E);
+        EXPECT_EQ(direction, RoutingDirection::N);
 
         const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::E);
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::N);
         EXPECT_TRUE(!eth_chans_by_direction.empty());
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
@@ -117,12 +117,12 @@ TEST_F(InterMeshRoutingDual2x4Fixture, Fabric2DSanity) {
 
     if (host_local_coord_range.contains(dst_mesh_coord)) {
         const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
-        EXPECT_EQ(reverse_direction, RoutingDirection::W);
+        EXPECT_EQ(reverse_direction, RoutingDirection::N);
 
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
         EXPECT_TRUE(!eth_chans.empty());
         const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::W);
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::N);
         EXPECT_TRUE(!eth_chans_by_direction.empty());
     }
 }
@@ -134,18 +134,18 @@ TEST_F(InterMeshRoutingDual2x4Fixture, Fabric1DSanity) {
 
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
-    MeshCoordinate src_mesh_coord(0, 3);
-    FabricNodeId dst_node_id(MeshId{0}, 4);  // On host rank 1
-    MeshCoordinate dst_mesh_coord(0, 4);
+    FabricNodeId src_node_id(MeshId{0}, 1);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 1);
+    FabricNodeId dst_node_id(MeshId{1}, 1);  // On host rank 1
+    MeshCoordinate dst_mesh_coord(0, 1);
 
     auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
     if (host_local_coord_range.contains(src_mesh_coord)) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
-        EXPECT_EQ(direction, RoutingDirection::E);
+        EXPECT_EQ(direction, RoutingDirection::N);
 
         const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::E);
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::N);
         EXPECT_TRUE(!eth_chans_by_direction.empty());
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
@@ -153,12 +153,12 @@ TEST_F(InterMeshRoutingDual2x4Fixture, Fabric1DSanity) {
 
     if (host_local_coord_range.contains(dst_mesh_coord)) {
         const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
-        EXPECT_EQ(reverse_direction, RoutingDirection::W);
+        EXPECT_EQ(reverse_direction, RoutingDirection::N);
 
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
         EXPECT_TRUE(!eth_chans.empty());
         const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::W);
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::N);
         EXPECT_TRUE(!eth_chans_by_direction.empty());
     }
 }
