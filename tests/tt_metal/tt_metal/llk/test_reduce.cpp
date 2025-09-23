@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// To enable pattern test data for MAX row reduction (instead of random data):
+// Compile with: -DUSE_PATTERN_DATA
+// Example: make -j8 build_hw DEFINES="-DUSE_PATTERN_DATA"
+
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -433,8 +437,9 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    // Create custom test data for MAX row reduction verification
+    // Generate test data - switch between pattern and random data
     vector<uint32_t> src_vec;
+#ifdef USE_PATTERN_DATA
     if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
         // Generate specific test pattern: 0.5 everywhere except second column (1-32)
         src_vec = create_max_reduce_test_data(dram_buffer_size, num_tensor_tiles, tile_H, tile_W);
@@ -443,6 +448,11 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
     }
+#else
+    // Default: always use random data
+    src_vec = create_random_vector_of_bfloat16(
+        dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
+#endif
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
@@ -485,6 +495,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);  // result is uint16_t untilized
 
     // Debug output for MAX row reduction with custom test data
+#ifdef USE_PATTERN_DATA
     if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
         log_info(LogTest, "=== MAX Row Reduction Test Debug Info ===");
         log_info(LogTest, "Input pattern: 0.5 everywhere except column 1 (values 1-32)");
@@ -501,6 +512,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         }
         log_info(LogTest, "==========================================");
     }
+#endif
 
     // Tilize from row major and convert to pairs (uint32_t)
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
@@ -511,6 +523,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         PhysicalSize{tile_H, tile_W}));
 
     // Debug output for actual kernel results
+#ifdef USE_PATTERN_DATA
     if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
         log_info(LogTest, "=== Actual Kernel Results ===");
         auto result_u16 = u16_from_u32_vector(result_vec);
@@ -524,6 +537,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         }
         log_info(LogTest, "=============================");
     }
+#endif
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
     if (!pass) {
