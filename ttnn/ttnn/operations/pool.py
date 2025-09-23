@@ -61,16 +61,16 @@ def prepare_grid_sample_grid(*args, **kwargs):
 
     Keyword Args:
         padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
-        output_dtype (ttnn.DataType, optional): Data type for the output tensor (ttnn.bfloat16 or ttnn.uint16). Default: bfloat16
+        output_dtype (ttnn.DataType, optional): Data type for the output tensor (only ttnn.uint16 is supported). Default: uint16
 
     Returns:
         ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
-                    - [:, :, :, 0]: North-west height coordinate (as integer stored in bfloat16)
-                    - [:, :, :, 1]: North-west width coordinate (as integer stored in bfloat16)
-                    - [:, :, :, 2]: Weight for north-west pixel
-                    - [:, :, :, 3]: Weight for north-east pixel
-                    - [:, :, :, 4]: Weight for south-west pixel
-                    - [:, :, :, 5]: Weight for south-east pixel
+                    - [:, :, :, 0]: North-west height coordinate (as integer stored in uint16)
+                    - [:, :, :, 1]: North-west width coordinate (as integer stored in uint16)
+                    - [:, :, :, 2]: Weight for north-west pixel (bfloat16 stored as uint16)
+                    - [:, :, :, 3]: Weight for north-east pixel (bfloat16 stored as uint16)
+                    - [:, :, :, 4]: Weight for south-west pixel (bfloat16 stored as uint16)
+                    - [:, :, :, 5]: Weight for south-east pixel (bfloat16 stored as uint16)
 
     Example:
         >>> # Create a normalized grid

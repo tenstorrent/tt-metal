@@ -24,18 +24,18 @@ namespace grid_sample {
  * @param grid Grid tensor of shape (N, H_out, W_out, 2) with normalized coordinates in [-1, 1]
  * @param input_shape Array containing input tensor dimensions [N, H_in, W_in, C] in NHWC format
  * @param padding_mode How to handle out-of-bounds coordinates (currently only "zeros" supported)
- * @param output_dtype Data type for the output tensor (default: bfloat16)
+ * @param output_dtype Data type for the output tensor (only ttnn::uint16 is supported)
  *
  * @return Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
- *         - [:, :, :, 0]: North-west height coordinate (as integer stored in bfloat16)
- *         - [:, :, :, 1]: North-west width coordinate (as integer stored in bfloat16)
- *         - [:, :, :, 2]: Weight for north-west pixel
- *         - [:, :, :, 3]: Weight for north-east pixel
- *         - [:, :, :, 4]: Weight for south-west pixel
- *         - [:, :, :, 5]: Weight for south-east pixel
+ *         - [:, :, :, 0]: North-west height coordinate (as integer stored in uint16)
+ *         - [:, :, :, 1]: North-west width coordinate (as integer stored in uint16)
+ *         - [:, :, :, 2]: Weight for north-west pixel (bfloat16 stored as uint16)
+ *         - [:, :, :, 3]: Weight for north-east pixel (bfloat16 stored as uint16)
+ *         - [:, :, :, 4]: Weight for south-west pixel (bfloat16 stored as uint16)
+ *         - [:, :, :, 5]: Weight for south-east pixel (bfloat16 stored as uint16)
  *
  * The function expects the input grid to be on host with float32 data type and
- * returns a tensor on host with the specified output data type.
+ * returns a tensor on host with uint16 data type.
  */
 ttnn::Tensor prepare_grid_sample_grid(
     const ttnn::Tensor& grid,

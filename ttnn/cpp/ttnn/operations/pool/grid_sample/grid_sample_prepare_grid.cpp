@@ -89,39 +89,28 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                 float weight_sw = (h1_valid && w0_valid) ? h_frac * w_frac_inv : 0.0f;
                 float weight_se = (h1_valid && w1_valid) ? h_frac * w_frac : 0.0f;
 
-                // Clamp coordinates to 16-bit range for storing as bfloat16
+                // Clamp coordinates to 16-bit range for storing as uint16
                 int16_t h0_clamped = static_cast<int16_t>(std::clamp(h0, -32768, 32767));
                 int16_t w0_clamped = static_cast<int16_t>(std::clamp(w0, -32768, 32767));
 
                 // Calculate output indices
                 uint32_t base_idx = ((n * grid_h + h) * grid_w + w) * 6;
 
-                // Store results
-                if constexpr (std::is_same_v<OutputType, bfloat16>) {
-                    // Reinterpret int16 bits as bfloat16 for coordinates
-                    uint16_t h0_bits = static_cast<uint16_t>(h0_clamped);
-                    uint16_t w0_bits = static_cast<uint16_t>(w0_clamped);
-                    output_buffer[base_idx + 0] = std::bit_cast<bfloat16>(h0_bits);
-                    output_buffer[base_idx + 1] = std::bit_cast<bfloat16>(w0_bits);
+                // Store results - only uint16_t is supported
+                static_assert(
+                    std::is_same_v<OutputType, uint16_t>, "Only uint16_t is supported for precomputed grid output");
 
-                    // Convert weights to bfloat16
-                    output_buffer[base_idx + 2] = bfloat16(weight_nw);
-                    output_buffer[base_idx + 3] = bfloat16(weight_ne);
-                    output_buffer[base_idx + 4] = bfloat16(weight_sw);
-                    output_buffer[base_idx + 5] = bfloat16(weight_se);
-                } else if constexpr (std::is_same_v<OutputType, uint16_t>) {
-                    // Store coordinates directly as uint16 (same bit pattern as int16)
-                    uint16_t h0_bits = static_cast<uint16_t>(h0_clamped);
-                    uint16_t w0_bits = static_cast<uint16_t>(w0_clamped);
-                    output_buffer[base_idx + 0] = h0_bits;
-                    output_buffer[base_idx + 1] = w0_bits;
+                // Store coordinates directly as uint16 (same bit pattern as int16)
+                uint16_t h0_bits = static_cast<uint16_t>(h0_clamped);
+                uint16_t w0_bits = static_cast<uint16_t>(w0_clamped);
+                output_buffer[base_idx + 0] = h0_bits;
+                output_buffer[base_idx + 1] = w0_bits;
 
-                    // Convert weights to bfloat16 and store as uint16 (bit representation)
-                    output_buffer[base_idx + 2] = std::bit_cast<uint16_t>(bfloat16(weight_nw));
-                    output_buffer[base_idx + 3] = std::bit_cast<uint16_t>(bfloat16(weight_ne));
-                    output_buffer[base_idx + 4] = std::bit_cast<uint16_t>(bfloat16(weight_sw));
-                    output_buffer[base_idx + 5] = std::bit_cast<uint16_t>(bfloat16(weight_se));
-                }
+                // Convert weights to bfloat16 and store as uint16 (bit representation)
+                output_buffer[base_idx + 2] = std::bit_cast<uint16_t>(bfloat16(weight_nw));
+                output_buffer[base_idx + 3] = std::bit_cast<uint16_t>(bfloat16(weight_ne));
+                output_buffer[base_idx + 4] = std::bit_cast<uint16_t>(bfloat16(weight_sw));
+                output_buffer[base_idx + 5] = std::bit_cast<uint16_t>(bfloat16(weight_se));
             }
         }
     }
@@ -165,11 +154,11 @@ ttnn::Tensor prepare_grid_sample_grid(
     TT_FATAL(padding_mode == "zeros", "Currently only 'zeros' padding mode is supported");
     TT_FATAL(input_shape.size() == 4, "Input shape must have 4 dimensions [N, H, W, C]");
     TT_FATAL(
-        output_dtype == DataType::BFLOAT16 || output_dtype == DataType::UINT16 || !output_dtype.has_value(),
-        "Currently only BFLOAT16 and UINT16 are supported for the grid output dtype");
+        output_dtype == DataType::UINT16 || !output_dtype.has_value(),
+        "Only UINT16 is supported for the precomputed grid output dtype");
 
-    // Determine output data type
-    DataType out_dtype = output_dtype.value_or(DataType::BFLOAT16);
+    // Determine output data type - only uint16 is supported for precomputed grid
+    DataType out_dtype = output_dtype.value_or(DataType::UINT16);
 
     // Validate input grid data type
     TT_FATAL(grid.dtype() == DataType::FLOAT32, "Currently only float32 input grid is supported");
@@ -178,12 +167,12 @@ ttnn::Tensor prepare_grid_sample_grid(
     auto grid_shape = grid.logical_shape();
     ttnn::Shape output_shape({grid_shape[0], grid_shape[1], grid_shape[2], 6});
 
-    // Dispatch based on output data type
+    // Only uint16 output is supported for precomputed grids
     switch (out_dtype) {
-        case DataType::BFLOAT16:
-            return convert_grid_tensor<float, bfloat16>(grid, output_shape, input_shape, out_dtype);
         case DataType::UINT16: return convert_grid_tensor<float, uint16_t>(grid, output_shape, input_shape, out_dtype);
-        default: TT_THROW("Unsupported output data type for prepare_grid_sample_grid: {}", out_dtype);
+        default:
+            TT_THROW(
+                "Unsupported output data type for prepare_grid_sample_grid: {}. Only UINT16 is supported.", out_dtype);
     }
 }
 

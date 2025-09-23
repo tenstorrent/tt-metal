@@ -325,7 +325,7 @@ def test_grid_sample_batch_output_channels_flag(
     device, input_shape, grid_shape, grid_batching_factor, batch_output_channels, use_precomputed_grid, grid_dtype
 ):
     if grid_dtype == ttnn.float32 and use_precomputed_grid:
-        pytest.skip("Precomputed grid only supports bfloat16")
+        pytest.skip("Precomputed grid always outputs uint16 regardless of input grid_dtype")
 
     torch.manual_seed(42)
 
@@ -386,9 +386,9 @@ def test_grid_sample_batch_output_channels_flag(
 )
 def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_grid, grid_dtype, core_grid):
     """Test grid sample with sharded grid tensor and interleaved input tensor"""
-    # Skip precomputed grid tests for float32 since precomputed grid only supports bfloat16
+    # Skip redundant test: precomputed grid always outputs uint16 regardless of grid_dtype
     if use_precomputed_grid and grid_dtype == ttnn.float32:
-        pytest.skip("Precomputed grid only supports bfloat16")
+        pytest.skip("Precomputed grid always outputs uint16 regardless of input grid_dtype")
 
     torch.manual_seed(42)
 
@@ -451,7 +451,7 @@ def test_grid_sample_sharded_batched(
     core_grid,
 ):
     if use_precomputed_grid and grid_dtype == ttnn.float32:
-        pytest.skip("Precomputed grid only supports bfloat16")
+        pytest.skip("Precomputed grid always outputs uint16 regardless of input grid_dtype")
 
     torch.manual_seed(0)
 
