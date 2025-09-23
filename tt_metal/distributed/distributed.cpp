@@ -88,7 +88,7 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span
         return;
     }
     if (cq_id.has_value()) {
-        device->mesh_command_queue(*cq_id).finish(sub_device_ids);
+        device->mesh_command_queue(cq_id).finish(sub_device_ids);
     } else {
         for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             device->mesh_command_queue(cq_id).finish(sub_device_ids);
