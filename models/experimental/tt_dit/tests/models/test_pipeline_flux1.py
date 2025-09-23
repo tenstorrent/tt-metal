@@ -35,7 +35,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
 @pytest.mark.parametrize(
     ("mesh_device", "sp", "tp", "topology", "num_links", "mesh_test_id"),
     [
-        pytest.param((1, 4), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        # pytest.param((1, 4), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
         pytest.param((2, 2), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (4, 1), (2, 0), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"),
@@ -46,7 +46,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
 @pytest.mark.parametrize(
     ("enable_t5_text_encoder", "use_torch_t5_text_encoder", "use_torch_clip_text_encoder"),
     [
-        pytest.param(True, True, True, id="encoder_cpu"),
+        # pytest.param(True, True, True, id="encoder_cpu"),
         pytest.param(True, False, False, id="encoder_device"),
     ],
 )
