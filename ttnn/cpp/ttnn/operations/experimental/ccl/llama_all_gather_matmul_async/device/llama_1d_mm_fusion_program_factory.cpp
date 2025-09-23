@@ -90,7 +90,7 @@ process_agmm_fusion_program_and_create_override_variables(
     }
     for (auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        if (intersection.size() > 0) {
+        if (!intersection.empty()) {
             non_idle_cores_vec.push_back(intersection.bounding_box());
         }
     }
