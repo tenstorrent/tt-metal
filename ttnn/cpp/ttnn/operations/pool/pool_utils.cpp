@@ -415,14 +415,29 @@ void validate_input_params(
     // tensor shape validation against provided NHWC dimensions
     const uint32_t nhw = batch_size * input_h * input_w;
     const auto& input_shape = input_tensor.logical_shape();
+
+    // Support both (1, 1, nhw, c) and (n, h, w, c) formats
+    bool is_flattened_format =
+        (input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels);
+    bool is_nhwc_format =
+        (input_shape[0] == batch_size && input_shape[1] == input_h && input_shape[2] == input_w &&
+         input_shape[3] == channels);
+
+    // Unflattened tesnor currently supported for non_block formats only.
     TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels,
-        "Input tensor shape {} does not match expected shape (1, 1, {}, {})",
+        is_flattened_format || (is_nhwc_format && !is_block_float(input_tensor.dtype())),
+        "Input tensor shape {} does not match expected shape. For block format inputs (bfloat8_b/bfloat4_b) only "
+        "flattened format (1, 1, {}, {}) is supported. Unflattened format ({}, {}, {}, {}) is not supported for block "
+        "format inputs.",
         input_shape,
         nhw,
+        channels,
+        batch_size,
+        input_h,
+        input_w,
         channels);
 
-    if (is_in_tiled) {
+    if (is_in_tiled && is_flattened_format) {
         const uint32_t padded_channels = tt::round_up(channels, tt::constants::TILE_WIDTH);
         const uint32_t padded_nhw = tt::round_up(nhw, tt::constants::TILE_HEIGHT);
         const auto& padded_input_shape = input_tensor.padded_shape();
