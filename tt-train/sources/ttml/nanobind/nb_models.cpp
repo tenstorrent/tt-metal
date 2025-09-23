@@ -3,20 +3,153 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/function.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/vector.h>
 
+#include <ttnn/operations/experimental/dropout/dropout.hpp>
+
+#include "models/base_transformer.hpp"
 #include "models/gpt2.hpp"
 #include "models/linear_regression.hpp"
+#include "models/llama.hpp"
+#include "models/mlp.hpp"
+#include "modules/module_base.hpp"
+#include "modules/multi_layer_perceptron.hpp"
+#include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
+#include "nb_modules.hpp"
 
 namespace ttml::models {
 
-void py_module_types(nb::module_& m) {
-    m.def("create_linear_regression_model", &linear_regression::create);
-    // m.def("load_gpt2_model_from_safetensors", &gpt2::load_model_from_safetensors);
+void py_module_types(nb::module_& m, nb::module_& m_modules) {
+    ttml::modules::py_module_types(m_modules);
+
+    nb::export_enum<models::common::transformer::RunnerType>(m);
+    nb::export_enum<models::common::transformer::WeightTyingType>(m);
+
+    nb::class_<models::BaseTransformer, modules::ModuleBase>(m, "BaseTransformer");
+
+    auto py_gpt2_module = m.def_submodule("gpt2");
+    nb::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
+    nb::class_<models::gpt2::TransformerConfig::Experimental>(py_gpt2_module, "GPT2TransformerConfigExperimental");
+    nb::class_<models::gpt2::TransformerConfig>(py_gpt2_module, "GPT2TransformerConfig");
+    nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");
+
+    auto py_linear_regression_model = m.def_submodule("linear_regression");
+
+    auto py_llama_module = m.def_submodule("llama");
+    nb::class_<models::llama::LlamaConfig>(py_llama_module, "LlamaConfig");
+    nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "Llama");
+    py_llama_module.def(
+        "create_llama_model", [](const models::llama::LlamaConfig& config) { return models::llama::create(config); });
+
+    auto py_mlp_module = m.def_submodule("mlp");
+    nb::class_<modules::MultiLayerPerceptronParameters>(py_mlp_module, "MultiLayerPerceptronParameters");
+    nb::class_<modules::MultiLayerPerceptron, modules::ModuleBase>(py_mlp_module, "MultiLayerPerceptron");
 }
 
-void py_module(nb::module_& m) {
+void py_module(nb::module_& m, nb::module_& m_modules) {
+    ttml::modules::py_module(m_modules);
+
+    {
+        auto py_base_transformer =
+            static_cast<nb::class_<models::BaseTransformer, modules::ModuleBase>>(m.attr("BaseTransformer"));
+        py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
+    }
+
+    {
+        auto py_gpt2_module = static_cast<nb::module_>(m.attr("gpt2"));
+        py_gpt2_module.def("create_gpt2_model", [](const models::gpt2::TransformerConfig& config) {
+            return models::gpt2::create(config);
+        });
+
+        auto py_gpt2_transformer_config_experimental =
+            static_cast<nb::class_<models::gpt2::TransformerConfig::Experimental>>(
+                py_gpt2_module.attr("GPT2TransformerConfigExperimental"));
+        py_gpt2_transformer_config_experimental.def(nb::init<>());
+        py_gpt2_transformer_config_experimental.def_rw(
+            "use_composite_layernorm", &models::gpt2::TransformerConfig::Experimental::use_composite_layernorm);
+
+        auto py_gpt2_transformer_config =
+            static_cast<nb::class_<models::gpt2::TransformerConfig>>(py_gpt2_module.attr("GPT2TransformerConfig"));
+        py_gpt2_transformer_config.def(nb::init<>());
+        py_gpt2_transformer_config.def_rw("num_heads", &models::gpt2::TransformerConfig::num_heads);
+        py_gpt2_transformer_config.def_rw("embedding_dim", &models::gpt2::TransformerConfig::embedding_dim);
+        py_gpt2_transformer_config.def_rw("dropout_prob", &models::gpt2::TransformerConfig::dropout_prob);
+        py_gpt2_transformer_config.def_rw("num_blocks", &models::gpt2::TransformerConfig::num_blocks);
+        py_gpt2_transformer_config.def_rw("vocab_size", &models::gpt2::TransformerConfig::vocab_size);
+        py_gpt2_transformer_config.def_rw("max_sequence_length", &models::gpt2::TransformerConfig::max_sequence_length);
+        py_gpt2_transformer_config.def_rw("runner_type", &models::gpt2::TransformerConfig::runner_type);
+        py_gpt2_transformer_config.def_rw("weight_tying", &models::gpt2::TransformerConfig::weight_tying);
+        py_gpt2_transformer_config.def_rw(
+            "positional_embedding_type", &models::gpt2::TransformerConfig::positional_embedding_type);
+        py_gpt2_transformer_config.def_rw("experimental", &models::gpt2::TransformerConfig::experimental);
+
+        auto py_gpt2 = static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(
+            py_gpt2_module.attr("GPT2Transformer"));
+        py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
+        py_gpt2.def("__call__", &models::gpt2::Transformer::operator());
+    }
+
+    {
+        auto py_linear_regression_module = static_cast<nb::module_>(m.attr("linear_regression"));
+        py_linear_regression_module.def("create_linear_regression_model", &models::linear_regression::create);
+    }
+
+    {
+        auto py_llama_module = static_cast<nb::module_>(m.attr("llama"));
+
+        auto py_llama_config = static_cast<nb::class_<models::llama::LlamaConfig>>(py_llama_module.attr("LlamaConfig"));
+        py_llama_config.def(nb::init<>());
+        py_llama_config.def_rw("num_heads", &models::llama::LlamaConfig::num_heads);
+        py_llama_config.def_rw("num_groups", &models::llama::LlamaConfig::num_groups);
+        py_llama_config.def_rw("embedding_dim", &models::llama::LlamaConfig::embedding_dim);
+        py_llama_config.def_rw("intermediate_dim", &models::llama::LlamaConfig::intermediate_dim);
+        py_llama_config.def_rw("dropout_prob", &models::llama::LlamaConfig::dropout_prob);
+        py_llama_config.def_rw("theta", &models::llama::LlamaConfig::theta);
+        py_llama_config.def_rw("num_blocks", &models::llama::LlamaConfig::num_blocks);
+        py_llama_config.def_rw("vocab_size", &models::llama::LlamaConfig::vocab_size);
+        py_llama_config.def_rw("max_sequence_length", &models::llama::LlamaConfig::max_sequence_length);
+        py_llama_config.def_rw("runner_type", &models::llama::LlamaConfig::runner_type);
+        py_llama_config.def_rw("weight_tying", &models::llama::LlamaConfig::weight_tying);
+        py_llama_config.def_rw("scaling_factor", &models::llama::LlamaConfig::scaling_factor);
+        py_llama_config.def_rw("high_freq_factor", &models::llama::LlamaConfig::high_freq_factor);
+        py_llama_config.def_rw("low_freq_factor", &models::llama::LlamaConfig::low_freq_factor);
+
+        auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
+        py_llama.def(nb::init<models::llama::LlamaConfig>());
+        py_llama.def("__call__", &models::llama::Llama::operator());
+    }
+
+    {
+        auto py_mlp_module = static_cast<nb::module_>(m.attr("mlp"));
+        py_mlp_module.def("create_mlp_model", [](const modules::MultiLayerPerceptronParameters& config) {
+            return models::mlp::create(config);
+        });
+
+        auto py_mlp_params = static_cast<nb::class_<modules::MultiLayerPerceptronParameters>>(
+            py_mlp_module.attr("MultiLayerPerceptronParameters"));
+        py_mlp_params.def(nb::init<>());
+        py_mlp_params.def_static(
+            "create",
+            [](uint32_t input_features, const std::vector<uint32_t>& hidden_features, uint32_t output_features) {
+                return modules::MultiLayerPerceptronParameters{
+                    .input_features = input_features,
+                    .hidden_features = hidden_features,
+                    .output_features = output_features};
+            });
+        py_mlp_params.def_rw("input_features", &modules::MultiLayerPerceptronParameters::input_features);
+        py_mlp_params.def_rw("hidden_features", &modules::MultiLayerPerceptronParameters::hidden_features);
+        py_mlp_params.def_rw("output_features", &modules::MultiLayerPerceptronParameters::output_features);
+
+        auto py_mlp = static_cast<nb::class_<modules::MultiLayerPerceptron, modules::ModuleBase>>(
+            py_mlp_module.attr("MultiLayerPerceptron"));
+        py_mlp.def(nb::init<const modules::MultiLayerPerceptronParameters&>());
+        py_mlp.def("__call__", &modules::MultiLayerPerceptron::operator());
+    }
 }
 
 }  // namespace ttml::models

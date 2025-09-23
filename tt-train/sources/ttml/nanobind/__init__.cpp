@@ -9,11 +9,12 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/vector.h>
 
 #include "nb_autograd.hpp"
 #include "nb_export_enum.hpp"
+#include "nb_models.hpp"
 #include "nb_modules.hpp"
-// #include "nb_models.hpp"
 #include "nb_ops.hpp"
 #include "nb_optimizers.hpp"
 #include "ttnn/api/ttnn/tensor/layout/layout.hpp"
@@ -21,22 +22,20 @@
 NB_MODULE(_ttml, m) {
     nb::export_enum<tt::tt_metal::Layout>(m);
     auto m_autograd = m.def_submodule("autograd", "autograd");
-    // auto m_models = m.def_submodule("models", "models");
+    auto m_models = m.def_submodule("models", "models");
     auto m_modules = m.def_submodule("modules", "modules");
     auto m_ops = m.def_submodule("ops", "ops");
     auto m_optimizers = m.def_submodule("optimizers", "optimizers");
 
     // TYPES
     ttml::autograd::py_module_types(m_autograd);
-    // ttml::models::py_module_types(m_models);
-    ttml::modules::py_module_types(m_modules);
+    ttml::models::py_module_types(m_models, m_modules);
     ttml::ops::py_module_types(m_ops);
     ttml::optimizers::py_module_types(m_optimizers);
 
     // FUNCTIONS / OPERATIONS
     ttml::autograd::py_module(m_autograd);
-    // ttml::models::py_module(m_models);
-    ttml::modules::py_module(m_modules);
+    ttml::models::py_module(m_models, m_modules);
     ttml::ops::py_module(m_ops);
     ttml::optimizers::py_module(m_optimizers);
 }

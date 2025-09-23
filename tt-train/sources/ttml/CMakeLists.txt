@@ -459,8 +459,8 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_bfloat16.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
-    # ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp
-    # ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.cpp
