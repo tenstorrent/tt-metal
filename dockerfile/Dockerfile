@@ -189,10 +189,10 @@ WORKDIR /tt-metal
 
 # Build tt-metal and venv, then clear cache
 run /bin/bash -c "./build_metal.sh \
-				&& ./create_venv.sh \
-				&& source $PYTHON_ENV_DIR/bin/activate \
-				&& pip install -r models/tt_transformers/requirements.txt \
-				&& rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+    && ./create_venv.sh \
+    && source $PYTHON_ENV_DIR/bin/activate \
+    && pip install -r models/tt_transformers/requirements.txt \
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -203,8 +203,9 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Extra system deps
 RUN apt-get update && apt-get install -y \
-		# required
-		gosu \
-		libgl1 \
-		libsndfile1 \
-		&& rm -rf /var/lib/apt/lists/*
+    # required
+    gosu \
+    libgl1 \
+    libsndfile1 \
+    xxd \
+    && rm -rf /var/lib/apt/lists/*
