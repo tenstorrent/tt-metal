@@ -85,15 +85,25 @@ def create_panoptic_models(device, weights_path):
     "height,width",
     [(512, 1024)],
 )
-def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds):
+def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_location_generator):
     """Test ResNet stem layer PCC between PyTorch and TTNN implementations."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
+
+    # Determine weights path based on environment
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
+        # Use local path (old method)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
+    else:
+        # Use CI v2 model location generator
+        complete_weights_path = (
+            model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+            / "model_final_bd324a.pkl"
+        )
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
@@ -126,15 +136,25 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds):
     [(512, 1024)],
 )
 @pytest.mark.parametrize("layer_name", ["res2", "res3", "res4", "res5"])
-def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_seeds):
+def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_seeds, model_location_generator):
     """Test ResNet individual layer PCC between PyTorch and TTNN implementations."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
+
+    # Determine weights path based on environment
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
+        # Use local path (old method)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
+    else:
+        # Use CI v2 model location generator
+        complete_weights_path = (
+            model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+            / "model_final_bd324a.pkl"
+        )
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
@@ -200,15 +220,25 @@ def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_s
     "height,width",
     [(512, 1024)],
 )
-def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds):
+def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_location_generator):
     """Test full ResNet PCC between PyTorch and TTNN implementations."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
+
+    # Determine weights path based on environment
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
+        # Use local path (old method)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
+    else:
+        # Use CI v2 model location generator
+        complete_weights_path = (
+            model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+            / "model_final_bd324a.pkl"
+        )
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
