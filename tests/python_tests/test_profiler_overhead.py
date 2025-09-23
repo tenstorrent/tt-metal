@@ -11,7 +11,7 @@ from helpers.test_config import ProfilerBuild, run_test
 def get_expected_overhead():
     match get_chip_architecture():
         case ChipArchitecture.WORMHOLE:
-            return 36
+            return 29
         case ChipArchitecture.BLACKHOLE:
             return 30
         case _:
