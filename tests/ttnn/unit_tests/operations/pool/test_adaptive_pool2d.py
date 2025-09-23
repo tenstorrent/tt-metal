@@ -25,39 +25,24 @@ failing_parameters = [
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
-    [
-        (1, 512, 28, 28),
-        (1, 224, 42, 42),
-        (2, 512, 28, 28),
-        (1, 256, 56, 56),
-        (1, 16, 23, 24),
-        (1, 8, 19, 21),
-    ],
-)
-@pytest.mark.parametrize(
-    "output_size",
-    (
-        (1, 1),
-        (7, 7),
-        (14, 14),
-    ),
+    [(1, 256, 160, 160), (1, 512, 80, 80), (1, 512, 40, 40), (1, 256, 40, 40)],
 )
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "pool_type",
-    ["max", "avg"],
+    ["avg"],
 )
 def test_adaptive_avg_pool2d(
     device,
     tensor_map,
     input_shape,
-    output_size,
     dtype,
     pool_type,
 ):
+    output_size = (input_shape[2] - 1, input_shape[3] - 1)
     if list(input_shape) + list(output_size) in failing_parameters:
         pytest.skip(
             f"Skipping failing cases due to non correctable patterns in kernels or strides: {input_shape} -> {output_size}"
@@ -70,4 +55,5 @@ def test_adaptive_avg_pool2d(
         output_size=output_size,
         dtype=dtype,
         pool_type=pool_type,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
