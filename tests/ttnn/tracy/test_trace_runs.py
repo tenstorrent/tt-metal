@@ -69,3 +69,6 @@ def test_with_ops_single_core(device):
     for i in range(5):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
+
+
+# add more unit tests for replay trace with diff ids
