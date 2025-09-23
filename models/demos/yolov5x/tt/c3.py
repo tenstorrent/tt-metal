@@ -4,12 +4,7 @@
 
 
 import ttnn
-from models.experimental.yolov5x.tt.common import (
-    TtYOLOv5xConv2D,
-    TtnnBottleneck,
-    deallocate_tensors,
-    interleaved_to_sharded,
-)
+from models.demos.yolov5x.tt.common import TtnnBottleneck, TtYOLOv5xConv2D, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
 
@@ -65,7 +60,6 @@ class TtnnC3:
         if cv2_out.shape[2] != m_out.shape[2]:
             cv2_out = ttnn.sharded_to_interleaved(cv2_out, memory_config=ttnn.L1_MEMORY_CONFIG)
             cv2_out = cv2_out[:, :, : m_out.shape[2], :]
-            cv2_out = interleaved_to_sharded(cv2_out)
 
         concat_out = concat(-1, True, m_out, cv2_out)
         concat_out = ttnn.sharded_to_interleaved(concat_out, memory_config=ttnn.L1_MEMORY_CONFIG)
