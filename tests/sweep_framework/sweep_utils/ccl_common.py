@@ -23,6 +23,7 @@ def device_context(mesh_shape, fabric_config, device_params=None):
     mesh_device = None
     try:
         logger.info("Setting up device")
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         ttnn.set_fabric_config(fabric_config)
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(mesh_shape), **get_updated_device_params(device_params)
@@ -39,14 +40,50 @@ def device_context(mesh_shape, fabric_config, device_params=None):
             del mesh_device
 
 
-def get_mem_config(buffer_type, shard_shape, shard_strategy, device):
-    if shard_shape is None or shard_strategy is None:
-        return ttnn.MemoryConfig(buffer_type=buffer_type)
-    else:
-        core_grid_size = device.compute_with_storage_grid_size()
-        core_grid = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))}
-        )
+def get_serializable_shard_specs(
+    input_shape, input_cores, input_strategy, output_shape, output_cores, output_strategy, valid_tensor_shapes
+):
+    return {
+        "input": {
+            "shape": input_shape,
+            "cores": input_cores,
+            "strategy": input_strategy,
+        },
+        "output": {"shape": output_shape, "cores": output_cores, "strategy": output_strategy},
+        "valid_tensor_shapes": valid_tensor_shapes,
+    }
 
-        shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        return ttnn.MemoryConfig(shard_strategy, buffer_type, shard_spec)
+
+def validate_serializable_shard_spec(input_shape, serializable_shard_specs):
+    return serializable_shard_specs is None or tuple(input_shape) in list(
+        map(tuple, serializable_shard_specs["valid_tensor_shapes"])
+    )
+
+
+def _parse_serializable_shard_spec(serializable_shard_spec):
+    assert len(serializable_shard_spec) == 3
+
+    shape, cores, strategy = tuple(serializable_shard_spec.values())
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores[0] - 1, cores[1] - 1))})
+
+    if strategy == "w":
+        strategy = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    elif strategy == "h":
+        strategy = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    else:
+        raise RuntimeError("Ivalid shard strategy option")
+
+    return ttnn.ShardSpec(core_grid, shape, ttnn.ShardOrientation.ROW_MAJOR), strategy
+
+
+def get_mem_configs(buffer_type, serializable_shard_specs):
+    if serializable_shard_specs is None:
+        return ttnn.MemoryConfig(buffer_type=buffer_type), ttnn.MemoryConfig(buffer_type=buffer_type)
+    else:
+        input_spec, input_strategy = _parse_serializable_shard_spec(serializable_shard_specs["input"])
+        input_config = ttnn.MemoryConfig(input_strategy, buffer_type, input_spec)
+
+        output_spec, output_strategy = _parse_serializable_shard_spec(serializable_shard_specs["output"])
+        output_config = ttnn.MemoryConfig(output_strategy, buffer_type, output_spec)
+
+    return input_config, output_config
