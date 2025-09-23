@@ -650,3 +650,92 @@ def test_max_pool2d_output_formats_and_layouts(
         output_layout=output_layout,
         nightly_skips=False,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape_nchw",
+    (([1, 128, 256, 512],)),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ((3, 3),),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ((1, 1),),
+)
+@pytest.mark.parametrize(
+    "dilation",
+    ((1, 1),),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding, dilation, stride, dtype, tensor_map):
+    num_slices = 4
+
+    batch_size, channels, input_h, input_w = input_shape_nchw
+    assert channels % num_slices == 0, "Channels must be divisible by num_slices"
+    slice_channels = channels // num_slices
+
+    logger.info(f"Running Panoptic MaxPool2D with Channel Slicing (slices={num_slices})")
+
+    torch.manual_seed(0)
+    torch_input_nchw = randomize_torch_tensor(tensor_map, input_shape_nchw)
+
+    torch_output = torch.nn.MaxPool2d(
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        return_indices=False,
+        ceil_mode=False,
+    )(torch_input_nchw)
+
+    out_h, out_w = torch_output.shape[2], torch_output.shape[3]
+
+    ttnn_input_nhwc = ttnn.from_torch(
+        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype
+    )
+    output_slices = []
+    for i in range(num_slices):
+        start_idx = i * slice_channels
+        end_idx = (i + 1) * slice_channels
+
+        x_slice = ttnn.slice(ttnn_input_nhwc, [0, 0, 0, start_idx], [batch_size, input_h, input_w, end_idx])
+
+        x_slice_reshaped = ttnn.reshape(x_slice, (1, 1, batch_size * input_h * input_w, slice_channels))
+        ttnn.deallocate(x_slice)
+
+        x_slice_pooled = ttnn.max_pool2d(
+            x_slice_reshaped,
+            batch_size=batch_size,
+            input_h=input_h,
+            input_w=input_w,
+            channels=slice_channels,
+            kernel_size=list(kernel_size),
+            stride=list(stride),
+            padding=list(padding),
+            dilation=list(dilation),
+            ceil_mode=False,
+        )
+        ttnn.deallocate(x_slice_reshaped)
+
+        x_slice_output_nhwc = ttnn.reshape(x_slice_pooled, (batch_size, out_h, out_w, slice_channels))
+        ttnn.deallocate(x_slice_pooled)
+        x_slice_output_nhwc = ttnn.to_memory_config(x_slice_output_nhwc, ttnn.DRAM_MEMORY_CONFIG)
+        output_slices.append(x_slice_output_nhwc)
+
+    ttnn.deallocate(ttnn_input_nhwc)
+    ttnn_output_nhwc = ttnn.concat(output_slices, dim=3)
+    for s in output_slices:
+        ttnn.deallocate(s)
+
+    ttnn_output_torch = ttnn.to_torch(ttnn_output_nhwc)
+    ttnn_output_torch_nchw = torch.permute(ttnn_output_torch, (0, 3, 1, 2))
+    passed, pcc_score = assert_with_pcc(ttnn_output_torch_nchw, torch_output, pcc=0.999)
+    logger.info(f"PCC Score: {pcc_score}")
+    assert passed, f"PCC check failed. PCC: {pcc_score}"
