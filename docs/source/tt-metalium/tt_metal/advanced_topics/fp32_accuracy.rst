@@ -20,7 +20,7 @@ To achieve maximum accuracy with the vector engine, several conditions must be m
 Host-Side Configuration
 -----------------------
 
-On the host, you must configure the compute kernel to enable high-precision computation. This involves setting two key parameters in the ``DeviceComputeKernelConfig`` struct.
+On the host, the ``DeviceComputeKernelConfig`` struct controls the precision settings for compute kernels, including both the matrix engine (FPU), the vector engine (SFPU) and other components. To ensure the highest possible accuracy, enable the following two options:
 
 * ``fp32_dest_acc_en = true``: This setting allocates 32-bit space in the Dst registers. This is required to store intermediate and final results at FP32 precision. If disabled (``false``, the default), the Dst registers will store 16-bit data, with FP32 values automatically converted to BFP16.
 * ``math_approx_mode = false``: This disables optimizations that approximate certain math operations, ensuring that calculations are performed with maximum fidelity that the kernel library provides. By default, this is ``true``.
