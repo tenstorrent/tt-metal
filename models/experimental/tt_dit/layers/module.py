@@ -194,7 +194,7 @@ class Parameter:
         self.memory_config = memory_config
         self.mesh_placements = tuple(mesh_placements)
         self.to_host = to_host
-        self.data = None
+        self._data = None
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
@@ -202,7 +202,7 @@ class Parameter:
             msg = f"expected tensor shape {self.shape}, got {shape}"
             raise ParameterLoadingError(msg)
 
-        self.data = ttnn.from_torch(
+        self._data = ttnn.from_torch(
             torch_tensor,
             layout=self.layout,
             dtype=self.dtype,
@@ -218,7 +218,12 @@ class Parameter:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str, /) -> None:
-        self.data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
+        self._data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
+
+    @property
+    def data(self) -> ttnn.Tensor:
+        assert self._data is not None, "parameter has no data"
+        return self._data
 
 
 def _mesh_placements_from_mapping(
