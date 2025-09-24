@@ -13,7 +13,7 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull, skip_for_blackhole
+from models.common.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull, skip_for_blackhole
 
 
 def rms_norm(x, dim, gamma, beta, eps):
