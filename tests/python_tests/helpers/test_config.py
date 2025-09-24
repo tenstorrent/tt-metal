@@ -271,13 +271,23 @@ def generate_build_header(test_config):
     # Unpack + result buffer addresses arrays generations
     buffer_A_address = test_config.get("buffer_A_address", 0x1A000)
     buffer_B_address = test_config.get("buffer_B_address", 0x1B000)
+    buffer_C_address = test_config.get("buffer_C_address", None)
     result_buffer_address = test_config.get("result_buffer_address", 0x1C000)
 
-    header_content.append(
-        f"constexpr Operand buffer_A({hex(buffer_A_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});\n"
-        f"constexpr Operand buffer_B({hex(buffer_B_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});\n"
-        f"constexpr Operand buffer_Res({hex(result_buffer_address)}, {format_tile_sizes[formats.output_format if formats != None else DataFormat.Float16_b]});\n"
-    )
+    # Generate buffer declarations with optional buffer_C
+    buffer_A_line = f"constexpr Operand buffer_A({hex(buffer_A_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});"
+    buffer_B_line = f"constexpr Operand buffer_B({hex(buffer_B_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});"
+    buffer_Res_line = f"constexpr Operand buffer_Res({hex(result_buffer_address)}, {format_tile_sizes[formats.output_format if formats != None else DataFormat.Float16_b]});"
+
+    header_content.append(buffer_A_line)
+    header_content.append(buffer_B_line)
+
+    # Add optional buffer_C if specified
+    if buffer_C_address is not None:
+        buffer_C_line = f"constexpr Operand buffer_C({hex(buffer_C_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});"
+        header_content.append(buffer_C_line)
+
+    header_content.append(buffer_Res_line)
 
     input_A_dimensions = test_config.get("input_A_dimensions", [32, 32])
     input_B_dimensions = test_config.get("input_B_dimensions", [32, 32])

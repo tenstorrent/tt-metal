@@ -36,14 +36,18 @@ void run_kernel()
     {
         UNPACK_FMT = to_ufmt(DataFormat::Bfp8_b);
     }
+    else if (UNPACK_A_IN == to_ufmt(DataFormat::Int32))
+    {
+        UNPACK_FMT = to_ufmt(DataFormat::Int32);
+    }
     else
     {
         UNPACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    constexpr uint32_t buffer_condition = 0x1a000;
-    constexpr uint32_t buffer_true      = 0x1b000;
-    constexpr uint32_t buffer_false     = 0x1c000;
+    constexpr uint32_t buffer_condition = buffer_A[0];
+    constexpr uint32_t buffer_true      = buffer_B[0];
+    constexpr uint32_t buffer_false     = buffer_C[0];
 
     _llk_unpack_A_hw_configure_<is_fp32_dest_acc_en, StochRndType::None, disable_src_zero_flag>(UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, 0, 4);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_FMT, UNPACK_FMT);
@@ -81,6 +85,10 @@ void run_kernel()
     else if (UNPACK_A_IN == to_ufmt(DataFormat::Bfp8_b))
     {
         MATH_FMT = to_ufmt(DataFormat::Bfp8_b);
+    }
+    else if (UNPACK_A_IN == to_ufmt(DataFormat::Int32))
+    {
+        MATH_FMT = to_ufmt(DataFormat::Int32);
     }
     else
     {
@@ -138,12 +146,16 @@ void run_kernel()
     {
         PACK_FMT = to_ufmt(DataFormat::Bfp8_b);
     }
+    else if (UNPACK_A_IN == to_ufmt(DataFormat::Int32))
+    {
+        PACK_FMT = to_ufmt(DataFormat::Int32);
+    }
     else
     {
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    constexpr uint32_t buffer_Dest = 0x1d000;
+    constexpr uint32_t buffer_Dest = buffer_Res[0];
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
