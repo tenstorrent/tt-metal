@@ -167,7 +167,7 @@ The TT-Exalens repository describes TT-Lensium, a low-level debugging tool for T
 The Model Explorer is an intuitive and hierarchical visualization tool using model graphs. It organizes model operations into nested layers and provides features for model exploration and debugging.
 
 #### [Tracy Profiler](https://github.com/tenstorrent/tracy)
-The Tracy Profiler is a real time nanosecond resolution, remote telemetry, hybrid frame, and sampling tool. Tracy supports profiling CPU, GPU, memory allocation, locks, context switches, and more.
+The Tracy Profiler is a real-time nanosecond resolution, remote telemetry, hybrid frame, and sampling tool. Tracy supports profiling CPU, GPU, memory allocation, locks, context switches, and more.
 
 #### [Kernel Print Debug](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/kernel_print.html)
 DPRINT can print variables, addresses, and circular buffer data from kernels to the host terminal or log file. This feature is useful for debugging issues with kernels.
