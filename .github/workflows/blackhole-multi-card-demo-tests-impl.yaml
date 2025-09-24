@@ -73,10 +73,6 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         with:
           runner-label: ${{ inputs.runner-label }}
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
@@ -86,28 +82,18 @@ jobs:
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
-        uses: ./.github/actions/docker-run
-        env:
-          LOGURU_LEVEL: INFO
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-          install_wheel: true
-          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        timeout-minutes: 15
+        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
         if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -160,10 +146,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         with:
           runner-label: ${{ inputs.runner-label }}
@@ -174,30 +156,21 @@ jobs:
             pip install -r /work/models/tt_transformers/requirements.txt
           fi
           ${{ matrix.test-group.cmd }}
+
       - name: Save environment data
         if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
-        uses: ./.github/actions/docker-run
-        env:
-          LOGURU_LEVEL: INFO
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-          install_wheel: true
-          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        timeout-minutes: 15
+        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
         if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
