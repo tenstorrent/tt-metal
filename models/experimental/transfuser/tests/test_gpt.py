@@ -116,6 +116,7 @@ def test_gpt(
     lidar_input = torch.randn(lidar_input_shape)
     velocity_input = torch.randn(1, 1)
 
+    # setting machine to avoid loading files
     config = GlobalConfig(setting="eval")
 
     ref_layer = GPT(
