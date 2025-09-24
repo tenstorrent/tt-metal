@@ -13,7 +13,7 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_ttforge_sweep import (
     failing_parameters as failing_parameters_ttnn_forge,
 )
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     skip_for_grayskull,
     is_wormhole_b0,
 )
