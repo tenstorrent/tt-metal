@@ -12,11 +12,14 @@
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
-#include "fabric_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 
 namespace tt::tt_fabric::bench {
 
@@ -170,11 +173,25 @@ Notes:
     // Global semaphore so a remote chip can signal it.
     // Fabric guarantees payload is visible before the bump is seen.
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
-    auto gsem = tt::tt_metal::CreateGlobalSemaphore(
-        dst_dev,
-        dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
-        /*initial_value=*/0,
-        tt::tt_metal::BufferType::L1);
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsemA;
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsemB;
+    if (!gsemA) {
+        gsemA = tt::tt_metal::CreateGlobalSemaphore(
+            dst_dev,
+            dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
+            /*initial_value=*/0,
+            tt::tt_metal::BufferType::L1);
+    }
+    if (!gsemB) {
+        gsemB = tt::tt_metal::CreateGlobalSemaphore(
+            dst_dev,
+            dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
+            /*initial_value=*/0,
+            tt::tt_metal::BufferType::L1);
+    }
+
+    static uint32_t sem_sel = 0;
+    auto& gsem = (sem_sel++ & 1) ? *gsemB : *gsemA;
 
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/kernels/";
@@ -252,13 +269,42 @@ Notes:
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
 
-    // Execution & timing
-    fixture->RunProgramNonblocking(dst_dev, receiver_prog);
+    // --- Mesh trace capture & replay ---
+    namespace MD = tt::tt_metal::distributed;
+    auto md = fixture->get_mesh_device();
+    auto view = md->get_view();
+
+    auto coord_of_phys = [&](chip_id_t phys) -> MD::MeshCoordinate {
+        for (const auto& c : MD::MeshCoordinateRange(view.shape())) {
+            if (view.get_device(c)->id() == phys) {
+                return c;
+            }
+        }
+        TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phys);
+        return MD::MeshCoordinate(0);
+    };
+    MD::MeshCoordinate src_coord = coord_of_phys(src_phys);
+    MD::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+
+    auto mesh_workload = MD::CreateMeshWorkload();
+    MD::AddProgramToMeshWorkload(mesh_workload, std::move(sender_prog), MD::MeshCoordinateRange(src_coord));
+    MD::AddProgramToMeshWorkload(mesh_workload, std::move(receiver_prog), MD::MeshCoordinateRange(dst_coord));
+
+    auto& mcq = md->mesh_command_queue();
+    // 1) Warm-up outside capture so loads/routes happen before tracing
+    MD::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/true);
+    // 2) Capture p.trace_iters enqueues back-to-back
+    auto trace_id = MD::BeginTraceCapture(md.get(), mcq.id());
+    for (uint32_t i = 0; i < p.trace_iters; ++i) {
+        MD::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/false);
+    }
+    MD::EndTraceCapture(md.get(), mcq.id(), trace_id);
+    // 3) Replay measured section
     auto t0 = std::chrono::steady_clock::now();
-    fixture->RunProgramNonblocking(src_dev, sender_prog);
-    fixture->WaitForSingleProgramDone(dst_dev, receiver_prog);
+    MD::ReplayTrace(md.get(), mcq.id(), trace_id, /*blocking=*/false);
+    MD::Finish(mcq);
     auto t1 = std::chrono::steady_clock::now();
-    fixture->WaitForSingleProgramDone(src_dev, sender_prog);
+    MD::ReleaseTrace(md.get(), trace_id);
 
     // Read back and verify
     tt::tt_metal::Finish(cq_dst);
@@ -267,7 +313,8 @@ Notes:
     verify_payload_words(rx, tx);
 
     // Perf point
-    const double e2e_sec = std::chrono::duration<double>(t1 - t0).count();
+    const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();
+    const double e2e_sec = (p.trace_iters > 0) ? (e2e_sec_total / static_cast<double>(p.trace_iters)) : 0.0;
     const uint64_t bytes = static_cast<uint64_t>(p.tensor_bytes);
     const double GB = static_cast<double>(bytes) / 1e9;          // gigabytes
     const double GB_s = (e2e_sec > 0.0) ? (GB / e2e_sec) : 0.0;  // GB per second
