@@ -18,9 +18,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
-
-
-PDL_L1_SMALL_SIZE = 37 * 1024  # Minimum L1 small size for Panoptic DeepLab
+from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
 
 
 def create_panoptic_models(device, weights_path):
