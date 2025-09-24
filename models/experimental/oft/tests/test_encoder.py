@@ -12,6 +12,7 @@ from models.experimental.oft.reference.utils import (
 )
 from models.experimental.oft.tt.model_preprocessing import create_decoder_model_parameters
 from models.experimental.oft.tests.common import GRID_RES, GRID_SIZE, Y_OFFSET, NMS_THRESH
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 import matplotlib.pyplot as plt
 from loguru import logger
 import os
@@ -34,6 +35,7 @@ def test_decode(
     pcc_dimensions,
     pcc_angles,
 ):
+    skip_if_not_blackhole_20_cores(device)
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
     os.makedirs(output_dir, exist_ok=True)
