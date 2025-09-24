@@ -441,8 +441,8 @@ def test_compare_ttnn_and_pytorch_obb_simple():
             f"Shape mismatch: PyTorch {torch_output.shape} vs TTNN {ttnn_output_torch.shape}"
         
         # Calculate PCC
-        torch_flat = torch_output.flatten()
-        ttnn_flat = ttnn_output_torch.flatten()
+        torch_flat = torch_output.flatten().float()  # Convert to float32
+        ttnn_flat = ttnn_output_torch.flatten().float()  # Convert to float32
         correlation_matrix = np.corrcoef(torch_flat.numpy(), ttnn_flat.numpy())
         pcc = correlation_matrix[0, 1] if correlation_matrix.shape == (2, 2) else 0.0
         
@@ -543,6 +543,8 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             ttnn_flat = ttnn_output_torch.flatten()
             
             # Calculate correlation using numpy
+            torch_flat = torch_flat.float()  # Convert to float32
+            ttnn_flat = ttnn_flat.float()  # Convert to float32  
             correlation_matrix = np.corrcoef(torch_flat.numpy(), ttnn_flat.numpy())
             pcc = correlation_matrix[0, 1] if correlation_matrix.shape == (2, 2) else 0.0
             
