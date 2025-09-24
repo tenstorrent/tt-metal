@@ -66,7 +66,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 // clang-format on
 ALWI void reduce_init_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_row_max_init<BroadcastType::NONE>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE>()));
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, ReduceDim::REDUCE_ROW>()));
 }
 
@@ -163,7 +163,7 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
  */
 // clang-format on
 ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
-    MATH((llk_math_reduce_max_row<MATH_FIDELITY>(icb, icb_scaler, idst)));
+    MATH((llk_math_reduce_max_row(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB(icb, icb_scaler, itile, itile_scaler)));
 }
 
@@ -178,8 +178,6 @@ ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile,
  * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
  */
 // clang-format on
-ALWI void reduce_tile_max_row_math(uint32_t idst, uint32_t num_faces = 4) {
-    MATH((llk_math_reduce_max_row<MATH_FIDELITY>(idst, num_faces)));
-}
+ALWI void reduce_tile_max_row_math(uint32_t idst) { MATH((llk_math_reduce_max_row(idst))); }
 
 }  // namespace ckernel

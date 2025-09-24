@@ -50,15 +50,11 @@ inline void llk_math_reduce_init(
 }
 
 // Specialized functions for PoolType::MAX and ReduceDim::REDUCE_ROW
-template <int num_fidelity_phases = 0>
-inline void llk_math_reduce_max_row(const uint dst_index, const uint num_faces = 4) {
-    _llk_math_reduce_max_row_<num_fidelity_phases>(dst_index, false, num_faces);
-}
+inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max_row_(dst_index); }
 
-template <int num_fidelity_phases = 0>
 inline void llk_math_reduce_max_row(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t dst_index) {
-    const std::uint32_t operand_id = get_operand_id(operandA);  // both operands must have same number of faces
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    _llk_math_reduce_max_row_<num_fidelity_phases>(dst_index, false, num_faces);
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t dst_index) {  // both operands must have same number of faces
+    _llk_math_reduce_max_row_(dst_index);
 }

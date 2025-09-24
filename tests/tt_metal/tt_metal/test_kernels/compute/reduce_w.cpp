@@ -29,7 +29,7 @@ void MAIN {
                 reduce_tile_max_row(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
-            dprint_tensix_dest_reg(0);
+            // dprint_tensix_dest_reg(0);
 
             cb_reserve_back(tt::CBIndex::c_16, onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
