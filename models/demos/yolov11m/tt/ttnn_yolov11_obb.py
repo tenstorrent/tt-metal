@@ -50,6 +50,7 @@ class TtnnOBB:
         
         # cv3: Class predictions using DWConv structure (3 scales)
         # Scale 0: DWConv(256->256) -> Conv(256->256) -> DWConv(256->256) -> Conv(256->256) -> Conv2d(256->15)
+        import pdb; pdb.set_trace()
         self.cv3_0_0_dw = TtnnDWConv(device, parameter.cv3[0][0][0], conv_pt.cv3[0][0][0], enable_act=True, is_detect=True)
         self.cv3_0_0_conv = TtnnConv(device, parameter.cv3[0][0][1], conv_pt.cv3[0][0][1], is_detect=True)
         self.cv3_0_1_dw = TtnnDWConv(device, parameter.cv3[0][1][0], conv_pt.cv3[0][1][0], enable_act=True, is_detect=True)
