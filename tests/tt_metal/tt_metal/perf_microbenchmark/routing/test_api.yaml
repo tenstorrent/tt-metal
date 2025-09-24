@@ -116,8 +116,8 @@ Tests:
     (optional) sync: true/false
     (optional) seed: 12345 # Used to generate random packet data during testing.
     (optional) bw_calc_func: "MyCustomBWFunc" # Not used
-    # on_missing_param_policy targets the following parameters in all tests: [ftype, ntype, size, num_packets]. 
-    # If on_missing_param_policy is set to "randomize", the framework randomizes the missing parameters. 
+    # on_missing_param_policy targets the following parameters in all tests: [ftype, ntype, size, num_packets].
+    # If on_missing_param_policy is set to "randomize", the framework randomizes the missing parameters.
     # If on_missing_param_policy is not provided, the framework provides sane defaults for missing parameters.
     (optional) on_missing_param_policy: "randomize"
  
