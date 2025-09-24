@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
     compare_pcc,
 )
-from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
 def create_full_range_tensor(input_shapes, dtype):
@@ -1724,5 +1724,40 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 
     if ttnn_dtype == ttnn.bfloat16:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    else:
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-9, 9)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.sinh(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.sinh)
+    golden_tensor = golden_function(in_data)
+
+    if ttnn_dtype == ttnn.bfloat16:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=5.0)
+
     else:
         assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)

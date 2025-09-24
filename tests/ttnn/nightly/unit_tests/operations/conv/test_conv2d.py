@@ -7,11 +7,11 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
-from models.utility_functions import skip_for_blackhole, run_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, run_for_blackhole
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
@@ -895,7 +895,6 @@ def test_conv_ws(
     enable_act_double_buffer,
     enable_weights_double_buffer,
 ):
-    print("Device Core Grid:", device.core_grid)
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
@@ -4558,11 +4557,13 @@ def test_conv2d_ch_split_dram_panoptic(
         (768, 32),  # input 8x2 vs 8x4 output
     ),
 )
+@pytest.mark.parametrize("transpose_shard", [False, True])
 def test_conv_bs_grid(
     device,
     torch_tensor_map,
     output_channels,
     input_channels,
+    transpose_shard,
 ):
     run_conv(
         device,
@@ -4583,9 +4584,61 @@ def test_conv_bs_grid(
         None,
         shard_layout=BS,
         has_bias=False,
-        input_dtype=ttnn.bfloat16
+        input_dtype=ttnn.bfloat16,
+        transpose_shards=transpose_shard,
     )
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels",
+    (
+        (128, 128),  # larger input 8x8 vs 8x4
+        (256, 128),  # equal grids 8x8
+        (32, 128),  # single output column 8x1
+    ),
+)
+@pytest.mark.parametrize("transpose_shard", [False, True])
+def test_conv_bs_grid_pre_sharded(
+    device,
+    torch_tensor_map,
+    output_channels,
+    input_channels,
+    transpose_shard,
+):
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
+
+    input_height = input_width = 32
+    batch = 1
+    sharded_cfg = ttnn.create_sharded_memory_config(
+        shape=(1, 1, batch * input_height * input_width, input_channels),
+        core_grid=ttnn.CoreGrid(x=8, y=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_shard else ttnn.ShardOrientation.COL_MAJOR,
+    )
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        3,
+        3,
+        1,
+        1,
+        0,
+        None,
+        shard_layout=BS,
+        has_bias=False,
+        input_dtype=ttnn.bfloat16,
+        sharded_cfg=sharded_cfg,
+    )
 
 # fmt: off
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
@@ -4729,6 +4782,8 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
 
     # Get device grid size and create core range set based on num_cores
     grid_size = device.compute_with_storage_grid_size()
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
 
     # Use ttnn's built-in function to create core range set with row-wise allocation
     input_core_range_set = ttnn.num_cores_to_corerangeset(

@@ -102,7 +102,7 @@ std::vector<CBInfo> get_cb_info(
 
     const bool split_reader_enabled =
         is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles) &&
-        is_split_reader_viable(
+        conv_config.force_split_reader.value_or(is_split_reader_viable(
             block_config.act_block_h_ntiles,
             input_channels_padded,
             kernel_size[1],
@@ -115,7 +115,7 @@ std::vector<CBInfo> get_cb_info(
             block_config.act_block_w_ntiles,
             fp32_dest_acc_en,
             output_datatype,
-            conv_config.enable_activation_reuse);
+            conv_config.enable_activation_reuse));
 
     // Block dims
     if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !split_reader_enabled || is_1d_depthwise_conv) {

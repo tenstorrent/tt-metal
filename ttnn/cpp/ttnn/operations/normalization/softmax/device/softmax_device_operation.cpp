@@ -371,7 +371,6 @@ SoftmaxDeviceOperation::invoke(
 }
 
 Tensor softmax(
-    QueueId queue_id,
     const Tensor& input_tensor,
     int8_t dim,
     tt::tt_metal::MemoryConfig output_mem_config,
@@ -379,6 +378,9 @@ Tensor softmax(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
+    TT_FATAL(
+        input_tensor.device() != nullptr,
+        "input_tensor.device() == nullptr, No device found, move input_tensor to device");
     const auto compute_kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
     const auto rank = input_tensor.logical_shape().size();
@@ -386,7 +388,6 @@ Tensor softmax(
     if (rank > 4) {
         // General-purpose softmax
         return ttnn::prim::softmax(
-            queue_id,
             SoftmaxOperationType::Softmax,
             /*input_tensor=*/input_tensor,
             /*dim=*/dim_calculated,
@@ -420,7 +421,6 @@ Tensor softmax(
 
         // Attention optimized softmax
         return ttnn::prim::softmax(
-            queue_id,
             SoftmaxOperationType::Softmax,
             /*input_tensor=*/formatted_input_tensor,
             /*dim=*/dim_adjusted,
@@ -436,7 +436,6 @@ Tensor softmax(
     }
     // General-purpose softmax
     return ttnn::prim::softmax(
-        queue_id,
         SoftmaxOperationType::Softmax,
         /*input_tensor=*/input_tensor_4D,
         /*dim=*/dim_adjusted,
@@ -452,7 +451,6 @@ Tensor softmax(
 }
 
 Tensor scale_mask_softmax(
-    QueueId queue_id,
     const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
@@ -519,7 +517,6 @@ Tensor scale_mask_softmax(
 
         // Operation
         return ttnn::prim::softmax(
-            queue_id,
             SoftmaxOperationType::ScaleMaskSoftmax,
             /*input_tensor=*/formatted_input_tensor,
             /*dim=*/dim,
@@ -536,7 +533,6 @@ Tensor scale_mask_softmax(
 
     // Operation
     return ttnn::prim::softmax(
-        queue_id,
         SoftmaxOperationType::ScaleMaskSoftmax,
         /*input_tensor=*/formatted_input_tensor,
         /*dim=*/dim,
@@ -552,7 +548,6 @@ Tensor scale_mask_softmax(
 }
 
 Tensor softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     int8_t dim,
     SoftmaxProgramConfig program_config,
@@ -575,7 +570,6 @@ Tensor softmax_in_place(
 
     // Operation
     return ttnn::prim::softmax(
-        queue_id,
         SoftmaxOperationType::SoftmaxInPlace,
         /*input_tensor=*/input_tensor,
         /*dim=*/dim,
@@ -591,7 +585,6 @@ Tensor softmax_in_place(
 }
 
 Tensor scale_mask_softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
@@ -608,7 +601,6 @@ Tensor scale_mask_softmax_in_place(
 
     // Operation
     return ttnn::prim::softmax(
-        queue_id,
         SoftmaxOperationType::ScaleMaskSoftmaxInPlace,
         /*input_tensor=*/input_tensor,
         /*dim=*/dim,
@@ -624,7 +616,6 @@ Tensor scale_mask_softmax_in_place(
 }
 
 Tensor scale_causal_mask_hw_dims_softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
@@ -640,7 +631,6 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
 
     // Operation
     return ttnn::prim::softmax(
-        queue_id,
         SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace,
         /*input_tensor=*/input_tensor,
         /*dim=*/dim,

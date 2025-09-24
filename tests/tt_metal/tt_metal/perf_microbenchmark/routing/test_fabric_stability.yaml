@@ -4,7 +4,7 @@ allocation_policies:
       max_configs_per_core: 1
 
 Tests:
-  - name: "LinearMulticastLooped"
+  - name: "LinearLooped"
     fabric_setup:
       topology: Linear
 
@@ -23,7 +23,7 @@ Tests:
       - type: all_to_all
         iterations: 100
 
-  - name: "MeshLowLatencyMulticastLooped"
+  - name: "MeshLowLatencyLooped"
     fabric_setup:
       topology: Mesh
 
@@ -42,7 +42,7 @@ Tests:
       - type: all_to_all
         iterations: 100
 
-  - name: "MeshDynamicMulticastLooped"
+  - name: "MeshDynamicLooped"
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic

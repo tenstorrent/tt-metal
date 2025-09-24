@@ -13,13 +13,73 @@
 #include <chrono>
 
 /**************************************************************************************************
+ Metric Creation
+**************************************************************************************************/
+
+// Creates ARC telemetry metrics for MMIO-capable chips with contiguous IDs and returns the next
+// free ID value
+void create_arc_metrics(
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) {
+    for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
+        bool_metrics.push_back(std::make_unique<ARCTelemetryAvailableMetric>(reader));
+
+        // Create UInt metrics with appropriate masks and units
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+            reader, tt::umd::TelemetryTag::AICLK, "AIClock", 0xffff, MetricUnit::MEGAHERTZ));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+            reader, tt::umd::TelemetryTag::AXICLK, "AXIClock", 0xffffffff, MetricUnit::MEGAHERTZ));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+            reader, tt::umd::TelemetryTag::ARCCLK, "ARCClock", 0xffffffff, MetricUnit::MEGAHERTZ));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+            reader, tt::umd::TelemetryTag::FAN_SPEED, "FanSpeed", 0xffffffff, MetricUnit::REVOLUTIONS_PER_MINUTE));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(reader, tt::umd::TelemetryTag::TDP, "TDP", 0xffff, MetricUnit::WATTS));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(reader, tt::umd::TelemetryTag::TDC, "TDC", 0xffff, MetricUnit::AMPERES));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+            reader, tt::umd::TelemetryTag::VCORE, "VCore", 0xffffffff, MetricUnit::MILLIVOLTS));
+
+        // Create Double metrics with appropriate masks, scale factors, and units
+        // For ASIC temperature, check architecture to determine mask and scale factor
+        uint32_t asic_temp_mask;
+        double asic_temp_scale;
+        if (reader->get_arch() == tt::ARCH::BLACKHOLE) {
+            asic_temp_mask = 0xffffffff;
+            asic_temp_scale = 1.0 / 65536.0;
+        } else {
+            asic_temp_mask = 0xffff;
+            asic_temp_scale = 1.0 / 16.0;
+        }
+        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
+            reader,
+            tt::umd::TelemetryTag::ASIC_TEMPERATURE,
+            "ASICTemperature",
+            asic_temp_mask,
+            asic_temp_scale,
+            MetricUnit::CELSIUS,
+            ARCDoubleMetric::Signedness::SIGNED));
+        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
+            reader,
+            tt::umd::TelemetryTag::BOARD_TEMPERATURE,
+            "BoardTemperature",
+            0xffffffff,
+            1.0 / 65536.0,
+            MetricUnit::CELSIUS,
+            ARCDoubleMetric::Signedness::SIGNED));
+    }
+    log_info(tt::LogAlways, "Created ARC metrics");
+}
+
+/**************************************************************************************************
 | ARCTelemetryAvailableMetric Class
 **************************************************************************************************/
 
-ARCTelemetryAvailableMetric::ARCTelemetryAvailableMetric(
-    size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader) :
-    BoolMetric(chip_id, MetricUnit::UNITLESS),
-    reader_(reader) {
+ARCTelemetryAvailableMetric::ARCTelemetryAvailableMetric(std::shared_ptr<ARCTelemetryReader> reader) :
+    BoolMetric(MetricUnit::UNITLESS), reader_(reader) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
     value_ = false;
 }
@@ -52,17 +112,12 @@ void ARCTelemetryAvailableMetric::update(
 **************************************************************************************************/
 
 ARCUintMetric::ARCUintMetric(
-    size_t chip_id,
     std::shared_ptr<ARCTelemetryReader> reader,
     tt::umd::TelemetryTag tag,
     const std::string& metric_name,
     uint32_t mask,
     MetricUnit units) :
-    UIntMetric(chip_id, units),
-    reader_(reader),
-    tag_(tag),
-    metric_name_(metric_name),
-    mask_(mask) {
+    UIntMetric(units), reader_(reader), tag_(tag), metric_name_(metric_name), mask_(mask) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
     value_ = 0;
 }
@@ -104,7 +159,6 @@ void ARCUintMetric::update(
 **************************************************************************************************/
 
 ARCDoubleMetric::ARCDoubleMetric(
-    size_t chip_id,
     std::shared_ptr<ARCTelemetryReader> reader,
     tt::umd::TelemetryTag tag,
     const std::string& metric_name,
@@ -112,7 +166,7 @@ ARCDoubleMetric::ARCDoubleMetric(
     double scale_factor,
     MetricUnit units,
     Signedness signedness) :
-    DoubleMetric(chip_id, units),
+    DoubleMetric(units),
     reader_(reader),
     tag_(tag),
     metric_name_(metric_name),
