@@ -16,11 +16,15 @@ using ttnn::distributed::SocketType;
 
 class SocketManager {
 public:
-    SocketManager(SocketType type);
+    explicit SocketManager(SocketType type);
+    SocketManager(SocketManager&&) = delete;
+    SocketManager(const SocketManager&) = delete;
+    SocketManager& operator=(const SocketManager&) = delete;
+    SocketManager& operator=(SocketManager&&) = delete;
+    ~SocketManager() = default;
 
     void send(const ttnn::Tensor& tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
 
-    // Receive tensor data into the provided tensor shape and return the filled tensor
     [[nodiscard]] ttnn::Tensor recv(
         ttnn::Tensor tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
 

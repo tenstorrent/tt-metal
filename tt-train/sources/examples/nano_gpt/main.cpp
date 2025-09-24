@@ -397,6 +397,54 @@ const std::unordered_map<
     std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
     schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
 
+namespace {
+
+inline bool is_pipeline_parallel_enabled(const TrainingConfig &config) {
+    return config.pipeline_parallel_config.has_value();
+}
+
+inline int get_mpi_rank_or_zero() {
+    auto &ctx = ttml::autograd::ctx();
+    auto distributed_ctx = ctx.get_distributed_context();
+    return distributed_ctx ? *distributed_ctx->rank() : 0;
+}
+
+inline bool is_three_tier_training(const TrainingConfig &config) {
+    return config.enable_mpi && !is_pipeline_parallel_enabled(config);
+}
+
+inline bool is_last_pipeline_stage(const TrainingConfig &config) {
+    if (!is_pipeline_parallel_enabled(config)) {
+        return true;
+    }
+    return static_cast<unsigned>(get_mpi_rank_or_zero()) == (config.num_mh_workers - 1U);
+}
+
+inline bool pipeline_needs_to_call_loss(const TrainingConfig &config) {
+    return !is_pipeline_parallel_enabled(config) || is_last_pipeline_stage(config);
+}
+
+inline void pipeline_transfer_targets_if_needed(const TrainingConfig &config, const TensorPtr &target) {
+    if (!is_pipeline_parallel_enabled(config)) {
+        return;
+    }
+    if (config.num_mh_workers <= 1U) {
+        return;
+    }
+    auto &ctx = ttml::autograd::ctx();
+    auto distributed_ctx = ctx.get_distributed_context();
+    int rank = *distributed_ctx->rank();
+    auto &socket_manager = ctx.get_socket_manager();
+    if (rank == 0) {
+        socket_manager.send(
+            target->get_value(), distributed_ctx, ttml::core::distributed::Rank(config.num_mh_workers - 1));
+    } else if (static_cast<unsigned>(rank + 1U) == config.num_mh_workers) {
+        target->set_value(socket_manager.recv(target->get_value(), distributed_ctx, ttml::core::distributed::Rank(0)));
+    }
+}
+
+}  // namespace
+
 int main(int argc, char **argv) {
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
@@ -760,7 +808,7 @@ int main(int argc, char **argv) {
 
     if (config.use_no_op) {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (!config.enable_mpi) {
+    } else if (!is_three_tier_training(config)) {
         fmt::print("AdamW configuration:\n");
         fmt::print("    Learning rate: {}\n", adamw_params.lr);
         fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
@@ -772,7 +820,7 @@ int main(int argc, char **argv) {
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
-        if (config.enable_mpi && !config.pipeline_parallel_config.has_value()) {
+        if (is_three_tier_training(config)) {
             return std::make_unique<RemoteOptimizer>(
                 get_model_parameters(model), config.num_mh_workers, config.socket_type);
         } else if (config.use_no_op) {
@@ -787,7 +835,7 @@ int main(int argc, char **argv) {
     auto optimizer = select_optimizer();
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
-    if (config.enable_mpi && !config.pipeline_parallel_config.has_value()) {
+    if (is_three_tier_training(config)) {
         auto *optimizer_ptr = dynamic_cast<RemoteOptimizer *>(optimizer.get());
         if (!optimizer_ptr) {
             throw std::runtime_error("Optimizer is not RemoteOptimizer");
@@ -847,18 +895,15 @@ int main(int argc, char **argv) {
 
     bool is_everything_compiled = false;
 
-    bool is_pipeline_parallel = config.pipeline_parallel_config.has_value();
-    bool needs_to_call_loss = true;
-    if (is_pipeline_parallel) {
-        auto rank = ttml::autograd::ctx().get_distributed_context()->rank();
-        if (rank.get() != config.num_mh_workers - 1U) {
-            needs_to_call_loss = false;
-        }
-    }
+    const bool is_pipeline_parallel = is_pipeline_parallel_enabled(config);
+    const bool needs_to_call_loss = pipeline_needs_to_call_loss(config);
 
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
+
+            // TODO(rfurko): add mask sending, once mask becomes non-constant
+            pipeline_transfer_targets_if_needed(config, target);
 
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
@@ -892,7 +937,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (device_config.enable_ddp && (!config.enable_mpi || config.pipeline_parallel_config.has_value())) {
+                if (device_config.enable_ddp && !is_three_tier_training(config)) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 

@@ -12,7 +12,7 @@ namespace ttml::models::distributed::pipeline_parallel_llama {
 
 namespace {
 
-void initialize_weights_tensor_parallel(PipelineParallelLlama& model, bool is_tensor_parallel) {
+void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
     auto params = model.parameters();
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
@@ -156,7 +156,7 @@ PipelineParallelLlama::PipelineParallelLlama(
     }
 
     if (is_tensor_parallel) {
-        initialize_weights_tensor_parallel(*this, is_tensor_parallel);
+        initialize_weights_tensor_parallel(*this);
     } else {
         common::transformer::initialize_weights_gpt2(*this);
     }

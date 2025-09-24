@@ -5,8 +5,6 @@
 #include "llama.hpp"
 
 #include "autograd/tensor.hpp"
-#include "modules/distributed/linear.hpp"
-#include "modules/distributed/llama_block.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/llama_block.hpp"
 #include "modules/rms_norm_module.hpp"
