@@ -13,6 +13,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/copy_dest_values.h"
+#include "compute_kernel_api/eltwise_unary/fill.h"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -33,6 +35,9 @@ void MAIN {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t W = get_compile_time_arg_val(14);
+    constexpr uint32_t total_width = get_compile_time_arg_val(15);
+    constexpr uint32_t last_tile_data_width = get_compile_time_arg_val(16);
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
@@ -56,13 +61,13 @@ void MAIN {
     }
 
     constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_eps = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;          // x minus mean
@@ -143,7 +148,7 @@ void MAIN {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             transpose_wh_tile(cb_x, w + index_h_offset, dst0);
-            welford_tile<in_dst, mean_dst, var_dst, true, false>(w * tile_width, block_w, 0, 0);
+            welford_tile<in_dst, mean_dst, var_dst, true, 0>(w * tile_width, block_w, 0, {});
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -158,32 +163,102 @@ void MAIN {
 
     // Welford combine local partials with external partials
     // cb_ex <-- cb_ex_external, cb_ex_partial
-    // where ex is ex and varx interleaved
+    // where "ex" is mean and var interleaved.
     if constexpr (is_allgather_worker) {
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
-        cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
+        // Accumulate mean and M2 in dst regs
+        constexpr uint32_t mean_acc_dst = 2;
+        constexpr uint32_t m2_acc_dst = 3;
 
+        // Work with two tiles (1 mean and 1 var) at a time
+        constexpr uint32_t mean_cb_idx = 0;
+        constexpr uint32_t var_cb_idx = 1;
+
+        cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_scaler_global, 1);
             tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                    cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
+            for (uint32_t b = 0; b < num_blocks_reduce; b++) {
+                // Wait for 1 mean tile and 1 var tile
+                cb_wait_front(cb_ex_external, 2);
+
+                const auto n_a = b * tile_width;
+                const auto n_b = b == num_blocks_reduce - 1 ? last_tile_data_width : tile_width;
+                const auto n_ab = n_a + n_b;
+                const auto n_b_over_n_ab = n_b / n_ab;
+                const auto n_a_n_b_over_n_ab = n_a * n_b_over_n_ab;
+
+                // Copy accumulated mean (x_a) to dst0
+                copy_dest_values_init();
+                copy_dest_values(dst0, mean_acc_dst);
+
+                // Compute delta = x_b - x_a, store in dst0
+                binary_dest_reuse_tiles_init<ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex_external);
+                binary_dest_reuse_tiles<ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_ex_external, mean_cb_idx, dst0);
+
+                // Fill dst1 with n_b / n_ab
+                fill_tile_init();
+                fill_tile(dst1, n_b_over_n_ab);
+
+                // Multiply delta by n_b / n_ab, store in dst1
+                // (delta remains in dst0)
+                mul_binary_tile_init();
+                mul_binary_tile(dst0, dst1, dst1);
+
+                // Accumulate mean
+                add_binary_tile_init();
+                add_binary_tile(mean_acc_dst, dst1, mean_acc_dst);
+
+                // Square delta
+                square_tile_init();
+                square_tile(dst0);
+
+                // Fill dst1 with n_a * n_b / n_ab
+                fill_tile_init();
+                fill_tile(dst1, n_a_n_b_over_n_ab);
+
+                // Multiply delta^2 by n_a * n_b / n_ab, store in dst0
+                mul_binary_tile_init();
+                mul_binary_tile(dst0, dst1, dst0);
+
+                // Accumulate into M2
+                add_binary_tile_init();
+                add_binary_tile(m2_acc_dst, dst0, m2_acc_dst);
+
+                // Copy var_b into dst0
+                copy_tile_to_dst_init_short(cb_ex_external);
+                copy_tile(cb_ex_external, var_cb_idx, dst0);
+
+                // Fill dst1 with n_b
+                fill_tile_init();
+                fill_tile(dst1, n_b);
+
+                // Multiply var_b by n_b to get M2_b, store in dst0
+                mul_binary_tile_init();
+                mul_binary_tile(dst0, dst1, dst0);
+
+                // Accumulate into M2
+                add_binary_tile_init();
+                add_binary_tile(m2_acc_dst, dst0, m2_acc_dst);
+
+                cb_pop_front(cb_ex_external, 2);
             }
-            if (use_two_stage_reduce && !is_second_stage_reader) {
-                cb_wait_front(cb_ex_external, num_blocks_second_stage - 1);
-                cb_pop_front(cb_ex_external, num_blocks_second_stage - 1);
-            }
+
+            // Divide final accumulated M2 by W to get final var
+            fill_tile_init();
+            fill_tile(dst0, static_cast<float>(W));
+            div_binary_tile_init();
+            div_binary_tile(m2_acc_dst, dst0, m2_acc_dst);
+
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex);
+
+            // Pack accumulated mean and var to cb_ex
+            pack_tile(mean_acc_dst, cb_ex);
+            pack_tile(m2_acc_dst, cb_ex);
             tile_regs_release();
         }
-        reduce_uninit();
-        cb_push_back(cb_ex, num_tiles_per_allgather_worker);
-        cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
+        cb_push_back(cb_ex, 2 * num_tiles_per_allgather_worker);
+        cb_wait_front(cb_ex, 2 * num_tiles_per_allgather_worker);
     }
 
     // x - E[x]
