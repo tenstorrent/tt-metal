@@ -11,11 +11,16 @@ import os
 
 class TestPackageConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
-    generators = "CMakeToolchain", "CMakeDeps"
+    generators = "CMakeDeps"
     test_type = "explicit"
 
     def requirements(self):
         self.requires(self.tested_reference_str)
+        self.requires("openmpi/4.1.6")
+        self.requires("capstone/5.0.6")
+        self.requires("libnuma/2.0.19")
+        self.requires("boost/1.88.0")
+        self.requires("hwloc/2.10.0")
 
     def layout(self):
         cmake_layout(self)
@@ -25,7 +30,17 @@ class TestPackageConan(ConanFile):
         cmake.configure()
         cmake.build()
 
+    def build_requirements(self):
+        self.tool_requires("ninja/[>=1.11.1]")
+        self.tool_requires("cmake/[>=3.25]")
+
     def generate(self):
+        from conan.tools.cmake import CMakeToolchain
+
+        tc = CMakeToolchain(self)
+        tc.generator = "Ninja"
+        tc.generate()
+
         runenv = VirtualRunEnv(self)
         runenv.generate()
 
