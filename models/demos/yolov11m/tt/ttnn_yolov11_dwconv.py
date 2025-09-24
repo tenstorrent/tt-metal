@@ -79,6 +79,13 @@ class TtnnDWConv:
             def __contains__(self, key):
                 """Support 'key in object' syntax like TTNN parameter containers"""
                 return hasattr(self, key)
+            
+            def __getitem__(self, key):
+                """Support dictionary-style access like conv_pth["bias"]"""
+                if hasattr(self, key):
+                    return getattr(self, key)
+                else:
+                    raise KeyError(f"'{key}' not found in FlattenedParams")
         
         conv_pt_flat = FlattenedParams(conv_pt)
         
