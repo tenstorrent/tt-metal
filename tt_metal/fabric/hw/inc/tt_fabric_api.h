@@ -234,7 +234,13 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 // Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
 bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
     tt_l1_ptr routing_path_t<2, true>* routing_info =
+#if defined(ACTIVE_ETH)
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(AERISC_FABRIC_ROUTING_PATH_BASE_2D);
+#elif defined(IDLE_ETH)
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(IERISC_FABRIC_ROUTING_PATH_BASE_2D);
+#else
         reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+#endif
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
     packet_header->routing_fields.hop_index = 0;
@@ -270,7 +276,13 @@ bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatency
         }
     } else {
         tt_l1_ptr routing_path_t<1, compressed>* routing_info =
+#if defined(ACTIVE_ETH)
+            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(AERISC_FABRIC_ROUTING_PATH_BASE_1D);
+#elif defined(IDLE_ETH)
+            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(IERISC_FABRIC_ROUTING_PATH_BASE_1D);
+#else
             reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+#endif
         if constexpr (target_as_dev) {
             tt_l1_ptr tensix_routing_l1_info_t* routing_table =
                 reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
