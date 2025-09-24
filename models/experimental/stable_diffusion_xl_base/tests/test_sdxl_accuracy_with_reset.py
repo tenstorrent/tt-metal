@@ -50,6 +50,14 @@ IMAGES_PATH, IMAGE_NAME_BASE = "output", "output"
     ],
     ids=("device_encoders", "host_encoders"),
 )
+@pytest.mark.parametrize(
+    "use_cfg_parallel",
+    [
+        (True),
+        (False),
+    ],
+    ids=("use_cfg_parallel", "no_cfg_parallel"),
+)
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 @pytest.mark.skipif(is_6u() or IS_RING_6U_LOCAL, reason="skip when 6u, as it does not support reset")
@@ -61,6 +69,7 @@ def test_accuracy_with_reset(
     coco_statistics_path,
     evaluation_range,
     reset_config,
+    use_cfg_parallel,
 ):
     start_from, num_prompts = evaluation_range
     prompts = sdxl_get_prompts(captions_path, start_from, num_prompts)  # also asserts evaluation_range
@@ -74,6 +83,7 @@ def test_accuracy_with_reset(
     vae_str = "device_vae" if vae_on_device else "host_vae"
     trace_str = "with_trace" if capture_trace else "no_trace"
     encoders_str = "device_encoders" if encoders_on_device else "host_encoders"
+    use_cfg_parallel_str = "use_cfg_parallel" if use_cfg_parallel else "no_cfg_parallel"
 
     logger.info(
         f"Running test_accuracy_with_reset with vae_on_device={vae_on_device}, capture_trace={capture_trace}, reset_bool={reset_bool}, reset_period={reset_period}"
@@ -101,7 +111,7 @@ def test_accuracy_with_reset(
                 "--num-prompts",
                 str(current_num_prompts),
                 "-k",
-                f"{vae_str} and {trace_str} and {encoders_str}",
+                f"{vae_str} and {trace_str} and {encoders_str} and {use_cfg_parallel_str}",
             ]
         )
         subprocess.run(command, check=True)
