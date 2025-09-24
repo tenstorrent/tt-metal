@@ -50,7 +50,7 @@ std::string get_host_name() {
     return std::string(hostname);
 }
 
-static std::string get_mobo_name() {
+std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
     std::string motherboard;
 
