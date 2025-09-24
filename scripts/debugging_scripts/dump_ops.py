@@ -20,7 +20,8 @@ Description:
 """
 
 from triage import ScriptConfig, triage_field, run_script
-from check_per_device import dataclass, run as get_check_per_device
+from dataclasses import dataclass
+from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 
 try:
@@ -309,7 +310,7 @@ def preserve_indentation_serializer(value) -> str:
 
 
 script_config = ScriptConfig(
-    depends=["check_per_device", "dispatcher_data"],
+    depends=["run_checks", "dispatcher_data"],
 )
 
 
@@ -478,13 +479,13 @@ def run(args, context: Context):
     mapping_file = args["--mapping-file"]
     max_width = int(args["--max-width"]) if args["--max-width"] else 100
     verbose = args["--verbose"]
-    check_per_device = get_check_per_device(args, context)
+    run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
 
     # Handle device iteration directly to avoid automatic "Dev" column
     all_ops_data = []
     all_host_id_op_names = []
-    for device in check_per_device.devices:
+    for device in run_checks.devices:
         device_ops, host_id_op_names = dump_ops(device, dispatcher_data, mapping_file, max_width, verbose)
         all_ops_data.extend(device_ops)
         all_host_id_op_names.extend(host_id_op_names)
