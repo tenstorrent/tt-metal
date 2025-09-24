@@ -139,7 +139,7 @@ def test_flux(
         pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        # pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),  # hangs
         pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],

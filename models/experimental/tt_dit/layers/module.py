@@ -7,7 +7,6 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, NamedTuple
 
-import torch
 import ttnn
 
 from ..utils.substate import pop_substate
@@ -15,6 +14,8 @@ from ..utils.substate import pop_substate
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, Iterator, Mapping
     from typing import Any
+
+    import torch
 
 
 class IncompatibleKeys(NamedTuple):
