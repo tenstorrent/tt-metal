@@ -520,6 +520,7 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
+    config.max_steps = 1;
     EvalConfig eval_config = parse_eval_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
 
