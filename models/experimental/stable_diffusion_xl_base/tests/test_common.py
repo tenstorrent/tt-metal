@@ -25,6 +25,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 SDXL_L1_SMALL_SIZE = 23000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
+SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
 
 
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
@@ -75,6 +76,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
 
 def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
     logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
+    batch_size = ttnn_device.get_num_devices()
     dummy_prompt = ["abc"] * batch_size
     dummy_ids = tokenizer(
         dummy_prompt,
@@ -131,6 +133,7 @@ def batch_encode_prompt_on_device(
     negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
     lora_scale: Optional[float] = None,
     clip_skip: Optional[int] = None,
+    use_cfg_parallel: bool = False,
 ):
     r"""
     Encodes the prompt into text encoder hidden states.
@@ -177,6 +180,11 @@ def batch_encode_prompt_on_device(
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
     num_devices = ttnn_device.get_num_devices()
+    num_prompts = len(prompt)
+    if use_cfg_parallel and num_prompts < num_devices:
+        # Pad prompts by appending empty strings to match num_devices
+        prompt = prompt + [""] * (num_devices - len(prompt))
+
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert prompt_2 is None, "Prompt 2 is not supported currently"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
@@ -383,7 +391,13 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+    slice_to = num_prompts if use_cfg_parallel else None
+    return (
+        prompt_embeds[:slice_to],
+        negative_prompt_embeds[:slice_to],
+        pooled_prompt_embeds[:slice_to],
+        negative_pooled_prompt_embeds[:slice_to],
+    )
 
 
 # Copied from sdxl pipeline
@@ -489,36 +503,60 @@ def run_tt_image_gen(
     input_shape,
     vae,  # can be host vae or tt vae
     batch_size,
+    persistent_buffer,
+    semaphores,
     output_device=None,
     output_shape=None,
     tid=None,
     tid_vae=None,
     capture_trace=False,
+    use_cfg_parallel=False,
 ):
     assert not (capture_trace and len(tt_timesteps) != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    for i, t in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
+    for i, _ in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
         if tid is None or capture_trace:
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            for unet_slice in range(len(tt_time_ids)):
+            for unet_slice in range(tt_prompt_embeds.shape[0]):
                 latent_model_input = tt_latents
                 noise_pred, _ = run_tt_iteration(
                     tt_unet,
                     tt_scheduler,
                     latent_model_input,
                     input_shape,
-                    tt_prompt_embeds[unet_slice],
-                    tt_time_ids[unet_slice],
-                    tt_text_embeds[unet_slice],
+                    tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
+                    tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
+                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
                 )
 
                 unet_outputs.append(noise_pred)
 
+            if use_cfg_parallel:
+                noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(noise_pred)
+                noise_pred = noise_pred_interleaved
+                noise_pred_out = ttnn.experimental.all_gather_async(
+                    noise_pred,
+                    dim=0,
+                    persistent_output_tensor=persistent_buffer,
+                    multi_device_global_semaphore=semaphores,
+                    num_links=1,
+                    cluster_axis=0,
+                    mesh_device=ttnn_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                )
+                ttnn.deallocate(noise_pred)
+                noise_pred = noise_pred_out
+                noise_pred = noise_pred[..., :4]
+                noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
+            else:
+                noise_pred_uncond, noise_pred_text = unet_outputs
+
             # perform guidance
-            noise_pred_uncond, noise_pred_text = unet_outputs
             noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
             noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
             noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
@@ -566,7 +604,9 @@ def run_tt_image_gen(
         profiler.end("vae_decode")
 
         profiler.start("read_output_tensor")
-        output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()
+        output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()[
+            :batch_size, ...
+        ]
         ttnn.synchronize_device(ttnn_device)
         profiler.end("read_output_tensor")
 
@@ -575,7 +615,7 @@ def run_tt_image_gen(
         imgs = torch.permute(output_tensor, (0, 3, 1, 2))
     else:
         profiler.start("read_output_tensor")
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))
+        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
         ttnn.synchronize_device(ttnn_device)
         profiler.end("read_output_tensor")
         profiler.start("vae_decode")
