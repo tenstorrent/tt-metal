@@ -43,7 +43,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             ),
             "moe": [
                 (
-                    MoE.convert_weights(hf_config, [state_dict], output_path / f"moe_{i}", mesh_device)
+                    MoE.convert_weights(hf_config, (state_dict,), output_path / f"moe_{i}", mesh_device)
                     if state_dict is not None
                     else None
                 )
@@ -132,6 +132,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
             "revert_dp": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(0),
             },
         }
 

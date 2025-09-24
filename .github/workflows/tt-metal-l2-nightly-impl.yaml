@@ -231,8 +231,11 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly sdxl tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode"
+        run: pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode"
+      - name: ttnn nightly sdxl demo cfg parallel test (N300 only)
+        if: ${{ inputs.runner-label == 'N300' }}
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest models/experimental/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -378,7 +381,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" -k panoptic
+        run: pytest tests/ttnn/nightly/unit_tests/operations -xv -m "not disable_fast_runtime_mode" -k panoptic
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
