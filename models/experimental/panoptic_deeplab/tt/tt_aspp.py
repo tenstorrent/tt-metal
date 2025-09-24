@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from math import floor
-import torch.nn as nn
 
 import ttnn
 from typing import Any
@@ -13,6 +12,7 @@ from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
     TtConv2dParameters,
 )
 from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
+from models.common.lightweightmodule import LightweightModule
 
 
 def get_ttnn_activation(activation_name: str):
@@ -89,7 +89,7 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: Any = 
         )
 
 
-class TtASPP(nn.Module):
+class TtASPP(LightweightModule):
     def __init__(
         self,
         parameters,

@@ -7,6 +7,7 @@ from typing import Dict, Tuple
 import cv2
 import numpy as np
 import torch
+import argparse
 from loguru import logger
 
 import ttnn
@@ -16,9 +17,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
-from models.experimental.panoptic_deeplab.tt.common import (
-    get_panoptic_deeplab_config,
-)
+from models.experimental.panoptic_deeplab.tt.common import get_panoptic_deeplab_config, PDL_L1_SMALL_SIZE
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.utility_functions import disable_persistent_kernel_cache
 
@@ -626,26 +625,43 @@ def run_panoptic_deeplab_batch_demo(
 
 
 if __name__ == "__main__":
-    # Example usage for standalone execution
-    import sys
+    parser = argparse.ArgumentParser(
+        description="Run Panoptic DeepLab inference on images using TTNN",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+            Examples:
+            # Single image with custom output directory
+            python models/experimental/panoptic_deeplab/tt/demo.py \
+            <image_path> \
+            <weight_path> \
+            <output_dir>
 
-    if len(sys.argv) < 3:
-        print("Usage: python demo.py <image_path> <weights_path> [output_dir]")
-        print("   or: python demo.py <input_dir> <weights_path> [output_dir] --batch")
-        sys.exit(1)
+            # Process all images in a directory
+            python models/experimental/panoptic_deeplab/tt/demo.py \
+            <image_directory> \
+            <weight_path> \
+            <output_dir> \
+            --batch
+            """,
+    )
 
-    device = ttnn.open_device(device_id=0, l1_small_size=65536)
+    parser.add_argument("input_path", help="Path to input image or directory (for batch mode)")
+
+    parser.add_argument("weights_path", help="Path to model weights (.pkl file)")
+
+    parser.add_argument("output_dir", help="Directory to save prediction outputs")
+
+    parser.add_argument("--batch", action="store_true", help="Enable batch processing mode for directory of images")
+
+    args = parser.parse_args()
+
+    device = ttnn.open_device(device_id=0, l1_small_size=PDL_L1_SMALL_SIZE)
 
     try:
-        input_path = sys.argv[1]
-        weights_path = sys.argv[2]
-        output_dir = sys.argv[3] if len(sys.argv) > 3 else "panoptic_deeplab_predictions"
-        batch_mode = "--batch" in sys.argv
-
-        if batch_mode:
-            run_panoptic_deeplab_batch_demo(device, input_path, weights_path, output_dir)
+        if args.batch:
+            run_panoptic_deeplab_batch_demo(device, args.input_path, args.weights_path, args.output_dir)
         else:
-            run_panoptic_deeplab_demo(device, input_path, weights_path, output_dir)
+            run_panoptic_deeplab_demo(device, args.input_path, args.weights_path, args.output_dir)
 
     finally:
         ttnn.close_device(device)

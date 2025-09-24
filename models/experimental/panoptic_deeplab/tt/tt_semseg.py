@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Dict, List, Union, Optional, Tuple
-from torch import nn
 import ttnn
 from loguru import logger
 
@@ -11,9 +10,10 @@ from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP, get_ttnn_act
 from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
 from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtDeepLabV3PlusHead(nn.Module):
+class TtDeepLabV3PlusHead(LightweightModule):
     """
     TTNN implementation of the DeepLabV3+ segmentation head.
     """
