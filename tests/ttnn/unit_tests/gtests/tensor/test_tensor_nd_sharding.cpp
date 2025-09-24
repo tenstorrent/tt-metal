@@ -81,7 +81,7 @@ TensorSpec get_nd_sharding_tensor_spec(
     const NDShardingParams& params,
     BufferType buffer_type,
     ShardOrientation orientation,
-    std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     CoreRangeSet cores;
     if (buffer_type == BufferType::L1) {
         cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
