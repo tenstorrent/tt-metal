@@ -54,12 +54,6 @@ public:
 
     CoreCoord get_dram_grid_size() const;
 
-    tt_cxy_pair convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const;
-
-    // During the transition of the UMD's api to CoreCoords, this function is needed to make the transition smoother.
-    // At the moment, different coordinate systems are expected for grayskull and other architectures.
-    CoordSystem get_umd_coord_system() const;
-
     // Number of cores per DRAM bank ceiled to nearest integer
     int profiler_ceiled_core_count_perf_dram_bank = 0;
     std::map<CoreCoord, int32_t> physical_routing_to_profiler_flat_id;
