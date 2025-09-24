@@ -158,7 +158,7 @@ def create_sharding_strategy(conv2d_args):
         return AutoShardedStrategyConfiguration()
 
 
-def create_conv2d_config(conv_args, weight, bias):
+def create_conv2d_config(conv_args, weight, bias, activation=None):
     """Helper to create Conv2dConfiguration with proper sharding parameters"""
     return Conv2dConfiguration.from_model_args(
         conv_args,
@@ -172,4 +172,5 @@ def create_conv2d_config(conv_args, weight, bias):
         packer_l1_acc=False,
         enable_act_double_buffer=True,
         output_layout=ttnn.TILE_LAYOUT,
+        activation=activation,
     )
