@@ -23,6 +23,7 @@ class Yolov11Conv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        layer_name="unknown",
     ):
         self.is_detect = is_detect
         self.activation = activation
@@ -64,14 +65,23 @@ class Yolov11Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
+        print(f"🔍 Yolov11Conv2D [{layer_name}] - Received conv_pth type: {type(conv_pth)}")
+        print(f"🔍 Yolov11Conv2D [{layer_name}] - conv_pth has 'bias': {'bias' in conv_pth}")
+        
         if "bias" in conv_pth and conv_pth["bias"] is not None:
             # Bias is already preprocessed in TTNN format
             self.bias = conv_pth["bias"]
+            print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded bias shape: {self.bias.shape}")
+            print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded bias range: {ttnn.to_torch(self.bias).min():.6f} to {ttnn.to_torch(self.bias).max():.6f}")
         else:
             self.bias = None
+            print(f"🔍 Yolov11Conv2D [{layer_name}] - No bias loaded")
 
         # Weight is already preprocessed in TTNN format  
         self.weight = conv_pth["weight"]
+        print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded weight shape: {self.weight.shape}")
+        print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded weight range: {ttnn.to_torch(self.weight).min():.6f} to {ttnn.to_torch(self.weight).max():.6f}")
+        print(f"🔍 Yolov11Conv2D [{layer_name}] - Initialization complete\n")
 
     def __call__(self, x):
         if self.is_detect:
@@ -215,6 +225,7 @@ class TtnnConv:
         reshard=False,
         activation="",
         deallocate_activation=False,
+        layer_name="ttnnconv",
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -227,6 +238,7 @@ class TtnnConv:
             reshard=reshard,
             activation=activation,
             deallocate_activation=deallocate_activation,
+            layer_name=layer_name,
         )
 
     def __call__(self, device, x):

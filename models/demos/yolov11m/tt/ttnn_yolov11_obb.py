@@ -33,7 +33,7 @@ class TtnnOBB:
         # Scale 0 (256 -> 64 -> 64 -> 64)
         self.cv2_0_0 = TtnnConv(device, parameter.cv2[0][0], conv_pt.cv2[0][0], is_detect=True)
         self.cv2_0_1 = TtnnConv(device, parameter.cv2[0][1], conv_pt.cv2[0][1], is_detect=True)
-        self.cv2_0_2 = Yolov11Conv2D(parameter.cv2[0][2], conv_pt.cv2[0][2], device=device, is_detect=True)
+        self.cv2_0_2 = Yolov11Conv2D(parameter.cv2[0][2], conv_pt.cv2[0][2], device=device, is_detect=True, layer_name="cv2_0_2")
         print(f"🔍 cv2_0_2 weights range: {ttnn.to_torch(self.cv2_0_2.weight).min():.6f} to {ttnn.to_torch(self.cv2_0_2.weight).max():.6f}")
         if self.cv2_0_2.bias is not None:
             print(f"🔍 cv2_0_2 bias range: {ttnn.to_torch(self.cv2_0_2.bias).min():.6f} to {ttnn.to_torch(self.cv2_0_2.bias).max():.6f}")
@@ -51,11 +51,11 @@ class TtnnOBB:
         # cv3: Class predictions using DWConv structure (3 scales)
         # Scale 0: DWConv(256->256) -> Conv(256->256) -> DWConv(256->256) -> Conv(256->256) -> Conv2d(256->15)
         import pdb; pdb.set_trace()
-        self.cv3_0_0_dw = TtnnDWConv(device, parameter.cv3[0][0][0], conv_pt.cv3[0][0][0], enable_act=True, is_detect=True)
+        self.cv3_0_0_dw = TtnnDWConv(device, parameter.cv3[0][0][0], conv_pt.cv3[0][0][0], enable_act=True, is_detect=True, layer_name="cv3_0_0_dw")
         self.cv3_0_0_conv = TtnnConv(device, parameter.cv3[0][0][1], conv_pt.cv3[0][0][1], is_detect=True)
         self.cv3_0_1_dw = TtnnDWConv(device, parameter.cv3[0][1][0], conv_pt.cv3[0][1][0], enable_act=True, is_detect=True)
         self.cv3_0_1_conv = TtnnConv(device, parameter.cv3[0][1][1], conv_pt.cv3[0][1][1], is_detect=True)
-        self.cv3_0_2 = Yolov11Conv2D(parameter.cv3[0][2], conv_pt.cv3[0][2], device=device, is_detect=True)
+        self.cv3_0_2 = Yolov11Conv2D(parameter.cv3[0][2], conv_pt.cv3[0][2], device=device, is_detect=True, layer_name="cv3_0_2")
         print(f"🔍 cv3_0_2 weights range: {ttnn.to_torch(self.cv3_0_2.weight).min():.6f} to {ttnn.to_torch(self.cv3_0_2.weight).max():.6f}")
         if self.cv3_0_2.bias is not None:
             print(f"🔍 cv3_0_2 bias range: {ttnn.to_torch(self.cv3_0_2.bias).min():.6f} to {ttnn.to_torch(self.cv3_0_2.bias).max():.6f}")
