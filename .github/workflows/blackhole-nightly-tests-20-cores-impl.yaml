@@ -37,7 +37,7 @@ jobs:
     # CIv2 to get weights
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib

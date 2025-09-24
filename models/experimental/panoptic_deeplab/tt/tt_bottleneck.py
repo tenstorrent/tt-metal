@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 from loguru import logger
 
@@ -11,9 +10,10 @@ from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
     SliceConfig,
     SliceMode,
 )
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtBottleneck(nn.Module):
+class TtBottleneck(LightweightModule):
     """
     TTNN implementation of BottleneckBlock with fused Conv+BatchNorm.
 

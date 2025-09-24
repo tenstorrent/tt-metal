@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 from loguru import logger
 
@@ -12,9 +11,10 @@ from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
     SliceMode,
 )
 from models.experimental.panoptic_deeplab.tt.tt_maxpool2d_wrapper import TtMaxPool2d
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtStem(nn.Module):
+class TtStem(LightweightModule):
     """
     TTNN implementation of DeepLabStem with fused Conv+BatchNorm.
 

@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_stem import TtStem
 from models.experimental.panoptic_deeplab.tt.tt_bottleneck import TtBottleneck
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtResNet(nn.Module):
+class TtResNet(LightweightModule):
     """
     TTNN implementation of ResNet backbone for Panoptic DeepLab.
 
@@ -45,7 +45,7 @@ class TtResNet(nn.Module):
 
     def _build_res_layer(self, layer_name, layer_params, device, dtype, num_blocks, stride=1, dilations=None):
         """Build a residual layer with the specified configuration"""
-        blocks = nn.ModuleList()
+        blocks = []
 
         for i in range(num_blocks):
             block_params = layer_params[i]
@@ -92,7 +92,7 @@ class TtResNet(nn.Module):
 
         return outputs
 
-    def _forward_res_layer(self, x: ttnn.Tensor, layer: nn.ModuleList) -> ttnn.Tensor:
+    def _forward_res_layer(self, x: ttnn.Tensor, layer: []) -> ttnn.Tensor:
         """Forward pass through a residual layer"""
         for block in layer:
             x = block(x)
