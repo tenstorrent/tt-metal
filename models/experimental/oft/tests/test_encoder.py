@@ -17,7 +17,7 @@ from loguru import logger
 import os
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     # fmt: off
     "pcc_peaks, pcc_scores, pcc_positions, pcc_dimensions, pcc_angles",

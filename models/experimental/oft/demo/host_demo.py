@@ -50,16 +50,15 @@ from tests.ttnn.utils_for_testing import check_with_pcc
         # fmt: on
     ],
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
 @torch.no_grad()
 def test_oftnet(
-    checkpoints_path,
     input_image_path,
     calib_path,
     pcc_scores_oft,
     pcc_positions_oft,
     pcc_dimensions_oft,
     pcc_angles_oft,
+    model_location_generator,
 ):
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
@@ -89,7 +88,7 @@ def test_oftnet(
         dtype=torch.float32,
     )
 
-    ref_model = load_checkpoint(checkpoints_path, ref_model)
+    ref_model = load_checkpoint(ref_model, model_location_generator)
     ref_encoder = ObjectEncoder(nms_thresh=NMS_THRESH, dtype=torch.float32)
 
     # ========================================================
@@ -102,7 +101,7 @@ def test_oftnet(
         grid_height=GRID_HEIGHT,
         dtype=torch.bfloat16,
     )
-    test_model = load_checkpoint(checkpoints_path, test_model)
+    test_model = load_checkpoint(test_model, model_location_generator)
 
     # ========================================================
     # Run torch fp32 and bfp16 inference pass
