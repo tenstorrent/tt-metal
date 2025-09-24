@@ -183,6 +183,7 @@ void __attribute__((noinline)) Application(void) {
                 WAYPOINT("R");
 
                 flush_erisc_icache();
+		flush_erisc_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
                 uint32_t kernel_lma =
