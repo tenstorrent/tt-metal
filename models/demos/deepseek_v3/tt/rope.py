@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import nearest_32
@@ -205,19 +206,23 @@ class RotarySetup:
         """
 
         device = self.device
-
+        # breakpoint()
+        logger.info(
+            f"RotarySetup.get_rot_mats called with position_idxs device: {position_idxs.device}, type: {type(position_idxs)} shape: {position_idxs.shape}"
+        )
         # If position_idxs is a torch tensor, get the TTNN version of it
         if isinstance(position_idxs, torch.Tensor):
             rot_idxs = self.get_rot_idxs(position_idxs)
         else:
             rot_idxs = position_idxs
-            assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+            # assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
 
         # Send the idxs to device
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         embedding_layout = ttnn.TILE_LAYOUT
+        # breakpoint()
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, dim]
         sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, dim]
 

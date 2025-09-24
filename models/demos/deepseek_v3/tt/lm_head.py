@@ -270,7 +270,7 @@ class LMHead(AbstractModule):
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        mesh_scatter(x, **cfg["mesh_scatter"])
+        # mesh_scatter(x, **cfg["mesh_scatter"]) #This also calls point_to_point internally
 
         output = ttnn.linear(x, **cfg["linear"])
         ttnn.deallocate(x)

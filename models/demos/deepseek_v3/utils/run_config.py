@@ -8,8 +8,6 @@ from enum import Enum
 from types import NoneType
 from typing import Any, overload
 
-from loguru import logger
-
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase
 
@@ -96,7 +94,7 @@ def create_run_config(model_config, weight_config, *model_states):
         mb_mesh_device=None,
     )
 
-    logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
+    # logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
 
     return run_config
 

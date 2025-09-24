@@ -39,6 +39,7 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count())
 def load_model_weights(
     model_path: str, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
 ) -> dict[str, torch.Tensor]:
+    print(f"Loading weights from {model_path}")
     safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
     weights_dict = {}
     iterable = (

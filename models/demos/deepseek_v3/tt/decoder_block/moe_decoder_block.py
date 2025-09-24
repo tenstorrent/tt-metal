@@ -174,13 +174,13 @@ class MoEDecoderBlock(DecoderBlockBase):
                 source_coord = ttnn.MeshCoordinate(src_row, col_dim_idx)
                 dest_coord = ttnn.MeshCoordinate(row_dim_idx, col_dim_idx)
 
-                ttnn.point_to_point(
-                    tt_input,
-                    dest_coord,
-                    source_coord,
-                    ttnn.Topology.Linear,
-                    optional_output_tensor=tt_input,
-                )
+                # ttnn.point_to_point(
+                #     tt_input,
+                #     dest_coord,
+                #     source_coord,
+                #     ttnn.Topology.Linear,
+                #     optional_output_tensor=tt_input,
+                # )
 
         return tt_input
 

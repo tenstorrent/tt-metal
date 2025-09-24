@@ -300,12 +300,18 @@ class Model1D(SharedStateAddOn, AbstractModule):
         dst_row = get_mesh_coords(mesh_shape, dst_row_idx)
 
         for src_coord, dst_coord in zip(src_row, dst_row):
+            logger.info(
+                f"Transferring from {src_coord} to {dst_coord} using topology {topology}, x shape: {x.shape} -- start"
+            )
             ttnn.point_to_point(
                 x,
                 dst_coord,
                 src_coord,
                 optional_output_tensor=x,
                 topology=topology,
+            )
+            logger.info(
+                f"Transferring from {src_coord} to {dst_coord} using topology {topology}, x shape: {x.shape} -- end"
             )
 
         return x
@@ -321,7 +327,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
 
-        logger.info(f"forward_decode")
+        logger.info(f"forward_decode x shape = {x.shape}")
         x = Embedding1D.forward_decode(x, cfg["embedding"])
 
         # Stage 1: MLP Decoder Block
@@ -336,7 +342,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ):
                 if is_padding_layer:
                     continue
-                # logger.info(f" DecoderBlock layer {layer_idx} at meta index {meta_layer_idx} on row {row_idx}")
+                logger.info(f" DecoderBlock layer {layer_idx} at meta index {meta_layer_idx} on row {row_idx}")
 
                 x_next = DecoderBlock.forward_decode(
                     x,
@@ -349,7 +355,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 ttnn.deallocate(x)
                 x = x_next
             # Transfer rows
-            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+            # cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
 
         # Stage 2: MOE Decoder Block
         moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
@@ -364,7 +370,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ):
                 if is_padding_layer:
                     continue
-                # logger.info(f" MoEDecoderBlock layer {layer_idx} at meta index {meta_layer_idx} on row {row_idx}")
+                logger.info(f" MoEDecoderBlock layer {layer_idx} at meta index {meta_layer_idx} on row {row_idx}")
                 x_next = MoEDecoderBlock.forward_decode(
                     x,
                     position_idxs,
@@ -377,22 +383,27 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 x = x_next
 
             # Transfer rows
-            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+            # cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
 
+        logger.info(f"Before norm x shape = {x.shape}")
         x_resharded = ttnn.to_memory_config(x, **cfg["norm_reshard"])  # TODO: fix
         ttnn.deallocate(x)
 
         x_norm = DistributedRMSNorm.forward_decode(x_resharded, cfg["norm"])
         ttnn.deallocate(x_resharded)
+        logger.info(f"After norm x shape = {x_norm.shape}")
 
         x_ag = ttnn.experimental.all_gather_async(x_norm, **cfg["lm_head"]["all_gather"])
         ttnn.deallocate(x_norm)
+        logger.info(f"After all gather x shape = {x_ag.shape}")
 
         x_resharded = ttnn.to_memory_config(x_ag, cfg["lm_head"]["input_memory_config"])
         ttnn.deallocate(x_ag)
 
+        logger.info(f"Before lm head x shape = {x_resharded.shape}")
         x_lmhead = LMHead.forward_decode(x_resharded, cfg["lm_head"])
         ttnn.deallocate(x_resharded)
+        logger.info(f"After lm head x shape = {x_lmhead.shape}")
 
         return x_lmhead
 
