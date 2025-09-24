@@ -97,8 +97,8 @@ void kernel_main() {
         starts[0] = starts[1];
         ranges[0] = ranges[1];
     }
-    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-        fabric_connection, unicast_route_id, starts, ranges);
+    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+        fabric_connection, unicast_route_id, starts, ranges, nullptr, page_size);
     fabric_multicast_noc_scatter_write_set_state<
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
         fabric_connection,
