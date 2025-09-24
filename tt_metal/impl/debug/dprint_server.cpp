@@ -54,10 +54,11 @@ namespace {
 std::string logfile_path = "generated/dprint/";
 
 inline float bfloat16_to_float(uint16_t bfloat_val) {
-    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
-    float f;
-    std::memcpy(&f, &uint32_data, sizeof(f));
-    return f;
+    union {
+        uint32_t uint32_data;
+        float f;
+    } u = {.uint32_data = ((uint32_t)bfloat_val) << 16};
+    return u.f;
 }
 
 std::string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
@@ -137,11 +138,6 @@ struct RiscKeyComparator {
         return x_risc_id < y_risc_id;
     }
 };
-
-bool StreamEndsWithNewlineChar(const ostringstream* stream) {
-    const string stream_str = stream->str();
-    return !stream_str.empty() && stream_str.back() == '\n';
-}  // StreamEndsWithNewlineChar
 
 void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
     TileSliceHostDev<0> ts_copy{};  // Make a copy since ptr might not be properly aligned
@@ -1002,8 +998,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
                 case DPrintTILESLICE: PrintTileSlice(intermediate_stream, ptr); break;
 
                 case DPrintENDL:
-                    if (risc_to_prev_type_[risc_key] != DPrintTILESLICE ||
-                        !StreamEndsWithNewlineChar(intermediate_stream)) {
+                    if (risc_to_prev_type_[risc_key] != DPrintTILESLICE) {
                         *intermediate_stream << '\n';
                     }
                     transfer_stream_to_output(risc_key, intermediate_stream);
