@@ -39,7 +39,7 @@ jobs:
             cmd: TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
           - name: fabric system health tests
-            cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ matrix.runner-group.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
+            cmd: ./build/test/tt_metal/tt_fabric/test_system_health
             timeout: 15
           - name: fabric stability nightly tests
             cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
@@ -102,7 +102,11 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          if [[ "${{ matrix.test-group.name }}" == "fabric system health tests" && "${{ matrix.runner-group.runner-label }}" == "BH-DeskBox" ]]; then
+            ${{ matrix.test-group.cmd }} --min-connections 4
+          else
+            ${{ matrix.test-group.cmd }}
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
