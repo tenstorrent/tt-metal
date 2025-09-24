@@ -38,18 +38,10 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 @pytest.mark.parametrize(
     "input_image_path, calib_path",
     [
-        # (
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.jpg")),
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.txt")),
-        # ),
         (
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
         ),
-        # (
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.jpg")),
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.txt")),
-        # )
     ],
 )
 @pytest.mark.parametrize(

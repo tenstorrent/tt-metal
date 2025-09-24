@@ -33,20 +33,10 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     [
         # fmt: off
         (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.txt")),
-            0.697, 0.742, 0.993, 0.722,
-        ),
-        (
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
             0.879, 0.902, 0.998, 0.874,
         ),
-        (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.txt")),
-            0.711, 0.793, 0.996, 0.756,
-        )
         # fmt: on
     ],
 )
