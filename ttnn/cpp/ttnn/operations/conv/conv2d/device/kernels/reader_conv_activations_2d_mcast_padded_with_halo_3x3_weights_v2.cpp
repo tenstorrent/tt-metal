@@ -138,15 +138,14 @@ void kernel_main() {
     // Fully create act matrix and tilize it before mcast
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-    // DPRINT << "noc_async_read_one_packet_set_state: " << get_noc_addr(act_l1_read_addr) << " " <<
-    // coalesced_read_bytes
-    //        << ENDL();
+
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
 
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr bool sliced_inner_dim = window_outer > 1;
+
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
@@ -156,7 +155,6 @@ void kernel_main() {
             reader_idx = start_reader_idx;
             cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
             if (is_sender_core) {
-                // DPRINT << " READER SENDER USAO " << act_block_num_tiles_read << ENDL();
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
                 if constexpr (sliced_inner_dim) {
@@ -202,9 +200,7 @@ void kernel_main() {
 
                 noc_async_read_barrier();
             }
-            DPRINT << "ACT PUSH BACK: " << act_block_num_tiles_read << ENDL();
             cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
-            // print_bf16_pages(get_read_ptr(cb_id_act_row_major_bfloat16), 1024, act_block_num_tiles_read);
 
             reader_offset += window_outer_offset;
 
@@ -305,9 +301,7 @@ void kernel_main() {
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
                 }
-                DPRINT << "ACT MCASTED PUSH BACK: " << act_block_num_tiles << ENDL();
                 cb_push_back(cb_id_act, act_block_num_tiles);
-
             }  // act_w_num_outer
 
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);

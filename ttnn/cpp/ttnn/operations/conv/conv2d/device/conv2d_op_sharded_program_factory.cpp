@@ -318,7 +318,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             fp32_dest_acc_en,
             output.dtype(),
             enable_activation_reuse));
-    log_info(
+    log_debug(
         tt::LogOp,
         "force_split_reader: {}, enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, "
         "act_block_h_ntiles: {}",
@@ -544,28 +544,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
             enable_split_reader ? act_block_h_datums_split_last : 0);
 
-    for (int j = 0; j < conv_sharded_input_top_left_indices.size(); j++) {
-        log_info(tt::LogOp, "j: {}", j);
-        for (int i = 0; i < conv_sharded_input_top_left_indices[0].size(); i += 4) {
-            if ((i / 4) % 2 == 0) {
-                log_info(
-                    tt::LogOp,
-                    "FIRST: {} {} {} {}",
-                    conv_sharded_input_top_left_indices[j][i],
-                    conv_sharded_input_top_left_indices[j][i + 1],
-                    conv_sharded_input_top_left_indices[j][i + 2],
-                    conv_sharded_input_top_left_indices[j][i + 3]);
-            } else {
-                log_info(
-                    tt::LogOp,
-                    "SECOND: {} {} {} {}",
-                    conv_sharded_input_top_left_indices[j][i],
-                    conv_sharded_input_top_left_indices[j][i + 1],
-                    conv_sharded_input_top_left_indices[j][i + 2],
-                    conv_sharded_input_top_left_indices[j][i + 3]);
-            }
-        }
-    }
     // create sharded ttnn config tensors
     sliding_window::ParallelConfig input_parallel_config = {
         .grid = a.memory_config().shard_spec().value().grid,
@@ -938,7 +916,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         split_reader_args = std::vector<uint32_t>(18, 0);
     }
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
-    log_info(tt::LogOp, "writer_compile_time_args: {}", writer_compile_time_args.size());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
