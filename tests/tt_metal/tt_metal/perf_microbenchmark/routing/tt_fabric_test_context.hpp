@@ -413,7 +413,7 @@ public:
     void generate_bandwidth_summary() {
         // Load golden CSV file
         load_golden_csv();
-        
+
         // Calculate bandwidth statistics for multi-iteration tests
         calculate_bandwidth_summary_statistics();
 
@@ -896,8 +896,8 @@ private:
                     uint32_t config_link_id = config.link_id.value_or(0);
 
                     // Create cache key: device_id + direction + link_id
-                    std::string cache_key = std::to_string(device_id.chip_id) + "_" + 
-                                            std::to_string(static_cast<int>(config_direction)) + "_" + 
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                                            std::to_string(static_cast<int>(config_direction)) + "_" +
                                             std::to_string(config_link_id);
 
                     config_cache[cache_key] = std::make_tuple(
@@ -940,8 +940,8 @@ private:
                     max_traffic_count = std::max(max_traffic_count, total_traffic_count);
 
                     // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
-                    std::string cache_key = std::to_string(device_id.chip_id) + "_" + 
-                                          std::to_string(static_cast<int>(direction)) + "_" + 
+                    std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+                                          std::to_string(static_cast<int>(direction)) + "_" +
                                           std::to_string(link_id);
                     
                     TT_FATAL(config_cache.contains(cache_key), "Config not found in cache for device {} direction {} link {}", device_id.chip_id, static_cast<int>(direction), link_id);
@@ -1197,7 +1197,7 @@ private:
         // The name of each statistic collected is maintained in-order in the stat_names_ vector
         // The statistics are calculated for each test in the same order and are stored in each test's BandwidthResultSummary.statistics_vector
         // Each function here should calculate the statistics for every test within a single invocation (see functions for details)
-        // NOTE: If you add new statistics, you must re-generate the golden CSV file, otherwise benchmarking will fail. 
+        // NOTE: If you add new statistics, you must re-generate the golden CSV file, otherwise benchmarking will fail.
         calculate_cycles_mean();
         calculate_packets_per_second_mean();
         calculate_bandwidth_mean();
@@ -1306,7 +1306,7 @@ private:
             if (golden_it == golden_csv_entries_.end()) {
                 log_warning(tt::LogTest, "Golden CSV entry not found for test {}, putting 0 in summary CSV", result.test_name);
                 summary_csv_stream << "," << 0.0;
-            } 
+            }
             else {
                 summary_csv_stream << "," << golden_it->tolerance_percent;
                 golden_it++;

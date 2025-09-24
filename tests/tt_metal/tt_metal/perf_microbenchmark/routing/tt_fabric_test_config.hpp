@@ -510,7 +510,7 @@ private:
         uint32_t max_iterations = 1;
         if (p_config.patterns) {
             for (const auto& p : p_config.patterns.value()) {
-                if (p.iterations.has_value()) { 
+                if (p.iterations.has_value()) {
                     max_iterations = std::max(max_iterations, p.iterations.value());
                     // Edge Case: If both iterations and all_to_one are supplied, iterations will override the number of iterations set by all_to_one
                     if (p.type == "all_to_one") {
