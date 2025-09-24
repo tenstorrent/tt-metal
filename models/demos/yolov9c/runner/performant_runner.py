@@ -5,7 +5,6 @@
 
 import ttnn
 from models.demos.yolov9c.runner.performant_runner_infra import YOLOv9PerformanceRunnerInfra
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 class YOLOv9PerformantRunner:
@@ -107,15 +106,12 @@ class YOLOv9PerformantRunner:
 
         return self.runner_infra.output_tensor
 
-    def _validate(self, input_tensor, result_output_tensor):
-        torch_output_tensor = self.runner_infra.torch_output_tensor
-        assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
-
     def run(self, torch_input_tensor, check_pcc=False):
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_yolov9_trace_2cqs_inference(tt_inputs_host=tt_inputs_host)
         if check_pcc:
-            self._validate(torch_input_tensor, output[0])
+            torch_output = self.runner_infra.torch_model(torch_input_tensor)
+            self.runner_infra.validate(output, torch_output)
 
         return output
 
