@@ -10,6 +10,8 @@ This module provides functions used across the Panoptic DeepLab model.
 import torch
 import ttnn
 
+PDL_L1_SMALL_SIZE = 37 * 1024  # Minimum L1 small size for Panoptic DeepLab
+
 
 def from_torch_fast(
     t: torch.Tensor,
