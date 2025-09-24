@@ -1018,7 +1018,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)num_blocks_first_stage,
         (std::uint32_t)num_blocks_second_stage,
         (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm};
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1035,7 +1036,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)num_blocks_first_stage,
         (std::uint32_t)num_blocks_second_stage,
         (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm};
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1052,7 +1054,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)reduce_second_stage_semaphore_id,
-        (std::uint32_t)rms_norm};
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -1133,7 +1136,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         1,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt};
+        (std::uint32_t)block_wt,
+        (std::uint32_t)use_welford};
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(writer_mcast_sender_compile_time_args);
@@ -1142,7 +1146,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         0,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt};
+        (std::uint32_t)block_wt,
+        (std::uint32_t)use_welford};
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
         .append_to(writer_mcast_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr)
@@ -1250,6 +1255,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         float32_reduction,
         legacy_rsqrt,
         num_blocks_second_stage};
+
+    if (use_welford) {
+        // For Welford combine
+        constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
+        uint32_t block_w = block_wt * tile_width;
+        uint32_t last_tile_data_width = block_w - (block_w / tile_width) * tile_width;
+        all_to_all_except_top_compute_compile_time_args.push_back(tile_width);
+        all_to_all_except_top_compute_compile_time_args.push_back(K);
+        all_to_all_except_top_compute_compile_time_args.push_back(last_tile_data_width);
+    }
     // compute kernel
     std::string compute_kernel_file;
     if (is_pre_all_gather) {
@@ -1324,11 +1339,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             .set_page_size(in2_cb_index, bfloat16_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
     // in4 scaler-c
-    uint32_t in4_cb_index = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig in4_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in4_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
+    if (!use_welford) {
+        uint32_t in4_cb_index = tt::CBIndex::c_4;
+        tt::tt_metal::CircularBufferConfig in4_cb_config =
+            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in4_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
+    }
     // in3 eps
     uint32_t in3_cb_index = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig in3_cb_config =
