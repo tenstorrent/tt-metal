@@ -58,9 +58,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     tt::tt_metal::Program program{};
 
     // Tensor Info
-    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
@@ -134,7 +131,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     ;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
     uint32_t num_sticks_to_write_per_packet = 1;
