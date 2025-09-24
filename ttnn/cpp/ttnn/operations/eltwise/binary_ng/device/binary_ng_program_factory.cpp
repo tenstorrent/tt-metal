@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
+#include <algorithm>
 using namespace tt::tt_metal;
 
 namespace {
@@ -67,9 +68,9 @@ struct AllShardSpecs {
 
 ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
-
-    ret.shape[0] = (ret.shape[0] * to_shape[-2]) / from_shape[-2];
-    ret.shape[1] = (ret.shape[1] * to_shape[-1]) / from_shape[-1];
+    // TODO: redesign to handle shard spec mismatch
+    ret.shape[0] = std::max((ret.shape[0] * to_shape[-2]) / from_shape[-2], 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_shape[-1]) / from_shape[-1], 32u);
 
     return ret;
 }
