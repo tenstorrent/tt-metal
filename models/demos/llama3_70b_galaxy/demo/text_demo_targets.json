@@ -1,12 +1,19 @@
 {
     "targets": {
         "4U": {
-            "prefill_pcc": 0.9125991571810271,
+            "prefill_pcc": 0.9180439801757613,
             "decode_pcc": 0.9498023316321954,
             "throughput": 61.55,
             "absolute_margin": 1.0,
             "token_pos": 127
+        },
+        "6U": {
+            "prefill_pcc": 0.9130302621110833,
+            "decode_pcc": 0.9526383708858326,
+            "throughput": 72,
+            "absolute_margin": 2.0,
+            "token_pos": 127
         }
     },
-    "description": "Targets for 4U with PCC and throughput metrics."
+    "description": "Targets for 4U and 6U with PCC and throughput metrics."
 }

@@ -72,7 +72,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    if (input_tensor.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+    if (input_tensor.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
         TT_THROW(
             "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
             "compute kernel configuration.");
@@ -206,7 +206,7 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
         TT_THROW(
             "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
             "compute kernel configuration.");
@@ -341,7 +341,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
         TT_THROW(
             "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
             "compute kernel configuration.");
@@ -477,7 +477,7 @@ SoftmaxProgramFactoryGeneralHLarge::cached_program_t SoftmaxProgramFactoryGenera
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
         TT_THROW(
             "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
             "compute kernel configuration.");
@@ -613,7 +613,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
         TT_THROW(
             "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
             "compute kernel configuration.");
@@ -814,6 +814,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         im0_t = 80;
         im3_t = 80;
         TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
+        // TODO: fix the hang, which occurs when numeric_stable is true for large softmax
+        // See issue #28509
+        TT_FATAL(!attributes.numeric_stable, "For softmax, cannot enable both large_kernel and numeric_stable");
     }
     if (!use_large_kernel) {
         TT_FATAL(

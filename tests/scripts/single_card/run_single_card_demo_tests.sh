@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+
 run_falcon7b_func() {
 
   pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
@@ -9,15 +11,17 @@ run_falcon7b_func() {
 
 run_mistral7b_func() {
 
-  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
-  mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
-  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 1200; fail+=$?
+  mistral7b=mistralai/Mistral-7B-Instruct-v0.3
+  mistral_cache=$TT_CACHE_HOME/$mistral7b
+  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 1200; fail+=$?
 
 }
 
 run_qwen7b_func() {
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+  qwen7b=Qwen/Qwen2-7B-Instruct
+  qwen_cache=$TT_CACHE_HOME/$qwen7b
+  HF_MODEL=$qwen7b TT_CACHE_PATH=$qwen_cache MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
 
 }
 
@@ -57,7 +61,7 @@ run_gemma3_func() {
 run_gemma3_perf() {
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 
@@ -84,21 +88,31 @@ run_yolov11_func() {
 
 }
 
+run_yolov11m_func() {
+
+ #Yolov11m Demo
+ pytest --disable-warnings models/demos/yolov11m/demo/demo.py --timeout 600; fail+=$?
+
+}
+
 run_llama3_func() {
   fail=0
 
   # Llama3 Accuracy tests
   # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
   # Llama3.1-8B (11B weights are the same)
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  # Llama3.2-11B
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
-  # Run Llama3 accuracy tests for 1B, 3B, 8B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 420 || fail=1
-    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
+  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    cache_path=$TT_CACHE_HOME/$hf_model
+    HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching  --timeout 420 || fail=1
+    echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
 
   if [[ $fail -ne 0 ]]; then
@@ -211,8 +225,8 @@ run_stable_diffusion_func() {
 run_mistral7b_perf() {
 
   # To ensure a proper perf measurement and dashboard upload of Mistral-7B N150, we have to run them on the N300 perf pipeline for now
-  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
-  mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
+  mistral7b=mistralai/Mistral-7B-Instruct-v0.3
+  mistral_cache=$TT_CACHE_HOME/$mistral7b
   # Run Mistral-7B-v0.3 for N150
   MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
   # Run Mistral-7B-v0.3 for N300
@@ -224,24 +238,26 @@ run_llama3_perf() {
   fail=0
 
   # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
   # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
   # Llama3.2-11B (same tet weights as 8B)
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run all Llama3 tests for 1B, 3B, 8B weights for N150
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    MESH_DEVICE=N150 LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed on N150"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
+    cache_path=$TT_CACHE_HOME/$hf_model
+    MESH_DEVICE=N150 HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Llama3 tests for $hf_model completed on N150"
   done
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    cache_path=$TT_CACHE_HOME/$hf_model
+    HF_MODEL=$hf_model TT_CACHE_PATH=$cache_path pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
   if [[ $fail -ne 0 ]]; then

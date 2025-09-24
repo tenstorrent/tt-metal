@@ -30,7 +30,9 @@ void MAIN {
     const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(11);
+    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
+    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
@@ -142,13 +144,13 @@ void MAIN {
 #ifndef RMSNORM
     // E[x],
     index_h_offset = 0;
-    reduce_init(cb_in, cb_scaler, cb_ex_partial);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex_partial);
     cb_wait_front(cb_scaler, 1);
     cb_reserve_back(cb_ex_partial, block_h);
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -163,7 +165,7 @@ void MAIN {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init(cb_ex_external, cb_scaler_global, cb_ex);
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -171,7 +173,8 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                    cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
@@ -262,12 +265,13 @@ void MAIN {
     cb_wait_front(cb_scaler, 1);
 #endif
     cb_reserve_back(cb_ex_partial2, block_h);
-    reduce_init(cb_xmm2, cb_scaler, cb_ex_partial2);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_xmm2, cb_scaler, w + index_h_offset, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                cb_xmm2, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -281,7 +285,7 @@ void MAIN {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init(cb_ex_external2, cb_scaler_global, cb_ex2);
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -290,7 +294,8 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external2, 1);
-                reduce_tile(cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                    cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external2, 1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
@@ -314,13 +319,8 @@ void MAIN {
                 add_tiles_init(cb_ex2, cb_eps);
                 add_tiles(cb_ex2, cb_eps, i, 0, dst0);
                 tile_regs_wait();
-                // sqrt(Var + eps)
-                sqrt_tile_init();
-                sqrt_tile(dst0);
-                tile_regs_wait();
-                // 1/[sqrt(Var + eps)]
-                recip_tile_init();
-                recip_tile(dst0);
+                rsqrt_tile_init<LEGACY_RSQRT>();
+                rsqrt_tile<LEGACY_RSQRT>(dst0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2pe);

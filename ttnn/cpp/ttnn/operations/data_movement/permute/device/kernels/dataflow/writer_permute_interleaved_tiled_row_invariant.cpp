@@ -51,19 +51,19 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 0) Read compile-time constants
     // ------------------------------------------------------------------------
-    constexpr uint32_t element_size = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t output_H = get_compile_time_arg_val(2);
-    constexpr uint32_t H = get_compile_time_arg_val(3);
-    constexpr uint32_t W = get_compile_time_arg_val(4);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(5);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(6);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(7);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(8);
-    constexpr bool needs_padding = (get_compile_time_arg_val(9) == 1);
-    constexpr uint32_t RANK = get_compile_time_arg_val(10);
-    constexpr uint32_t permuted_input_h_index = get_compile_time_arg_val(11);
-    constexpr auto dst_args = TensorAccessorArgs<12>();
+    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("output_cb_index");
+    constexpr uint32_t output_H = get_named_compile_time_arg_val("output_H");
+    constexpr uint32_t H = get_named_compile_time_arg_val("H");
+    constexpr uint32_t W = get_named_compile_time_arg_val("W");
+    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
+    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
+    constexpr uint32_t FACE_HEIGHT = get_named_compile_time_arg_val("face_height");
+    constexpr uint32_t FACE_WIDTH = get_named_compile_time_arg_val("face_width");
+    constexpr bool needs_padding = (get_named_compile_time_arg_val("needs_padding") == 1);
+    constexpr uint32_t RANK = get_named_compile_time_arg_val("rank");
+    constexpr uint32_t permuted_input_h_index = get_named_compile_time_arg_val("h_in_dest");
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // ------------------------------------------------------------------------
     // 1) Read runtime arguments

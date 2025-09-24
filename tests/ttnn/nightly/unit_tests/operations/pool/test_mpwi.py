@@ -58,7 +58,7 @@ def test_max_pool2d_with_indices(device):
     #     for c in range(in_c):
     #         for h in range(in_h):
     #             for w in range(in_w):
-    #                 torch_input[n, c, h, w] = 1
+    #                 torch_input[n, c, h, w] = h * in_w + w
 
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
@@ -66,7 +66,21 @@ def test_max_pool2d_with_indices(device):
     ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
     if ttnn_dtype == ttnn.bfloat8_b:
         ttnn_layout = ttnn.TILE_LAYOUT
-    ttnn_input = ttnn.from_torch(torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, device=device)
+
+    # Memory configuration for ttnn_input
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
+            [1280, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+    ttnn_input = ttnn.from_torch(
+        torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, memory_config=memory_config, device=device
+    )
 
     ttnn_output, indices = ttnn.max_pool2d(
         input_tensor=ttnn_input,
@@ -78,7 +92,7 @@ def test_max_pool2d_with_indices(device):
         stride=stride,
         padding=padding,
         dilation=dilation,
-        applied_shard_scheme=shard_scheme,
+        # applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
         in_place_halo=False,
         deallocate_input=False,
@@ -104,9 +118,9 @@ def test_max_pool2d_with_indices(device):
         stride=stride,
         padding=padding,
         dilation=dilation,
-        applied_shard_scheme=shard_scheme,
+        # applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
-        in_place_halo=False,
+        in_place_halo=True,  # test the base with IPH for a little more IPH coverage
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=False,
@@ -124,6 +138,11 @@ def test_max_pool2d_with_indices(device):
         ceil_mode=ceil_mode,
         return_indices=True,
     )
+
+    print("Torch result:")
+    print(torch_output.flatten())
+    print("TTNNresult:")
+    print(ttnn.to_torch(ttnn_output).flatten())
 
     # Reshape torch output to match TTNN format (NCHW -> NHWC)
     torch_output_reshaped = torch_output.permute(0, 2, 3, 1)  # N, H, W, C

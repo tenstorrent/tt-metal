@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
@@ -21,6 +21,12 @@ from models.utility_functions import torch_random
         ((1, 512, 256, 256), 1, 0, False, "up_blocks", 0.999),
         ((1, 512, 256, 256), 2, 0, True, "up_blocks", 0.999),
         ((1, 256, 256, 256), 2, 1, False, "up_blocks", 0.999),
+        ((1, 128, 1024, 1024), 0, 0, False, "down_blocks", 0.998),
+        ((1, 128, 512, 512), 1, 0, True, "down_blocks", 0.999),
+        ((1, 256, 512, 512), 1, 1, False, "down_blocks", 0.999),
+        ((1, 256, 256, 256), 2, 0, True, "down_blocks", 0.999),
+        ((1, 512, 256, 256), 2, 1, False, "down_blocks", 0.999),
+        ((1, 512, 128, 128), 3, 0, False, "down_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -35,14 +41,22 @@ def test_vae_resnetblock2d(device, input_shape, block_id, resnet_id, conv_shortc
     vae.eval()
     state_dict = vae.state_dict()
 
+    is_encoder = False
     if block == "up_blocks":
         torch_resnet = vae.decoder.up_blocks[block_id].resnets[resnet_id]
         block = f"{block}.{block_id}"
+    elif block == "down_blocks":
+        torch_resnet = vae.encoder.down_blocks[block_id].resnets[resnet_id]
+        block = f"{block}.{block_id}"
+        is_encoder = True
     else:
         torch_resnet = vae.decoder.mid_block.resnets[resnet_id]
+    vae_block = "encoder" if is_encoder else "decoder"
 
     model_config = ModelOptimisations()
-    tt_resnet = TtResnetBlock2D(device, state_dict, f"decoder.{block}.resnets.{resnet_id}", model_config, conv_shortcut)
+    tt_resnet = TtResnetBlock2D(
+        device, state_dict, f"{vae_block}.{block}.resnets.{resnet_id}", model_config, conv_shortcut
+    )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_resnet(torch_input_tensor, None)

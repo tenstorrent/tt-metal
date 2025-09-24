@@ -155,7 +155,7 @@ void MemoryReporter::init_reports() {
         this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
 void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix) {
-    MemoryReporter::inst().dump_memory_usage_state(device, std::move(prefix));
+    MemoryReporter::inst().dump_memory_usage_state(device, prefix);
 }
 
 MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferType& buffer_type) const {

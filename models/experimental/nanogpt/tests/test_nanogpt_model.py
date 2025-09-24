@@ -13,7 +13,7 @@ import os
 from loguru import logger
 import models.experimental.nanogpt.tt.nanogpt_model as nanogpt_model
 
-from models.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

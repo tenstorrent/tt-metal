@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 
 #include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
@@ -37,7 +38,8 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_line_devices(distribut
     };
 }
 
-std::vector<IDevice*> get_line_devices_as_idevice(std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices) {
+std::vector<IDevice*> get_line_devices_as_idevice(
+    const std::vector<std::shared_ptr<distributed::MeshDevice>>& mesh_devices) {
     std::vector<IDevice*> devices;
     devices.reserve(mesh_devices.size());
     for (auto& mesh_device : mesh_devices) {
@@ -86,7 +88,91 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
             float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
-            EXPECT_EQ(data[i].to_float(), expected);
+            EXPECT_EQ(static_cast<float>(data[i]), expected);
+        }
+    }
+}
+
+// TODO uncomment this once the composite implementation is completed
+// TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherMinimalAsyncComposite) {
+//     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+//     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
+//
+//     std::vector<ttnn::Tensor> tensors;
+//     TensorSpec tensor_spec(
+//         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+//     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+//         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+//         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+//     }
+//     auto forward_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+//     auto backward_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+//     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+//         forward_semaphore, backward_semaphore};
+//     tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
+//
+//     auto all_gathered = ttnn::experimental::all_gather_async(
+//         /* input_tensors */ tensors,
+//         /* persistent_output_buffer */ std::nullopt,
+//         /* dim */ 0,
+//         /* multi_device_global_semaphore */ multi_dev_semaphore,
+//         /* num_links */ 1,
+//         /* memory_config */ std::nullopt,
+//         /* topology */ ttnn::ccl::Topology::Linear,
+//         /* subdevice_id */ SubDeviceId(0),
+//         /* cluster_axis */ std::nullopt,
+//         /* use_optimal_ccl_for_llama */ false,
+//         /* barrier_semaphore */ std::nullopt,
+//         /* chunks_per_sync */ std::nullopt,
+//         /* num_workers_per_link */ std::nullopt,
+//         /* num_buffers_per_channel */ std::nullopt);
+//     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+//         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
+//         for (int i = 0; i < data.size(); i++) {
+//             float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
+//             EXPECT_EQ(static_cast<float>(data[i]), expected);
+//         }
+//     }
+// }
+
+// same as above but with a different tensor shape which triggers the native implementation
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherMinimalAsyncNative) {
+    auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
+
+    std::vector<ttnn::Tensor> tensors;
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+        std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+    }
+    auto forward_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    auto backward_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+        forward_semaphore, backward_semaphore};
+    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
+
+    auto all_gathered = ttnn::experimental::all_gather_async(
+        /* input_tensors */ tensors,
+        /* persistent_output_buffer */ std::nullopt,
+        /* dim */ 0,
+        /* multi_device_global_semaphore */ multi_dev_semaphore,
+        /* num_links */ 1,
+        /* memory_config */ std::nullopt,
+        /* topology */ ttnn::ccl::Topology::Linear,
+        /* subdevice_id */ SubDeviceId(0),
+        /* cluster_axis */ std::nullopt,
+        /* use_optimal_ccl_for_llama */ false,
+        /* barrier_semaphore */ std::nullopt,
+        /* chunks_per_sync */ std::nullopt,
+        /* num_workers_per_link */ std::nullopt,
+        /* num_buffers_per_channel */ std::nullopt);
+    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+        auto data = all_gathered[dev_idx].to_vector<bfloat16>();
+        for (int i = 0; i < data.size(); i++) {
+            float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
+            EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
 }
@@ -121,7 +207,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatterAsync) {
         auto data = reduced[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
             float expected = static_cast<float>(mesh_devices.size());
-            EXPECT_EQ(data[i].to_float(), expected);
+            EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
 }

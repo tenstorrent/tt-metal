@@ -12,12 +12,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names, preprocess
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov7.demo.demo_utils import postprocess
 from models.demos.yolov7.reference import yolov7_model, yolov7_utils
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
-from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model

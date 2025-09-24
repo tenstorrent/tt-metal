@@ -8,11 +8,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.vgg_unet.common import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
 from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

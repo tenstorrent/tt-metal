@@ -23,7 +23,7 @@ AllGatherMatmulAsync create_all_gather_matmul_async_struct(
     const CoreCoord all_gather_core_grid_offset,
     const std::vector<IDevice*>& devices) {
     return ttnn::AllGatherMatmulAsync{
-        all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset, std::move(devices)};
+        all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset, devices};
 }
 
 }  // namespace all_gather_matmul_async_detail

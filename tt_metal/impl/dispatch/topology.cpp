@@ -31,8 +31,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "system_memory_manager.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 
@@ -653,7 +653,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
 void populate_cq_static_args(IDevice* device) {
     TT_ASSERT(
-        node_id_to_kernel.size() > 0,
+        !node_id_to_kernel.empty(),
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>();

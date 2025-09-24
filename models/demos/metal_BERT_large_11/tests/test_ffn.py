@@ -9,9 +9,9 @@ from transformers import BertForQuestionAnswering
 from tt_lib.utils import pad_activation
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
-from models.utility_functions import comp_allclose, comp_pcc
 
 
 class PytorchFeedForwardModel(torch.nn.Module):
