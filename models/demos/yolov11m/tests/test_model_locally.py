@@ -646,47 +646,40 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             pass
 
 
-if __name__ == "__main__":    
-    # Test PyTorch OBB model
-    print("=" * 60)
-    print("📊 Testing PyTorch OBB Model")
-    print("=" * 60)
+if __name__ == "__main__": 
 
     # Also try some backup images from other YOLO demos if available
     # Test images - use existing demo images
     test_images = [
         "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
+        #"./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
+        #"./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
+        #"./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
+        #"./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
+        #"./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
     ]
 
     #pytorch_results = pytorch_obb_with_real_images(test_images)
     
     # Test TTNN OBB model and compare with PyTorch
-    print("\n" + "=" * 60)
-    print("🔥 Testing TTNN vs PyTorch OBB Model")
-    print("=" * 60)
+    #print("\n" + "=" * 60)
+    #print("🔥 Testing TTNN vs PyTorch OBB Model")
+    #print("=" * 60)
     
-    simple_pcc = test_compare_ttnn_and_pytorch_obb_simple()
+    #simple_pcc = test_compare_ttnn_and_pytorch_obb_simple()
     
     # Then run full test with real images
     print("\n📸 Running TTNN vs PyTorch test with real images...")
     ttnn_results = compare_ttnn_and_pytorch_obb_with_real_images(test_images)
     
     # Final summary
-    print("\n" + "=" * 60)
-    print("📊 FINAL SUMMARY")
-    print("=" * 60)
     #if pytorch_results:
     #    print(f"✅ PyTorch OBB: {len(pytorch_results)} images processed successfully")
     
-    if simple_pcc > 0:
-        print(f"✅ TTNN Simple Test: PCC = {simple_pcc:.6f}")
-    else:
-        print("❌ TTNN Simple Test: Failed")
+    #if simple_pcc > 0:
+    #    print(f"✅ TTNN Simple Test: PCC = {simple_pcc:.6f}")
+    #else:
+    #    print("❌ TTNN Simple Test: Failed")
         
     if ttnn_results:
         avg_pcc = np.mean([r['pcc'] for r in ttnn_results])
