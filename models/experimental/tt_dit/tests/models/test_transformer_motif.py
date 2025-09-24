@@ -113,6 +113,9 @@ def test_transformer_motif(
     else:
         padding_config = None
 
+    latents_height = height // vae_scale_factor
+    latents_width = width // vae_scale_factor
+
     tt_model = MotifTransformer(
         patch_size=patch_size,
         num_layers=num_layers,
@@ -123,6 +126,8 @@ def test_transformer_motif(
         modulation_dim=modulation_dim,
         time_embed_dim=time_embed_dim,
         register_token_num=register_token_num,
+        latents_height=latents_height,
+        latents_width=latents_width,
         mesh_device=submesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -144,7 +149,7 @@ def test_transformer_motif(
     tt_model.load_torch_state_dict(converted_state_dict)
 
     torch.manual_seed(0)
-    latents = torch.randn([batch_size, in_channels, height // vae_scale_factor, width // vae_scale_factor])
+    latents = torch.randn([batch_size, in_channels, latents_height, latents_width])
     pooled = torch.randn([batch_size, 2048])
     timestep = torch.full([batch_size], fill_value=500)
 

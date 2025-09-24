@@ -114,6 +114,8 @@ class MotifTransformer(Module):
         modulation_dim: int,
         time_embed_dim: int,
         register_token_num: int,
+        latents_height: int,
+        latents_width: int,
         mesh_device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
@@ -135,8 +137,8 @@ class MotifTransformer(Module):
         tp_axis = parallel_config.tensor_parallel.mesh_axis
 
         self.pos_embed = PatchEmbed(
-            height=128,
-            width=128,
+            height=latents_height,
+            width=latents_width,
             patch_size=patch_size,
             in_channels=in_channels,
             embed_dim=inner_dim,
