@@ -165,9 +165,8 @@ run_t3000_llama3_vision_tests() {
   n300=N300
   t3k=T3K
 
-  for mesh_device in "$n300" "$t3k"; do
-    MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b \
-    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
+  for mesh_device in "$t3k"; do  # Issue #28247 Running this demo on a N300 mesh causes a CI ND hang
+    MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
@@ -184,15 +183,14 @@ run_t3000_llama3_90b_vision_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
-  echo "LOG_METAL: Running run_t3000_llama3_90b_vision_tests"
 
-  export PYTEST_ADDOPTS="--tb=short"
+  echo "LOG_METAL: Running run_t3000_llama3_90b_vision_tests"
 
   # Llama3.2-90B
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 1000 || fail=1
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 1200; fail+=$?
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
@@ -238,14 +236,11 @@ run_t3000_mixtral_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
+  echo "LOG_METAL: Running run_t3000_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
-  mixtral8x7=/mnt/MLPerf/huggingface/hub/models--mistralai--Mixtral-8x7B-v0.1/snapshots/fc7ac94680e38d7348cfa806e51218e6273104b0
-
-  CI=true HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout=3600 ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -302,8 +297,9 @@ run_t3000_sd35large_tests() {
 
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
-  #Cache path
-  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "2x4cfg1sp0tp1" --timeout 600 ; fail+=$?
+  # Run test_model (decode and prefill) for llama3 70B
+  sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
+  NO_PROMPT=1 SD35L_DIR=$sd35large pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "t3k"  --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -345,12 +341,30 @@ run_t3000_gemma3_tests() {
   start_time=$(date +%s)
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 27B tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
   echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+}
+
+run_t3000_whisper_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_whisper_tests"
+
+  pytest models/demos/t3000/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_whisper_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 }
 
 run_t3000_tests() {
@@ -398,6 +412,9 @@ run_t3000_tests() {
 
   # Run gemma3 tests
   run_t3000_gemma3_tests
+
+  # Run whisper tests
+  run_t3000_whisper_tests
 }
 
 fail=0

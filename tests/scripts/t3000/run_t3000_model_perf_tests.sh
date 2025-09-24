@@ -111,24 +111,6 @@ run_t3000_stable_diffusion_35_large_tests() {
   fi
 }
 
-run_t3000_whisper_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_whisper_tests"
-
-  pytest models/demos/t3000/whisper/tests/device_perf_test.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_whisper_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_ccl_all_gather_perf_tests() {
   # Record the start time
   fail=0
@@ -176,8 +158,6 @@ run_t3000_ccl_tests() {
 run_t3000_model_perf_tests() {
   # Run model performance tests
   run_t3000_sentence_bert_tests
-
-  run_t3000_whisper_tests
 }
 
 fail=0
