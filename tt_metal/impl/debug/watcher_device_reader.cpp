@@ -26,7 +26,7 @@
 
 #include "control_plane.hpp"
 #include "core_descriptor.hpp"
-#include "debug_helpers.hpp"
+#include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
@@ -309,9 +309,6 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
-
-    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
@@ -454,7 +451,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             paused_cores_str += fmt::format(
                 "{}:{}, ",
                 virtual_core.str(),
-                get_riscv_name(get_programmable_core_type(virtual_core, device_id), processor_index));
+                get_riscv_name(llrt::get_core_type(device_id, virtual_core), processor_index));
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
@@ -467,7 +464,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
         // Clear all pause flags
         for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
-            auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
             uint64_t addr =

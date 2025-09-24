@@ -4,9 +4,9 @@
 
 from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d
 from tests.sweep_framework.sweeps.max_pool2d.short.max_pool2d_short_sweep import parameters as parameters_ttnn_pytorch
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 
 import pytest
 import ttnn

@@ -249,7 +249,7 @@ def test_create_pipeline_json_for_gtest_testcases(workflow_run_gh_environment):
                         x
                         for x in job.tests
                         if x.full_test_name
-                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300DeviceFixture::EthValidatePhysicalCoreConversion"
+                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300MeshDeviceFixture::EthValidatePhysicalCoreConversion"
                     ]
                 )
                 == 1
@@ -381,5 +381,6 @@ def test_pipeline_job_contains_valid_steps():
     logger.debug(f"\n✅ Job `{target_job_name}` has {len(target_job.steps)} steps:")
     for step in target_job.steps:
         logger.debug(
-        f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
-        f"started_at={step.started_at}, completed_at={step.completed_at}")
+            f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
+            f"started_at={step.started_at}, completed_at={step.completed_at}"
+        )

@@ -33,6 +33,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
+    BufferType input_tensor_buffer_type,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
@@ -59,8 +60,7 @@ struct SkipMcast {
     bool skip_weights_mcast;
 };
 
-SkipMcast conv_skip_mcast(
-    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
+SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
 
 sliding_window::ParallelConfig determine_parallel_config(
     TensorMemoryLayout shard_layout,
@@ -98,23 +98,23 @@ uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::Paral
 MemoryConfig create_sharded_memory_config_from_parallel_config(
     const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
-OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
+Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config,
     uint32_t num_cores_nhw,
     uint32_t num_cores_c_in,
     uint32_t num_cores_c_out);
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
-    OptimizedConvParallelizationConfig conv_parallelization_config,
-    OptimizedConvBlockConfig conv_blocking_config,
+    Conv2dParallelizationConfig conv_parallelization_config,
+    Conv2dBlockConfig conv_blocking_config,
     bool height_sharded,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 
-OptimizedConvBlockConfig determine_per_core_conv_block_config(
+Conv2dBlockConfig determine_per_core_conv_block_config(
     const sliding_window::ParallelConfig& parallel_config,
-    const OptimizedConvParallelizationConfig& conv_op_parallel_config,
+    const Conv2dParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
     uint32_t padded_output_height_ntiles_per_core,
     uint32_t act_block_h_override,
@@ -126,7 +126,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     bool full_inner_dim,
     bool enable_activation_reuse = false);
 
-std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
+std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
     const sliding_window::ParallelConfig& input_parallel_config,
@@ -159,6 +159,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool is_mm_conv,
     CoreCoord compute_grid_size,
     Layout input_tensor_layout,
+    BufferType input_tensor_buffer_type,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
     std::optional<uint32_t> act_block_h_override = std::nullopt);
 
@@ -249,6 +250,7 @@ struct ConvDRAMParamters {
     DataType weights_datatype;
     DataType input_datatype;
     DataType output_datatype;
+    Layout input_layout;
     bool enable_bias;
     bool mm_conv;
 };

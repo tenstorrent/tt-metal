@@ -5,7 +5,6 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -20,12 +19,12 @@ class DebugToolsMeshFixture : public MeshDispatchFixture {
        void RunTestOnDevice(
            const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
            const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-           auto run_function_no_args = [=, this]() { run_function(static_cast<T*>(this), mesh_device); };
+           auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
            MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
        }
 };
 
-// A version of DispatchFixture with DPrint enabled on all cores.
+// A version of MeshDispatchFixture with DPrint enabled on all cores.
 class DPrintMeshFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
@@ -112,7 +111,7 @@ protected:
     }
 };
 
-// A version of DispatchFixture with watcher enabled
+// A version of MeshDispatchFixture with watcher enabled
 class MeshWatcherFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string log_file_name = "generated/watcher/watcher.log";

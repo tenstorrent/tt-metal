@@ -110,11 +110,11 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    auto arch = t.storage_type() == StorageType::DEVICE
-                    ? t.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    const int num_cores = (arch == ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
-    const int tensix_mul_adds_per_cycle_lofi = (arch == ARCH::WORMHOLE_B0) ? 4096 : 2048;
+    const CoreCoord compute_grid = t.device()->compute_with_storage_grid_size();
+    const int num_cores = compute_grid.x * compute_grid.y;
+    // The Wormhole/Blackhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+    // This is 2*8*16*16 = 4096 muladds in a single cycle.
+    constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling
@@ -1212,28 +1212,50 @@ tt::tt_metal::Tile get_output_tile(
     const MemoryConfig& output_mem_config,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
-    const std::optional<const tt::tt_metal::Tile> output_tile) {
+    const std::optional<const tt::tt_metal::Tile> output_tile,
+    const std::optional<const tt::tt_metal::Tile> optional_output_tensor_tile) {
     auto in0_tile_shape = in0_tile.get_tile_shape();
     auto in1_tile_shape = in1_tile.get_tile_shape();
-    if (output_tile.has_value()) {
-        uint32_t in0_tile_h = in0_tile_shape[0];
-        uint32_t in1_tile_w = in1_tile_shape[1];
-        const auto& out_tile_shape = output_tile->get_tile_shape();
+    if (output_tile.has_value() or optional_output_tensor_tile.has_value()) {
+        TT_FATAL(
+            !(optional_output_tensor_tile.has_value() && output_tile.has_value()),
+            "Matmul cannot have both an output_tile and an optional_output_tensor. Configure the tile type of the "
+            "output tensor instead if both are required.");
+        const auto& override_output_tile =
+            output_tile.has_value() ? output_tile.value() : optional_output_tensor_tile.value();
+        const auto& out_tile_shape = override_output_tile.get_tile_shape();
+
+        const uint32_t in0_tile_h = in0_tile_shape[0];
+        const uint32_t in1_tile_w = in1_tile_shape[1];
+
         TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
-        TT_FATAL(out_tile_shape[1] % in1_tile_w == 0, "the override output tile width be multiple of in1 tile width");
+        TT_FATAL(
+            out_tile_shape[1] % in1_tile_w == 0,
+            "the override output tile width ({}) must be a multiple of in1 tile width ({})",
+            out_tile_shape[1],
+            in1_tile_w);
         TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
-        TT_FATAL(out_tile_shape[0] == in0_tile_h, "the override output tile height must equal to the in0 tile height");
+        TT_FATAL(
+            out_tile_shape[0] == in0_tile_h,
+            "the override output tile height ({}) must equal to the in0 tile height ({})",
+            out_tile_shape[0],
+            in0_tile_h);
         if (out_tile_shape[1] != in1_tile_w) {
             TT_FATAL(
                 out_tile_shape[0] <= constants::FACE_HEIGHT,
-                "the override output tile height must equal or less to face height");
+                "the override output tile height ({}) must equal or less to face height ({})",
+                out_tile_shape[0],
+                constants::FACE_HEIGHT);
         }
         if (!output_mem_config.is_sharded()) {
             TT_FATAL(
-                out_tile_shape[1] == in1_tile_w, "the override output tile width must equal to the in0 tile width");
+                out_tile_shape[1] == in1_tile_w,
+                "the override output tile width ({}) must equal the in0 tile width ({})",
+                out_tile_shape[1],
+                in1_tile_w);
         }
 
-        return output_tile.value();
+        return override_output_tile;
     } else {
         return tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
     }
@@ -1347,7 +1369,9 @@ Matmul create_matmul_struct(
     const Tensor& input_tensor_b,
     const struct Matmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    auto arch = input_tensor_a.device()->arch();
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
+    TT_FATAL(device != nullptr, "Operand to matmul must be on device");
+    auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
     bool are_inputs_low_precision_df =
@@ -1404,7 +1428,13 @@ Matmul create_matmul_struct(
         /*default_l1_acc=*/!is_float_32);
     auto in0_tile = input_tensor_a.tensor_spec().tile();
     auto in1_tile = input_tensor_b.tensor_spec().tile();
-    tt::tt_metal::Tile output_tile = get_output_tile(output_mem_config, in0_tile, in1_tile, parameters.output_tile);
+
+    std::optional<tt::tt_metal::Tile> optional_output_tensor_tile = std::nullopt;
+    if (is_optional_output_tensor) {
+        optional_output_tensor_tile = optional_output_tensors.at(0)->tensor_spec().tile();
+    }
+    tt::tt_metal::Tile output_tile =
+        get_output_tile(output_mem_config, in0_tile, in1_tile, parameters.output_tile, optional_output_tensor_tile);
 
     return Matmul{
         parameters.program_config,
@@ -1428,11 +1458,10 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
-        optional_input_tensors.push_back(bias.value());
+        optional_input_tensors.push_back(bias);
     } else {
         optional_input_tensors.push_back(std::nullopt);
     }
@@ -1441,8 +1470,7 @@ Tensor matmul(
                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor}),
                {input_tensor_a, input_tensor_b},
                optional_input_tensors,
-               {optional_output_tensor},
-               queue_id)
+               {optional_output_tensor})
         .at(0);
 }
 
@@ -1451,11 +1479,10 @@ std::vector<Tensor> matmul_batched_weights(
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
-        optional_input_tensors.push_back(bias.value());
+        optional_input_tensors.push_back(bias);
     } else {
         optional_input_tensors.push_back(std::nullopt);
     }
@@ -1467,8 +1494,7 @@ std::vector<Tensor> matmul_batched_weights(
         create_matmul_struct(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}),
         input_tensors,
         optional_input_tensors,
-        {optional_output_tensor},
-        queue_id);
+        {optional_output_tensor});
 }
 
 ttnn::Shape compute_sparse_matmul_output_shape(
@@ -1548,15 +1574,13 @@ Tensor sparse_matmul(
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
     const struct SparseMatmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     return operation::run(
                create_sparse_matmul_struct(
                    input_tensor_a, input_tensor_b, sparsity, parameters, {optional_output_tensor}),
                {input_tensor_a, input_tensor_b, sparsity},
                {},
-               {optional_output_tensor},
-               queue_id)
+               {optional_output_tensor})
         .at(0);
 }
 
@@ -1585,16 +1609,9 @@ void Matmul::validate(
     const auto& b_shape_aligned = input_tensor_b.padded_shape();
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
-
-    if (input_tensor_a.device()->arch() == tt::ARCH::GRAYSKULL) {
-        TT_FATAL(
-            (in0_tile_shape[1] == TILE_WIDTH && in0_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-        TT_FATAL(
-            (in1_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_HEIGHT),
-            "Grayskull does not support tiny tile");
-    }
-
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Operands to matmul need to be on device!");
     TT_FATAL(
         (in0_tile_shape[1] == TILE_WIDTH && in1_tile_shape[0] == TILE_WIDTH),
         "Input tile dims must have inner dim equal to 32 due to llk constraints");
@@ -1681,9 +1698,7 @@ void Matmul::validate(
     }
 
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
-    TT_FATAL(
-        input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
-        "Operands to matmul need to be on device!");
+
     TT_FATAL(
         input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
         "Operands to matmul need to be allocated in buffers on device!");
@@ -2856,9 +2871,9 @@ std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
 
     auto in0_tile = input_tensor_a.tensor_spec().tile();
     auto in1_tile = input_tensor_b.tensor_spec().tile();
-    tt::tt_metal::Tile output_tile = this->output_tile.has_value()
-                                         ? this->output_tile.value()
-                                         : get_output_tile(this->output_mem_config, in0_tile, in1_tile, std::nullopt);
+
+    tt::tt_metal::Tile output_tile = get_output_tile(
+        this->output_mem_config, in0_tile, in1_tile, this->output_tile, /*optional_output_tensor_tile=*/std::nullopt);
 
     return {TensorSpec(
         output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE, output_tile), this->output_mem_config))};

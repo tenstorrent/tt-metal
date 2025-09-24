@@ -52,6 +52,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ACOSH:
         case UnaryOpType::COS:
         case UnaryOpType::COSH:
+        case UnaryOpType::SINH:
         case UnaryOpType::SIN:
         case UnaryOpType::ASINH:
         case UnaryOpType::TAN:
@@ -101,11 +102,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
     // TODO don't cast T to float when precision needs to be preserved
-    float param0 = params[0];
+    const T param0_raw = params[0];
+    float param0 = static_cast<float>(params[0]);
     switch (op_type) {
         case UnaryOpType::FILL:
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "fill_tile_init();",
+                    fmt::format(
+                        "fill_tile_int({}, {}u);", idst, std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0_raw)};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
                 op_init_and_name = {
@@ -265,9 +273,25 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::ADD_UNARY_SFPU:
-            op_init_and_name = {
-                "binop_with_scalar_tile_init();",
-                fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format(
+                        "add_unary_tile_int32({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    // TODO: Use uint32_t tile API here once implemented
+                    fmt::format("add_unary_tile_int32({}, {}u);", idst, (uint)param0_raw)};
+            } else {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::MUL_UNARY_SFPU:
             op_init_and_name = {
@@ -529,6 +553,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::COSH: op_init_and_name = {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)}; break;
+        case UnaryOpType::SINH: op_init_and_name = {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:
             op_init_and_name = {"isfinite_tile_init();", fmt::format("isfinite_tile({});", idst)};
             break;
@@ -791,6 +816,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::COS);
     } else if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
+    } else if (name == "sinh") {
+        return UnaryWithParam(UnaryOpType::SINH);
     } else if (name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
     } else if (name == "abs_int32") {
@@ -876,8 +903,8 @@ template std::map<std::string, std::string> get_defines<std::uint32_t>(
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
-    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
-                             : get_op_init_and_func_default(op_type, idst, input_dtype);
+    return !params.empty() ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
+                           : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
 template std::pair<std::string, std::string> get_op_init_and_func<float>(
