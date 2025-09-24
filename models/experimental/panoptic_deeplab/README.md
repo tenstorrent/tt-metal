@@ -14,7 +14,7 @@ Place the downloaded `model_final_bd324a.pkl` file in `models/experimental/panop
 
 ```bash
 # From tt-metal root directory
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_panoptic_deeplab
+pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
 ```
 
 This runs PCC comparison between PyTorch and TTNN implementations on 512x1024 input.

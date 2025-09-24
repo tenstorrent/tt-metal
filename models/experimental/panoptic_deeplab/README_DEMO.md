@@ -83,27 +83,6 @@ The model predicts 19 semantic classes from the Cityscapes dataset:
 **Thing classes (objects):**
 - person, rider, car, truck, bus, train, motorcycle, bicycle
 
-## Model Configuration
-
-- **Input size**: 512×1024 (height×width) - optimized for Cityscapes format
-- **Architecture**: ResNet-50 backbone with DeepLab heads
-- **Precision**: bfloat16 for efficient inference on TT hardware
-- **Memory optimization**: Uses channel slicing for memory-efficient processing
-
-## Performance Notes
-
-- The demo uses Conv+BatchNorm fusion for improved performance
-- Memory usage is optimized through channel slicing in convolution operations
-- Input images are automatically resized to the target resolution
-- Processing time depends on image complexity and number of objects
-
-## Troubleshooting
-
-1. **Missing weights file**: Ensure the weights file is downloaded and placed in the correct location
-2. **Memory issues**: Try reducing batch size or image resolution for devices with limited memory
-3. **Image format**: Supported formats include JPG, PNG, BMP, TIFF
-4. **Poor results**: Model works best on street scene images similar to Cityscapes training data
-
 ## Example Results
 
 The demo will show:

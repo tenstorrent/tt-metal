@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import Dict, List, Union, Optional, Tuple
 from torch import nn
 import ttnn

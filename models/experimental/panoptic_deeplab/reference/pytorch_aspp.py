@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+# Modified from the Panoptic-DeepLab implementation in Detectron2 library
+# https://github.com/facebookresearch/detectron2/tree/main/projects/Panoptic-DeepLab
+# Copyright (c) Facebook, Inc. and its affiliates.
+
 from copy import deepcopy
 import torch
 from torch import nn
