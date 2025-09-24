@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-# Copied from: https://github.com/facebookresearch/detectron2/blob/main/projects/Panoptic-DeepLab/panoptic_deeplab/post_processing.py
+# Modified from the Panoptic-DeepLab implementation in Detectron2 library
+# https://github.com/facebookresearch/detectron2/tree/main/projects/Panoptic-DeepLab
 # Copyright (c) Facebook, Inc. and its affiliates.
-# Reference: https://github.com/bowenc0221/panoptic-deeplab/blob/master/segmentation/model/post_processing/instance_post_processing.py  # noqa
 
 from collections import Counter
 import torch
