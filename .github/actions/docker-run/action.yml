@@ -105,7 +105,6 @@ runs:
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
           -e HOME=${{ github.workspace }}
-          -e PIP_CACHE_DIR=${{ github.workspace }}/.cache/pip
           -e GITHUB_ACTIONS=true
           -e CI=true
           -e GITHUB_REPOSITORY=${{ github.repository }}
