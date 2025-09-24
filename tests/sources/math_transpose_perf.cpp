@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 
 #include "build.h"
@@ -19,6 +20,10 @@ uint32_t unp_cfg_context          = 0;
 uint32_t pack_sync_tile_dst_ptr   = 0;
 uint32_t math_sync_tile_dst_index = 0;
 
+static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "Only L1 to L1 is supported for this benchmark");
+
+static constexpr uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -26,26 +31,26 @@ uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel()
 {
-    constexpr uint32_t src_a = 0x1a000;
-
     {
         ZONE_SCOPED("INIT")
+
         _llk_unpack_A_hw_configure_<is_fp32_dest_acc_en, StochRndType::None, unpack_to_dest>(
             formats.unpack_src, formats.unpack_dst, FACE_R_DIM, false, TILE_NUM_FACES);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             UNPACK_TRANSPOSE_FACES, false, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_src, formats.unpack_dst);
-        ckernel::tensix_sync(); // -> perf
+        PROFILER_SYNC();
     }
 
     {
         ZONE_SCOPED("TILE_LOOP")
+
         for (uint32_t tile = 0; tile < TILE_CNT; tile++)
         {
             _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                L1_ADDRESS(src_a + (tile % 8) * 0x1000), UNPACK_TRANSPOSE_FACES, formats.unpack_src, formats.unpack_dst); // TODO SS<-LP use PERF_ADDRESS here
+                PERF_ADDRESS(PERF_INPUT_A, tile), UNPACK_TRANSPOSE_FACES, formats.unpack_src, formats.unpack_dst);
             _llk_unpack_set_srcb_dummy_valid_();
         }
-        ckernel::tensix_sync(); // -> perf
+        PROFILER_SYNC();
     }
 }
 
@@ -59,22 +64,21 @@ void run_kernel()
 
 void run_kernel()
 {
-    // FIXME: Properly handle expB -> FP16
-    constexpr bool is32 = is_32bit_format(static_cast<DataFormat>(formats.math));
-
     {
         ZONE_SCOPED("INIT")
+
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<>(formats.math, formats.math);
-
-        ckernel::tensix_sync(); // -> perf
+        PROFILER_SYNC();
     }
 
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        for (int i = 0; i < TILE_CNT; i++)
+        for (uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
+            uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
 #ifdef ARCH_BLACKHOLE
@@ -84,15 +88,22 @@ void run_kernel()
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
                 UNPACK_TRANSPOSE_FACES, false, TILE_NUM_FACES, formats.math);
 #endif
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                0, formats.math, formats.math);
+            for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+            {
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    block_tile, formats.math, formats.math);
+            }
 
-            _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is32>();
-            _llk_math_transpose_dest_<MATH_TRANSPOSE_FACES, is32>(0);
+            _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+            for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+            {
+                _llk_math_transpose_dest_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
+            }
 
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
-        ckernel::tensix_sync(); // -> perf
+
+        PROFILER_SYNC();
     }
 }
 
@@ -105,23 +116,28 @@ void run_kernel()
 
 void run_kernel()
 {
-    constexpr uint32_t dst = 0x1E000;
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_<>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        ckernel::tensix_sync(); // -> perf
+        PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+
+        for (uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
         {
+            uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
             _llk_packer_wait_for_math_done_();
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(dst + (tile % 8) * 0x1000)); // TODO SS<-LP use PERF_ADDRESS here
+            for (uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
+            {
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+            }
             _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
-        ckernel::tensix_sync(); // -> perf
+        PROFILER_SYNC();
     }
 }
 
