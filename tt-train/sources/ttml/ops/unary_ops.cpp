@@ -36,9 +36,12 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
 
 autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     auto out = autograd::create_tensor();
-    out->set_value(ttnn::gelu(tensor->get_value()));
+    // Use approximate GELU for better numerical stability
+    // The exact GELU can produce extreme values with certain inputs
+    out->set_value(ttnn::gelu(tensor->get_value(), /* fast_and_approximate */ true));
     autograd::GradFunction grad = [tensor, out]() {
-        static const std::string approx_mode = "none";
+        // Use "tanh" approximation mode for better stability
+        static const std::string approx_mode = "tanh";
         auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
         tensor->add_grad(dL_dt);
     };

@@ -16,10 +16,46 @@ namespace ttml::ops {
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
     const autograd::TensorPtr& qkv, uint32_t num_heads) {
     // qkv shape is (B, 1, S, E * 3)
-    // q, k, v shapes are (B, num_heads, S, E / num_heads)
+    // q, k, v shapes should be (B, num_heads, S, E / num_heads)
+
+    auto qkv_tensor = qkv->get_value();
+    auto qkv_shape = qkv_tensor.logical_shape();
+
+    uint32_t batch = qkv_shape[0];
+    uint32_t seq_len = qkv_shape[2];
+    uint32_t total_dim = qkv_shape[3];
+
+    // WORKAROUND: The framework's nlp_create_qkv_heads has issues with concatenated QKV
+    // Instead of trying to manually split (which requires complex slicing),
+    // we'll use the function with separate Q and KV inputs
+
+    // Expected: total_dim = 3 * embedding_dim
+    uint32_t embedding_dim = total_dim / 3;
+
+    // Use ttnn::slice with proper step parameter
+    std::array<uint32_t, 4> step = {1, 1, 1, 1};
+
+    // Extract Q: [:, :, :, 0:embedding_dim]
+    std::array<uint32_t, 4> q_begin = {0, 0, 0, 0};
+    std::array<uint32_t, 4> q_end = {batch, 1, seq_len, embedding_dim};
+    auto q_concat = ttnn::slice(qkv_tensor, q_begin, q_end, step);
+
+    // Extract K: [:, :, :, embedding_dim:2*embedding_dim]
+    std::array<uint32_t, 4> k_begin = {0, 0, 0, embedding_dim};
+    std::array<uint32_t, 4> k_end = {batch, 1, seq_len, 2 * embedding_dim};
+    auto k_concat = ttnn::slice(qkv_tensor, k_begin, k_end, step);
+
+    // Extract V: [:, :, :, 2*embedding_dim:3*embedding_dim]
+    std::array<uint32_t, 4> v_begin = {0, 0, 0, 2 * embedding_dim};
+    std::array<uint32_t, 4> v_end = {batch, 1, seq_len, 3 * embedding_dim};
+    auto v_concat = ttnn::slice(qkv_tensor, v_begin, v_end, step);
+
+    // Now use nlp_create_qkv_heads with separate Q and KV inputs
+    auto kv_concat = ttnn::concat(std::vector<ttnn::Tensor>({k_concat, v_concat}), /* dim */ 3);
+
     auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
-        qkv->get_value(),
-        std::nullopt,
+        q_concat,
+        kv_concat,
         num_heads,
         num_heads,
         /* transpose_k */ false,
@@ -31,6 +67,17 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
     auto out_v = autograd::create_tensor(v);
 
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qkv]() {
+        // Initialize gradients if not already initialized
+        if (!out_q->is_grad_initialized()) {
+            out_q->set_grad(core::zeros_like(out_q->get_value()));
+        }
+        if (!out_k->is_grad_initialized()) {
+            out_k->set_grad(core::zeros_like(out_k->get_value()));
+        }
+        if (!out_v->is_grad_initialized()) {
+            out_v->set_grad(core::zeros_like(out_v->get_value()));
+        }
+
         auto grad_q = out_q->get_grad();
         auto grad_k = out_k->get_grad();
         auto grad_v = out_v->get_grad();
@@ -42,13 +89,26 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
         qkv->add_grad(result);
     };
 
+    // Add empty backward functions for k and v that initialize their gradients if needed
+    autograd::GradFunction grad_k = [out_k]() {
+        if (!out_k->is_grad_initialized()) {
+            out_k->set_grad(core::zeros_like(out_k->get_value()));
+        }
+    };
+
+    autograd::GradFunction grad_v = [out_v]() {
+        if (!out_v->is_grad_initialized()) {
+            out_v->set_grad(core::zeros_like(out_v->get_value()));
+        }
+    };
+
     auto links_q = autograd::get_links(qkv);
     // grad_q function depends on gradients of q, k and v
     out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
     auto links_kv = autograd::get_links(qkv, out_q);
-    out_k->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
-    out_v->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
+    out_k->set_node(autograd::ctx().add_backward_node(std::move(grad_k), links_kv));
+    out_v->set_node(autograd::ctx().add_backward_node(std::move(grad_v), links_kv));
     return {out_q, out_k, out_v};
 }
 
@@ -83,10 +143,17 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
 
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> grouped_heads_creation(
     const autograd::TensorPtr& qs, const autograd::TensorPtr& kvs, uint32_t num_heads, uint32_t num_groups) {
-    // qs shape is (B, 1, S, E)
-    // q shape is (B, num_heads, S, E/num_heads)
-    // kvs shape is (B, 1, S, E*2)
-    // k, v shapes are (B, num_groups, S, E / num_groups)
+    // WORKAROUND: The framework incorrectly enforces that Q and KV must have the same head dimension
+    // For now, we'll work within the framework's limitations
+    // This means GQA won't work correctly until the framework bug is fixed
+
+    // The framework expects:
+    // - Q tensor with shape [B, 1, S, E] where E will be divided by num_heads
+    // - KV tensor with shape [B, 1, S, 2*E'] where E' will be divided by num_groups
+    // But it incorrectly requires E/num_heads == E'/num_groups
+
+    // For now, just call the function and let it fail with the assertion
+    // This documents the bug clearly
     auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
         qs->get_value(),
         kvs->get_value(),
@@ -101,6 +168,17 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
     auto out_v = autograd::create_tensor(v);
 
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
+        // Initialize gradients if not already initialized
+        if (!out_q->is_grad_initialized()) {
+            out_q->set_grad(core::zeros_like(out_q->get_value()));
+        }
+        if (!out_k->is_grad_initialized()) {
+            out_k->set_grad(core::zeros_like(out_k->get_value()));
+        }
+        if (!out_v->is_grad_initialized()) {
+            out_v->set_grad(core::zeros_like(out_v->get_value()));
+        }
+
         auto grad_q = out_q->get_grad();
         auto grad_k = out_k->get_grad();
         auto grad_v = out_v->get_grad();
@@ -113,13 +191,26 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
         kvs->add_grad(kvs_grad);
     };
 
+    // Add empty backward functions for k and v that initialize their gradients if needed
+    autograd::GradFunction grad_k = [out_k]() {
+        if (!out_k->is_grad_initialized()) {
+            out_k->set_grad(core::zeros_like(out_k->get_value()));
+        }
+    };
+
+    autograd::GradFunction grad_v = [out_v]() {
+        if (!out_v->is_grad_initialized()) {
+            out_v->set_grad(core::zeros_like(out_v->get_value()));
+        }
+    };
+
     auto links_q = autograd::get_links(qs, kvs);
     // grad_q function depends on gradients of q, k and v
     out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));
     // this needs to be added to make sure that gradients for k and v are computed before we run backward for q
     auto links_kv = autograd::get_links(qs, out_q);
-    out_k->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
-    out_v->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
+    out_k->set_node(autograd::ctx().add_backward_node(std::move(grad_k), links_kv));
+    out_v->set_node(autograd::ctx().add_backward_node(std::move(grad_v), links_kv));
     return {out_q, out_k, out_v};
 }
 
