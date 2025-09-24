@@ -761,18 +761,27 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             }
             if (!auto_shard_mm) {
                 ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
+                tt::tt_metal::Alignment alignment = {};
                 if (!input_tensor.is_sharded()) {
-                    // In case we need to run Interleaved2Sharded switch fron physical sharding
-                    // to logical sharding, in order to get smaller allocation size of sharded buffer.
+                    // In case we need to run Interleaved2Sharded, adjust the shard spec,
+                    // in order to get smaller allocation size of sharded buffer.
+                    const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
                     input_tensor_sharded_memory_config_to_layout =
-                        input_tensor_sharded_memory_config_to_layout.with_shard_spec(tt::tt_metal::ShardSpec(
-                            input_tensor_sharded_memory_config.shard_spec().value().grid,
-                            input_tensor_sharded_memory_config.shard_spec().value().shape,
-                            input_tensor_sharded_memory_config.shard_spec().value().shape,
-                            input_tensor_sharded_memory_config.shard_spec().value().orientation));
+                        input_tensor_sharded_memory_config_to_layout.with_shard_spec(
+                            tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
+                    alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
                 }
-                Tensor resharded_input_tensor =
-                    ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt);
+                Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
+                    TensorSpec(
+                        input_tensor.logical_shape(),
+                        tt::tt_metal::TensorLayout(
+                            input_tensor.dtype(),
+                            tt::tt_metal::PageConfig(input_tensor.layout()),
+                            input_tensor_sharded_memory_config_to_layout,
+                            alignment)),
+                    input_tensor.device());
+                ttnn::to_memory_config(
+                    input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt, resharded_input_tensor);
                 if (conv_config.deallocate_activation) {
                     input_tensor.deallocate(/*force*/ true);
                     resharded_input_tensor = ttnn::move(resharded_input_tensor);
