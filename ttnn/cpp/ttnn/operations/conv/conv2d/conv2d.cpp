@@ -221,13 +221,38 @@ Result conv2d_DRAM(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     Conv2dSliceConfig dram_slice_config = dram_slice_config_.value_or(Conv2dSliceConfig{
         .slice_type = determine_conv_slice_type(input_height, input_width, conv_config.output_layout),
         .num_slices = 0});
+
+    ttnn::Tensor input_tensor_on_device = input_tensor;
+
+    if (conv_config.enable_kernel_stride_folding) {
+        auto folding_result = compute_kernel_stride_folding_params(
+            input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
+        input_tensor_on_device = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
+        if (conv_config.deallocate_activation) {
+            Tensor input_tensor_pre_folded = input_tensor;
+            input_tensor_pre_folded.deallocate(true);
+        }
+
+        // Update the input tensor parameters to the folding result
+        input_height = folding_result.input_height;
+        input_width = folding_result.input_width;
+        in_channels = folding_result.in_channels;
+        stride = folding_result.stride;
+        kernel_size = folding_result.kernel_size;
+        mm_conv = folding_result.mm_conv;
+        conv_config.output_layout = Layout::ROW_MAJOR;  // Output of fold is row major.
+    }
+    if (!is_device_tensor(input_tensor_on_device)) {
+        input_tensor_on_device =
+            ttnn::operations::core::to_device(input_tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
+    }
 
     ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
@@ -274,10 +299,6 @@ Result conv2d_DRAM(
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
         std::optional<std::string> linear_activation = std::nullopt;
-        auto input_tensor_on_device =
-            is_device_tensor(input_tensor)
-                ? input_tensor
-                : ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
 
         // Matmul expects inputs to be in Tile Layout
         tilize_with_optional_deallocation(input_tensor_on_device, conv_config.deallocate_activation);
@@ -302,6 +323,7 @@ Result conv2d_DRAM(
             tt::LogOp,
             "Conv2D DRAM doesn't support specifying memory config, as the output will always be DRAM Interleaved");
     }
+
     TT_FATAL(
         !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
         "Conv output can't be in Row Major if output dtype is BFloat8_B.");
@@ -378,13 +400,6 @@ Result conv2d_DRAM(
             " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
             dram_slice_config.num_slices,
             output_sliced_dim);
-    }
-
-    ttnn::Tensor input_tensor_on_device;
-    if (!is_device_tensor(input_tensor)) {
-        input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
-    } else {
-        input_tensor_on_device = input_tensor;
     }
 
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
@@ -677,7 +692,10 @@ Result conv2d_L1(
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
     auto orig_stride = stride;
-    if (conv_config.enable_kernel_stride_folding) {
+
+    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
+    // also need to be folded.
+    if (conv_config.enable_kernel_stride_folding && (stride[0] > 1 || stride[1] > 1)) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
