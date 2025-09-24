@@ -28,31 +28,6 @@
 #include <server/collection_endpoint.hpp>
 
 /**************************************************************************************************
- PSD/FSD Testing
-**************************************************************************************************/
-
-#include <llrt/rtoptions.hpp>
-#include <llrt/get_platform_architecture.hpp>
-#include <tt-metalium/distributed_context.hpp>
-
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-
-static void test_psd() {
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
-    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context =
-        tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-
-    tt::tt_metal::PhysicalSystemDescriptor psd =
-        tt::tt_metal::PhysicalSystemDescriptor(cluster, distributed_context, rtoptions);
-
-    std::cout << "All host names:" << std::endl;
-    for (auto hostname : psd.get_all_hostnames()) {
-        std::cout << "  " << hostname << std::endl;
-    }
-}
-
-/**************************************************************************************************
  Utility Functions
 **************************************************************************************************/
 
@@ -182,10 +157,6 @@ static void test_print_link_health() {
 }
 
 int main(int argc, char* argv[]) {
-    test_psd();
-    std::cout << "Exited normally" << std::endl;
-    return 0;
-
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
 
