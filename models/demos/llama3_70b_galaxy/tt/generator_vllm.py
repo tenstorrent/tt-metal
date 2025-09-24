@@ -124,7 +124,7 @@ class LlamaForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)
 
 
-# @INPUT_REGISTRY.register_input_processor(input_processor_for_qwen_text)
+@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class QwenForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
