@@ -33,7 +33,7 @@ def prepare_checkpoint_path(model_location_generator):
             # Use CI v2 model location generator to download
             checkpoints_path = (
                 model_location_generator("vision-models/oft", model_subdir="", download_if_ci_v2=True)
-                / "checkpoint.pth"
+                / "checkpoint-0600.pth"
             )
 
     if checkpoints_path is not None and os.path.isfile(checkpoints_path):
