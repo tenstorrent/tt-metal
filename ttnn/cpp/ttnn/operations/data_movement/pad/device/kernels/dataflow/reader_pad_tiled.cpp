@@ -31,6 +31,10 @@ void kernel_main() {
     // This kernel keeps track of which page (tile) we are on from a logical tensor perspective
     // and reads from the input tensor only when we are within the input region
     // The writer will be waiting for the correct page to be available in the input circular buffer
+    // For example, if we are padding (2, 2, 32, 32) -> (4, 4, 64, 64), then we condense the inner dims to tiles:
+    // (2, 2, 1, 1) -> (4, 4, 2, 2) and as incrementing through writing the output, [0:2, 0:2, 0:1, 0:1] will be
+    // tiles read from input, and the rest will be padding. So for this reader kernel, we will only read when
+    // [0:2, 0:2, 0:1, 0:1] is reached, and skip reads otherwise.
 
     for (uint32_t out_pages_written = 0; out_pages_written < num_pages_to_write; out_pages_written++) {
         within_input_region = true;
