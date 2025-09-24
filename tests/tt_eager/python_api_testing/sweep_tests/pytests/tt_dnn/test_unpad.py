@@ -10,7 +10,7 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 import random
 
 # Seed here for fixed params
