@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fmt/base.h>
+#include <fmt/ostream.h>
 #include <future>
 #include <iomanip>
 #include <iostream>
@@ -31,7 +33,6 @@
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
-#include "fmt/base.h"
 #include "hal_types.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
@@ -175,17 +176,19 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
 
     // Read any error codes and handle accordingly
     enum tt::CBIndex cb = static_cast<enum tt::CBIndex>(ts->cb_id);
+    // WTF VSCode syntax is messed up if fmt is moved inside case.
+    constexpr auto fmt = "Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n";
     switch (ts->return_code) {
         case DPrintOK: break;  // Continue to print the tile slice
         case DPrintErrorBadPointer: {
             uint32_t ptr = ts->cb_ptr;
             uint8_t count = ts->data_count;
-            *stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count);
+            fmt::print(*stream, fmt, cb, ptr, count);
             return;
         }
         case DPrintErrorUnsupportedFormat: {
             tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
-            *stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
+            fmt::print(*stream, "Tried printing {}: Unsupported data format ({})\n", cb, data_format);
             return;
         }
         case DPrintErrorMath:
@@ -195,8 +198,10 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
             *stream << "Warning: Ethernet core does not support TileSlice printing, omitting print...\n";
             return;
         default:
-            *stream << fmt::format(
-                "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n", ts->return_code);
+            fmt::print(
+                *stream,
+                "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n",
+                ts->return_code);
             return;
     }
 
@@ -270,7 +275,7 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
         // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
         // know that the slice has been truncated.
         if (count_exceeded) {
-            *stream << "<TileSlice data truncated due to exceeding max count (" << to_string(ts->data_count) << ")>\n";
+            fmt::print(*stream, "<TileSlice data truncated due to exceeding max count ({:d})>\n", ts->data_count);
             break;
         }
 

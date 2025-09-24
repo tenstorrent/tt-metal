@@ -8,6 +8,7 @@
 
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/core_descriptor.hpp>
+#include "hal_types.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
@@ -64,10 +65,14 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
     return dispatch_cores;
 }
 
-inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_core, int risc_id) {
+inline uint64_t GetDprintBufAddr(HalProgrammableCoreType core_type, int risc_id) {
     auto* buf = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<DebugPrintMemLayout*>(
-        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+        core_type, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
     return reinterpret_cast<uint64_t>(&buf[risc_id]);
+}
+
+inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_core, int risc_id) {
+    return GetDprintBufAddr(llrt::get_core_type(device_id, virtual_core), risc_id);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {
