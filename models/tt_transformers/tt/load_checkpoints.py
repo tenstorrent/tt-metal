@@ -574,6 +574,14 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
+
+        #phi-1
+        ("dense", "wo"),
+        ("layernorm","attention_norm"),
+        ("input_layernorm", "attention_norm"),
+        ("final_layernorm", "norm"),
+        ("fc1","w1"),
+        ("fc2","w2"),
     ]
     # "weight": "emb.weight",  # For host embeddings
     return replace_keys(loaded_weights, replacements)

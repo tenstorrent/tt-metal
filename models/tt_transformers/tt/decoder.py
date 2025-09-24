@@ -5,7 +5,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -45,7 +45,7 @@ class TransformerBlock(LightweightModule):
         self.current = 0
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
-        self.parallel_model = ["phi-1","phi-1_5"]
+        self.parallel_model = ["phi-1","phi-1.5"]
 
         self.layer_num = layer_num
 
@@ -119,7 +119,7 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
         )
         
-        if f"layers.{self.layer_num}.ffn_norm" in self.state_dict:
+        if f"layers.{self.layer_num}.ffn_norm" in state_dict:
             self.ff_norm = DistributedNorm(
                 RMSNorm(
                     device=mesh_device,
@@ -313,7 +313,19 @@ class TransformerBlock(LightweightModule):
         else:
             input_mem_cfg = self.model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
             if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-                x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
+                x = ttnn.experimental.all_gather_async(
+                    x,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=self.args.ccl_topology(),
+                    memory_config=input_mem_cfg,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
             else:
                 x = ttnn.to_memory_config(x, input_mem_cfg)
             # MLP takes replicated inputs and produces fractured outputs

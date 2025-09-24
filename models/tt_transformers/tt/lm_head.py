@@ -167,6 +167,7 @@ class LMHead(LightweightModule):
                     output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
                 )
             )
+            output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
             if bias is not None:
                 bias = ttnn.sharded_to_interleaved(bias, memory_config=ttnn.L1_MEMORY_CONFIG)
                 output = output + bias
