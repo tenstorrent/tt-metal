@@ -34,7 +34,6 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 | All to all                  | 300-308              | Write transactions from multiple cores to multiple cores.                               |
 | All from all                | 310-318              | Read transactions from multiple cores to multiple cores.                                |
 | I2S Hardcoded               | 400-405              | Tests interleaved to sharded data movement operations for different memory layouts.     |
-| Inline Direct Write         | 500-501              | Inline DW transactions between two Tensix cores.                                        |
 
 ## Running Tests
 ### C++ Gtests
