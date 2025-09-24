@@ -420,13 +420,18 @@ class TtTransformer(LightweightModule):
             x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
         else:
             x_split = [x]
+        if tt_out_logits_saved and tt_out_logits_saved.shape[-2] != 1:
+            skip_slicing = True
+        else:
+            skip_slicing = False
         toks_list = []
         for i, x in enumerate(x_split):
             if isinstance(last_token_idx, list):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            if not skip_slicing:
+                x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
 
             tt_logits = self.lm_head(x, None, mode="prefill")
 
@@ -441,6 +446,7 @@ class TtTransformer(LightweightModule):
             )
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
             tt_logits = ttnn.reshape(
                 tt_logits,
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
@@ -537,7 +543,7 @@ class TtTransformer(LightweightModule):
                     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
                 ),
             )
-            tt_out_logits = tt_out_logits[0, 0, 0, :128256]
+            tt_out_logits = tt_out_logits[0, 0, tt_out_logits_saved.shape[2], :128256]
             tt_out_logits_saved.copy_(tt_out_logits)
 
         # Increment current position and rot_mat_idxs

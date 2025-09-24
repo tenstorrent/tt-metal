@@ -76,6 +76,7 @@ class Generator:
         sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
         empty_slots=None,
         tt_out_logits_all_users=None,
+        return_logits=False,
     ):
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
@@ -102,8 +103,12 @@ class Generator:
             and len(set(prefill_seq_lens)) == 1
             and batch_seq_len * batch < 128 * 1024
             and tt_out_logits_all_users is None
+            and not return_logits
         ):
             use_batched_prefill = True
+
+        if return_logits:
+            tt_out_logits_all_users = torch.zeros(batch, 1, 131072)
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -156,8 +161,8 @@ class Generator:
                 "batch_size": batch if use_batched_prefill else 1,
             }
 
-            # If PCC check enabled (we save output logits)
-            if tt_out_logits_all_users is not None:
+            # If PCC check enabled or return_logits is True (we save output logits)
+            if tt_out_logits_all_users is not None or return_logits:
                 tt_out_logits_saved = torch.zeros(1, 131072)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
@@ -173,6 +178,10 @@ class Generator:
 
             if tt_out_logits_all_users is not None and tt_out_logits_saved is not None:
                 tt_out_logits_all_users[id] = tt_out_logits_saved
+
+        if return_logits:
+            # Return logits instead of tokens
+            return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_toks
@@ -327,6 +336,7 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        return_logits=False,
     ):
         if self.prev_page_table is None:
             self.prev_page_table = page_table
@@ -354,12 +364,18 @@ class Generator:
                 p=[sampling_params.top_p] * 32,
                 temp=[1 / sampling_params.temperature] * 32,
             )
-        if tt_out_logits_saved is not None:
+        if tt_out_logits_saved is not None or return_logits:
+            if return_logits and tt_out_logits_saved is None:
+                tt_out_logits_saved = torch.zeros(tokens.shape[0], 131072)
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
             tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs)
+
+        if return_logits:
+            # Return logits instead of tokens
+            return tt_out_logits_saved
 
         if read_from_device:
             tt_tok, read_event = self.read_decode_output(tt_tok, tokens.shape[0])
