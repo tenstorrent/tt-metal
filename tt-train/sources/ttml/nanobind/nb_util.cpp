@@ -30,7 +30,7 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
             std::vector<size_t> numpy_shape(tensor_shape_rank);
             std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
 
-            // Copying strides does not work in all cases, fortunately ndarray will comput them at construction
+            // Copying strides does not work in all cases, fortunately ndarray will compute them at construction
             // std::vector<int64_t> numpy_strides;
             // numpy_strides.assign(tensor_strides.cbegin(), tensor_strides.cend());
 
