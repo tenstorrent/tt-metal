@@ -11,13 +11,13 @@
  *
  * Key Responsibilities:
  * - Read sliced data from circular buffer (produced by reader kernel)
- * - Write assigned portion of output data to DRAM using InterleavedAddrGenFast
+ * - Write assigned portion of output data to DRAM using TensorAccessor
  * - Handle different tensor dimensions with proper address calculations
  * - Support different data types with proper element size handling
  * - Process assigned rows for this core based on work distribution
  *
  * Architecture:
- * - Uses InterleavedAddrGenFast for efficient DRAM address generation
+ * - Uses TensorAccessor for efficient DRAM address generation
  * - Processes data row-by-row to match reader kernel output
  * - Simple sequential write pattern for optimal memory controller utilization
  * - Multi-core work distribution: each core writes a subset of output rows

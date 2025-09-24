@@ -10,14 +10,14 @@
  * across multiple cores for improved performance.
  *
  * Key Responsibilities:
- * - Read assigned portion of input tensor data from DRAM using InterleavedAddrGenFast
+ * - Read assigned portion of input tensor data from DRAM using TensorAccessor
  * - Apply slice logic (start, end, step) for all dimensions (N, D, H, W)
  * - Handle different data types with proper element size calculations
  * - Process assigned rows for this core based on work distribution
  * - Output sliced rows to circular buffer for writer kernel consumption
  *
  * Architecture:
- * - Uses InterleavedAddrGenFast for efficient DRAM address generation
+ * - Uses TensorAccessor for efficient DRAM address generation
  * - Processes data row-by-row for optimal memory access patterns
  * - Supports slicing with configurable start, end, and step parameters for all dimensions
  * - Handles 1D (W), 2D (H,W), 3D (D,H,W), and 4D (N,D,H,W) tensors
