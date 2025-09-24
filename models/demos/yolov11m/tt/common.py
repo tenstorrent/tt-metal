@@ -64,14 +64,14 @@ class Yolov11Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        if "bias" in conv_pth:
-            bias = ttnn.from_torch(conv_pth.bias)
-            self.bias = bias
+        if "bias" in conv_pth and conv_pth["bias"] is not None:
+            # Bias is already preprocessed in TTNN format
+            self.bias = conv_pth["bias"]
         else:
             self.bias = None
 
-        weight = ttnn.from_torch(conv_pth.weight)
-        self.weight = weight
+        # Weight is already preprocessed in TTNN format  
+        self.weight = conv_pth["weight"]
 
     def __call__(self, x):
         if self.is_detect:
