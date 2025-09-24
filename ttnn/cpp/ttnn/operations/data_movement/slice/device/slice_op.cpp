@@ -87,7 +87,6 @@ void SliceDeviceOperation::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Error");
-    log_info(tt::LogMetal, "LLONG input_tensor_a.layout() = {}", input_tensor_a.layout());
     TT_FATAL(
         input_tensor_a.padded_shape().rank() == this->slice_start.rank() &&
             this->slice_start.rank() == this->slice_end.rank(),
@@ -173,7 +172,6 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    log_info(tt::LogMetal, "LLONG create_program input_tensor_a.layout() = {}", input_tensor_a.layout());
     return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
 }
 

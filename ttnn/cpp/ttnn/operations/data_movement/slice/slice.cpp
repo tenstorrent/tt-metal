@@ -30,7 +30,6 @@ ttnn::Tensor SliceOperation::invoke(
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t input_rank = input_shape.rank();
     auto input_layout = input_tensor.layout();
-    log_info(tt::LogMetal, "LLONG in SliceOperation::invoke input_layout = {}", input_layout);
 
     if (input_rank == 0) {
         return input_tensor;
@@ -117,7 +116,6 @@ ttnn::Tensor SliceOperation::invoke(
             input.dtype() != DataType::UINT16,
             "This slice requires an implicit Tile->RM conversion and that is not currently supported for uint16");
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
-        log_info(tt::LogMetal, "LLONG tiled to row major happened", input.layout());
     }
 
     ttnn::SmallVector<uint32_t> padded_ends = modified_ends;
@@ -158,7 +156,6 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
-    log_info(tt::LogMetal, "LLONG in SliceOperation::invoke input.layout() = {}", input.layout());
     auto res =
         tt::tt_metal::operation::run(
             SliceDeviceOperation{

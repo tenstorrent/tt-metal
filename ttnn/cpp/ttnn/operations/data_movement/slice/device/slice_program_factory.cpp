@@ -855,7 +855,6 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 operation::ProgramWithCallbacks slice_tile_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    std::cout << "LLONG slice_tile_multi_core" << std::endl;
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -983,16 +982,13 @@ operation::ProgramWithCallbacks slice_multi_core(
             break;
         }
     }
-    std::cout << "LLONG has step: " << has_step << std::endl;
     switch (a.layout()) {
         case Layout::ROW_MAJOR:
-            std::cout << "LLONG input is row major" << std::endl;
-            return a.is_sharded() ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
-                                  : slice_rm_multi_core_kb(a, output, output_tensor_start, output_tensor_end, step);
-            // :slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end);
-        case Layout::TILE:
-            std::cout << "LLONG input is tile" << std::endl;
-            return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
+            return a.is_sharded()
+                       ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
+                       : (has_step ? slice_rm_multi_core_kb(a, output, output_tensor_start, output_tensor_end, step)
+                                   : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
+        case Layout::TILE: return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
         default: TT_ASSERT(false, "Unsupported Layout");
     }
     return {};
