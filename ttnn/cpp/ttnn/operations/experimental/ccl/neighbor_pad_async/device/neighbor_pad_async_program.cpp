@@ -46,7 +46,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     const uint32_t dim,
     const uint32_t padding_left,
     const uint32_t padding_right,
-    const std::string padding_mode,
+    const std::string& padding_mode,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
@@ -54,7 +54,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     const uint32_t ring_size,
     const uint32_t ring_index,
     std::optional<uint32_t> secondary_cluster_axis,
-    std::optional<std::vector<uint32_t>> secondary_mesh_shape) {
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
     tt::tt_metal::Program program{};
 
     // Tensor Info
