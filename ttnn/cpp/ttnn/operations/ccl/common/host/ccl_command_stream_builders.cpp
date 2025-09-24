@@ -58,7 +58,7 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
 // // Outer vector = per worker command stream, inner vector = commands
 std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_workers_page_aligned(
     size_t num_workers, std::vector<ttnn::ccl::v2::TensorSlice> const& tensor_slices) {
-    TT_FATAL(tensor_slices.size() > 0, "Number of slices must be greater than 0");
+    TT_FATAL(!tensor_slices.empty(), "Number of slices must be greater than 0");
     // not split up across workers yet
 
     auto worker_slices_streams = std::vector<std::vector<ttnn::ccl::v2::TensorSlice>>(num_workers);
