@@ -91,9 +91,9 @@ struct RingAttentionAllGatherAsync {
 
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers(
     const std::vector<Tensor>& input_tensor,
-    MeshCoordinate& target_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    IDevice* target_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensor,
     uint32_t dim,
     uint32_t num_links,
@@ -105,9 +105,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    MeshCoordinate& target_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    IDevice* target_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensor,
     uint32_t dim,
     uint32_t num_links,

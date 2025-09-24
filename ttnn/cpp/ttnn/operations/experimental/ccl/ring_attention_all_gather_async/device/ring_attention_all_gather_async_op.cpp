@@ -130,7 +130,6 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    auto target_device_coord = coord;
     std::vector<IDevice*> devices_to_use = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
@@ -138,37 +137,30 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
     devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
                                                        : mesh_view.get_devices_on_row(coord[0]);
 
-    std::optional<MeshCoordinate> backward_coord = std::nullopt;
-    std::optional<MeshCoordinate> forward_coord = std::nullopt;
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < this->ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i - 1);
+                backward_device = devices_to_use.at(i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? this->ring_size - 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : this->ring_size - 1);
+                backward_device = devices_to_use.at(this->ring_size - 1);
             }
             if (i != this->ring_size - 1) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? i + 1 : coord[0],
-                    (this->cluster_axis.value() == 0) ? coord[1] : i + 1);
+                forward_device = devices_to_use.at(i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_coord = MeshCoordinate(
-                    (this->cluster_axis.value() == 0) ? 0 : coord[0], (this->cluster_axis.value() == 0) ? coord[1] : 0);
+                forward_device = devices_to_use.at(0);
             }
         }
     }
 
     return ring_attention_all_gather_async_multi_core_with_workers(
         input_tensors,
-        target_device_coord,
-        forward_coord,
-        backward_coord,
+        target_device,
+        forward_device,
+        backward_device,
         output_tensors,
         this->dim,
         this->num_links,
