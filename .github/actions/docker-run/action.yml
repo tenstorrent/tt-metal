@@ -172,6 +172,7 @@ runs:
             echo "=== DEBUG: Trying pip install with isolation ==="
             # Try to install with isolation from current directory and clean environment
             mkdir -p "$HOME/wheels"
+            chmod 0755 "${{ github.workspace }}/$WHEEL_FILENAME"
             cp -f "${{ github.workspace }}/$WHEEL_FILENAME" "$HOME/wheels/"
             chmod 0644 "$HOME/wheels/$WHEEL_FILENAME"
 
