@@ -105,9 +105,16 @@ class TtnnOBB:
         """
         
         # cv2: Box coordinate regression for all scales
+        print(f"🔍 Debug cv2_0 - y1 input: {ttnn.to_torch(y1).min():.6f} to {ttnn.to_torch(y1).max():.6f}")
+        
         x1 = self.cv2_0_0(device, y1)
+        print(f"🔍 Debug cv2_0 - after conv0: {ttnn.to_torch(x1).min():.6f} to {ttnn.to_torch(x1).max():.6f}")
+        
         x1 = self.cv2_0_1(device, x1)
+        print(f"🔍 Debug cv2_0 - after conv1: {ttnn.to_torch(x1).min():.6f} to {ttnn.to_torch(x1).max():.6f}")
+        
         x1 = self.cv2_0_2(x1)
+        print(f"🔍 Debug cv2_0 - final output: {ttnn.to_torch(x1).min():.6f} to {ttnn.to_torch(x1).max():.6f}")
         
         x2 = self.cv2_1_0(device, y2)
         x2 = self.cv2_1_1(device, x2)
@@ -118,11 +125,22 @@ class TtnnOBB:
         x3 = self.cv2_2_2(x3)
         
         # cv3: Class predictions with DWConv structure for all scales
+        print(f"🔍 Debug cv3_0 - y1 input: {ttnn.to_torch(y1).min():.6f} to {ttnn.to_torch(y1).max():.6f}")
+        
         x4 = self.cv3_0_0_dw(device, y1)
+        print(f"🔍 Debug cv3_0 - after dw0: {ttnn.to_torch(x4).min():.6f} to {ttnn.to_torch(x4).max():.6f}")
+        
         x4 = self.cv3_0_0_conv(device, x4)
+        print(f"🔍 Debug cv3_0 - after conv0: {ttnn.to_torch(x4).min():.6f} to {ttnn.to_torch(x4).max():.6f}")
+        
         x4 = self.cv3_0_1_dw(device, x4)
+        print(f"🔍 Debug cv3_0 - after dw1: {ttnn.to_torch(x4).min():.6f} to {ttnn.to_torch(x4).max():.6f}")
+        
         x4 = self.cv3_0_1_conv(device, x4)
+        print(f"🔍 Debug cv3_0 - after conv1: {ttnn.to_torch(x4).min():.6f} to {ttnn.to_torch(x4).max():.6f}")
+        
         x4 = self.cv3_0_2(x4)
+        print(f"🔍 Debug cv3_0 - final output: {ttnn.to_torch(x4).min():.6f} to {ttnn.to_torch(x4).max():.6f}")
         
         x5 = self.cv3_1_0_dw(device, y2)
         x5 = self.cv3_1_0_conv(device, x5)
