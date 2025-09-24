@@ -86,7 +86,6 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_include_directories(tt_telemetry_server SYSTEM PRIVATE ${PROJECT_BINARY_DIR}/tt_metal/fabric)
 target_link_libraries(
     tt_telemetry_server
     PRIVATE
@@ -96,9 +95,4 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
-        yaml-cpp::yaml-cpp
-        protobuf::libprotobuf
 )
-
-# Ensure protobuf files are generated before building tt_telemetry_server
-add_dependencies(tt_telemetry_server fabric)
