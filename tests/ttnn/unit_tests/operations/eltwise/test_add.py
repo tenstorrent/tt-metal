@@ -276,15 +276,90 @@ def test_in_place_add_and_apply_activations(device, shape, activations):
 @pytest.mark.parametrize("shape", [(32, 32)])
 def test_prim_add(device, shape):
     torch.manual_seed(0)
+    torch.set_printoptions(linewidth=10000)
+    torch.set_printoptions(threshold=float("inf"))
 
-    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+    # CUSTOM INPUT
+    # *********************************************************************************
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    ones = torch.tensor([1] * 16)
+    twos = torch.tensor([2] * 16)
+    threes = torch.tensor([3] * 16)
+    fours = torch.tensor([4] * 16)
+    padding = torch.tensor([0] * (256 - 16))
+
+    torch_input_tensor_a = torch.cat((ones, padding, twos, padding, threes, padding, fours, padding))
+    torch_input_tensor_a = torch_input_tensor_a.repeat(shape[0] * shape[1] // 1024)
+
+    torch_input_tensor_b = torch.ones(shape[0] * shape[1]) * (5)
+
+    print("SRC A")
+    print("*" * 100)
+
+    print(torch_input_tensor_a.view(shape[0] * shape[1] // 16, 16))
+
+    print("SRC B")
+    print("*" * 100)
+
+    print(torch_input_tensor_b.view(shape[0] * shape[1] // 16, 16))
+
+    # GENERATING GOLDEN BY HAND
+    # *********************************************************************************
+
+    reshaped_a = torch_input_tensor_a.view(shape[0] * shape[1] // 16, 16)
+
+    take = []
+    for i in range(0, reshaped_a.size(0), 64):
+        if i < reshaped_a.size(0):
+            take.append(reshaped_a[i])  # row i
+        if i + 16 < reshaped_a.size(0):
+            take.append(reshaped_a[i + 16])  # row i+16
+
+    result = torch.stack(take)
+    result = result.repeat_interleave(8, dim=0)
+    reshaped = result.view(-1, 8, 16)
+    flattened_a = reshaped.view(reshaped.size(0), -1)  # shape [num_blocks, 128]
+
+    reshaped = torch_input_tensor_b.view(-1, 8, 16)
+    flattened_b = reshaped.view(-1, 8, 16)  # [num_subarrays, 8, 16]
+    flattened_b = reshaped.view(reshaped.size(0), -1)  # shape [num_blocks, 128]
+
+    num_segments = len(flattened_a) // 2
+    pattern = []
+
+    for seg in range(num_segments):
+        base = seg * 2
+        seg_pattern = [base, base, base + 1, base + 1, base, base, base + 1, base + 1]
+        pattern.extend(seg_pattern)
+
+    pattern_a = torch.tensor(pattern)
+    pattern_b = torch.arange(len(flattened_b))
+
+    golden_tensor = []
+
+    # append all intermediate results
+    for i in range(len(pattern_b)):
+        golden_tensor.append((flattened_a[pattern_a[i]] - flattened_b[pattern_b[i]]))
+
+    # flatten
+    golden_tensor = torch.cat(golden_tensor, dim=0)
+    print("GOLDEN TENSOR")
+    print(golden_tensor.flatten().view(64, 16))
+    golden_tensor = golden_tensor.flatten().view(32, 32)
+    # *********************************************************************************
+
+    # torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+    # torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+    # torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+    torch_output_tensor = golden_tensor  # make calculated golden be torch output
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
     ttnn.prim.binary(input_tensor_a, input_tensor_b, ttnn.BinaryOpType.ADD, output_tensor=input_tensor_a)
     output_tensor = ttnn.to_torch(input_tensor_a)
+
+    print("OUTPUT TENSOR")
+    print(output_tensor.view(64, 16))
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
     assert output_tensor.shape == shape
