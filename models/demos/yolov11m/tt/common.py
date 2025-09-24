@@ -65,12 +65,12 @@ class Yolov11Conv2D:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
         if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
+            bias = ttnn.from_torch(conv_pth.bias)
             self.bias = bias
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
+        weight = ttnn.from_torch(conv_pth.weight)
         self.weight = weight
 
     def __call__(self, x):
