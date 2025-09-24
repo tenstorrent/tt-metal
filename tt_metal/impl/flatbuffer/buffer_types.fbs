@@ -23,11 +23,6 @@ enum ShardOrientation : ubyte {
     ColMajor = 1,
 }
 
-enum ShardModeDeprecated : ubyte {
-    Physical,
-    Logical,
-}
-
 table ShardShape {
     height: uint32;
     width: uint32;
@@ -38,8 +33,6 @@ table ShardSpec {
     shape_h: uint32;
     shape_w: uint32;
     orientation: ShardOrientation;
-    shard_mode_deprecated: ShardModeDeprecated;
-    physical_shard_shape_deprecated: ShardShape;
 }
 
 table ShardSpecBuffer {

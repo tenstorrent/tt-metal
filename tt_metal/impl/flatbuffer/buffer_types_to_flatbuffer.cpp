@@ -95,15 +95,8 @@ flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation) {
 
 flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
     const ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
-    flatbuffers::Offset<flatbuffer::ShardShape> physical_shard_shape = 0;
     return flatbuffer::CreateShardSpec(
-        builder,
-        to_flatbuffer(builder, spec.grid),
-        spec.shape[0],
-        spec.shape[1],
-        to_flatbuffer(spec.orientation),
-        flatbuffer::ShardModeDeprecated::Physical,
-        physical_shard_shape);
+        builder, to_flatbuffer(builder, spec.grid), spec.shape[0], spec.shape[1], to_flatbuffer(spec.orientation));
 }
 
 flatbuffers::Offset<flatbuffer::BufferDistributionSpec> to_flatbuffer(
