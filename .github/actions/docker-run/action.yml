@@ -103,6 +103,7 @@ runs:
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
           -e HOME=/tmp/home
+          -e PIP_CACHE_DIR=/tmp/home/.cache/pip
           -e GITHUB_ACTIONS=true
           -e CI=true
           -e GITHUB_REPOSITORY=${{ github.repository }}
@@ -122,10 +123,46 @@ runs:
         run: |
           set -eu
 
-          install_wheel=${{ inputs.install_wheel }}
-          if [ "${install_wheel,,}" == "true" ]; then
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install "$WHEEL_FILENAME"
+          echo "=== DEBUG: Container startup ==="
+          echo "Current user: $(whoami)"
+          echo "User ID: $(id -u)"
+          echo "Group ID: $(id -g)"
+          echo "Current directory: $(pwd)"
+          echo "HOME: $HOME"
+          echo "PIP_CACHE_DIR: $PIP_CACHE_DIR"
+
+          echo "=== DEBUG: Directory permissions ==="
+          echo "Workspace ownership: $(stat -c '%u:%g' .)"
+          echo "Workspace permissions: $(stat -c '%a' .)"
+          ls -la
+
+          echo "=== DEBUG: Setting up home directory ==="
+          # Create and set up home directory with proper ownership
+          mkdir -p /tmp/home/.cache/pip
+          echo "Created /tmp/home/.cache/pip"
+          ls -la /tmp/home/
+
+          echo "=== DEBUG: Checking workspace ownership ==="
+          # Fix ownership of workspace files if needed
+          if [ "$(stat -c '%u' .)" != "$(id -u)" ]; then
+            echo "Fixing ownership of workspace files..."
+            sudo chown -R $(id -u):$(id -g) .
+            echo "Fixed ownership - new ownership: $(stat -c '%u:%g' .)"
+          else
+            echo "Workspace ownership is correct"
           fi
 
+          echo "=== DEBUG: Installing wheel ==="
+          install_wheel=${{ inputs.install_wheel }}
+          if [ "${install_wheel,,}" == "true" ]; then
+            echo "Installing wheel..."
+            WHEEL_FILENAME=$(ls -1 *.whl)
+            echo "Wheel filename: $WHEEL_FILENAME"
+            pip3 install "$WHEEL_FILENAME"
+            echo "Wheel installation completed"
+          else
+            echo "Skipping wheel installation"
+          fi
+
+          echo "=== DEBUG: Running user commands ==="
           ${{ inputs.run_args }}
