@@ -16,7 +16,7 @@ from .module import Module, Parameter
 from .normalization import RMSNorm
 
 if TYPE_CHECKING:
-    from ..parallel.config import DiTParallelConfig, ParallelFactor
+    from ..parallel.config import DiTParallelConfig
     from ..parallel.manager import CCLManager
 
 
@@ -126,11 +126,13 @@ class Attention(Module):
 
         if self.padding_config is not None:
             if "to_out.weight" in state:
-                weight = state["to_out.weight"]
-                state["to_out.weight"] = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                weight = state["to_out.weight"].T
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                state["to_out.weight"] = weight.T
             if "to_add_out.weight" in state:
-                weight = state["to_add_out.weight"]
-                state["to_add_out.weight"] = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                weight = state["to_add_out.weight"].T
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                state["to_add_out.weight"] = weight.T
 
         if "context_head_factors" in state:
             factors = state["context_head_factors"]
@@ -239,17 +241,13 @@ class Attention(Module):
             shape = [1, self.n_local_heads, 0, self.head_dim]
             add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
 
-        k_chunk_size = 512
-        while q.shape[-2] % k_chunk_size != 0:
-            k_chunk_size //= 2
-
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_worker_grid,
             q_chunk_size=128,
-            k_chunk_size=k_chunk_size,
+            k_chunk_size=512,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
