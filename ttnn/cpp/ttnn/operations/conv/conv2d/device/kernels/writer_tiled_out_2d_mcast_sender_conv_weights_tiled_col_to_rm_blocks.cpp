@@ -5,23 +5,12 @@
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
-
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
 
 constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
 constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);  // Input filter window width
@@ -89,6 +78,7 @@ void kernel_main() {
     constexpr uint32_t weight_block_height_num_outer_in = get_compile_time_arg_val(17);
 
 #ifdef SPLIT_READER
+    constexpr bool split_reader_enabled = true;
     // Use existing args that factory already passes but are currently ignored
     constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(4);
@@ -106,6 +96,8 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+#else
+    constexpr bool split_reader_enabled = false;
 #endif
     // Without split reader, weight tensor args start at 35
     constexpr auto s_weight_args = TensorAccessorArgs<35>();
@@ -128,6 +120,11 @@ void kernel_main() {
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
+    const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
+
+    if (skip_work && !split_reader_enabled) {
+        return;
+    }
 
 #ifdef SPLIT_READER
 #ifdef CONFIG_TENSOR_IN_DRAM
@@ -149,12 +146,7 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
-    // TODO add config tensor if in DRAM
-
     const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-    // DPRINT << "noc_async_read_one_packet_set_state: " << get_noc_addr(act_l1_read_addr) << " " <<
-    // coalesced_read_bytes
-    //        << ENDL();
 
 #endif
 
@@ -192,11 +184,12 @@ void kernel_main() {
     constexpr uint32_t tiles_per_full_block =
         num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer_in * weight_block_width_ntiles;
     constexpr uint32_t height_stride_factor = weight_block_height_ntiles * weight_stride_h;
-
+    DPRINT << " LOOP sizes" << out_num_blocks_w << " " << out_num_blocks_h << " " << num_blocks_weight_h << " "
+           << weight_block_height_ntiles << ENDL();
+    DPRINT << " skip_work: " << (skip_work ? "true" : "false") << ENDL();
     uint32_t weight_start_tile_id = out_start_tile_id_w;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
-            // Read activation data using block sharded pattern (for second reader)
 #ifdef SPLIT_READER
             uint32_t reader_offset = act_l1_read_addr;
 #endif
@@ -249,10 +242,12 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                 }
-                DPRINT << "ACT SECOND READER PUSH BACK: " << act_block_num_tiles_split_last << ENDL();
                 cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
                 reader_offset += window_outer_offset;
 #endif
+                if (skip_work) {
+                    continue;
+                }
                 // Compute height block offset once per outer loop iteration
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
@@ -313,7 +308,6 @@ void kernel_main() {
                         weights_mcast_receiver_semaphore_noc_addr,
                         weights_mcast_num_cores);
 #endif
-                    DPRINT << "WEIGHTS PUSH BACK: " << weight_block_num_tiles << ENDL();
                     cb_push_back(cb_id_weight, weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }
