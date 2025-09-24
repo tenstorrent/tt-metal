@@ -39,7 +39,7 @@ jobs:
             cmd: TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
           - name: fabric system health tests
-            cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
+            cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ matrix.runner-group.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
             timeout: 15
           - name: fabric stability nightly tests
             cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
