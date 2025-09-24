@@ -10,7 +10,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
-from vllm.inputs import INPUT_REGISTRY
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
@@ -109,7 +108,7 @@ def initialize_vllm_text_transformer_qwen(
                 "Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path
             ),
             max_batch_size=max_batch_size // tt_data_parallel,
-            optimizations=optimizations,
+            # optimizations=optimizations,
             max_seq_len=max_seq_len,
         )
 
@@ -125,9 +124,9 @@ def initialize_vllm_text_transformer_qwen(
         tt_model_i = TtTransformer(
             args=model_args[i],
             mesh_device=submesh,
-            dtype=dtype,
+            dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
-            weight_cache_path=model_args[i].weight_cache_path(dtype),
+            weight_cache_path=model_args[i].weight_cache_path(ttnn.bfloat8_b),
             use_paged_kv_cache=True,
             mode="prefill",
             enable_prefetcher_performance_mode=True,
@@ -141,7 +140,11 @@ def input_processor_for_llama_text(ctx, inputs):
     return inputs
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
+def input_processor_for_qwen_text(ctx, inputs):
+    return inputs
+
+
+# @INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -178,7 +181,7 @@ class LlamaForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
+# @INPUT_REGISTRY.register_input_processor(input_processor_for_qwen_text)
 class QwenForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
