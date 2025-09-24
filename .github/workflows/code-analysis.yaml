@@ -33,7 +33,7 @@ jobs:
           echo "🔄 Found PR #$PR_NUMBER in branch: $PR_BRANCH"
 
           # Verify it's from the same repository (not a fork)
-          if [ "$PR_REPO" != "${{ github.repository }}" ]; then
+          if [ "$PR_REPO" != "null" ] && [ "$PR_REPO" != "${{ github.repository }}" ]; then
             echo "❌ PR is from a fork: $PR_REPO"
             exit 1
           fi
