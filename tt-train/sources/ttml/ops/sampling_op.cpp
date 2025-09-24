@@ -23,10 +23,9 @@ autograd::TensorPtr sample_op(
         logits_padding_mask == nullptr ? std::nullopt
                                        : std::optional<tt::tt_metal::Tensor>(logits_padding_mask->get_value()));
 
-    auto out = autograd::create_tensor();
-    out->set_value(sampled_tensor);
+    auto out = autograd::create_tensor(sampled_tensor);
 
-    autograd::GradFunction grad = [logits, out]() {
+    autograd::GradFunction grad = []() {
         // Argmax in sampling is non-differentiable; no gradient to propagate.
         throw std::runtime_error("Sampling operation backward pass is not implemented.");
     };
