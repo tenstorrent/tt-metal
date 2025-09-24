@@ -20,13 +20,13 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_shape, layers, expected_pcc",
     [
-        ((1, 3, 384, 1280), [2, 2, 2, 2], (0.998, 0.995, 0.992)),  # ResNet-18
+        ((1, 3, 384, 1280), [2, 2, 2, 2], (0.998, 0.998, 0.997)),  # ResNet-18
     ],
 )
 @pytest.mark.parametrize(
     "input_image_path",
     [
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.jpg")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
