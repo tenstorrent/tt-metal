@@ -84,7 +84,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     // Info for RM tensors
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
-    uint32_t page_size = round_up_to_mul32(row_size);
+    uint32_t page_size = input_tensor.buffer()->aligned_page_size();
 
     uint32_t num_rows = input_tensor.logical_shape().size() > 2
                             ? input_tensor.logical_shape()[-2] * input_tensor.logical_shape()[-3]
@@ -97,7 +97,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const size_t packet_size_bytes = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4096;
     size_t max_packet_size = packet_size_bytes;
     uint32_t num_packets_per_row = std::ceil(static_cast<double>(row_size) / max_packet_size);
-    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
+    uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
@@ -124,9 +124,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        src0_cb_index,              // cb0_id
-        num_pages_per_packet,       // packet_size_in_pages
-        op_config.get_page_size(),  // tensor0_page_size
+        src0_cb_index,                               // cb0_id
+        num_pages_per_packet,                        // packet_size_in_pages
+        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
     };
 
     if (!tilized) {
@@ -141,7 +141,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,              // cb0_id
         num_pages_per_packet,       // packet_size_in_pages
-        op_config.get_page_size(),  // tensor0_page_size
+        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
         num_targets_forward,        // num_targets_forward_direction
         num_targets_backward,       // num_targets_backward_direction
     };
