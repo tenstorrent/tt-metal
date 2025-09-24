@@ -11,6 +11,7 @@
 
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "const.h"
+#include "compile_time_args.h"
 
 // Forward declared from dataflow_api.h
 template <typename T>

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -13,52 +12,50 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
+using namespace tt::tt_fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);  // 4
-constexpr BufferType intermediate_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(4));
-constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(5);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(6);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(7);
-constexpr uint32_t intermediate_page_size = get_compile_time_arg_val(8);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(9);
-constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(10);
-constexpr uint32_t ring_size = get_compile_time_arg_val(11);
-constexpr uint32_t num_batches = get_compile_time_arg_val(12);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(13);
-constexpr bool direction = get_compile_time_arg_val(14);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(15);
+constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(1);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(2);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
+constexpr uint32_t intermediate_page_size = get_compile_time_arg_val(4);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(5);
+constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(6);
+constexpr uint32_t ring_size = get_compile_time_arg_val(7);
+constexpr uint32_t num_batches = get_compile_time_arg_val(8);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(9);
+constexpr bool direction = get_compile_time_arg_val(10);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(11);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(16);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(17);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(18);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(28);
+constexpr bool is_termination_master = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(13);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(14);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<29>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<25>();
 constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<29 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<25 + ccl_routing_utils::num_line_unicast_args>();
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -93,7 +90,8 @@ void kernel_main() {
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 29 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+    constexpr uint32_t ct_idx =
+        25 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -115,13 +113,9 @@ void kernel_main() {
     arg_idx += intermediate_rt_increment;
 
 #else
-    constexpr uint32_t ct_offset = 0;
-
-    constexpr bool intermediate_is_dram = intermediate_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_addrgen = InterleavedAddrGenFast<intermediate_is_dram>{
-        .bank_base_address = intermediate_address,
-        .page_size = intermediate_page_size,
-        .data_format = get_dataformat(cb_compute_output_id)};
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
+    constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
+    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, intermediate_page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -143,11 +137,8 @@ void kernel_main() {
 
     arg_idx += output_rt_increment;
 #else
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    auto output_addrgen = InterleavedAddrGenFast<output_is_dram>{
-        .bank_base_address = output_address,
-        .page_size = intermediate_page_size,
-        .data_format = get_dataformat(cb_compute_output_id)};
+    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, intermediate_page_size);
 #endif
 
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -169,35 +160,61 @@ void kernel_main() {
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
-    // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-
     // pre-populate packet headers
-    volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
-
-    volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
+    auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
     tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
+    fabric_multicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_mcastseminc,
+        static_cast<uint8_t>(multicast_route_info.start_distance_in_hops),
+        static_cast<uint8_t>(multicast_route_info.range_hops),
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            0,                         // ignore
+            static_cast<uint16_t>(1),  // increment 1
+            32});
     if (use_barrier_sem) {
         // multicast to entire ring of workers going in the same direction
         uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr_seminc->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
-        tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &mux_connection_handle,
+            pkt_hdr_mcastseminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
+
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(intermediate_addrgen);
+    fabric_unicast_noc_scatter_write_set_state<
+        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+        pkt_scatter_hdr,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        NocUnicastScatterCommandHeader{
+            {0, 0},  // ignore
+            static_cast<uint16_t>(page_size)},
+        page_size * 2);
+
+    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+        pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, intermediate_page_size);
+
+    fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_seminc,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            0,                         // ignore
+            static_cast<uint16_t>(1),  // increment 1
+            32});
 
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < num_batches; b++) {
@@ -253,16 +270,17 @@ void kernel_main() {
                         uint32_t tiles_to_put_in_current_packet =
                             std::min(tiles_remaining_to_read_in_current_direction, num_tiles_to_write_per_packet);
 
+                        uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
+                        pages_read_in_row++;
+                        if (pages_read_in_row == slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
+                        auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            intermediate_addrgen, tile_one_id, 0);
                         // Will have more cases once scatter-write supports more than 2 distinct addresses
                         switch (tiles_to_put_in_current_packet) {
                             case 2: {
-                                uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
-                                pages_read_in_row++;
-                                if (pages_read_in_row == slice_Wt) {
-                                    row_offset += stride_Wt;
-                                    pages_read_in_row = 0;
-                                }
-
                                 uint32_t tile_two_id = input_tile_id_start + row_offset + pages_read_in_row;
                                 pages_read_in_row++;
                                 if (pages_read_in_row == slice_Wt) {
@@ -270,40 +288,32 @@ void kernel_main() {
                                     pages_read_in_row = 0;
                                 }
 
-                                scatter_write_for_fabric_write<
-                                    true,
-                                    fabric_mux_num_buffers_per_channel>(
-                                    intermediate_addrgen,
-                                    tile_one_id,
-                                    tile_two_id,
-                                    pkt_hdr,
-                                    mux_connection_handle,
-                                    l1_read_addr);
+                                auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                    intermediate_addrgen, tile_two_id, 0);
+                                fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                    &mux_connection_handle,
+                                    pkt_scatter_hdr,
+                                    l1_read_addr,
+                                    NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                                l1_read_addr += page_size * 2;
                                 tiles_read += 2;
                                 tiles_read_in_current_direction += 2;
                                 break;
                             }
                             case 1:
                             default: {
-                                uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                                pages_read_in_row++;
-                                if (pages_read_in_row == slice_Wt) {
-                                    row_offset += stride_Wt;
-                                    pages_read_in_row = 0;
-                                }
-
-                                write_for_fabric_write<true,fabric_mux_num_buffers_per_channel>(
-                                    intermediate_addrgen,
-                                    tile_id,
-                                    pkt_hdr,
-                                    mux_connection_handle,
+                                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                    &mux_connection_handle,
+                                    pkt_unicast_hdr,
                                     l1_read_addr,
-                                    intermediate_page_size);
+                                    NocUnicastCommandHeader{noc_address0});
+                                l1_read_addr += intermediate_page_size;
                                 tiles_read++;
                                 tiles_read_in_current_direction++;
                                 break;
                             }
                         }
+                        noc_async_writes_flushed();
                     }
                     cb_pop_front(cb_output_id, tile_granularity);
 
@@ -332,12 +342,12 @@ void kernel_main() {
                         // 2. unicast output ready semaphore
                         uint64_t out_ready_sem_noc_addr_in_pkt =
                             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                        pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            out_ready_sem_noc_addr_in_pkt,
-                            static_cast<uint16_t>(1),  // increment 1
-                            32});
-                        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-                        tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            &mux_connection_handle,
+                            pkt_hdr_seminc,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                                out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                            });
                     }
                 }
 
@@ -345,12 +355,12 @@ void kernel_main() {
                     // 2. unicast output ready semaphore
                     uint64_t out_ready_sem_noc_addr_in_pkt =
                         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                        out_ready_sem_noc_addr_in_pkt,
-                        static_cast<uint16_t>(1),  // increment 1
-                        32});
-                        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-                    tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
+                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        &mux_connection_handle,
+                        pkt_hdr_seminc,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                        });
                 }
                 noc_async_writes_flushed();
             } else {
@@ -400,13 +410,10 @@ void kernel_main() {
                 // 2. mcast half batch ready semaphore
                 uint64_t batch_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-                pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                    batch_ready_sem_noc_addr_in_pkt,
-                    static_cast<uint16_t>(1),  // increment 1
-                    32});
-                // Write the mcast packet
-                ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
-                tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
+                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                    &mux_connection_handle,
+                    pkt_hdr_mcastseminc,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0, 0});
                 noc_async_writes_flushed();
             }
 

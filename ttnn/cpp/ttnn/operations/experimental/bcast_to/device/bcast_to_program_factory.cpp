@@ -18,6 +18,7 @@
 
 #include "bcast_to_device_operation.hpp"
 #include "bcast_to_utils.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace ttnn::operations::experimental::broadcast_to;
 
@@ -161,24 +162,27 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
 
     create_cb(tt::CBIndex::c_1, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
-    const auto src_is_dram = static_cast<const uint32_t>(input.buffer()->is_dram());
-    const auto dst_is_dram = static_cast<const uint32_t>(output.buffer()->is_dram());
-
     auto kernel_config = BcastToKernelConfig(operation_attributes.subtile_broadcast_type);
 
     // READER KERNEL
+    std::vector<uint32_t> reader_compile_time_args{(uint32_t)tt::CBIndex::c_0};
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel),
         all_device_cores,
-        tt::tt_metal::ReaderDataMovementConfig({src_is_dram, (uint32_t)tt::CBIndex::c_0}));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // WRITER KERNEL
+    uint32_t writer_cb_id = (kernel_config.writer_kernel == KernelName::WriterNoBcast) ? (uint32_t)tt::CBIndex::c_0
+                                                                                       : (uint32_t)tt::CBIndex::c_1;
+    std::vector<uint32_t> writer_compile_time_args{writer_cb_id};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.writer_kernel),
         all_device_cores,
-        tt::tt_metal::WriterDataMovementConfig({dst_is_dram, (uint32_t)tt::CBIndex::c_1, (uint32_t)tt::CBIndex::c_0}));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL
     auto compute_id = tt::tt_metal::CreateKernel(

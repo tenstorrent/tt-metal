@@ -8,6 +8,14 @@ from ..utils.tensor import bf16_tensor
 
 
 class CCLManager:
+    """
+    Manages parallelization of DiT model.
+
+        - stores mesh device, num links, topology
+        - caches ping pong buffers and semaphores
+        - sets up one SubDevice spanning all compute cores
+    """
+
     def __init__(
         self,
         mesh_device,
@@ -27,8 +35,9 @@ class CCLManager:
 
         # Initialize semaphores for reduce scatter and all gather
         self._init_semaphores()
-        self.rs_ping_pong_idx = 0
-        self.ag_ping_pong_idx = 0
+        self.rs_ping_pong_idx = [0, 0]
+        self.ag_ping_pong_idx = [0, 0]
+        self.barrier_idx = [0, 0]
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -44,17 +53,26 @@ class CCLManager:
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
 
     def _init_semaphores(self):
-        # Initialize semaphores for reduce scatter ping pong
+        # Initialize semaphores for reduce scatter ping pong - separate for each mesh axis
         rs_n_sems = 3 * 2  # 3 semaphores * 2 for ping pong
-        self.rs_ping_pong_semaphores = [
-            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)
-        ]
+        self.rs_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+        }
 
-        # Initialize semaphores for all gather ping pong
+        # Initialize semaphores for all gather ping pong - separate for each mesh axis
         ag_n_sems = 2 * 2  # 2 semaphores * 2 for ping pong (2 buffers)
-        self.ag_ping_pong_semaphores = [
-            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)
-        ]
+        self.ag_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+        }
+
+        # Initialize barrier semaphore
+        barrier_n_sems = 1 * 2
+        self.barrier_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
+        }
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
         """
@@ -74,10 +92,13 @@ class CCLManager:
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
+            # Synchronize devices to ensure all are ready to allocate and proceed
+            ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
+
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape
             for _ in range(2):
@@ -112,6 +133,8 @@ class CCLManager:
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
+            # Synchronize devices to ensure all are ready to allocate and proceed
+            ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
@@ -129,36 +152,52 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_rs_ping_pong_semaphore(self):
+    def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for reduce scatter ping pong operations.
 
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
         Returns:
             List of 3 semaphores for the current ping pong cycle
         """
-        cur_idx = self.rs_ping_pong_idx
+        cur_idx = self.rs_ping_pong_idx[mesh_axis]
         n_sems = 3
-        self.rs_ping_pong_idx = (cur_idx + 1) % 2
-        return self.rs_ping_pong_semaphores[cur_idx * n_sems : (cur_idx + 1) * n_sems]
+        self.rs_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.rs_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
-    def get_ag_ping_pong_semaphore(self):
+    def get_ag_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for all gather ping pong operations.
 
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
         Returns:
-            List of 3 semaphores for the current ping pong cycle
+            List of 2 semaphores for the current ping pong cycle
         """
-        cur_idx = self.ag_ping_pong_idx
+        cur_idx = self.ag_ping_pong_idx[mesh_axis]
         n_sems = 2
-        self.ag_ping_pong_idx = (cur_idx + 1) % 2
-        return self.ag_ping_pong_semaphores[cur_idx * n_sems : (cur_idx + 1) * n_sems]
+        self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_barrier_semaphore(self, mesh_axis):
+        """
+        Get semaphore for barrier operations.
+        """
+        cur_idx = self.barrier_idx[mesh_axis]
+        n_sems = 1
+        self.barrier_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.barrier_semaphores[mesh_axis][cur_idx]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""
-        for sem in self.rs_ping_pong_semaphores:
-            ttnn.reset_global_semaphore_value(sem, 0)
-        for sem in self.ag_ping_pong_semaphores:
-            ttnn.reset_global_semaphore_value(sem, 0)
+        for axis in [0, 1]:
+            for sem in self.rs_ping_pong_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self.ag_ping_pong_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
 
     def get_ag_hyperparams(self, shape):
         if shape[2] > 512:

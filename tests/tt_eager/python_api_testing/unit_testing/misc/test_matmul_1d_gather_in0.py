@@ -5,8 +5,8 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 import random
 import math
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (

@@ -21,24 +21,24 @@ void kernel_main() {
     constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr bool input_mask_is_dram = get_compile_time_arg_val(5) == 1;
 
     // Used only if negative mask is passed in kernel, i.e. if define FUSE_NEGATIVE_MASK is defined
 
-    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(6);
+    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(3);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(7);
-    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
+    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
 
-    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(11);
-    constexpr uint32_t block_w = get_compile_time_arg_val(12);
+    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(7);
+    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(8);
+    constexpr uint32_t block_w = get_compile_time_arg_val(9);
 
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t size = get_compile_time_arg_val(15);
+    constexpr uint32_t size = get_compile_time_arg_val(10);
+
+    constexpr auto gamma_args = TensorAccessorArgs<11>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
@@ -59,20 +59,15 @@ void kernel_main() {
     // constexpr uint32_t block_w = 4;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
-    const DataFormat input_mask_data_format = get_dataformat(cb_input_mask);
 
     // input mask
-    const InterleavedAddrGenFast<input_mask_is_dram> mask = {
-        .bank_base_address = input_mask_addr,
-        .page_size = input_mask_single_tile_size_bytes,
-        .data_format = input_mask_data_format};
+    const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
 
 #if defined(FUSE_NEGATIVE_MASK)
     constexpr uint32_t cb_input_negative_mask = tt::CBIndex::c_14;
     const uint32_t input_negative_mask_single_tile_size_bytes = get_tile_size(cb_input_negative_mask);
-    const DataFormat input_negative_mask_data_format = get_dataformat(cb_input_negative_mask);
 
-    constexpr auto negative_mask_args = TensorAccessorArgs<13>();
+    constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
     const auto negative_mask_tensor_accessor =
         TensorAccessor(negative_mask_args, input_negative_mask_addr, input_negative_mask_single_tile_size_bytes);
 
@@ -127,7 +122,7 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-                    const auto gamma = get_interleaved_addr_gen<gamma_is_dram, stick_size_is_pow2>(gamma_addr, size);
+                    const auto gamma = TensorAccessor(gamma_args, gamma_addr, size);
 
                     cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
@@ -151,7 +146,7 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-                    const auto beta = get_interleaved_addr_gen<beta_is_dram, stick_size_is_pow2>(beta_addr, size);
+                    const auto beta = TensorAccessor(beta_args, beta_addr, size);
 
                     uint32_t l1_write_addr_beta = get_write_ptr(cb_beta);
                     cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);

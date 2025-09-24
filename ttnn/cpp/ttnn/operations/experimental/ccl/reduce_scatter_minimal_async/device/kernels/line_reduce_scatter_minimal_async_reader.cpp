@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -12,35 +11,31 @@
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr BufferType input_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(1));
-constexpr BufferType intermediate_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr BufferType output_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(4);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(5);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(6);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(7);
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(8);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(9);
-constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(10);
-constexpr uint32_t ring_size = get_compile_time_arg_val(11);
-constexpr uint32_t num_batches = get_compile_time_arg_val(12);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(13);
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(14);
-constexpr bool is_forward = get_compile_time_arg_val(15);
-constexpr bool is_first_device_in_direction = get_compile_time_arg_val(16);
-constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(17);
-constexpr uint32_t num_intermediate_reduction_steps = get_compile_time_arg_val(18);
-constexpr bool do_final_reduction = get_compile_time_arg_val(19);
-constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(20);
-constexpr bool sync_with_other_direction = get_compile_time_arg_val(21);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(22);
+constexpr uint32_t cb_input_id = get_compile_time_arg_val(1);
+constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(2);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
+constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(6);
+constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t ring_size = get_compile_time_arg_val(8);
+constexpr uint32_t num_batches = get_compile_time_arg_val(9);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(10);
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
+constexpr bool is_forward = get_compile_time_arg_val(12);
+constexpr bool is_first_device_in_direction = get_compile_time_arg_val(13);
+constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(14);
+constexpr uint32_t num_intermediate_reduction_steps = get_compile_time_arg_val(15);
+constexpr bool do_final_reduction = get_compile_time_arg_val(16);
+constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(17);
+constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(19);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -57,7 +52,7 @@ void kernel_main() {
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    constexpr uint32_t ct_idx = 23;
+    constexpr uint32_t ct_idx = 20;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
@@ -78,13 +73,9 @@ void kernel_main() {
 
     arg_idx += input_rt_increment;
 #else
-    constexpr uint32_t ct_offset_one = 0;
-
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
-        .bank_base_address = input_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
+    constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
+    constexpr uint32_t ct_offset_one = input_tensor_args.num_compile_time_args();
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -109,13 +100,10 @@ void kernel_main() {
 
     arg_idx += intermediate_rt_increment;
 #else
-    constexpr uint32_t ct_offset_two = 0;
-
-    constexpr bool intermediate_tensor_is_dram = intermediate_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<intermediate_tensor_is_dram>{
-        .bank_base_address = intermediate_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset_one>();
+    constexpr uint32_t ct_offset_two = intermediate_tensor_args.num_compile_time_args();
+    auto intermediate_tensor_addrgen =
+        TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, input_tensor_page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -138,11 +126,8 @@ void kernel_main() {
 
     arg_idx += output_rt_increment;
 #else
-    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto output_tensor_addrgen = InterleavedAddrGenFast<output_tensor_is_dram>{
-        .bank_base_address = output_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
+    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset_one + ct_offset_two>();
+    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address, input_tensor_page_size);
 #endif
 
     ReduceScatterOpReceiver matmul_receiver;

@@ -59,12 +59,12 @@ void kernel_main() {
     tt_l1_ptr uint32_t* worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
-    constexpr DataFormat data_format = get_dataformat(cb_weight_tiled);
-    const InterleavedAddrGen<true> out_writer = {.bank_base_address = out_addr, .page_size = out_row_size_bytes};
-    const InterleavedAddrGenFast<true> weight_reader = {
-        .bank_base_address = weight_addr, .page_size = tile_bytes, .data_format = data_format};
-    const InterleavedAddrGenFast<true> bias_reader = {
-        .bank_base_address = bias_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    const auto out_writer = TensorAccessor(out_args, out_addr, out_row_size_bytes);
+    const auto weight_reader = TensorAccessor(weight_args, weight_addr, tile_bytes);
+    const auto bias_reader = TensorAccessor(bias_args, bias_addr, tile_bytes);
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -168,8 +168,8 @@ void kernel_main() {
                                 for (uint32_t h = h_block; h < h_block_end; ++h) {
                                     for (uint32_t w = w_block; w < w_block_end; ++w) {
                                         uint32_t out_page_idx = t * H_out * W_out + h * W_out + w;
-                                        uint64_t dst_addr = get_noc_addr(out_page_idx, out_writer);
-                                        dst_addr += c_out_block * C_out_block_bytes;  // Using block index directly
+                                        uint64_t dst_addr = out_writer.get_noc_addr(out_page_idx);
+                                        dst_addr += c_out_block * C_out_block_bytes;
                                         noc_async_write(cb_read_ptr, dst_addr, C_out_block_bytes);
                                         cb_read_ptr += C_out_block_bytes;
                                     }

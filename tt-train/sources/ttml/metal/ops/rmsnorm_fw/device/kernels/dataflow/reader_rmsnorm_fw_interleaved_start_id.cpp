@@ -69,13 +69,10 @@ void kernel_main() {
     generate_tile_with_value(cb_eps_idx, packed_eps);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_format = get_dataformat(cb_input_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast</* is_dram */ true> gamma_address_generator = {
-        .bank_base_address = gamma_address, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto input_args = TensorAccessorArgs<5>();
+    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address, tile_bytes);
 
     const uint32_t max_block_size = 4;
 

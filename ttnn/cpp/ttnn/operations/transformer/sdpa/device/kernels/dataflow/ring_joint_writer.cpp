@@ -35,6 +35,10 @@ void kernel_main() {
     constexpr uint32_t global_padded_NK_chunks = get_compile_time_arg_val(22);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(23);
 
+    constexpr auto out_args = TensorAccessorArgs<24>();
+    constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
+
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
     // Only one iteration of the ring will contain the masked portion of the spatial input.
@@ -53,21 +57,16 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    constexpr bool is_dram = true;
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
-    constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const InterleavedAddrGenFast<is_dram> out_writer = {
-        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
-    const InterleavedAddrGenFast<is_dram> joint_out_writer = {
-        .bank_base_address = joint_out_addr, .page_size = tile_bytes, .data_format = data_format};
-    const InterleavedAddrGenFast<is_dram> lse_writer = {
-        .bank_base_address = lse_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
+    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
+    const auto lse_writer = TensorAccessor(lse_args, lse_addr, tile_bytes);
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, logical_Lt, DHt);

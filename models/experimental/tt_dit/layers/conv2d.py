@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from ..parallel.config import vae_all_gather
 from ..utils.tensor import bf16_tensor_host
 
 
@@ -73,7 +74,7 @@ class Conv2d:
         dilation=None,
         mesh_device=None,
         mesh_axis=None,
-        parallel_manager=None,
+        ccl_manager=None,
         torch_ref=None,
     ):
         """
@@ -88,7 +89,7 @@ class Conv2d:
             dilation: Dilation of the convolution.
             mesh_device: Mesh device to use.
             mesh_axis: Axis to use for mesh parallelism.
-            parallel_manager: Parallel manager to use.
+            ccl_manager: CCL manager to use.
             torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
         Returns:
             Conv2d layer.
@@ -104,17 +105,17 @@ class Conv2d:
         self.weight = None
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
-        self.parallel_manager = parallel_manager
+        self.ccl_manager = ccl_manager
 
         if torch_ref is not None:
             self.load_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device, mesh_axis, parallel_manager):
+    def from_torch(cls, torch_ref, mesh_device, mesh_axis, ccl_manager):
         layer = cls(
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
-            parallel_manager=parallel_manager,
+            ccl_manager=ccl_manager,
             torch_ref=torch_ref,
         )
         return layer
@@ -155,7 +156,7 @@ class Conv2d:
         TODO: Add support for DP and SP
         """
         if self.is_sharded_tensor(x):
-            x = self.parallel_manager.vae_all_gather(x)
+            x = vae_all_gather(self.ccl_manager, x)
 
         b, h, w, c = x.shape
         slice_config = ttnn.Conv2dSliceConfig(

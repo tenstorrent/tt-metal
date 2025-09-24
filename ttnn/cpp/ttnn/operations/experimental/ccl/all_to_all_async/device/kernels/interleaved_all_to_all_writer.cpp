@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -11,7 +10,6 @@
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -21,16 +19,15 @@ constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(2);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(3);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(4));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(6);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
-constexpr uint32_t chunk_granularity = get_compile_time_arg_val(11);
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(12);
-constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(13);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
+constexpr uint32_t chunk_granularity = get_compile_time_arg_val(10);
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
+constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(12);
 
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
@@ -84,14 +81,11 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
 
-    // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = intermediate_buffer_addr,
-        .page_size = tensor0_page_size,
-        .data_format = get_dataformat(cb0_id)};
-    auto output_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = output_buffer_addr, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<13>();
+    auto intermediate_tensor_addrgen =
+        TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, tensor0_page_size);
+    constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
+    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr, tensor0_page_size);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open_finish();
@@ -149,32 +143,27 @@ void kernel_main() {
 
                     packet_id++;  // increment packet_id for chunk calculation
 
-                    uint64_t noc0_dest_noc_addr =
-                        get_noc_addr(first_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
                     uint32_t current_chunk_id = packet_id / chunk_granularity;
                     if (current_chunk_id != prev_chunk_id) {
                         // Fused payload write with atomic inc
-                        cur_pkt_header->to_noc_fused_unicast_write_atomic_inc(
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                noc0_dest_noc_addr, output_semaphore_noc_addr_in_pkt, 1, 32, false},
-                            payload_size_bytes);
-                        cur_connection.wait_for_empty_write_slot();
-                        cur_connection.send_payload_without_header_non_blocking_from_address(
-                            l1_read_addr, payload_size_bytes);
-                        cur_connection.send_payload_flush_non_blocking_from_address(
-                            (uint32_t)cur_pkt_header, sizeof(PACKET_HEADER_TYPE));
+                        perform_atomic_fabric_write(
+                            cur_pkt_header,
+                            first_id,
+                            intermediate_tensor_addrgen,
+                            cur_connection,
+                            l1_read_addr,
+                            payload_size_bytes,
+                            output_semaphore_noc_addr_in_pkt,
+                            1,
+                            32,
+                            false);
 
                         prev_chunk_id = current_chunk_id;
                     } else {
                         // Unicast payload write
-                        cur_pkt_header->to_noc_unicast_write(
-                            tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
-                        cur_connection.wait_for_empty_write_slot();
-                        cur_connection.send_payload_without_header_non_blocking_from_address(
-                            l1_read_addr, payload_size_bytes);
-                        cur_connection.send_payload_flush_non_blocking_from_address(
-                            (uint32_t)cur_pkt_header, sizeof(PACKET_HEADER_TYPE));
+                        tt::tt_fabric::linear::to_noc_unicast_write(
+                            payload_size_bytes, cur_pkt_header, first_id, intermediate_tensor_addrgen);
+                        perform_payload_send(cur_connection, l1_read_addr, payload_size_bytes, cur_pkt_header);
                     }
 
                     noc_async_writes_flushed();

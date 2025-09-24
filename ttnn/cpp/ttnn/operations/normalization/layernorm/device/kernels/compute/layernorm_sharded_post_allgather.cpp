@@ -30,7 +30,9 @@ void MAIN {
     const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(11);
+    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
+    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
@@ -108,11 +110,11 @@ void MAIN {
 #endif
 
             cb_wait_front(cb_scaler_global, 1);
-            reduce_init(cb_stats, cb_scaler_global, cb_var);
+            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_scaler_global, cb_var);
             tile_regs_acquire();
             // striding over cb_stats, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
             for (uint32_t w = 0; w < stats_tiles * num_distributed_blocks; w++) {
-                reduce_tile(
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                     cb_stats,
                     cb_scaler_global,
                     0,
@@ -183,10 +185,8 @@ void MAIN {
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, dst0);
             tile_regs_wait();
-            sqrt_tile_init();
-            sqrt_tile(dst0);
-            recip_tile_init();
-            recip_tile(dst0);
+            rsqrt_tile_init<LEGACY_RSQRT>();
+            rsqrt_tile<LEGACY_RSQRT>(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_stats_reduced);

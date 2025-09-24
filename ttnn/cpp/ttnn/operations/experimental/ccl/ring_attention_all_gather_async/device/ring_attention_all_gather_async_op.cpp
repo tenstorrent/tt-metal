@@ -14,7 +14,7 @@ namespace ttnn {
 void RingAttentionAllGatherAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(
-        input_tensors.size() > 0, "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
+        !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
 
     const auto& first_input_tensor = input_tensors[0];
     const auto& dtype = first_input_tensor.dtype();
@@ -55,7 +55,7 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
         memory_config.memory_layout());
 
     // Validate output tensors if provided
-    if (output_tensors.size() > 0) {
+    if (!output_tensors.empty()) {
         TT_FATAL(
             output_tensors.size() == input_tensors.size(),
             "Number of output tensors ({}) must match number of input tensors ({})",
@@ -128,12 +128,12 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RingAttentionAllGatherAsync::
 tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
-    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+    const auto& mesh_view = input_tensors[0].device()->get_view();
     devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
                                                        : mesh_view.get_devices_on_row(coord[0]);
 
@@ -186,7 +186,11 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
-        this->sub_device_id,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,

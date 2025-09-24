@@ -57,6 +57,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp
@@ -135,6 +136,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
@@ -147,6 +150,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
@@ -159,6 +164,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tokenizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
@@ -228,6 +235,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # SDPA Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -407,9 +422,7 @@ endif()
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
-set(GPT2_TOKENIZER_URL
-    "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json"
-)
+set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
 set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
 
 # Check if the file already exists before downloading

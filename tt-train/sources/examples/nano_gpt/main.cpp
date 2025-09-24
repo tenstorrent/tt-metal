@@ -6,8 +6,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
-#include <ttnn/distributed/create_socket.hpp>
-#include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
 #include "3tier/remote_optimizer.hpp"
@@ -27,8 +25,11 @@
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/no_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 
 namespace {
@@ -44,7 +45,7 @@ void signal_handler(int signum) {
     exit(signum);
 }
 
-using Model = std::shared_ptr<ttml::autograd::ModuleBase>;
+using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
 void model_to_eval(Model &model) {
     model->eval();
@@ -96,140 +97,6 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
-uint32_t sample(std::span<const float> log_softmax) {
-    auto probabilities_vector = std::vector<float>(log_softmax.size());
-    std::transform(log_softmax.begin(), log_softmax.end(), probabilities_vector.begin(), [](float value) {
-        return std::exp(value);
-    });
-    auto distribution = std::discrete_distribution<uint32_t>(probabilities_vector.begin(), probabilities_vector.end());
-    return distribution(ttml::autograd::ctx().get_generator());
-}
-
-inline void apply_repetition_penalty(
-    std::vector<float> &logits, const std::vector<uint32_t> &history, float repetition_penalty) {
-    if (repetition_penalty <= 1.0F) {
-        return;  // no penalty
-    }
-    for (auto token_id : history) {
-        float &val = logits[token_id];
-        if (val > 0.0F) {
-            val /= repetition_penalty;
-        } else {
-            val *= repetition_penalty;
-        }
-    }
-}
-
-inline void top_k_filter(std::vector<float> &logits, int top_k) {
-    if (top_k <= 0 || static_cast<size_t>(top_k) >= logits.size()) {
-        return;
-    }
-    std::vector<float> copy = logits;
-    std::nth_element(copy.begin(), copy.end() - top_k, copy.end());
-    float cutoff = *(copy.end() - top_k);
-
-    for (auto &val : logits) {
-        if (val < cutoff) {
-            val = -std::numeric_limits<float>::infinity();
-        }
-    }
-}
-
-inline void top_p_filter(std::vector<float> &logits, float top_p) {
-    if (top_p <= 0.0F || top_p >= 1.0F) {
-        return;  // no filtering
-    }
-
-    std::vector<float> probs(logits.size());
-    for (size_t i = 0; i < logits.size(); i++) {
-        probs[i] = std::exp(logits[i]);
-    }
-    float sum = 0.0F;
-    for (auto x : probs) {
-        sum += x;
-    }
-    // argsort
-    std::vector<size_t> indices(logits.size());
-    for (size_t i = 0; i < indices.size(); ++i) {
-        indices[i] = i;
-    }
-    std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
-        return probs[a] > probs[b];  // descending by prob
-    });
-    // smallest set of tokens whose sum >= top_p
-    float cum_prob = 0.0F;
-    size_t cutoff_idx = 0;
-    for (size_t rank = 0; rank < indices.size(); ++rank) {
-        auto idx = indices[rank];
-        cum_prob += probs[idx] / sum;
-        if (cum_prob > top_p) {
-            cutoff_idx = rank;
-            break;
-        }
-    }
-    for (size_t rank = cutoff_idx + 1; rank < indices.size(); ++rank) {
-        auto idx = indices[rank];
-        logits[idx] = -std::numeric_limits<float>::infinity();
-    }
-}
-
-inline uint32_t sample_with_strategy(
-    std::span<float> logits_span,
-    const std::vector<uint32_t> &history,
-    float temperature,
-    float repetition_penalty,
-    int top_k,
-    float top_p) {
-    std::vector<float> logits(logits_span.begin(), logits_span.end());
-    size_t vocab_size = logits.size();
-
-    apply_repetition_penalty(logits, history, repetition_penalty);
-
-    if (temperature > 0.0F && std::fabs(temperature - 1.0F) > 1e-6f) {
-        for (auto &val : logits) {
-            val /= temperature;
-        }
-    }
-    auto max_it = std::max_element(logits.begin(), logits.end());
-    float max_val = (max_it != logits.end()) ? *max_it : 0.0F;
-    for (auto &val : logits) {
-        val -= max_val;
-    }
-
-    // 4) top-k filter
-    top_k_filter(logits, top_k);
-
-    // 5) top-p (nucleus) filter
-    top_p_filter(logits, top_p);
-
-    // 6) Convert to probabilities + sample
-    //    Recompute stable exponent after filtering
-    float sum_exp = 0.0F;
-    for (auto val : logits) {
-        if (val > -std::numeric_limits<float>::infinity()) {
-            sum_exp += std::exp(val);
-        }
-    }
-
-    auto &rng = ttml::autograd::ctx().get_generator();
-    std::uniform_real_distribution<float> dist(0.0F, 1.0F);
-
-    float r = dist(rng);
-    float cum = 0.0F;
-    for (size_t i = 0; i < vocab_size; ++i) {
-        if (logits[i] == -std::numeric_limits<float>::infinity()) {
-            continue;
-        }
-        float p = std::exp(logits[i]) / sum_exp;
-        cum += p;
-        if (r <= cum) {
-            return static_cast<uint32_t>(i);
-        }
-    }
-    // Fallback
-    return static_cast<uint32_t>(vocab_size - 1);
-}
-
 template <typename Tokenizer>
 void generate(
     Model &model,
@@ -263,7 +130,7 @@ void generate(
     auto *device = &ttml::autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
-    auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
+    auto padded_vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
@@ -279,10 +146,39 @@ void generate(
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
+    std::vector<float> padded_logits_vector(padded_vocab_size, 0.0F);
 
     fmt::print("Generated text:\n");
     fmt::print("*******************\n");
     fmt::print("{}", prompt);
+
+    // Sampling setup
+    uint32_t prompt_tokens_padded_size = 0U;
+    uint32_t next_token_id = 0U;
+
+    auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+        std::vector<float>(original_vocab_size, 0.0F),
+        ttnn::Shape({1, 1, 1, original_vocab_size}),
+        device,
+        ttnn::Layout::ROW_MAJOR);
+
+    auto next_token_tensor = ttml::core::zeros(ttnn::Shape({1U, 1U, 1U}), device, tt::tt_metal::DataType::UINT32);
+
+    std::vector<uint32_t> next_token_vector;
+    std::vector<float> logits_vector(original_vocab_size, 0.0F);
+
+    // Create a large negative mask for out-of-vocab logits
+    auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
+
+    auto argmax_zeros =
+        ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
+
+    auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
+        vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
+
+    auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
+
+    auto logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
 
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
@@ -291,7 +187,6 @@ void generate(
         if (prompt_tokens.size() > max_sequence_length) {
             start_idx = static_cast<uint32_t>(prompt_tokens.size() - max_sequence_length);
         }
-
         // Fill padded array
         for (uint32_t i = 0; i < max_sequence_length; ++i) {
             prompt_tokens_padded[i] = pad_token_id;
@@ -299,42 +194,40 @@ void generate(
         for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
             prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
         }
-        auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
+        prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            prompt_tokens_padded, ttnn::Shape({1, 1, 1, prompt_tokens_padded_size}), device, ttnn::Layout::ROW_MAJOR));
+            prompt_tokens_padded,
+            ttnn::Shape({1U, 1U, 1U, prompt_tokens_padded_size}),
+            device,
+            ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
-        // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
+        // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
-
-        // Convert last position's logits to a std::vector
-        auto output_vector = ttml::core::to_vector(output->get_value());
+        next_token_tensor = ttml::ttnn_fixed::sample(
+            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask);
 
         // The index of the last token in the "effective" input
         // (Your indexing may vary depending on how your model outputs are shaped)
         uint32_t predicted_token_idx =
             (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
 
-        // Extract the logits for the last token
-        // (Assuming output is flattened so that token dimension is first,
-        //  then you'd do: offset = predicted_token_idx * vocab_size)
-        size_t offset = static_cast<size_t>(predicted_token_idx) * vocab_size;
-        auto logits_ptr = output_vector.data() + offset;
+        // ** TTNN Argmax **
 
-        // Now we do advanced sampling from these logits
-        uint32_t next_token_id = sample_with_strategy(
-            std::span<float>(logits_ptr, original_vocab_size),
-            prompt_tokens,  // entire history for repetition penalty
-            temperature,
-            repetition_penalty,
-            top_k,
-            top_p);
+        auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor);
+        next_token_id = next_token_vector[predicted_token_idx];
+
+        // Handle out-of-vocabulary token
+        if (next_token_id >= original_vocab_size) {
+            next_token_id = prompt_tokens.back();
+        }
 
         // Append the new token
         prompt_tokens.push_back(next_token_id);
 
         // Decode and print
         fmt::print("{}", tokenizer.decode({next_token_id}));
+        std::cout.flush();
 
         // Reset the autograd graph if needed
         ttml::autograd::ctx().reset_graph();
@@ -374,6 +267,7 @@ struct TrainingConfig {
     uint32_t max_steps = 5000;
     float learning_rate = 3e-4F;
     float weight_decay = 1e-2F;
+    bool use_no_op = false;
     bool use_moreh_adamw = false;
     // works only for AdamW
     bool use_kahan_summation = false;
@@ -406,6 +300,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.learning_rate = training_config["learning_rate"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
+    config.use_no_op = training_config["use_no_op"].as<bool>(config.use_no_op);
     config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.gradient_accumulation_steps =
@@ -502,6 +397,7 @@ int main(int argc, char **argv) {
     bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = false;
+    std::string safetensors_path = "";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
@@ -510,6 +406,8 @@ int main(int argc, char **argv) {
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
         ->default_val(save_and_exit_path);
+    app.add_option("--safetensors", safetensors_path, "Loads safetensors model from the given path")
+        ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(config_name);
@@ -667,15 +565,10 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    if (config.socket_type == SocketType::FABRIC) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
-            throw std::runtime_error(fmt::format(
-                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
-                device_config.mesh_shape));
-        }
-    } else if (device_config.enable_tp || device_config.enable_ddp) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
+    // enable fabric config for 3-tier architecture, tp, ddp
+    if (config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
+        ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
@@ -696,7 +589,7 @@ int main(int argc, char **argv) {
         }
     }
     cached_data.masks_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
+        ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
@@ -760,7 +653,6 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
     std::visit(
         [&](auto &&arg) {
@@ -795,6 +687,11 @@ int main(int argc, char **argv) {
         },
         config.transformer_config);
 
+    if (!safetensors_path.empty()) {
+        fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
+        model->load_from_safetensors(safetensors_path);
+        fmt::print("Model loaded from safetensors\n");
+    }
     if (!save_and_exit_path.empty()) {
         if (std::filesystem::exists(save_and_exit_path)) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
@@ -840,7 +737,10 @@ int main(int argc, char **argv) {
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
     adamw_params.use_kahan_summation = config.use_kahan_summation;
-    if (!config.enable_mpi) {
+
+    if (config.use_no_op) {
+        fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
+    } else if (!config.enable_mpi) {
         fmt::print("AdamW configuration:\n");
         fmt::print("    Learning rate: {}\n", adamw_params.lr);
         fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
@@ -851,19 +751,20 @@ int main(int argc, char **argv) {
 
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
-    auto select_optimizer =
-        [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+    auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
             return std::make_unique<RemoteOptimizer>(
                 get_model_parameters(model), config.num_mh_workers, config.socket_type);
-        } else if (use_moreh_adamw) {
+        } else if (config.use_no_op) {
+            return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
+        } else if (config.use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
             return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
         }
     };
 
-    auto optimizer = select_optimizer(config.use_moreh_adamw);
+    auto optimizer = select_optimizer();
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (config.enable_mpi) {
@@ -874,6 +775,8 @@ int main(int argc, char **argv) {
         fmt::println("[worker] Remote optimizer receiving weights from rank {}", config.num_mh_workers);
         optimizer_ptr->receive_weights();
         fmt::println("[worker] Remote optimizer received weights from rank {}", config.num_mh_workers);
+    } else if (config.use_no_op) {
+        fmt::print("Skipping training state load (NoOp optimizer)\n");
     } else {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
@@ -892,6 +795,16 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi && config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
+    }
+
+    if (device_config.enable_ddp) {
+        auto num_devices = static_cast<uint32_t>(device->num_devices());
+        if (config.batch_size % num_devices != 0) {
+            throw std::logic_error(fmt::format(
+                "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
+                config.batch_size,
+                num_devices));
+        }
     }
 
     auto get_samples_count = [&config](uint32_t global_step) {
@@ -944,7 +857,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!device_config.enable_tp && !config.enable_mpi) {
+                if (device_config.enable_ddp && !config.enable_mpi) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 

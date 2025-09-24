@@ -11,27 +11,15 @@ void kernel_main() {
     uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(1);
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr uint32_t in0_is_dram = get_compile_time_arg_val(1);
     // READER COMPILE TIME ARGS
-    constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_c = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_HtWt = get_compile_time_arg_val(4);
+    constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t in0_c = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_HtWt = get_compile_time_arg_val(2);
+    constexpr auto in0_args = TensorAccessorArgs<3>();
 
     constexpr uint32_t cb_id_in0 = 0;
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
-
-    constexpr bool in0_is_dram_bool = in0_is_dram == 1;
-    constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
-
-    DataFormat data_format = DataFormat::Invalid;
-    if constexpr (tile_dtype_is_bfloat16) {
-        data_format = DataFormat::Float16;
-    } else {
-        data_format = DataFormat::Bfp8_b;
-    }
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
 
     uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
     uint32_t in0_tensor_current_tile_id = in0_tensor_tile_id;

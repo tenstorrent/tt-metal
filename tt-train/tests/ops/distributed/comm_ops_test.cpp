@@ -5,14 +5,15 @@
 #include "ops/distributed/comm_ops.hpp"
 
 #include <gtest/gtest.h>
-#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
 
@@ -28,7 +29,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().set_seed(42);
     }
@@ -98,10 +99,6 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
 TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
-
-    size_t batch_multiplier = rand() % 8 + 1;
-    size_t size_multiplier = rand() % 6 + 1;
-    size_t height_multiplier = rand() % 8 + 1;
 
     size_t batch = 64;
     size_t size = 384;

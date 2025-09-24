@@ -18,6 +18,7 @@ set(SOURCES
     ttnn_fixed/matmuls_test.cpp
     ttnn_fixed/reduce_ops_test.cpp
     ttnn_fixed/dropout_op_test.cpp
+    ttnn_fixed/slice_op_test.cpp
     autograd/autograd_tensor.cpp
     autograd/autograd_test.cpp
     autograd/module_base_parameters_test.cpp
@@ -33,10 +34,12 @@ set(SOURCES
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
     serialization/msgpack_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
+    serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
     ops/layer_norm_op_test.cpp
@@ -50,6 +53,7 @@ set(SOURCES
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
+    ops/sdpa_fw_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
@@ -78,6 +82,7 @@ else()
 endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")

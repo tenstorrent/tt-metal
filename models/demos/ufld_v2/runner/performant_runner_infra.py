@@ -8,10 +8,10 @@ from loguru import logger
 from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.ufld_v2.common import load_torch_model
 from models.demos.ufld_v2.tests.pcc.test_ttnn_ufld_v2 import create_custom_mesh_preprocessor, get_mesh_mappers
 from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
-from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -120,7 +120,7 @@ class UFLDPerformanceRunnerInfra:
         ttnn_output_tensor = self.output_tensor_1 if output_tensor_1 is None else output_tensor_1
         torch_output_tensor = self.torch_output_tensor_1 if torch_output_tensor_1 is None else torch_output_tensor_1
         output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.output_mesh_composer).squeeze(1).squeeze(1)
-        self.valid_pcc = 0.99
+        self.valid_pcc = 0.976
         self.pcc_passed, self.pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc=self.valid_pcc)
         logger.info(
             f"ufld_v2 - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"

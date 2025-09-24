@@ -6,6 +6,7 @@ import pytest
 import torchvision.transforms as transforms
 from diffusers import StableDiffusionPipeline
 
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.demo.demo import load_inputs
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference as demo
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference_diffusiondb as demo_db
@@ -13,7 +14,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192, "trace_region_size": 789321728}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}], indirect=True
+)
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),
@@ -33,7 +36,9 @@ def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192, "trace_region_size": 789835776}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}], indirect=True
+)
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),

@@ -6,21 +6,20 @@
 
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/fabric.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
-class UnitMeshMultiCQSingleDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQSingleDeviceFixture : public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -111,7 +110,7 @@ protected:
         this->create_device(0 /* device_id */, trace_region_size);
     }
 };
-class UnitMeshMultiCQMultiDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;

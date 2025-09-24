@@ -24,9 +24,8 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <umd/device/tt_xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -40,6 +39,7 @@ uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
 
 void issue_record_event_commands(
     IDevice* device,
+    chip_id_t device_id,
     uint32_t event_id,
     uint8_t cq_id,
     uint32_t num_command_queues,
@@ -130,8 +130,9 @@ void issue_record_event_commands(
 
     if (notify_host) {
         bool flush_prefetch = true;
+        uint16_t pad1 = (device_id << 8) | cq_id;
         command_sequence.add_dispatch_write_host<true>(
-            flush_prefetch, DispatchSettings::EVENT_PADDED_SIZE, true, event_payload.data());
+            flush_prefetch, DispatchSettings::EVENT_PADDED_SIZE, true, pad1, event_payload.data());
     }
 
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
@@ -170,6 +171,7 @@ void issue_wait_for_event_commands(
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
     chip_id_t mmio_device_id,
+    chip_id_t device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager) {
@@ -182,6 +184,25 @@ void read_events_from_completion_queue(
         read_ptr,
         mmio_device_id,
         channel);
+
+    CQDispatchCmd* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(dispatch_cmd_and_event.data());
+    uint32_t expected_padding_value = HugepageDeviceCommand::random_padding_value();
+    uint16_t expected_pad1 = (device_id << 8) | cq_id;
+
+    TT_FATAL(
+        dispatch_cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST && dispatch_cmd->write_linear_host.is_event &&
+            dispatch_cmd->write_linear_host.length == sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE &&
+            dispatch_cmd->write_linear_host.pad1 == expected_pad1 &&
+            dispatch_cmd->write_linear_host.pad2 == expected_padding_value,
+        "Unexpected values for event in completion queue, got cmd id {}, is event {}, length {}, pad1 {} (expected "
+        "{}), pad2 {} (expected {})",
+        dispatch_cmd->base.cmd_id,
+        dispatch_cmd->write_linear_host.is_event,
+        dispatch_cmd->write_linear_host.length,
+        dispatch_cmd->write_linear_host.pad1,
+        expected_pad1,
+        dispatch_cmd->write_linear_host.pad2,
+        expected_padding_value);
     uint32_t event_completed = dispatch_cmd_and_event[sizeof(CQDispatchCmd) / sizeof(uint32_t)];
 
     TT_FATAL(

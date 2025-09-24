@@ -10,11 +10,13 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include <unordered_map>
 
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -68,6 +70,52 @@ auto compute_program_hash(
     }
 }
 
+// Helper to create a mesh workload from a WorkloadFactory that may or may not
+// provide create_mesh_workload. If missing, synthesize it from create_at.
+template <typename WorkloadFactory, typename device_operation_t>
+static auto create_mesh_workload_from_workload_factory(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
+    if constexpr (requires(
+                      const typename device_operation_t::operation_attributes_t& operation_attributes,
+                      const ttnn::MeshCoordinateRangeSet& tensor_coords,
+                      const typename device_operation_t::tensor_args_t& tensor_args,
+                      typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                      WorkloadFactory::create_mesh_workload(
+                          operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                  }) {
+        return WorkloadFactory::create_mesh_workload(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const ttnn::MeshCoordinate& mesh_coordinate,
+                             const typename device_operation_t::tensor_args_t& tensor_args,
+                             typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                             WorkloadFactory::create_at(
+                                 operation_attributes, mesh_coordinate, tensor_args, tensor_return_value);
+                         }) {
+        using shared_variables_t = typename WorkloadFactory::shared_variables_t;
+        tt::tt_metal::distributed::MeshWorkload mesh_workload;
+        std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+        for (const auto& coord : tensor_coords.coords()) {
+            auto cached_program =
+                WorkloadFactory::create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+            mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+            shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+        }
+        return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+    } else {
+        static_assert(
+            tt::stl::concepts::always_false_v<WorkloadFactory>,
+            "WorkloadFactory must implement create_mesh_workload(operation_attributes, tensor_coords, tensor_args, "
+            "tensor_return_value) or create_at(operation_attributes, mesh_coordinate, tensor_args, "
+            "tensor_return_value, tensor_coords)");
+    }
+}
+
 struct CheckDeviceBufferIsAllocated {
     std::size_t index = 0;
 
@@ -110,7 +158,7 @@ inline void log_operation(
     log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
 
     log_debug(tt::LogOp, "Attributes:");
-    for (const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+    for ([[maybe_unused]] const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
         log_debug(tt::LogOp, "\t{} = {}", key, value);
     }
 
@@ -140,7 +188,6 @@ inline void log_operation(
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
-    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -152,7 +199,7 @@ void enqueue_mesh_workload(
     }
     {
         ZoneScopedN("EnqueueMeshWorkload");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     }
 
     TracyOpMeshWorkload(
@@ -178,7 +225,6 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
-    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -202,19 +248,13 @@ void handle_mesh_adapter_cache_hit(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
 
             enqueue_mesh_workload<mesh_device_operation_t>(
-                cq_id,
-                operation_attributes,
-                tensor_args,
-                tensor_return_value,
-                mesh_device,
-                cached_mesh_workload.workload);
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
         });
 }
 
 // Helper for creating and caching a mesh workload
 template <DeviceOperationConcept mesh_device_operation_t>
 void create_and_cache_mesh_workload(
-    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -246,7 +286,7 @@ void create_and_cache_mesh_workload(
                     tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
                 }
             }
-            auto cached_workload = WorkloadFactory::create_mesh_workload(
+            auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
             if (program_cache.is_enabled()) {
@@ -255,15 +295,10 @@ void create_and_cache_mesh_workload(
                 auto& cached_program_factory = program_cache.get(program_hash);
                 auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+                    operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    cq_id,
-                    operation_attributes,
-                    tensor_args,
-                    tensor_return_value,
-                    mesh_device,
-                    cached_workload.workload);
+                    operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
             }
         });
 }
@@ -271,7 +306,6 @@ void create_and_cache_mesh_workload(
 // Main function to launch operations on mesh devices with special handling for MeshDeviceOperationAdapter
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void launch_operation_with_adapter(
-    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -308,16 +342,15 @@ void launch_operation_with_adapter(
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-            cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
-            cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     }
 }
 
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
-    QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Launch Device Operation");
@@ -329,15 +362,14 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
     }
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    auto mesh_device = first_tensor.mesh_device();
+    auto mesh_device = first_tensor.device();
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
-        cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
+        operation_attributes, tensor_args, tensor_return_value, mesh_device);
     return tensor_return_value;
 }
 
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
-    QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Run Device Operation");
@@ -356,7 +388,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     tensor_return_value_t tensor_return_value;
 
     TT_FATAL(std::holds_alternative<tt::tt_metal::DeviceStorage>(storage), "Unsupported storage type");
-    tensor_return_value = detail::launch_on_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
+    tensor_return_value = detail::launch_on_device<device_operation_t>(operation_attributes, tensor_args);
 
     // Should every output tensor be tracked?
     /*

@@ -6,6 +6,8 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
+add_compile_options(-Wno-unused-variable)
+
 ############################################################################################################################
 # NUMA
 ############################################################################################################################
@@ -48,6 +50,26 @@ ensureboosttarget(core)
 ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
+
+############################################################################################################################
+# protobuf
+############################################################################################################################
+
+CPMAddPackage(
+    NAME protobuf
+    GITHUB_REPOSITORY protocolbuffers/protobuf
+    GIT_TAG
+        v21.12 # Using 21.12 to avoid using abseil and utf8_range
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "protobuf_BUILD_TESTS OFF"
+        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-invalid-noreturn"
+        "protobuf_INSTALL OFF"
+        "BUILD_TESTING OFF"
+        "protobuf_BUILD_EXAMPLES OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
+)
 
 ############################################################################################################################
 # yaml-cpp
@@ -301,4 +323,22 @@ CPMAddPackage(
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
+)
+
+####################################################################################################################
+# Cap'n Proto : https://github.com/capnproto/capnproto
+####################################################################################################################
+CPMAddPackage(
+    NAME capnproto
+    GITHUB_REPOSITORY capnproto/capnproto
+    GIT_TAG
+        d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
+    PATCHES
+        capnp.patch # We need to patch capnp until bug is properly fixed: https://github.com/capnproto/capnproto/issues/2418
+    OPTIONS
+        "BUILD_TESTING OFF"
+        "CAPNP_LITE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_CXX_EXTENSIONS ON"
+    CUSTOM_CACHE_KEY "1_2_0_patched"
 )

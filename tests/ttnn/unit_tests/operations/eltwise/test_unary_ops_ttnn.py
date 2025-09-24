@@ -5,6 +5,7 @@
 import torch
 import pytest
 import ttnn
+from tests.ttnn.utils_for_testing import assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
@@ -289,27 +290,6 @@ def test_unary_gtz_ttnn(input_shapes, device):
     cq_id = 0
     ttnn.gtz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data > 0
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("alpha", [1.0, 5.0, 10.0])
-def test_unary_elu_ttnn(input_shapes, alpha, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.elu(input_tensor, alpha=alpha, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.nn.functional.elu(in_data, alpha)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -710,26 +690,6 @@ def test_unary_tanh_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_rsqrt_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.rsqrt(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.rsqrt(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_sign_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
@@ -838,7 +798,7 @@ def test_unary_log_sigmoid_ttnn(input_shapes, device):
     ),
 )
 def test_unary_rsqrt_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
@@ -911,26 +871,6 @@ def test_unary_heaviside_ttnn(input_shapes, value, device):
     cq_id = 0
     ttnn.heaviside(input_tensor, value=value, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.heaviside(in_data, torch.tensor(value, dtype=in_data.dtype))
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_log_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.log(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.log(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -1064,7 +1004,63 @@ def test_unary_log1p_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.log1p)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+    assert_with_pcc(output_tensor, torch_output_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([3, 123, 115])),
+        (torch.Size([69, 178])),
+        (torch.Size([1024])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.log,
+        ttnn.log1p,
+        ttnn.log2,
+        ttnn.log10,
+    ],
+)
+@pytest.mark.parametrize("fast_and_approx", [False, True])
+def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fast_and_approx, device):
+    torch.manual_seed(0)
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    if fast_and_approx:
+        # Positive inputs
+        torch_input_tensor = torch.linspace(1, 100, num_elements, dtype=torch_dtype)
+    else:
+        # Negative and 0 inputs
+        torch_input_tensor = torch.linspace(-100, 0, num_elements, dtype=torch_dtype)
+    torch_input_tensor = torch_input_tensor.reshape(input_shapes)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cq_id = 0
+    output_tensor_tt = ttnn_op(input_tensor, queue_id=cq_id, fast_and_approximate_mode=fast_and_approx)
+    output_tensor = ttnn.to_torch(output_tensor_tt)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor)
+    if ttnn_dtype == ttnn.float32 or fast_and_approx:
+        assert_allclose(output_tensor_tt, torch_output_tensor, atol=0.0625)
+    else:
+        assert_with_pcc(output_tensor, torch_output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize("scalar", [1, 2, -10, -25, 15.5, 28.5, -13.5, -29.5, 0, -0, -5, 8, 100, -100])

@@ -159,9 +159,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         std::map<std::string, std::string> writer_defines;
 
         if (is_row_major_index) {
-            reader_defines["ROW_MAJOR_INDEX"] = 1;
+            reader_defines["ROW_MAJOR_INDEX"] = "1";
         } else {
-            reader_defines["TILIZE_INDEX"] = 1;
+            reader_defines["TILIZE_INDEX"] = "1";
         }
 
         std::vector<uint32_t> reader_compile_time_args;
@@ -383,9 +383,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         std::map<std::string, std::string> writer_defines;
 
         if (is_row_major_index) {
-            reader_defines["ROW_MAJOR_INDEX"] = 1;
+            reader_defines["ROW_MAJOR_INDEX"] = "1";
         } else {
-            reader_defines["TILIZE_INDEX"] = 1;
+            reader_defines["TILIZE_INDEX"] = "1";
         }
 
         std::vector<uint32_t> reader_compile_time_args;

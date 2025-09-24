@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     run_conv1d_short_sweep,
@@ -1619,7 +1619,6 @@ def test_conv2d_localrun(device, input_spec):
 
 failing_parameters = [
     # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-    [1, 528, 528, 192, 192, 3, 3, 2, 2, 1, 1, 2, 1, 1, False],  # 220
     [1, 1, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1495
     [1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1496
 ]

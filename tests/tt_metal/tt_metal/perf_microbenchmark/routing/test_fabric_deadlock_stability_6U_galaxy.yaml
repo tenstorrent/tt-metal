@@ -190,7 +190,7 @@ Tests:
       destination:
         hops:
           N: 7
-          E: 2
+          E: 3
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -212,7 +212,7 @@ Tests:
       destination:
         hops:
           N: 7
-          W: 2
+          W: 3
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -234,7 +234,7 @@ Tests:
       destination:
         hops:
           S: 7
-          E: 2
+          E: 3
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -256,7 +256,7 @@ Tests:
       destination:
         hops:
           S: 7
-          W: 2
+          W: 3
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -389,7 +389,7 @@ Tests:
       destination:
         hops:
           N: 7
-          E: 2
+          E: 3
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -411,7 +411,7 @@ Tests:
       destination:
         hops:
           N: 7
-          W: 2
+          W: 3
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -433,7 +433,7 @@ Tests:
       destination:
         hops:
           S: 7
-          E: 2
+          E: 3
 
     patterns:
       - type: all_devices_uniform_pattern
@@ -455,7 +455,7 @@ Tests:
       destination:
         hops:
           S: 7
-          W: 2
+          W: 3
 
     patterns:
       - type: all_devices_uniform_pattern

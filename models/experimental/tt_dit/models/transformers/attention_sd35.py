@@ -23,7 +23,6 @@ class SD35JointAttention:
         context_pre_only=None,
         eps=1e-5,
         mesh_device=None,
-        init=False,
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
@@ -52,7 +51,6 @@ class SD35JointAttention:
             "norm_elementwise_affine": True,
             "bias": False,
             "mesh_device": mesh_device,
-            "init": init,
         }
 
         self.norm_q = RMSNorm(**rms_kwargs)
@@ -65,7 +63,6 @@ class SD35JointAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # Implementing joint attention
@@ -75,7 +72,6 @@ class SD35JointAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         self.to_out = ColParallelLinear(
@@ -84,7 +80,6 @@ class SD35JointAttention:
             bias=out_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -95,7 +90,6 @@ class SD35JointAttention:
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
             )
 
         self.norm_added_q = RMSNorm(**rms_kwargs)
@@ -117,6 +111,59 @@ class SD35JointAttention:
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache normalization layers
+        norm_q_cache = self.norm_q.to_cached_state_dict(path_prefix + "norm_q.")
+        norm_k_cache = self.norm_k.to_cached_state_dict(path_prefix + "norm_k.")
+        norm_added_q_cache = self.norm_added_q.to_cached_state_dict(path_prefix + "norm_added_q.")
+        norm_added_k_cache = self.norm_added_k.to_cached_state_dict(path_prefix + "norm_added_k.")
+
+        # Add norm prefixes to all keys
+        for key, value in norm_q_cache.items():
+            cache_dict[f"norm_q.{key}"] = value
+        for key, value in norm_k_cache.items():
+            cache_dict[f"norm_k.{key}"] = value
+        for key, value in norm_added_q_cache.items():
+            cache_dict[f"norm_added_q.{key}"] = value
+        for key, value in norm_added_k_cache.items():
+            cache_dict[f"norm_added_k.{key}"] = value
+
+        # Cache linear layers
+        to_qkv_cache = self.to_qkv.to_cached_state_dict(path_prefix + "to_qkv.")
+        add_qkv_proj_cache = self.add_qkv_proj.to_cached_state_dict(path_prefix + "add_qkv_proj.")
+        to_out_cache = self.to_out.to_cached_state_dict(path_prefix + "to_out.")
+
+        # Add linear layer prefixes to all keys
+        for key, value in to_qkv_cache.items():
+            cache_dict[f"to_qkv.{key}"] = value
+        for key, value in add_qkv_proj_cache.items():
+            cache_dict[f"add_qkv_proj.{key}"] = value
+        for key, value in to_out_cache.items():
+            cache_dict[f"to_out.{key}"] = value
+
+        # Cache optional to_add_out layer
+        if self.context_pre_only is not None and not self.context_pre_only:
+            to_add_out_cache = self.to_add_out.to_cached_state_dict(path_prefix + "to_add_out.")
+            for key, value in to_add_out_cache.items():
+                cache_dict[f"to_add_out.{key}"] = value
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.norm_q.from_cached_state_dict(substate(cache_dict, "norm_q"))
+        self.norm_k.from_cached_state_dict(substate(cache_dict, "norm_k"))
+        self.norm_added_q.from_cached_state_dict(substate(cache_dict, "norm_added_q"))
+        self.norm_added_k.from_cached_state_dict(substate(cache_dict, "norm_added_k"))
+
+        self.to_qkv.from_cached_state_dict(substate(cache_dict, "to_qkv"))
+        self.add_qkv_proj.from_cached_state_dict(substate(cache_dict, "add_qkv_proj"))
+        self.to_out.from_cached_state_dict(substate(cache_dict, "to_out"))
+
+        if self.context_pre_only is not None and not self.context_pre_only:
+            self.to_add_out.from_cached_state_dict(substate(cache_dict, "to_add_out"))
 
     def load_state_dict(self, state_dict):
         def reshape_and_merge_qkv(q_state, k_state, v_state):
@@ -214,7 +261,9 @@ class SD35JointAttention:
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.sequence_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                 mesh_device=self.mesh_device,
@@ -245,7 +294,9 @@ class SD35JointAttention:
                     spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -265,7 +316,9 @@ class SD35JointAttention:
                         prompt_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                     ),
                     dim=3,
-                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                        self.parallel_config.tensor_parallel.mesh_axis
+                    ),
                     num_links=self.ccl_manager.num_links,
                     topology=self.ccl_manager.topology,
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,

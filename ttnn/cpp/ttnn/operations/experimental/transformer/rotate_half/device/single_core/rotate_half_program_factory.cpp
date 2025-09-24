@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -62,21 +63,20 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     uint32_t output_no_mul_cb_index = src_no_mul_cb_index;
 
-    const uint16_t bfloat16_scalar = bfloat16(-1.0f).to_uint16();
+    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_no_mul_cb_index,
         (uint32_t)src_mul_cb_index,
         (uint32_t)src_scalar_cb_index,
-        (uint32_t)src_is_dram,
         (uint32_t)bfloat16_scalar};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_no_mul_cb_index, (std::uint32_t)output_mul_cb_index, (std::uint32_t)dst_is_dram};
+        (std::uint32_t)output_no_mul_cb_index, (std::uint32_t)output_mul_cb_index};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,

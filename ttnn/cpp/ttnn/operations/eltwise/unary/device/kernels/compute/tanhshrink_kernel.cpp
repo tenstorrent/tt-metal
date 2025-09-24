@@ -26,7 +26,7 @@ void MAIN {
             tile_regs_acquire();
 
             // Pop tile after tile, copy to DST and pack
-            copy_tile_to_dst_init_short(cb_input);
+            copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 0);
 
             tanh_tile_init();

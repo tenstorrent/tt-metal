@@ -75,6 +75,9 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     if (this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto output_shard_shape = this->output_mem_config.shard_spec().value().shape;
         out_shape[out_shape.size() - 1] = output_shard_shape[1];
+    } else if (this->output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        auto output_shard_shape = this->output_mem_config.shard_spec().value().shape;
+        out_shape[out_shape.size() - 2] = output_shard_shape[0];
     }
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));

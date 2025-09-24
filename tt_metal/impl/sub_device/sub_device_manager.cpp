@@ -10,26 +10,22 @@
 #include <sub_device_types.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
-#include <functional>
 #include <limits>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "allocator_types.hpp"
-#include "buffer_types.hpp"
 #include "core_coord.hpp"
+#include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "hal.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include "trace/trace.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
@@ -367,7 +363,7 @@ void SubDeviceManager::populate_noc_data() {
     CoreRangeSet all_core_set{device_worker_cores};
     CoreRangeSet unused_cores = all_core_set.subtract(used_cores);
     if (!unused_cores.empty()) {
-        constexpr uint32_t unused_go_message_index = go_message_num_entries - 1;
+        constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;
         core_go_message_mapping_.emplace_back(unused_cores, unused_go_message_index);
     }
 }

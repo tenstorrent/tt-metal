@@ -52,10 +52,11 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using std::vector;
 using namespace tt;
@@ -344,7 +345,7 @@ create_mesh_workloads(
     return {std::move(mesh_workloads), std::move(global_cb)};
 }
 
-float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
+float to_float(bfloat16 bfloat16_num) { return static_cast<float>(bfloat16_num); }
 
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     if (x.size() != y.size()) {
@@ -627,7 +628,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
 
     std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer;
     if (address.has_value()) {
-        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address.value());
+        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address);
     } else {
         input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }
@@ -788,7 +789,7 @@ int main(int argc, char** argv) {
                 if (i % 2 == 0) {  // even layers
                     auto input_vec_tilized = tilize_swizzled(tensor_fp8.get_values(), k, n);
                     std::vector<uint32_t> packed_input_vec_tile_layout =
-                        pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                        pack_as_bfp8_tiles(tt::stl::make_const_span(input_vec_tilized), true, false);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
                         device.get(),
                         packed_input_vec_tile_layout,
@@ -833,7 +834,7 @@ int main(int argc, char** argv) {
                 } else {
                     auto input_vec_tilized = tilize_swizzled(tensor_fp8.get_values(), k, n);
                     std::vector<uint32_t> packed_input_vec_tile_layout =
-                        pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                        pack_as_bfp8_tiles(tt::stl::make_const_span(input_vec_tilized), true, false);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
                         device.get(),
                         packed_input_vec_tile_layout,
@@ -872,7 +873,7 @@ int main(int argc, char** argv) {
             use_sub_devices);
         if (tile_format == tt::DataFormat::Bfp8_b) {
             // output
-            vector<uint32_t> outputs = create_constant_vector_of_bfp8(output_size, 0, true);
+            vector<uint32_t> outputs = test_utils::create_constant_vector_of_bfp8(output_size, 0, true);
             output_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),
                 outputs,

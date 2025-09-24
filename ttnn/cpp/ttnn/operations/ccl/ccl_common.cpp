@@ -8,11 +8,10 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 
@@ -140,7 +139,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 }
 
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto mesh_device = tensor.mesh_device();
+    auto mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
     devices.reserve(tensor.device_storage().coords.size());
     for (const auto& coord : tensor.device_storage().coords) {
@@ -154,11 +153,57 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     devices.reserve(tensor_shards.size());
     for (const auto& tensor : tensor_shards) {
         TT_FATAL(
-            tensor.mesh_device()->shape().mesh_size() == 1,
+            tensor.device()->shape().mesh_size() == 1,
             "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
-        devices.push_back(tensor.mesh_device()->get_device(MeshCoordinate(0, 0)));
+        devices.push_back(tensor.device()->get_device(MeshCoordinate(0, 0)));
     }
     return devices;
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset) {
+    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
+    CoreRangeSet sender_worker_core_range;
+    const size_t num_workers_preferred = num_workers_per_link * num_links;
+    const auto available_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (available_cores.num_cores() < num_workers_preferred) {
+        log_warning(
+            tt::LogOp,
+            "CCL operation is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+            "performance loss.",
+            num_workers_preferred,
+            num_workers_per_link,
+            num_links,
+            available_cores.num_cores());
+    }
+    for (const auto& cr : available_cores.ranges()) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
+            }
+            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                break;
+            }
+        }
+        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+            break;
+        }
+    }
+    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
@@ -1492,6 +1537,22 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
+void validate_fabric_2d_dynamic_config(Topology topology) {
+    TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+    auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
+    TT_FATAL(
+        physical_mesh_shapes.size() == 1,
+        "Fabric 2D dynamic CCLs expected a single Physical Mesh to be instantiated, but got {} meshes",
+        physical_mesh_shapes.size());
+    const auto& physical_mesh_shape = physical_mesh_shapes.begin()->second;
+    TT_FATAL(
+        physical_mesh_shape.dims() == 2,
+        "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
+    TT_FATAL(
+        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1,
+        "Fabric 2D dynamic CCLs are only supported for 1D physical meshes");
+}
+
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
     size_t ring_size, size_t ring_index, Topology topology) {
     // Used for experimentation for optimal perf
@@ -1532,7 +1593,7 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+        validate_fabric_2d_dynamic_config(topology);
         if (forward_device) {
             auto forward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());
@@ -1595,7 +1656,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+        validate_fabric_2d_dynamic_config(topology);
         auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
         auto set_mcast_args = [&src_fabric_node_id](std::array<uint32_t, 6>& args, std::optional<IDevice*> device, uint32_t num_targets) {
             if (device) {

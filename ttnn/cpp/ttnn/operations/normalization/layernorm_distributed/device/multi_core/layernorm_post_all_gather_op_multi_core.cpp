@@ -15,6 +15,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -76,7 +77,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     const uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.dtype();
 
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
@@ -139,16 +139,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
-
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
     uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
@@ -250,7 +246,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t max_cores_y = grid_size.y;
-    uint32_t max_cores_x = grid_size.x;
     uint32_t tiles_per_core_y = Wt;
 
     // Declare all variables that will be used later
@@ -319,31 +314,28 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     Program program = tt::tt_metal::CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)is_dram(a),
-        (std::uint32_t)is_dram(stats),
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)is_dram(beta),
         (std::uint32_t)block_size,
         (std::uint32_t)stats_tiles_cols,
     };
 
+    uint32_t gamma_stick_size = 0;
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
+        gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
-        reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        // if (gamma_stick_size_is_power_of_two) {
-        uint32_t gamma_log2_stick_size =
-            gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-        reader_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
     }
+    reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)is_dram(output),
-                                                      (std::uint32_t)block_size};
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
     if (gamma.has_value()) {
@@ -485,7 +477,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     // std::vector<std::shared_ptr<CircularBuffer>>
 
     for (const auto& cb : program.circular_buffers()) {
-        for (const auto index : cb->buffer_indices()) {
+        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
             log_debug(tt::LogOp, "cb_id {}", index);
             log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
             log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));

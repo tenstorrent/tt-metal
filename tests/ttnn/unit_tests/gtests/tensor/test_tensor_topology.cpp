@@ -36,7 +36,7 @@ TEST_F(TensorTopologyTest, SingleDevice) {
 
     // Tensor topology for tensor replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = replicated_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.distribution_shape(), mesh_mapper_config.mesh_shape_override);
     EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     auto coord = MeshCoordinate(0);
@@ -74,7 +74,7 @@ TEST_F(TensorTopology2x4Test, Replicate2D) {
 
     // Tensor topology for tensor replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = replicated_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.distribution_shape(), mesh_mapper_config.mesh_shape_override);
     EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     auto check_neighbors_2d = [&tensor_topology](const MeshCoordinate& coord) {
@@ -144,7 +144,7 @@ TEST_F(TensorTopology2x4Test, Shard1DRowMajor) {
     // Tensor topology for tensor sharded across 1 dimension should be 1D shape with number of actual shards (ie.
     // num_devices)
     const auto& tensor_topology = sharded_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(num_devices));
+    EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(num_devices));
     EXPECT_EQ(
         tensor_topology.placements(), (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{1}}));
 
@@ -159,4 +159,50 @@ TEST_F(TensorTopology2x4Test, Shard1DRowMajor) {
     EXPECT_EQ(mesh_coords[6], MeshCoordinate(1, 2));
     EXPECT_EQ(mesh_coords[7], MeshCoordinate(1, 3));
 }
+
+TEST_F(TensorTopology2x4Test, GetTensorCoord) {
+    const int num_devices = mesh_device_->num_devices();
+    // Test only works on 8 devices in 2x4 mesh
+    ASSERT_EQ(num_devices, 8);
+    ASSERT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+    const auto tensor_spec = TensorSpec(
+        ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
+
+    // The sharding creates a 1D distribution with 8 devices in row-major order
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    const auto& tensor_topology = sharded_tensor.tensor_topology();
+    const auto& mesh_coords = tensor_topology.mesh_coords();
+
+    // Test that get_tensor_coord returns the correct tensor coordinate for each device coordinate
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(0, 0)), MeshCoordinate(0));
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(0, 1)), MeshCoordinate(1));
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(0, 2)), MeshCoordinate(2));
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(0, 3)), MeshCoordinate(3));
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(1, 0)), MeshCoordinate(4));
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(1, 1)), MeshCoordinate(5));
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(1, 2)), MeshCoordinate(6));
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(1, 3)), MeshCoordinate(7));
+
+    // Test that get_tensor_coord is the inverse of get_device_coord
+    for (const auto& device_coord : mesh_coords) {
+        auto tensor_coord = tensor_topology.get_tensor_coord(device_coord);
+        ASSERT_TRUE(tensor_coord.has_value());
+        EXPECT_EQ(tensor_topology.get_device_coord(tensor_coord.value()), device_coord);
+    }
+
+    // Test that get_tensor_coord returns nullopt for invalid device coordinates
+    // ie. These device coordinates don't exist in the mesh
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(2, 0)), std::nullopt);
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(0, 4)), std::nullopt);
+    EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(3, 3)), std::nullopt);
+}
+
 }  // namespace ttnn::distributed::test

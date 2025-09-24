@@ -54,18 +54,18 @@ void MAIN {
 
             // tile[1] = x^3
             square_tile(1);
-            mul_binary_tile(1, 2);
+            mul_binary_tile(1, 2, 1);
 
             // tile[1] = 0.044715 * x^3
             fill_tile(3, kKappa);
-            mul_binary_tile(1, 3);
+            mul_binary_tile(1, 3, 1);
 
             // tile[1] = x + 0.044715 * x^3
-            add_binary_tile(1, 2);
+            add_binary_tile(1, 2, 1);
 
             // tile[1] = sqrt(2/π) * (x + 0.044715 * x^3)
             fill_tile(3, kBeta);
-            mul_binary_tile(1, 3);
+            mul_binary_tile(1, 3, 1);
 
             // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
             tanh_tile_init();
@@ -74,36 +74,36 @@ void MAIN {
 
             // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
             fill_tile(3, 1.0f);
-            add_binary_tile(1, 3);
+            add_binary_tile(1, 3, 1);
             fill_tile(3, 0.5f);
-            mul_binary_tile(1, 3);
+            mul_binary_tile(1, 3, 1);
 
             // tile[4] = 1 - tanh^2
             square_tile(4);
             fill_tile(3, 1.0f);
-            sub_binary_tile(3, 4);
+            sub_binary_tile(3, 4, 3);
             copy_dest_values(4, 3);
 
             // tile[2] = (1 + 0.134145 * x**2)
             fill_tile(3, kKappa * 3.0f);
             square_tile(2);         // x^2
-            mul_binary_tile(2, 3);  // 0.134145 * x**2
+            mul_binary_tile(2, 3, 2);  // 0.134145 * x**2
             fill_tile(3, 1.0f);
-            add_binary_tile(2, 3);  // 1 + 0.134145 * x**2
+            add_binary_tile(2, 3, 2);  // 1 + 0.134145 * x**2
 
             // PDF term: tile[2] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
-            mul_binary_tile(2, 4);
+            mul_binary_tile(2, 4, 2);
             fill_tile(3, kBeta / 2.0f);
-            mul_binary_tile(2, 3);
+            mul_binary_tile(2, 3, 2);
 
             // tile[2] = x * pdf tern
             copy_dest_values(3, 8);
-            mul_binary_tile(2, 3);
+            mul_binary_tile(2, 3, 2);
 
             // result: tile[1] = grad * (cdf_term + x * pdf_term)
-            add_binary_tile(1, 2);  // cdf_term + x * pdf_term
+            add_binary_tile(1, 2, 1);  // cdf_term + x * pdf_term
             // tile[0] = grad * (cdf_term + x * pdf_term)
-            mul_binary_tile(0, 1);
+            mul_binary_tile(0, 1, 0);
 
             pack_tile(0, cb_grad_in);
             tile_regs_commit();

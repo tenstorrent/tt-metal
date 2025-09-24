@@ -22,48 +22,31 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_id_src = get_compile_time_arg_val(6);
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+    constexpr auto cb_id_src = get_compile_time_arg_val(2);
+    constexpr auto cb_id_dst = get_compile_time_arg_val(3);
+    constexpr auto cb_id_old_running_mean = get_compile_time_arg_val(4);
+    constexpr auto cb_id_old_running_var = get_compile_time_arg_val(5);
+    constexpr auto cb_id_updated_running_mean = get_compile_time_arg_val(6);
+    constexpr auto cb_id_updated_running_var = get_compile_time_arg_val(7);
+    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto old_running_mean_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
+    constexpr auto old_running_var_args = TensorAccessorArgs<old_running_mean_args.next_compile_time_args_offset()>();
+
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
-
-    constexpr auto cb_id_dst = get_compile_time_arg_val(7);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const DataFormat dst_data_format = get_dataformat(cb_id_dst);
+    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 
-    const InterleavedAddrGenFast<dst_is_dram> dst = {
-        .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
-
-    // old running mean
-    constexpr auto cb_id_old_running_mean = get_compile_time_arg_val(8);
-    constexpr bool old_running_mean_is_dram = get_compile_time_arg_val(2) == 1;
     const uint32_t old_running_mean_tile_bytes = get_tile_size(cb_id_old_running_mean);
-    const DataFormat old_running_mean_data_format = get_dataformat(cb_id_old_running_mean);
+    const auto old_running_mean =
+        TensorAccessor(old_running_mean_args, old_running_mean_addr, old_running_mean_tile_bytes);
 
-    const InterleavedAddrGenFast<old_running_mean_is_dram> old_running_mean = {
-        .bank_base_address = old_running_mean_addr,
-        .page_size = old_running_mean_tile_bytes,
-        .data_format = old_running_mean_data_format};
-
-    // old running var
-    constexpr auto cb_id_old_running_var = get_compile_time_arg_val(9);
-    constexpr bool old_running_var_is_dram = get_compile_time_arg_val(3) == 1;
     const uint32_t old_running_var_tile_bytes = get_tile_size(cb_id_old_running_var);
-    const DataFormat old_running_var_data_format = get_dataformat(cb_id_old_running_var);
-
-    const InterleavedAddrGenFast<old_running_var_is_dram> old_running_var = {
-        .bank_base_address = old_running_var_addr,
-        .page_size = old_running_var_tile_bytes,
-        .data_format = old_running_var_data_format};
-
-    constexpr bool old_running_mean_has_value = get_compile_time_arg_val(4) == 1;
-    constexpr bool old_running_var_has_value = get_compile_time_arg_val(5) == 1;
-    constexpr auto cb_id_updated_running_mean = get_compile_time_arg_val(10);
-    constexpr auto cb_id_updated_running_var = get_compile_time_arg_val(11);
+    const auto old_running_var = TensorAccessor(old_running_var_args, old_running_var_addr, old_running_var_tile_bytes);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;

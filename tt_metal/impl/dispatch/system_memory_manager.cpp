@@ -19,15 +19,13 @@
 #include "memcpy.hpp"
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
-// #include <umd/device/driver_atomics.h> - Should be included as it is used here, but the file is missing include
-// guards
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
-
-enum class CoreType;
+#include <utils.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -42,15 +40,11 @@ bool wrap_ge(uint32_t a, uint32_t b) {
 }  // namespace
 
 SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
-    device_id(device_id),
-    num_hw_cqs(num_hw_cqs),
-    fast_write_callable(
-        tt::tt_metal::MetalContext::instance().get_cluster().get_fast_pcie_static_tlb_write_callable(device_id)),
-    bypass_enable(false),
-    bypass_buffer_write_offset(0) {
+    device_id(device_id), num_hw_cqs(num_hw_cqs), bypass_enable(false), bypass_buffer_write_offset(0) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
+    this->completion_q_writers.reserve(num_hw_cqs);
     this->prefetch_q_dev_ptrs.resize(num_hw_cqs);
     this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
@@ -116,7 +110,13 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
                                                                                      completion_queue_writer_virtual.y))
                                                                                  .value();
         auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
-        this->completion_byte_addrs[cq_id] = completion_tlb_offset + completion_q_rd_ptr % completion_tlb_size;
+
+        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
+        this->completion_q_writers.emplace_back(
+            tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(tt_cxy_pair(
+                completion_queue_writer_core.chip,
+                completion_queue_writer_virtual.x,
+                completion_queue_writer_virtual.y)));
 
         this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
@@ -336,7 +336,8 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-    this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
+
+    this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
     chip_id_t mmio_device_id =
@@ -396,12 +397,38 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
-    do {
+    // Body of the operation to be timed out
+    auto wait_operation_body =
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-    } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
-             cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition.load());
+
+        if (exit_condition.load()) {
+            return write_ptr_and_toggle;
+        }
+
+        return write_ptr_and_toggle;
+    };
+
+    // Condition to check if the operation should continue
+    auto wait_condition = [&cq_interface, &write_ptr, &write_toggle]() -> bool {
+        return cq_interface.completion_fifo_rd_ptr == write_ptr and
+               cq_interface.completion_fifo_rd_toggle == write_toggle;
+    };
+
+    // Handler for the timeout
+    auto on_timeout = [&exit_condition]() {
+        exit_condition.store(true);
+        TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
+    };
+
+    tt::utils::loop_and_wait_with_timeout(
+        wait_operation_body,
+        wait_condition,
+        on_timeout,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations());
+
     return write_ptr_and_toggle;
 }
 

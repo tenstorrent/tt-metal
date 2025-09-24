@@ -21,7 +21,7 @@ memory::memory() {
     link_spans_.reserve(initial_span_space_);
 }
 
-memory::memory(std::string_view path, Loading loading) : loading_(loading) {
+memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     ElfFile elf;
 
     elf.ReadImage(path);
@@ -62,7 +62,7 @@ memory::memory(std::string_view path, Loading loading) : loading_(loading) {
             }
             lma += segment.contents.size() * sizeof(word_t);
         }
-        if (loading == Loading::DISCRETE ? segment.contents.size() != 0 : link_spans_.empty()) {
+        if (loading == Loading::DISCRETE ? !segment.contents.empty() : link_spans_.empty()) {
             link_spans_.emplace_back(segment.address, 0);
         }
         link_spans_.back().len += segment.contents.size();

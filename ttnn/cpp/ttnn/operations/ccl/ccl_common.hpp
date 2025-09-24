@@ -15,7 +15,6 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
@@ -65,6 +64,13 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 // Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
 // to run a CCL over the unit-meshes.
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 class EriscDatamoverBuilder;
 

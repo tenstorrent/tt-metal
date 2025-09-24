@@ -7,8 +7,8 @@
 #include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "hostdevcommon/fabric_common.h"
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -22,7 +22,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include <tt-metalium/hal.hpp>
@@ -33,11 +33,10 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -54,11 +53,11 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topology) {
+WorkerMemMap generate_worker_mem_map(
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
-    uint32_t NOTIFICATION_MAILBOX_ADDR_SIZE_BYTES = tt::tt_metal::hal::get_l1_alignment();
 
     uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
@@ -119,7 +118,7 @@ void get_mcast_receivers(
             auto curr_fabric_node_id = node;
             for (uint32_t i = 0; i < mcast_ref[trunk_direction].size(); i++) {
                 auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, trunk_direction);
-                if (neighbors.size() > 0) {
+                if (!neighbors.empty()) {
                     FabricNodeId rx_node_id(MeshId{curr_fabric_node_id.mesh_id}, neighbors[0]);
                     mcast_receiver_physical_device_ids.push_back(
                         control_plane.get_physical_chip_id_from_fabric_node_id(rx_node_id));
@@ -213,19 +212,17 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     CoreCoord receiver_logical_core = {1, 0};  // Data will be forwarded to this core on al chips in the mcast group
 
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto topology = fabric_context.get_fabric_topology();
     const auto& edm_config = fabric_context.get_fabric_router_config();
     uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
 
-    auto* sender_device = DevicePool::instance().get_active_device(sender_phys_id);
-    auto* mcast_start_device = DevicePool::instance().get_active_device(mcast_start_phys_id);
-    std::vector<tt_metal::IDevice*> mcast_group_devices = {};
+    auto sender_device = fixture->get_device(sender_phys_id);
+    auto mcast_start_device = fixture->get_device(mcast_start_phys_id);
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> mcast_group_devices = {};
     mcast_group_devices.reserve(mcast_group_phys_ids.size());
     for (auto id : mcast_group_phys_ids) {
-        mcast_group_devices.push_back(DevicePool::instance().get_active_device(id));
+        mcast_group_devices.push_back(fixture->get_device(id));
     }
 
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = mcast_start_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
@@ -304,20 +301,23 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 
     // Create the receiver programs for validation on all devices involved in the Mcast
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
-    std::unordered_map<tt_metal::IDevice*, std::shared_ptr<tt_metal::Program>> recv_programs;
+    std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>
+        recv_programs;
 
     for (const auto& dev : mcast_group_devices) {
         recv_programs[dev] = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
     }
 
     // Launch sender and receiver programs and wait for them to finish
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
-        log_info(tt::LogTest, "Run receiver on: {}", dev->id());
+        log_info(tt::LogTest, "Run receiver on: {}", dev->get_devices()[0]->id());
         fixture->RunProgramNonblocking(dev, *recv_program);
     }
-    log_info(tt::LogTest, "Run Sender on: {}", sender_device->id());
+    log_info(tt::LogTest, "Run Sender on: {}", sender_device->get_devices()[0]->id());
     fixture->RunProgramNonblocking(sender_device, sender_program);
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         fixture->WaitForSingleProgramDone(dev, *recv_program);
     }
@@ -325,7 +325,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 
     std::vector<uint32_t> sender_status;
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -336,10 +336,11 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, _] : recv_programs) {
         std::vector<uint32_t> receiver_status;
         tt_metal::detail::ReadFromDeviceL1(
-            dev,
+            dev->get_devices()[0],
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -354,8 +355,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     }
 }
 
-void RunTestUnicastRaw(
-    BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction, bool enable_fabric_tracing) {
+void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
@@ -363,8 +363,6 @@ void RunTestUnicastRaw(
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
-    chip_id_t not_used_1;
-    chip_id_t not_used_2;
     // Find a device num_hops away in specified direction.
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
@@ -398,31 +396,30 @@ void RunTestUnicastRaw(
 
         // get a port to connect to
         eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
-        if (eth_chans.size() == 0) {
+        if (eth_chans.empty()) {
             GTEST_SKIP() << "No active eth chans to connect to";
         }
     } else {
         const auto& devices = fixture->get_devices();
-        auto num_devices = devices.size();
         // create a list of available deive ids in a random order
         // In 2D routing the source and desitnation devices can be anywhere on the mesh.
         auto random_dev_list = get_random_numbers_from_range(0, devices.size() - 1, devices.size());
 
         // pick the first two in the list to be src and dst devices for the test.
-        src_physical_device_id = devices[random_dev_list[0]]->id();
-        dst_physical_device_id = devices[random_dev_list[1]]->id();
+        src_physical_device_id = devices[random_dev_list[0]]->get_devices()[0]->id();
+        dst_physical_device_id = devices[random_dev_list[1]]->get_devices()[0]->id();
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
         dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
         mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
         eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-        if (eth_chans.size() == 0) {
+        if (eth_chans.empty()) {
             log_info(
                 tt::LogTest,
                 "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
-                src_fabric_node_id.mesh_id,
+                *(src_fabric_node_id.mesh_id),
                 src_fabric_node_id.chip_id,
-                *dst_fabric_node_id.mesh_id,
+                *(dst_fabric_node_id.mesh_id),
                 dst_fabric_node_id.chip_id);
 
             GTEST_SKIP() << "Skipping Test";
@@ -436,15 +433,14 @@ void RunTestUnicastRaw(
     log_info(tt::LogTest, "mesh size {:x}", mesh_shape.mesh_size());
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
-    log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-    log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Dst MeshId {} ChipId {}", *(dst_fabric_node_id.mesh_id), dst_fabric_node_id.chip_id);
 
     auto edm_direction = control_plane.get_eth_chan_direction(src_fabric_node_id, edm_port);
     log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
 
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
+    auto sender_device = fixture->get_device(src_physical_device_id);
+    auto receiver_device = fixture->get_device(dst_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
@@ -469,10 +465,6 @@ void RunTestUnicastRaw(
     std::map<std::string, std::string> defines = {};
     if (is_2d_fabric) {
         defines["FABRIC_2D"] = "";
-    }
-
-    if (enable_fabric_tracing) {
-        defines["TEST_ENABLE_FABRIC_TRACING"] = "1";
     }
 
     // Create the sender program
@@ -529,16 +521,12 @@ void RunTestUnicastRaw(
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
-    if (enable_fabric_tracing) {
-        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
-    }
-
     // Validate the status and packets processed by sender and receiver
     std::vector<uint32_t> sender_status;
     std::vector<uint32_t> receiver_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -546,7 +534,7 @@ void RunTestUnicastRaw(
         CoreType::WORKER);
 
     tt_metal::detail::ReadFromDeviceL1(
-        receiver_device,
+        receiver_device->get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -576,9 +564,8 @@ void run_unicast_test_bw_chips(
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
+    auto sender_device = fixture->get_device(src_physical_device_id);
+    auto receiver_device = fixture->get_device(dst_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
@@ -650,7 +637,7 @@ void run_unicast_test_bw_chips(
 
     // append the EDM connection rt args
     const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
-    EXPECT_EQ(available_links.size() > 0, true);
+    EXPECT_EQ(!available_links.empty(), true);
 
     uint32_t link_idx = available_links[0];
     append_fabric_connection_rt_args(
@@ -663,12 +650,12 @@ void run_unicast_test_bw_chips(
     if (use_dram_dst) {
         std::vector<uint32_t> zeros(tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t), 0);  // zero out mailbox
         tt_metal::detail::WriteToDeviceL1(
-            receiver_device,
+            receiver_device->get_devices()[0],
             receiver_logical_core,
             worker_mem_map.notification_mailbox_address,
             zeros,
             CoreType::WORKER);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->get_devices()[0]->id());
     }
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
@@ -704,7 +691,7 @@ void run_unicast_test_bw_chips(
     std::vector<uint32_t> receiver_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -712,7 +699,7 @@ void run_unicast_test_bw_chips(
         CoreType::WORKER);
 
     tt_metal::detail::ReadFromDeviceL1(
-        receiver_device,
+        receiver_device->get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -768,8 +755,86 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
     // In 2D routing the source and desitnation devices can be anywhere on the mesh.
     auto random_dev_list = get_random_numbers_from_range(0, devices.size() - 1, 2);
 
-    const auto src_physical_device_id = devices[random_dev_list[0]]->id();
-    const auto dst_physical_device_id = devices[random_dev_list[1]]->id();
+    const auto src_physical_device_id = devices[random_dev_list[0]]->get_devices()[0]->id();
+    const auto dst_physical_device_id = devices[random_dev_list[1]]->get_devices()[0]->id();
+
+    log_info(tt::LogTest, "Src Phys ChipId {}", src_physical_device_id);
+    log_info(tt::LogTest, "Dst Phys ChipId {}", dst_physical_device_id);
+
+    run_unicast_test_bw_chips(
+        fixture, src_physical_device_id, dst_physical_device_id, 0 /* num_hops, not needed for 2d */);
+}
+
+void RunTestUnicastRaw2D(
+    BaseFabricFixture* fixture, uint32_t ns_hops, RoutingDirection ns_dir, uint32_t ew_hops, RoutingDirection ew_dir) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // use control plane to find a mesh with (ns_hops + 1) * (ew_hops + 1) devices
+    auto user_meshes = control_plane.get_user_physical_mesh_ids();
+    std::optional<MeshId> mesh_id;
+    for (const auto& mesh : user_meshes) {
+        auto mesh_shape = control_plane.get_physical_mesh_shape(mesh);
+        if (mesh_shape.mesh_size() >= (ns_hops + 1) * (ew_hops + 1)) {
+            mesh_id = mesh;
+            break;
+        }
+    }
+    if (!mesh_id.has_value()) {
+        GTEST_SKIP() << "No appropriate mesh found for 2d unicast test";
+    }
+
+    // Find a device num_hops away in specified direction.
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+    std::unordered_map<RoutingDirection, uint32_t> branch_hops;
+
+    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
+    chip_id_t src_phys_chip_id;
+    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
+
+    if (ns_hops != 0) {
+        fabric_hops[ns_dir] = ns_hops;
+    }
+    if (ew_hops != 0) {
+        fabric_hops[ew_dir] = ew_hops;
+    }
+
+    tt::tt_metal::distributed::MeshShape mesh_shape;
+    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
+    uint32_t is_2d_fabric = topology == Topology::Mesh;
+
+    if (!is_2d_fabric) {
+        GTEST_SKIP() << "Need 2D Fabric for this test.";
+    }
+
+    // Get the mcast sender device and mcast receiver devices that satisfy the input number of trunk hops
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
+            src_fabric_node_id,
+            end_fabric_node_ids_by_dir,
+            src_phys_chip_id,
+            physical_end_device_ids_by_dir,
+            fabric_hops)) {
+        log_info(
+            tt::LogTest,
+            "No destinations found for {} hops in direction {} and {} hops in direction {}.",
+            ns_hops,
+            ns_dir,
+            ew_hops,
+            ew_dir);
+        GTEST_SKIP() << "Skipping Test";
+    }
+
+    mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+    uint32_t ew_dim = mesh_shape[1];
+    auto device_offset = ns_dir == RoutingDirection::N ? -1 : 1;
+    auto dst_fabric_node_id = src_fabric_node_id;
+    if (ew_hops != 0) {
+        dst_fabric_node_id = end_fabric_node_ids_by_dir[ew_dir][ew_hops - 1];
+    }
+    dst_fabric_node_id.chip_id += device_offset * ew_dim * ns_hops;
+    auto dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+    auto src_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
     log_info(tt::LogTest, "Src Phys ChipId {}", src_physical_device_id);
     log_info(tt::LogTest, "Dst Phys ChipId {}", dst_physical_device_id);
@@ -871,14 +936,13 @@ void RunTestMCastConnAPI(
     auto right_recv_phys_chip_id = physical_end_device_ids_by_dir[bwd_dir][bwd_hops - 1];
     auto right_first_hop_phys_chip_id = physical_end_device_ids_by_dir[bwd_dir][0];
 
-    auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
-    auto* left_recv_device = DevicePool::instance().get_active_device(left_recv_phys_chip_id);
-    auto* right_recv_device = DevicePool::instance().get_active_device(right_recv_phys_chip_id);
+    auto sender_device = fixture->get_device(src_phys_chip_id);
+    auto left_recv_device = fixture->get_device(left_recv_phys_chip_id);
+    auto right_recv_device = fixture->get_device(right_recv_phys_chip_id);
 
     auto left_fabric_node_id = end_fabric_node_ids_by_dir[fwd_dir][fwd_hops - 1];
     auto right_fabric_node_id = end_fabric_node_ids_by_dir[bwd_dir][bwd_hops - 1];
 
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
@@ -921,12 +985,15 @@ void RunTestMCastConnAPI(
     log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
-    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
     log_info(
-        tt::LogTest, "Mcast Fwd Dst MeshId {} ChipId {}", left_fabric_node_id.mesh_id, left_fabric_node_id.chip_id);
+        tt::LogTest, "Mcast Fwd Dst MeshId {} ChipId {}", *(left_fabric_node_id.mesh_id), left_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Fwd Dst Device is {} hops in direction: {}", fwd_hops, fwd_dir);
     log_info(
-        tt::LogTest, "Mcast Bwd Dst MeshId {} ChipId {}", right_fabric_node_id.mesh_id, right_fabric_node_id.chip_id);
+        tt::LogTest,
+        "Mcast Bwd Dst MeshId {} ChipId {}",
+        *(right_fabric_node_id.mesh_id),
+        right_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Bwd Dst Device is {} hops in direction: {}", bwd_hops, bwd_dir);
 
     std::vector<uint32_t> sender_runtime_args = {
@@ -990,7 +1057,7 @@ void RunTestMCastConnAPI(
     // Create and launch the receiver program for validation on all mcast receiver devices
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (auto physical_end_device_id : physical_end_device_ids) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
+            auto receiver_device = fixture->get_device(physical_end_device_id);
             // Create the receiver program for validation
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
@@ -1016,7 +1083,7 @@ void RunTestMCastConnAPI(
     // Wait for receivers to finish
     for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
+            auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
             fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
         }
     }
@@ -1028,7 +1095,7 @@ void RunTestMCastConnAPI(
     std::vector<uint32_t> right_recv_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1048,11 +1115,11 @@ void RunTestMCastConnAPI(
                 routing_direction,
                 physical_end_device_ids[i]);
 
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
+            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
             std::vector<uint32_t> recv_status;
 
             tt_metal::detail::ReadFromDeviceL1(
-                receiver_device,
+                receiver_device->get_devices()[0],
                 receiver_logical_core,
                 worker_mem_map.test_results_address,
                 worker_mem_map.test_results_size_bytes,
@@ -1258,11 +1325,11 @@ void RunTest2DMCastConnAPI(
     log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", ew_dim);
-    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
         "Mcast North East Branch Dst MeshId {} ChipId {}",
-        north_east_fabric_node_id.mesh_id,
+        *(north_east_fabric_node_id.mesh_id),
         north_east_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1271,7 +1338,7 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast West Branch Dst MeshId {} ChipId {}",
-        north_west_fabric_node_id.mesh_id,
+        *(north_west_fabric_node_id.mesh_id),
         north_west_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1280,7 +1347,7 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast North East Branch Dst MeshId {} ChipId {}",
-        south_east_fabric_node_id.mesh_id,
+        *(south_east_fabric_node_id.mesh_id),
         south_east_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1289,7 +1356,7 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast West Branch Dst MeshId {} ChipId {}",
-        south_west_fabric_node_id.mesh_id,
+        *(south_west_fabric_node_id.mesh_id),
         south_west_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1298,13 +1365,13 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast Right Direct Dst MeshId {} ChipId {}",
-        right_fabric_node_id.mesh_id,
+        *(right_fabric_node_id.mesh_id),
         right_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Right Direct Dst Device is {} hops in direction  : RoutingDirection::E", east_hops);
     log_info(
         tt::LogTest,
         "Mcast Left Direct Dst MeshId {} ChipId {}",
-        left_fabric_node_id.mesh_id,
+        *(left_fabric_node_id.mesh_id),
         left_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Left Direct Dst Device is {} hops in direction : RoutingDirection::W", west_hops);
 
@@ -1322,10 +1389,9 @@ void RunTest2DMCastConnAPI(
         GTEST_SKIP() << "No dst chip id found";
     }
 
-    auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
-    auto* dst_recv_device = DevicePool::instance().get_active_device(dst_recv_phys_chip_id);
+    auto sender_device = fixture->get_device(src_phys_chip_id);
+    auto dst_recv_device = fixture->get_device(dst_recv_phys_chip_id);
 
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = dst_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
@@ -1542,7 +1608,7 @@ void RunTest2DMCastConnAPI(
 
     // Create and launch the receiver program for validation on all mcast receiver devices
     for (auto physical_end_device_id : rx_physical_device_ids) {
-        auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
+        auto receiver_device = fixture->get_device(physical_end_device_id);
         // Create the receiver program for validation
         auto receiver_program = tt_metal::CreateProgram();
         auto receiver_kernel = tt_metal::CreateKernel(
@@ -1565,7 +1631,7 @@ void RunTest2DMCastConnAPI(
 
     // Wait for receivers to finish
     for (uint32_t i = 0; i < rx_physical_device_ids.size(); i++) {
-        auto* receiver_device = DevicePool::instance().get_active_device(rx_physical_device_ids[i]);
+        auto receiver_device = fixture->get_device(rx_physical_device_ids[i]);
         fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
     }
     log_info(tt::LogTest, "All Receivers Finished");
@@ -1576,7 +1642,7 @@ void RunTest2DMCastConnAPI(
     std::vector<uint32_t> right_recv_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1591,11 +1657,11 @@ void RunTest2DMCastConnAPI(
     for (uint32_t i = 0; i < rx_physical_device_ids.size(); i++) {
         log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_ids[i]);
 
-        auto* receiver_device = DevicePool::instance().get_active_device(rx_physical_device_ids[i]);
+        const auto& receiver_device = fixture->get_device(rx_physical_device_ids[i]);
         std::vector<uint32_t> recv_status;
 
         tt_metal::detail::ReadFromDeviceL1(
-            receiver_device,
+            receiver_device->get_devices()[0],
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -1609,12 +1675,7 @@ void RunTest2DMCastConnAPI(
     }
 }
 
-void RunTestChipMCast1D(
-    BaseFabricFixture* fixture,
-    RoutingDirection dir,
-    uint32_t start_distance,
-    uint32_t range,
-    bool enable_fabric_tracing) {
+void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32_t start_distance, uint32_t range) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     std::vector<tt_metal::Program> receiver_programs;
@@ -1673,15 +1734,13 @@ void RunTestChipMCast1D(
 
     tt::tt_metal::distributed::MeshShape mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     auto last_recv_phys_chip_id = physical_end_device_ids_by_dir[dir][range - 1];
-    auto first_recv_phys_chip_id = physical_end_device_ids_by_dir[dir][0];
 
-    auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
-    auto* last_recv_device = DevicePool::instance().get_active_device(last_recv_phys_chip_id);
+    auto sender_device = fixture->get_device(src_phys_chip_id);
+    auto last_recv_device = fixture->get_device(last_recv_phys_chip_id);
 
     auto first_recv_fabric_node_id = end_fabric_node_ids_by_dir[dir][0];
     auto last_recv_fabric_node_id = end_fabric_node_ids_by_dir[dir][range - 1];
 
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core =
         last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
@@ -1704,10 +1763,6 @@ void RunTestChipMCast1D(
         0 /* additional_dir */};
 
     std::map<std::string, std::string> defines = {};
-
-    if (enable_fabric_tracing) {
-        defines["TEST_ENABLE_FABRIC_TRACING"] = "1";
-    }
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
@@ -1767,7 +1822,7 @@ void RunTestChipMCast1D(
     // Create and launch the receiver program for validation on all mcast receiver devices
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (auto physical_end_device_id : physical_end_device_ids) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
+            auto receiver_device = fixture->get_device(physical_end_device_id);
             // Create the receiver program for validation
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
@@ -1797,15 +1852,11 @@ void RunTestChipMCast1D(
     // Wait for receivers to finish
     for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
+            auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
             fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
         }
     }
     log_info(tt::LogTest, "All Receivers Finished");
-
-    if (enable_fabric_tracing) {
-        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
-    }
 
     // Validate the status and packets processed by sender and receiver
     std::vector<uint32_t> sender_status;
@@ -1813,7 +1864,7 @@ void RunTestChipMCast1D(
     std::vector<uint32_t> right_recv_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1827,7 +1878,7 @@ void RunTestChipMCast1D(
 
     for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
+            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
 
             log_info(
                 tt::LogTest,
@@ -1840,7 +1891,7 @@ void RunTestChipMCast1D(
             std::vector<uint32_t> recv_status;
 
             tt_metal::detail::ReadFromDeviceL1(
-                receiver_device,
+                receiver_device->get_devices()[0],
                 receiver_logical_core,
                 worker_mem_map.test_results_address,
                 worker_mem_map.test_results_size_bytes,
@@ -1855,17 +1906,15 @@ void RunTestChipMCast1D(
     }
 }
 
-TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDirection::E, false); }
+TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDirection::E); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }
 TEST_F(Fabric1DFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
 
 // only chip multicast (test start and range)
-TEST_F(Fabric1DFixture, TestChipMCast1DWithTracing) { RunTestChipMCast1D(this, RoutingDirection::E, 1, 3, true); }
-TEST_F(Fabric1DFixture, TestChipMCast1DWithTracing2) { RunTestChipMCast1D(this, RoutingDirection::E, 2, 2, true); }
-
-TEST_F(Fabric1DFixture, TestUnicastRawWithTracing) { RunTestUnicastRaw(this, 1, RoutingDirection::E, true); }
+TEST_F(Fabric1DFixture, TestChipMCast1DWithTracing) { RunTestChipMCast1D(this, RoutingDirection::E, 1, 3); }
+TEST_F(Fabric1DFixture, TestChipMCast1DWithTracing2) { RunTestChipMCast1D(this, RoutingDirection::E, 2, 2); }
 
 void RunEDMConnectionStressTest(
     BaseFabricFixture* fixture,
@@ -1880,10 +1929,6 @@ void RunEDMConnectionStressTest(
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     log_debug(tt::LogTest, "Control plane found");
 
-    std::pair<MeshId, chip_id_t> src_mesh_chip_id;
-    std::pair<MeshId, chip_id_t> dst_mesh_chip_id;
-    chip_id_t not_used_1;
-    chip_id_t not_used_2;
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     std::optional<MeshId> mesh_id;
@@ -1904,8 +1949,8 @@ void RunEDMConnectionStressTest(
     auto dst_physical_device_id =
         control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id.value(), 1));
 
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
+    auto sender_device = fixture->get_device(src_physical_device_id);
+    auto receiver_device = fixture->get_device(dst_physical_device_id);
 
     // Set the destination address for fabric writes (constant for all workers)
     uint32_t fabric_write_dest_bank_addr = 0x50000;
@@ -2012,9 +2057,9 @@ void RunEDMConnectionStressTest(
                 worker_args.push_back(i % message_counts.size());
 
                 const auto sender_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->get_devices()[0]->id());
                 const auto receiver_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->id());
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->get_devices()[0]->id());
                 append_fabric_connection_rt_args(
                     sender_fabric_node_id,
                     receiver_fabric_node_id,
@@ -2125,28 +2170,23 @@ void FabricUnicastCommon(
         GTEST_SKIP() << "No path found for requested directions";
     }
 
-    std::vector<tt::tt_metal::IDevice*> receiver_devices;
-    std::vector<chip_id_t> first_hop_phys_chip_ids;
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> receiver_devices;
+    std::vector<FabricNodeId> dest_fabric_node_ids;
     receiver_devices.reserve(dir_configs.size());
-    first_hop_phys_chip_ids.reserve(dir_configs.size());
     for (auto [dir, num_hops] : dir_configs) {
         // pick destination device at the num_hops-th neighbor
         uint32_t dst_index = num_hops - 1;
         auto dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
-        receiver_devices.push_back(DevicePool::instance().get_active_device(dst_physical_device_id));
+        receiver_devices.push_back(fixture->get_device(dst_physical_device_id));
         // connection is to first hop for each direction
-        first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
+        dest_fabric_node_ids.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id));
     }
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
+    auto sender_device = fixture->get_device(src_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_devices.back()->worker_core_from_logical_core(receiver_logical_core);
 
     tt_metal::Program sender_program = tt_metal::CreateProgram();
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
-        worker_mem_map.packet_payload_size_bytes = 4;
-    }
+    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
@@ -2159,9 +2199,8 @@ void FabricUnicastCommon(
         0  // is_chip_multicast = 0
     };
 
-    std::map<std::string, std::string> defines = {};
-    if (topology == Topology::Mesh) {
-        defines["FABRIC_2D"] = "";
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+        worker_mem_map.packet_payload_size_bytes = 4;
     }
 
     auto sender_kernel = tt_metal::CreateKernel(
@@ -2173,8 +2212,7 @@ void FabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
+            .compile_args = compile_time_args});
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
@@ -2188,79 +2226,49 @@ void FabricUnicastCommon(
         sender_runtime_args.push_back(num_hops);
     }
 
-    // Append FabricConnectionManager args per manager (pair-ordered)
-    // V2 connection args: [tag, WorkerToFabricEdmSender args]
-    for (size_t i = 0; i < dir_configs.size(); ++i) {
-        auto dir = std::get<0>(dir_configs[i]);
-        sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
-        auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
-        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-        uint32_t link_idx = 0;
-        if (topology == Topology::Mesh) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
-        }
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            dst_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
-    }
-
-    // For 2D Mesh, append extra route info
-    if (topology == Topology::Mesh) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        uint32_t ew_dim = mesh_shape[1];
-        uint32_t my_dev_id = src_fabric_node_id.chip_id;
-        uint32_t dst_mesh_id = *src_fabric_node_id.mesh_id;
-        sender_runtime_args.push_back(ew_dim);
-        sender_runtime_args.push_back(my_dev_id);
-        sender_runtime_args.push_back(dst_mesh_id);
-        for (auto [dir, num_hops] : dir_configs) {
-            auto first_hop_phys_chip_id = physical_end_device_ids_by_dir[dir][0];
-            const auto dst_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            TT_ASSERT(dir_opt.has_value());
-            sender_runtime_args.push_back(static_cast<uint32_t>(dir_opt.value()));
-            sender_runtime_args.push_back(static_cast<uint16_t>(dst_fabric_node_id.chip_id));
-        }
-    }
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id,
+        dest_fabric_node_ids,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+    std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program> receiver_programs;
+    for (const auto& recv_dev : receiver_devices) {
+        receiver_programs[recv_dev] = tt_metal::CreateProgram();
+        auto receiver_kernel = tt_metal::CreateKernel(
+            receiver_programs[recv_dev],
+            (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
+                ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
+                : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+            {receiver_logical_core},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = compile_time_args});
 
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
-            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
-            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        worker_mem_map.packet_payload_size_bytes,
-        num_packets,
-        time_seed,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-
-    for (auto* recv_dev : receiver_devices) {
+        std::vector<uint32_t> receiver_runtime_args = {
+            worker_mem_map.packet_payload_size_bytes,
+            num_packets,
+            time_seed,
+        };
+        tt_metal::SetRuntimeArgs(
+            receiver_programs[recv_dev], receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    }
+    for (auto& [recv_dev, receiver_program] : receiver_programs) {
         fixture->RunProgramNonblocking(recv_dev, receiver_program);
     }
     fixture->RunProgramNonblocking(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    for (auto* recv_dev : receiver_devices) {
+    for (auto& [recv_dev, receiver_program] : receiver_programs) {
         fixture->WaitForSingleProgramDone(recv_dev, receiver_program);
     }
 
     std::vector<uint32_t> sender_status;
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -2269,9 +2277,9 @@ void FabricUnicastCommon(
     EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
 
     std::vector<uint32_t> receiver_status;
-    for (auto* recv_dev : receiver_devices) {
+    for (const auto& recv_dev : receiver_devices) {
         tt_metal::detail::ReadFromDeviceL1(
-            recv_dev,
+            recv_dev->get_devices()[0],
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -2326,18 +2334,18 @@ void FabricMulticastCommon(
         GTEST_SKIP() << "No multicast destinations found for requested directions";
     }
 
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
+    auto sender_device = fixture->get_device(src_physical_device_id);
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
     // Adjust lists to start from start_distance for each direction
-    std::vector<chip_id_t> first_hop_phys_chip_ids;
+    std::vector<FabricNodeId> dest_fabric_node_ids;
     for (auto [dir, start_distance, range] : dir_configs) {
-        first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
         physical_end_device_ids_by_dir[dir] = std::vector(
             physical_end_device_ids_by_dir[dir].begin() + (start_distance - 1),
             physical_end_device_ids_by_dir[dir].end());
         end_fabric_node_ids_by_dir[dir] = std::vector(
             end_fabric_node_ids_by_dir[dir].begin() + (start_distance - 1), end_fabric_node_ids_by_dir[dir].end());
+        dest_fabric_node_ids.push_back(end_fabric_node_ids_by_dir[dir][0]);
     }
 
     // Choose a receiver device to compute RX core coords (use last device from first configured dir)
@@ -2346,7 +2354,7 @@ void FabricMulticastCommon(
         GTEST_SKIP() << "No multicast receivers after start_distance adjustment";
     }
     auto last_recv_phys_chip_id = physical_end_device_ids_by_dir[first_dir].back();
-    auto* last_recv_device = DevicePool::instance().get_active_device(last_recv_phys_chip_id);
+    auto last_recv_device = fixture->get_device(last_recv_phys_chip_id);
     CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
@@ -2378,11 +2386,6 @@ void FabricMulticastCommon(
     }
 
     auto sender_program = tt_metal::CreateProgram();
-    std::map<std::string, std::string> defines = {};
-    if (topology == Topology::Mesh) {
-        defines["FABRIC_2D"] = "";
-    }
-
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
@@ -2392,57 +2395,24 @@ void FabricMulticastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
+            .compile_args = compile_time_args});
 
-    // V2 connection args for multicast: [tag, WorkerToFabricEdmSender args]
-    for (size_t i = 0; i < dir_configs.size(); ++i) {
-        auto dir = std::get<0>(dir_configs[i]);
-        sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
-        auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
-        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-        uint32_t link_idx = 0;
-        if (topology == Topology::Mesh) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
-        }
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            dst_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
-    }
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id,
+        dest_fabric_node_ids,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
 
-    // Append 2D mesh route info only when on Mesh
-    if (topology == Topology::Mesh) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        uint32_t ew_dim = mesh_shape[1];
-        uint32_t my_dev_id = src_fabric_node_id.chip_id;
-        uint32_t dst_mesh_id = *src_fabric_node_id.mesh_id;
-        sender_runtime_args.push_back(ew_dim);
-        sender_runtime_args.push_back(my_dev_id);
-        sender_runtime_args.push_back(dst_mesh_id);
-        // Append per-route outgoing eth direction followed by dst dev ids in pair order
-        for (size_t i = 0; i < dir_configs.size(); ++i) {
-            auto [dir, start_distance, range] = dir_configs[i];
-            auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
-            const auto dst_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            TT_ASSERT(dir_opt.has_value());
-            sender_runtime_args.push_back(static_cast<uint32_t>(dir_opt.value()));
-            sender_runtime_args.push_back(static_cast<uint16_t>(dst_fabric_node_id.chip_id));
-        }
-    }
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Build and launch receiver programs for all destination devices in all configured directions
-    std::vector<std::pair<tt::tt_metal::IDevice*, tt_metal::Program>> receiver_programs;
+    std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     for (auto& [dir, start_distance, range] : dir_configs) {
         for (auto physical_end_device_id : physical_end_device_ids_by_dir[dir]) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
+            auto receiver_device = fixture->get_device(physical_end_device_id);
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
@@ -2453,8 +2423,7 @@ void FabricMulticastCommon(
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = compile_time_args,
-                    .defines = defines});
+                    .compile_args = compile_time_args});
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
             fixture->RunProgramNonblocking(receiver_device, receiver_program);
             receiver_programs.emplace_back(receiver_device, std::move(receiver_program));
@@ -2470,7 +2439,7 @@ void FabricMulticastCommon(
 
     std::vector<uint32_t> sender_status;
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -2483,7 +2452,7 @@ void FabricMulticastCommon(
     for (auto& [dev, _] : receiver_programs) {
         std::vector<uint32_t> recv_status;
         tt_metal::detail::ReadFromDeviceL1(
-            dev,
+            dev->get_devices()[0],
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

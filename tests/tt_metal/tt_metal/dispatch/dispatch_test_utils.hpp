@@ -4,12 +4,12 @@
 
 #pragma once
 #include <gtest/gtest.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "hal_types.hpp"
-#include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
 
 namespace tt::tt_metal {
@@ -40,20 +40,6 @@ inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_
         src.at(i) = start + i;
     }
     return src;
-}
-
-inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(
-    tt::tt_metal::IDevice* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
-    // This function just enqueues a buffer (which should be large in the config)
-    // write as a precursor to testing the wrap mechanism
-    size_t buf_size = config.num_pages * config.page_size;
-    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
-
-    std::vector<uint32_t> src =
-        create_random_vector_of_bfloat16(buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-
-    EnqueueWriteBuffer(cq, *buffer, src, false);
-    return std::make_pair(std::move(buffer), src);
 }
 
 inline bool does_device_have_active_eth_cores(const IDevice* device) {
@@ -140,7 +126,7 @@ inline void verify_kernel_coordinates(
             const auto& virtual_coord = mesh_device->virtual_core_from_logical_core(logical_coord, core_type);
             CoreCoord relative_coord{logical_coord.x - sub_device_origin.x, logical_coord.y - sub_device_origin.y};
             for (const auto& device : mesh_device->get_devices()) {
-                auto read_coords_raw = tt::llrt::read_hex_vec_from_core(
+                auto read_coords_raw = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                     device->id(), virtual_coord, cb_addr, sizeof(tt::tt_metal::CoreCoordsL1));
                 auto read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());
 

@@ -11,10 +11,13 @@
 #include <utility>
 #include <limits>
 
+#include "debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
 
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
+
+#include "debug/assert.h"
 
 namespace tt::tt_fabric {
 
@@ -194,9 +197,15 @@ struct ChannelCounter {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
-    uint32_t num_free_slots = RECEIVER_NUM_BUFFERS;
-    BufferIndex remote_receiver_buffer_index{0};
-    size_t cached_next_buffer_slot_addr = 0;
+    uint32_t num_free_slots;
+    BufferIndex remote_receiver_buffer_index;
+    size_t cached_next_buffer_slot_addr;
+
+    FORCE_INLINE void init() {
+        this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        this->remote_receiver_buffer_index = BufferIndex{0};
+        this->cached_next_buffer_slot_addr = 0;
+    }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
 };
@@ -217,6 +226,8 @@ struct ReceiverChannelPointers {
     }
 
     FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
+
+    FORCE_INLINE void init() { reset(); }
 
     FORCE_INLINE void reset() {
         wr_sent_counter.reset();
@@ -247,7 +258,12 @@ struct ChannelPointersTuple {
     static constexpr size_t N = std::size(BufferSizes);
 
     static constexpr auto make() {
-        return ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
+        // call init() on each element and return it
+        auto channel_ptrs = ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
+        std::apply(
+            [&](auto&... chans) { ((chans.init()), ...); },
+            channel_ptrs.channel_ptrs);  // Apply to the actual tuple member
+        return channel_ptrs;
     }
 };
 

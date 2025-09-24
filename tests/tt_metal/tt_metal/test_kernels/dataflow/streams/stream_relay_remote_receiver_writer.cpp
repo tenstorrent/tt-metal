@@ -18,8 +18,8 @@ void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t write_page_size = cb_page_size - msg_hdr_size;
-    const InterleavedAddrGen<true> dest_addr_gen = {
-        .bank_base_address = output_buffer_addr, .page_size = write_page_size};
+    constexpr auto dst_args = TensorAccessorArgs<1>();
+    const auto dest_addr_gen = TensorAccessor(dst_args, output_buffer_addr, write_page_size);
 
     auto cb = tt::CBIndex::c_0;
     for (uint32_t i = 0; i < num_pages; i++) {

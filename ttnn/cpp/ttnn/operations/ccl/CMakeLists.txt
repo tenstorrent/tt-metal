@@ -19,6 +19,10 @@ file(
 target_sources(
     ttnn_op_ccl
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES ccl_op_fusion.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -76,6 +80,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_ccl
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/ccl

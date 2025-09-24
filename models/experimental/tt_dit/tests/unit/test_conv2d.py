@@ -9,7 +9,7 @@ import ttnn
 from ...utils.check import assert_quality
 from ...layers.conv2d import Conv2d
 from ...parallel.manager import CCLManager
-from ...parallel.config import create_vae_parallel_manager
+from ...parallel.config import vae_all_gather
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
@@ -58,9 +58,7 @@ def test_conv2d(
     shard_input: bool,
     mesh_axis: int,
 ) -> None:
-    vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
 
     # models
     torch_model = torch.nn.Conv2d(
@@ -71,7 +69,7 @@ def test_conv2d(
     torch_model.eval()
 
     tt_model = Conv2d.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, mesh_axis=mesh_axis, parallel_manager=vae_parallel_manager
+        torch_ref=torch_model, mesh_device=mesh_device, mesh_axis=mesh_axis, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -90,7 +88,7 @@ def test_conv2d(
     tt_out = tt_model(tt_input_tensor)
 
     if mesh_axis is not None:
-        tt_out = vae_parallel_manager.vae_all_gather(tt_out)
+        tt_out = vae_all_gather(ccl_manager, tt_out)
 
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.999_500)

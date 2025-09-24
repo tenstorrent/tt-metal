@@ -6,11 +6,9 @@ add_library(TT::Metalium::Test::STL::Smoke ALIAS unit_tests_stl_smoke)
 target_sources(
     unit_tests_stl_smoke
     PRIVATE
-        test_any_range.cpp
         test_cleanup.cpp
         test_indestructible.cpp
         test_optional_reference.cpp
-        test_slotmap.cpp
         test_span.cpp
         test_strong_type.cpp
         test_small_vector.cpp

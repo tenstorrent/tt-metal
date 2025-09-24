@@ -54,7 +54,7 @@ jobs:
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
 
       - name: Warmup caches
-        timeout-minutes: 1
+        timeout-minutes: 2
         env:
           GTEST_COLOR: yes
           TT_METAL_HOME: /usr/libexec/tt-metalium

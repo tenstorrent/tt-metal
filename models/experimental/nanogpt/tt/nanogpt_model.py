@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import ttnn
-from models.helper_funcs import Linear
+from models.common.helper_funcs import Linear
 import tt_lib.fallback_ops as fallback_ops
 
 import ttnn
@@ -13,7 +13,7 @@ import ttnn
 import models.experimental.nanogpt.tt.nanogpt_block as nanogpt_block
 from models.experimental.nanogpt.nanogpt_utils import unpad_from_zero
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
@@ -30,9 +30,9 @@ class TtGPT(nn.Module):
         base_address = f"transformer"
         self.device = device
 
-        self.beta = ttnn.load_tensor(tt_cache_path + base_address + ".ln_f.bias" + str(dtype) + ".bin")
+        self.beta = ttnn.load_tensor(tt_cache_path + base_address + ".ln_f.bias" + str(dtype) + ".tensorbin")
 
-        self.gamma = ttnn.load_tensor(tt_cache_path + base_address + ".ln_f.weight" + str(dtype) + ".bin")
+        self.gamma = ttnn.load_tensor(tt_cache_path + base_address + ".ln_f.weight" + str(dtype) + ".tensorbin")
 
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         self.wpe = nn.Embedding(self.config.block_size, config.n_embd)
@@ -51,7 +51,7 @@ class TtGPT(nn.Module):
 
         self.ln_f = ttnn.layer_norm
 
-        tt_lm_weight = ttnn.load_tensor(tt_cache_path + "lm_head.weight" + str(dtype) + ".bin")
+        tt_lm_weight = ttnn.load_tensor(tt_cache_path + "lm_head.weight" + str(dtype) + ".tensorbin")
 
         weight = unpad_from_zero(tt_lm_weight, (1, 1, self.config.vocab_size, self.config.n_embd))
         weight_torch = weight

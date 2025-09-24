@@ -15,18 +15,18 @@ run_t3000_ttmetal_tests() {
   echo "LOG_METAL: Running run_t3000_ttmetal_tests"
   ./build/test/tt_metal/distributed/distributed_unit_tests
 
-  echo "LOG_METAL: Testing TT_METAL_VISIBLE_DEVICES functionality"
+  echo "LOG_METAL: Testing TT_VISIBLE_DEVICES functionality"
   ./tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh ; fail+=$?
 
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips" ; fail+=$?
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips" ; fail+=$?
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsInterleavedRingGatherAllChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
+  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="MeshDeviceFixture.ActiveEthKernelsInterleavedRingGatherAllChips" ; fail+=$?
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*" ; fail+=$?
   TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleDevice*Fixture.*" ; fail+=$?
   TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQMultiDevice*Fixture.*" ; fail+=$?
-  ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
+  ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.*:MeshWatcherFixture.*" ; fail+=$?
 
   # Programming examples
   ./build/programming_examples/distributed/distributed_program_dispatch
@@ -53,6 +53,11 @@ run_t3000_ttfabric_tests() {
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3kCustomMeshGraphControlPlaneTests*
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
+  # MGD 2.0 Tests
+  TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*T3k*
+  TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3kCustomMeshGraphControlPlaneTests*
+  TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
+
   # originally were in TT-NN, now promoted to TT-Metal (Fabric)
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*WorkerFabricEdmDatapath*:*EdmFabric*"
   # Instantiate a 1x8 Mesh on a T3K with 2D Fabric
@@ -64,8 +69,8 @@ run_t3000_ttfabric_tests() {
   # these tests cover mux fixture as well
   TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
   TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+  TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
@@ -114,9 +119,9 @@ run_t3000_ttnn_tests() {
 
 run_t3000_tt_metal_multiprocess_tests() {
   local mpi_args="--allow-run-as-root --tag-output"
-
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_strict_connection_multi_process_rank_bindings.yaml  ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_2x2.yaml
 
   # Big-Mesh 2x4 Regression tests
@@ -179,7 +184,7 @@ run_t3000_falcon40b_tests() {
 }
 
 run_t3000_gemma3-small_tests() {
-  HF_MODEL="google/gemma-3-4b-it" TT_CACHE_PATH="$HF_HOME/tt_cache/gemma-3-4b-it" pytest models/demos/siglip/tests
+  pytest models/demos/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
 run_t3000_llama3-small_tests() {
@@ -413,15 +418,18 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
-  # Mixtral prefill tests
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
+  mixtral8x7=/mnt/MLPerf/huggingface/hub/models--mistralai--Mixtral-8x7B-v0.1/snapshots/fc7ac94680e38d7348cfa806e51218e6273104b0
+
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_mlp.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_moe.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_decoder.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 CI=true pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-device_params0-8-performance-256-1-page_params0-paged_attention-quick] --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 CI=true pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-device_params0-8-performance-256-1-page_params0-default_attention-quick] --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 CI=true pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-device_params0-1layer-performance-max128k-4k-page_params0-paged_attention-8] --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 CI=true pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-device_params0-1layer-performance-max128k-4k-page_params0-default_attention-8] --timeout=720 ; fail+=$?
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -472,45 +480,26 @@ run_t3000_unet_shallow_tests() {
 
 run_t3000_qwen25_vl_unit_tests() {
   # Record the start time
-  fail=0
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+  pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
 
-  qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
-  qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
+  # Qwen2.5-VL-72B provides good enough coverage for other model variants -- 3B, 32B
+  qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-VL-72B-Instruct
 
-  for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
-    # test_mlp.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_mlp.py --timeout 400 || fail=1
-    echo "LOG_METAL: Unit tests in test_mlp.py for $qwen_dir on T3K completed"
-    # test_rms_norm.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_rms_norm.py --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_rms_norm.py for $qwen_dir on T3K completed"
-    # test_vision_attention.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_vision_attention.py --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_vision_attention.py for $qwen_dir on T3K completed"
-    # test_vision_block.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_vision_block.py --timeout 600 || fail=1
-    echo "LOG_METAL: Unit tests in test_vision_block.py for $qwen_dir on T3K completed"
-    # test_patch_merger.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_patch_merger.py --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_patch_merger.py for $qwen_dir on T3K completed"
-    # test_model.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_model.py -k two_layers --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_model.py for $qwen_dir on T3K completed"
-    # test_wrapped_model.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/tests/test_wrapped_model.py -k two_layers --timeout 180 || fail=1
-    echo "LOG_METAL: Unit tests in test_wrapped_model.py for $qwen_dir on T3K completed"
-  done
+  # run unit tests
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
 
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: Unit tests for $qwen25_vl_72b on T3K completed in $duration seconds"
 }
 
 run_t3000_tests() {

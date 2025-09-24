@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/common/types/ccl_types_device.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 #include "debug/dprint.h"
-#include "api/ttnn/tensor/enum_types.hpp"
+#include "api/ttnn/tensor/layout/layout.hpp"
 #include <cstdint>
 
 using ttnn::ccl::coord_t;

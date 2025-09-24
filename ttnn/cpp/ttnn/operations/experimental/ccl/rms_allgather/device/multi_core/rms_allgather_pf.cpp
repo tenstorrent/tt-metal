@@ -22,6 +22,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
@@ -86,7 +87,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    ttnn::MeshDevice* mesh_device = a.mesh_device();
+    ttnn::MeshDevice* mesh_device = a.device();
     tt::tt_metal::Program program{};
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
@@ -668,7 +669,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         num_targets_backward,             // num_targets_backward_direction
         num_links,
         (std::uint32_t)gamma.has_value(),
-        (std::uint32_t)is_dram(gamma),
         (std::uint32_t)block_wt,
         output_reshard_cb_index,
         output_cb_index,
@@ -692,6 +692,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     writer_compile_time_args.push_back(stats_filled_semaphore);
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
+    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = NOC::NOC_1;

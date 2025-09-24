@@ -30,23 +30,23 @@ class TtEmbeddings:
         if tt_cache_path is not None:
             word_embeddings_path = str(
                 f"{tt_cache_path}/"
-                f"{base_address}.word_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+                f"{base_address}.word_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             position_embeddings_path = str(
                 f"{tt_cache_path}/"
-                f"{base_address}.position_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+                f"{base_address}.position_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             token_type_embeddings_path = str(
                 f"{tt_cache_path}/"
-                f"{base_address}.token_type_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+                f"{base_address}.token_type_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             layerNorm_gamma_path = str(
                 f"{tt_cache_path}/"
-                f"{base_address}.LayerNorm.weight_{self.model_config['EMBEDDINGS_LAYERNORM_GAMMA_DTYPE'].name}.bin"
+                f"{base_address}.LayerNorm.weight_{self.model_config['EMBEDDINGS_LAYERNORM_GAMMA_DTYPE'].name}.tensorbin"
             )
             layerNorm_beta_path = str(
                 f"{tt_cache_path}/"
-                f"{base_address}.LayerNorm.beta_{self.model_config['EMBEDDINGS_LAYERNORM_BETA_DTYPE'].name}.bin"
+                f"{base_address}.LayerNorm.beta_{self.model_config['EMBEDDINGS_LAYERNORM_BETA_DTYPE'].name}.tensorbin"
             )
 
         def compute_word_embeddings():

@@ -29,4 +29,7 @@ std::string stringify(const T& vec) {
 
 uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view);
 
+size_t get_num_links(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis = std::nullopt);
+
 }  // namespace ttnn::operations::ccl::common

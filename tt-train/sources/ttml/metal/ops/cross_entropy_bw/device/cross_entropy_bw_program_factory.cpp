@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstdint>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "cross_entropy_bw_device_operation_types.hpp"
 #include "metal/ops/common/program_utils.hpp"
@@ -152,7 +153,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get the number of inner dimension
@@ -202,22 +202,22 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     auto precise_data_format = tt::DataFormat::Float32;
     auto target_indexes_data_format = tt::DataFormat::UInt32;
 
-    auto cb_input = create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    auto cb_target = create_circular_buffer(
+    [[maybe_unused]] auto cb_target = create_circular_buffer(
         program, all_cores, kTargetCbIndex, target_indexes_data_format, uint32_read_page_size, kNumTargetIndexesTiles);
 
-    auto cb_mask = create_circular_buffer(
+    [[maybe_unused]] auto cb_mask = create_circular_buffer(
         program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    auto cb_max_mask = create_circular_buffer(
+    [[maybe_unused]] auto cb_max_mask = create_circular_buffer(
         program, all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    auto cb_reduction_scaler = create_circular_buffer(
+    [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_max_value_before_reduction = create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueBeforeReductionCbIndex,
@@ -225,7 +225,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         bfloat16_single_tile_size_bytes,
         kMaxValueBeforeReductionTiles);
 
-    auto cb_max_value_after_reduction = create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_after_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueAfterReductionCbIndex,
@@ -233,7 +233,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         bfloat16_single_tile_size_bytes,
         kNumMaxValueAfterReductionTiles);
 
-    auto cb_exp_sum_before_reduction = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kExpSumBeforeReductionCbIndex,
@@ -241,7 +241,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    auto cb_exp_sum_after_refuction = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_after_refuction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
@@ -249,10 +249,10 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         float32_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    auto cb_mat_mul_reduce = create_circular_buffer(
+    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_output = create_circular_buffer(
+    [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
@@ -296,16 +296,19 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     CrossEntropyBackwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size},
-        defines,
-        kReaderKernelPath);
+    {
+        std::vector<uint32_t> reader_compile_time_args{
+            block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size};
+        tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_compile_time_args);
+        kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    }
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt, scaler_bits}, defines, kWriterKernelPath);
+    {
+        std::vector<uint32_t> writer_compile_time_args{block_size, Wt, scaler_bits};
+        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    }
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_bw
@@ -375,7 +378,6 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
     auto& cross_entropy_bw_writer_kernel_id = shared_variables.writer_kernel_id;
     auto& cross_entropy_bw_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
     auto& cross_entropy_bw_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
@@ -390,9 +392,9 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, cross_entropy_bw_writer_kernel_id);
     auto& group_1_runtime_args = GetRuntimeArgs(program, cross_entropy_bw_kernel_group_1_id);
     // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    auto& group_2_runtime_args = core_group_2.ranges().empty()
-                                     ? group_1_runtime_args
-                                     : GetRuntimeArgs(program, cross_entropy_bw_kernel_group_2_id);
+    [[maybe_unused]] auto& group_2_runtime_args = core_group_2.ranges().empty()
+                                                      ? group_1_runtime_args
+                                                      : GetRuntimeArgs(program, cross_entropy_bw_kernel_group_2_id);
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

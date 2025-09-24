@@ -44,7 +44,7 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
@@ -74,9 +74,6 @@ using std::chrono::microseconds;
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
-inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
-    uint64_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
-
 template <typename T>
 std::vector<T> slice_vec(std::vector<T> const& v, int m, int n);
 
@@ -105,7 +102,7 @@ bool assign_runtime_args_to_program(
 
 bool validation(
     tt_metal::distributed::MeshDevice* device,
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -257,7 +254,8 @@ int main(int argc, char** argv) {
             tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
             tt_metal::distributed::Finish(device->mesh_command_queue());
         } else {
-            for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
+            uint64_t input_offset = 0;
+            for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
                 uint32_t num_tiles_per_core = 0;
                 if (core_group_1.contains(core)) {
@@ -377,7 +375,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (int i = 0; i < vec.size(); i++) {
+    for (size_t i = 0; i < vec.size(); i++) {
         float num_1_float = rand_float() + offset;
         float num_2_float = rand_float() + offset;
 
@@ -470,7 +468,7 @@ bool assign_runtime_args_to_program(
 
 bool validation(
     tt_metal::distributed::MeshDevice* device,
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,

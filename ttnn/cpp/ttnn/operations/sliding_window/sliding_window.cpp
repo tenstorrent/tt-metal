@@ -128,8 +128,12 @@ uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
             (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first;
         uint32_t output_h = std::ceil(output_h_float) + 1;
 
+        // Calculate effective kernel size with dilation
+        uint32_t effective_kernel_h = dilation_hw.first * (window_hw.first - 1) + 1;
+
         // extra_padding = ceil size - non ceil size
-        ceil_padding_h = stride_hw.first * (output_h - 1) + window_hw.first - input_hw.first - get_pad_h();
+        int32_t padding_calc = stride_hw.first * (output_h - 1) + effective_kernel_h - input_hw.first - get_pad_h();
+        ceil_padding_h = (padding_calc > 0) ? static_cast<uint32_t>(padding_calc) : 0;
     }
 
     return ceil_padding_h;
@@ -143,8 +147,12 @@ uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
             (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) / stride_hw.second;
         uint32_t output_w = std::ceil(output_w_float) + 1;
 
+        // Calculate effective kernel size with dilation
+        uint32_t effective_kernel_w = dilation_hw.second * (window_hw.second - 1) + 1;
+
         // extra_padding = ceil size - non ceil size
-        ceil_padding_w = stride_hw.second * (output_w - 1) + window_hw.second - input_hw.second - get_pad_w();
+        int32_t padding_calc = stride_hw.second * (output_w - 1) + effective_kernel_w - input_hw.second - get_pad_w();
+        ceil_padding_w = (padding_calc > 0) ? static_cast<uint32_t>(padding_calc) : 0;
     }
 
     return ceil_padding_w;
@@ -334,7 +342,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(
         output_index_start = output_index_end + 1;
     }
 
-    for (auto& boundary : shard_boundaries) {
+    for ([[maybe_unused]] auto& boundary : shard_boundaries) {
         log_trace(
             tt::LogOp,
             "shard_boundary={}, input_size = {}",
@@ -482,7 +490,7 @@ static std::vector<DestinationTransferPair> flatten_gather_config(const GatherCo
 static GatherConfig reduce_flattened_transfers(const std::vector<DestinationTransferPair>& transfers) {
     GatherConfig output;
 
-    if (transfers.size() == 0) {
+    if (transfers.empty()) {
         return output;
     }
 
@@ -598,10 +606,11 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool transpose_mcast,
     bool remote_read,
     IDevice* device,
+    uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size) {
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
+    auto core_id_to_noc_coords =
+        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
                                            : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
         return device->worker_core_from_logical_core(core_coord);
@@ -647,7 +656,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     remote_config.resize(num_cores_nhw);
 
     // Split off padding, local transfer, remote transfer operations into their own configs
-    for (auto [src_dst, data] : per_core_gather_data) {
+    for (const auto& [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
         bool is_pad = src_core_id == PAD_LOCAL_SENTINAL;
         bool is_local = src_core_id == dst_core_id;
@@ -796,11 +805,13 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     bool remote_read,
     bool is_in_tiled,
     IDevice* device,
+    uint32_t num_cores_x,
     uint32_t max_out_nsticks_per_core,
     uint32_t in_nsticks_per_core,
-    bool in_place) {
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
+    bool in_place,
+    uint32_t in_out_shard_size_delta) {
+    auto core_id_to_noc_coords =
+        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
                                            : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
         return device->worker_core_from_logical_core(core_coord);
@@ -856,7 +867,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     local_config.resize(num_cores_nhw);
     remote_config.resize(num_cores_nhw);
 
-    for (auto [src_dst, data] : per_core_gather_data) {
+    for (const auto& [src_dst, data] : per_core_gather_data) {
         auto [src_core_id, dst_core_id] = src_dst;
         bool is_pad = src_core_id == pad_local;
         bool is_local = src_core_id == dst_core_id;
@@ -912,8 +923,9 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         return flattened_config;
     };
 
-    auto flatten_local_config = [in_place, max_out_nsticks_per_core, in_nsticks_per_core, is_in_tiled](
-                                    auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+    auto flatten_local_config =
+        [in_place, max_out_nsticks_per_core, in_nsticks_per_core, is_in_tiled, in_out_shard_size_delta](
+            auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // find max length
         size_t max_len = 0;
         for (const auto& [_, data] : config) {
@@ -927,11 +939,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         max_len += 6;  // account for the key tuple and null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int32_t in_out_shard_size_delta =
-            (in_place && is_in_tiled)
-                ? 0
-                : max_out_nsticks_per_core - in_nsticks_per_core;  // for in place with tilized data we untilize
-                                                                   // directly into the output buffer so delta is zero
         for (const auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -1246,15 +1253,16 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
 }
 
 Tensor construct_on_host_config_tensor(
-    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config) {
+    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config, bool store_in_dram) {
     // We need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
+
     ttnn::Shape config_shape(
         {static_cast<uint32_t>(config.size()), static_cast<uint32_t>(config[0].size()) + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
 
-    const auto factor = get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
+    const uint32_t factor = store_in_dram ? 1 : get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
     auto repeat_config = replicate_config(config_vector, factor);
 
     auto config_buffer = tt::tt_metal::HostBuffer(std::move(repeat_config));
@@ -1266,7 +1274,11 @@ Tensor move_config_tensor_to_device(
     const Tensor& config_tensor,
     const ParallelConfig& p_config,
     bool is_block_sharded,
-    distributed::MeshDevice* device) {
+    distributed::MeshDevice* device,
+    bool store_in_dram) {
+    if (store_in_dram) {
+        return config_tensor.to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    }
     auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.logical_shape()[-1]});
     log_debug(tt::LogOp, "shard_shape: ({}, {})", shard_shape[0], shard_shape[1]);
     auto config_shard_orientation =
@@ -1277,6 +1289,12 @@ Tensor move_config_tensor_to_device(
     MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
     return config_tensor.to_device(device, memory_config);
 }
+
+uint32_t align_buffer(uint32_t size) {
+    uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
+    return factor * alignment_bytes;
+};
 
 std::string SlidingWindowConfig::to_string() const {
     return std::to_string(batch_size) + "_" + std::to_string(channels) + "_" + std::to_string(std::get<0>(input_hw)) +

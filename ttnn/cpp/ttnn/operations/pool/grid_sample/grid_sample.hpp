@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "grid_sample_prepare_grid.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -34,6 +35,7 @@ struct ExecuteGridSample {
         const std::string& mode = "bilinear",
         const std::string& padding_mode = "zeros",
         bool use_precomputed_grid = false,
+        bool batch_output_channels = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
@@ -43,5 +45,8 @@ struct ExecuteGridSample {
 // Register the operation
 constexpr auto grid_sample =
     ttnn::register_operation<"ttnn::grid_sample", ttnn::operations::grid_sample::ExecuteGridSample>();
+
+// Import prepare function to main ttnn namespace
+using ttnn::operations::grid_sample::prepare_grid_sample_grid;
 
 }  // namespace ttnn

@@ -8,8 +8,8 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "tt_metal/hw/inc/dataflow_api.h"
 #include "tt_metal/hw/inc/dataflow_api_addrgen.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 
 namespace tt::tt_fabric {
@@ -29,8 +29,8 @@ FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::Termi
 }
 
 FORCE_INLINE bool connect_is_requested(uint32_t cached) {
-    return cached == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value ||
-           cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
+    return cached == tt::tt_fabric::connection_interface::open_connection_value ||
+           cached == tt::tt_fabric::connection_interface::close_connection_request_value;
 }
 
 template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>

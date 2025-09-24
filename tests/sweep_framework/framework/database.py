@@ -12,6 +12,7 @@ import datetime as dt
 import json
 from contextlib import contextmanager
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+import hashlib
 
 try:
     import psycopg2
@@ -37,7 +38,7 @@ except ImportError as e:
     psycopg2 = MockPsycopg2()
 
 
-def get_postgres_config(env="prod"):
+def get_postgres_config():
     """Get PostgreSQL configuration from environment variables."""
     config = {
         "host": os.getenv("POSTGRES_HOST"),
@@ -59,7 +60,7 @@ def get_postgres_config(env="prod"):
 
 
 @contextmanager
-def postgres_connection(env="prod"):
+def postgres_connection():
     """
     Context manager for PostgreSQL database connections.
     Handles connection setup, commit/rollback, and cleanup automatically.
@@ -81,7 +82,7 @@ def postgres_connection(env="prod"):
             "Please install it using 'pip install psycopg2' or 'pip install psycopg2-binary'."
         )
 
-    pg_config = get_postgres_config(env)
+    pg_config = get_postgres_config()
     conn = None
     cursor = None
 
@@ -101,10 +102,10 @@ def postgres_connection(env="prod"):
             conn.close()
 
 
-def initialize_postgres_database(env="prod"):
+def initialize_postgres_database():
     """Initialize PostgreSQL database with required tables for both sweeps and unit tests."""
     try:
-        with postgres_connection(env) as (conn, cursor):
+        with postgres_connection() as (conn, cursor):
             # Check if tables already exist
             check_tables_query = """
             SELECT table_name
@@ -243,6 +244,13 @@ def generate_error_signature(exception_message):
     return exception_message.splitlines()[0][:255]
 
 
+def generate_error_hash(error_message):
+    """Generate SHA-256 hash of error message for grouping and URL filtering."""
+    if not error_message:
+        return None
+    return hashlib.sha256(error_message.encode("utf-8")).hexdigest()
+
+
 def map_test_status_to_run_status(statuses):
     """
     Aggregate test case statuses to a single test/run status.
@@ -294,11 +302,10 @@ def push_run(
     run_contents=None,
     device=None,
     run_type="sweep",
-    env="prod",
 ):
     """Create a new run record in the database."""
     try:
-        with postgres_connection(env) as (conn, cursor):
+        with postgres_connection() as (conn, cursor):
             insert_run_query = """
             INSERT INTO runs (initiated_by, host, device, type, run_contents, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -325,10 +332,10 @@ def push_run(
         raise
 
 
-def update_run(run_id, end_time_ts, status, env="prod"):
+def update_run(run_id, end_time_ts, status):
     """Update an existing run's status and end time."""
     try:
-        with postgres_connection(env) as (conn, cursor):
+        with postgres_connection() as (conn, cursor):
             update_run_query = "UPDATE runs SET status = %s, end_time_ts = %s WHERE id = %s"
             cursor.execute(update_run_query, (status, end_time_ts, run_id))
             logger.info(f"Successfully updated run {run_id} with status {status}.")
@@ -337,10 +344,10 @@ def update_run(run_id, end_time_ts, status, env="prod"):
         raise
 
 
-def push_test(run_id, name, start_time_ts, end_time_ts, status="success", env="prod"):
+def push_test(run_id, name, start_time_ts, end_time_ts, status="success"):
     """Create a new test record in the database."""
     try:
-        with postgres_connection(env) as (conn, cursor):
+        with postgres_connection() as (conn, cursor):
             insert_test_query = """
             INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
             VALUES (%s, %s, %s, %s, %s)
@@ -355,10 +362,10 @@ def push_test(run_id, name, start_time_ts, end_time_ts, status="success", env="p
         raise
 
 
-def update_test_status(test_id, status, env="prod"):
+def update_test_status(test_id, status):
     """Update a test's status."""
     try:
-        with postgres_connection(env) as (conn, cursor):
+        with postgres_connection() as (conn, cursor):
             update_test_query = "UPDATE tests SET status = %s WHERE id = %s"
             cursor.execute(update_test_query, (status, test_id))
             logger.info(f"Successfully updated test {test_id} with status {status}.")

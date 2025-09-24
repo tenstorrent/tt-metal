@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_gn_mask,
     prepare_gn_beta_gamma,
@@ -13,7 +13,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-class TtAttention(nn.Module):
+class TtAttention(LightweightModule):
     def __init__(
         self,
         device,
@@ -29,10 +29,9 @@ class TtAttention(nn.Module):
         super().__init__()
         self.device = device
 
-        self.norm_core_grid = ttnn.CoreGrid(y=4, x=8)
+        self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
         self.norm_eps = 1e-6
-        self.num_out_blocks = 4
 
         self.inner_dim = out_dim if out_dim is not None else dim_head * heads
         self.inner_kv_dim = self.inner_dim if kv_heads is None else dim_head * kv_heads
@@ -62,8 +61,8 @@ class TtAttention(nn.Module):
 
         norm_weights = state_dict[f"{module_path}.group_norm.weight"]
         norm_bias = state_dict[f"{module_path}.group_norm.bias"]
-        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, norm_weights, norm_bias, self.norm_core_grid.y)
-        self.input_mask = prepare_gn_mask(self.device, norm_weights.shape[0], self.norm_groups, self.norm_core_grid.y)
+        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, norm_weights, norm_bias, self.norm_core_grid.x)
+        self.input_mask = prepare_gn_mask(self.device, norm_weights.shape[0], self.norm_groups, self.norm_core_grid.x)
 
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         q_bias = state_dict[f"{module_path}.to_q.bias"]
@@ -93,18 +92,27 @@ class TtAttention(nn.Module):
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat16)
 
     def forward(self, input_tensor, input_shape, encoder_hidden_states=None):
-        hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        B, C, H, W = input_shape
+        shard_shape = B * H * W // self.norm_core_grid.x, C // self.norm_core_grid.y
+        sharded_mem_config = ttnn.create_sharded_memory_config(
+            shard_shape,
+            core_grid=self.norm_core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        hidden_states = ttnn.to_memory_config(input_tensor, sharded_mem_config)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
             input_mask=self.input_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=sharded_mem_config,
             core_grid=self.norm_core_grid,
             epsilon=self.norm_eps,
-            inplace=False,
-            num_out_blocks=self.num_out_blocks,
+            negative_mask=None,
+            inplace=False,  # We are working with tiled sharded GN
         )
 
         assert encoder_hidden_states is None, "VAE does self attention only"
@@ -117,6 +125,7 @@ class TtAttention(nn.Module):
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
+        ttnn.deallocate(hidden_states)
 
         (
             q_heads,

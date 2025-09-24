@@ -2,16 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dev_msgs.h"
-#include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <memory>
 #include <numeric>
 #include <string>
-#include <vector>
 
-#include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
 #include "hw/inc/wormhole/eth_l1_address_map.h"
@@ -22,6 +17,13 @@
 #include "wormhole/wh_hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "hal_1xx_common.hpp"
+
+namespace {
+
+// Wrap enum definitions in anonymous namespace so as to not clash with other archs.
+#include "core_config.h"  // MaxProcessorsPerCoreType
+
+}  // namespace
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -39,7 +41,7 @@ constexpr static std::uint32_t NUM_DRAM_CHANNELS = 12;
 constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
     (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
 constexpr static std::uint32_t DRAM_PROFILER_SIZE =
-    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
       DRAM_ALIGNMENT - 1) /
      DRAM_ALIGNMENT) *
     DRAM_ALIGNMENT;
@@ -211,13 +213,12 @@ public:
 };
 
 void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
+    using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
-
-    static_assert(MaxProcessorsPerCoreType <= MAX_RISCV_PER_CORE);
 
     HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
@@ -259,7 +260,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
@@ -302,8 +303,19 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
+    this->eth_fw_arg_addr_func_ = [&](int, uint32_t) -> uint32_t { return 0; };
 
+    this->device_features_func_ = [](DispatchFeature feature) -> bool {
+        switch (feature) {
+            case DispatchFeature::ETH_MAILBOX_API: return false;
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            default: TT_THROW("Invalid Wormhole dispatch feature {}", static_cast<int>(feature));
+        }
+    };
+
+    this->max_processors_per_core_ = MaxProcessorsPerCoreType;
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
@@ -322,12 +334,17 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
     this->intermesh_eth_links_enabled_ = true;  // Intermesh routing is enabled on Wormhole
-    this->virtualized_core_types_ = {AddressableCoreType::TENSIX, AddressableCoreType::ETH};
+    this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;
     this->inf_ = INF_WHB0;
+
+    // PCIe address range for Wormhole. Includes the mapping through the outbound iATU. See
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/PCIExpressTile for more details.
+    this->pcie_addr_lower_bound_ = 0x8'0000'0000ULL;
+    this->pcie_addr_upper_bound_ = 0x8'FFFE'0000ULL - 1ULL;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -342,6 +359,18 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>();
+
+    this->set_iram_text_size_func_ = [](dev_msgs::launch_msg_t::View launch_msg,
+                                        HalProgrammableCoreType programmable_core_type,
+                                        HalProcessorClassType processor_class,
+                                        uint32_t processor_type_idx,
+                                        uint32_t iram_text_size) {
+        // Only NCRISC on Wormhole needs to set the field ncrisc_kernel_size16 in launch message.
+        if (programmable_core_type == HalProgrammableCoreType::TENSIX && processor_class == HalProcessorClassType::DM &&
+            processor_type_idx == 1) {
+            launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
+        }
+    };
 }
 
 }  // namespace tt_metal

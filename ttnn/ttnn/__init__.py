@@ -109,6 +109,7 @@ from ttnn._ttnn.multi_device import (
     create_mesh_mapper,
     concat_mesh_to_tensor_composer,
     create_mesh_composer,
+    compute_distribution_to_mesh_mapping,
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,
@@ -137,7 +138,7 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster
@@ -252,7 +253,6 @@ from ttnn.device import (
     SubDevice,
     SubDeviceId,
     SubDeviceManagerId,
-    DefaultQueueId,
     init_device_compute_kernel_config,
 )
 
@@ -273,11 +273,10 @@ from ttnn.core import (
     LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
-    dump_memory_config,
-    load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    get_current_command_queue_id_for_thread,
 )
 
 import ttnn.reflection
@@ -285,6 +284,7 @@ import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
+    command_queue,
     create_module_if_not_exists,
     dump_operations,
     get_golden_function,
@@ -353,7 +353,9 @@ from ttnn.operations.normalization import (
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
+    create_group_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    dram_group_norm_params_from_torch,
 )
 
 from ttnn.operations.embedding import (
@@ -386,6 +388,10 @@ from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
     convert_conv_weight_tensor_to_special_padding_tiled_layout,
     convert_conv_weight_tensor_to_grouped_layout,
+)
+
+from ttnn.operations.pool import (
+    prepare_grid_sample_grid,
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig

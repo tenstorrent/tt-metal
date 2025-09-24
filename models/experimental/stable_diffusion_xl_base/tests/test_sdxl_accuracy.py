@@ -11,9 +11,14 @@ import urllib
 from loguru import logger
 import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_TRACE_REGION_SIZE
+from models.experimental.stable_diffusion_xl_base.tests.test_common import (
+    SDXL_L1_SMALL_SIZE,
+    SDXL_TRACE_REGION_SIZE,
+    SDXL_FABRIC_CONFIG,
+)
 import json
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
+from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
@@ -21,11 +26,38 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+    "device_params, use_cfg_parallel",
+    [
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+                "fabric_config": SDXL_FABRIC_CONFIG,
+            },
+            True,
+        ),
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+            },
+            False,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["use_cfg_parallel", "no_cfg_parallel"],
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((50),),
+    ((20),),
+)
+@pytest.mark.parametrize(
+    "guidance_scale",
+    ((8.0),),
+)
+@pytest.mark.parametrize(
+    "negative_prompt",
+    (("normal quality, low quality, worst quality, low res, blurry, nsfw, nude"),),
 )
 @pytest.mark.parametrize(
     "vae_on_device",
@@ -54,6 +86,7 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
+    validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
     num_inference_steps,
@@ -63,6 +96,9 @@ def test_accuracy_sdxl(
     captions_path,
     coco_statistics_path,
     evaluation_range,
+    guidance_scale,
+    negative_prompt,
+    use_cfg_parallel,
 ):
     start_from, num_prompts = evaluation_range
 
@@ -75,14 +111,18 @@ def test_accuracy_sdxl(
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     images = test_demo(
+        validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
         prompts,
+        negative_prompt,
         num_inference_steps,
         vae_on_device,
         encoders_on_device,
         capture_trace,
         evaluation_range,
+        guidance_scale,
+        use_cfg_parallel,
     )
 
     clip = CLIPEncoder()
@@ -110,15 +150,20 @@ def test_accuracy_sdxl(
     data = {
         "model": "sdxl",  # For compatibility with current processes
         "metadata": {
-            "device": "N150",
+            "device": get_device_name(),
             "device_vae": vae_on_device,
+            "capture_trace": capture_trace,
+            "encoders_on_device": encoders_on_device,
+            "num_inference_steps": num_inference_steps,
             "start_from": start_from,
             "num_prompts": num_prompts,
+            "negative_prompt": negative_prompt,
+            "guidance_scale": guidance_scale,
             "model_name": "sdxl",
         },
         "benchmarks_summary": [
             {
-                "device": "N150",
+                "device": get_device_name(),
                 "model": "sdxl",
                 "average_denoising_time": profiler.get("denoising_loop"),
                 "average_vae_time": profiler.get("vae_decode"),
@@ -137,11 +182,25 @@ def test_accuracy_sdxl(
     }
 
     os.makedirs(OUT_ROOT, exist_ok=True)
+    trace_flag = "with_trace" if capture_trace else "no_trace"
+    vae_flag = "device_vae" if vae_on_device else "host_vae"
+    encoders_flag = "device_encoders" if encoders_on_device else "host_encoders"
+    new_file_name = (
+        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel}_{num_inference_steps}.json"
+    )
+    with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
+        json.dump(data, f, indent=4)
 
-    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:
+    logger.info(f"Test results saved to {OUT_ROOT}/{new_file_name}")
+
+    with open(
+        f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w"
+    ) as f:  # this is for CI and test_sdxl_accuracy_with_reset.py compatibility
         json.dump(data, f, indent=4)
 
     logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
+
+    check_clip_scores(start_from, num_prompts, prompts, clip_scores)
 
 
 def sdxl_get_prompts(
@@ -172,3 +231,22 @@ def sdxl_get_prompts(
             prompts.append(row[2])
 
     return prompts
+
+
+def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
+    assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
+    num_of_very_low_clip_scores = 0
+    for idx, score in enumerate(clip_scores):
+        if clip_scores[idx] < 27:
+            if clip_scores[idx] < 20:
+                logger.error(
+                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]},  \
+                        this indicates a fragmented image or noise or prompt mismatch or something else very wrong."
+                )
+                num_of_very_low_clip_scores += 1
+            else:
+                logger.warning(
+                    f"Low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
+                )
+
+    assert num_of_very_low_clip_scores == 0, f"Found {num_of_very_low_clip_scores} images with very low CLIP scores"

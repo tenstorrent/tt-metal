@@ -21,28 +21,32 @@ void kernel_main() {
     const uint32_t send_core_y = get_arg_val<uint32_t>(rt_args_idx++);
     const bool is_input1 = get_arg_val<uint32_t>(rt_args_idx++);
 
-    constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_input1_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t untilized_input2_cb_id = get_compile_time_arg_val(5);
-    constexpr bool use_index_tensor = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(7);
-    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t Wt = get_compile_time_arg_val(9);
-    constexpr uint32_t Wbytes = get_compile_time_arg_val(10);
+    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t untilized_input1_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t untilized_input2_cb_id = get_compile_time_arg_val(4);
+    constexpr bool use_index_tensor = get_compile_time_arg_val(5) == 1;
+    constexpr uint32_t cb_index_id = get_compile_time_arg_val(6);
+    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);
+    constexpr uint32_t Wbytes = get_compile_time_arg_val(9);
 
     // paged_cache args
-    constexpr bool is_paged_cache = get_compile_time_arg_val(11) == 1;
-    constexpr uint32_t num_heads = get_compile_time_arg_val(12);
-    constexpr uint32_t block_size = get_compile_time_arg_val(13);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(14);
-    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(15);
-    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(16);
+    constexpr bool is_paged_cache = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t num_heads = get_compile_time_arg_val(11);
+    constexpr uint32_t block_size = get_compile_time_arg_val(12);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
+    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(14);
+    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
 
-    constexpr uint32_t St = get_compile_time_arg_val(17);
-    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(18));  // semaphore for receiver
+    constexpr uint32_t St = get_compile_time_arg_val(16);
+    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
+    constexpr uint32_t batch_size = get_compile_time_arg_val(18);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(19);
+    constexpr uint32_t page_table_is_dram = get_compile_time_arg_val(20);
+
+    constexpr auto s0_args = TensorAccessorArgs<21>();
 
     uint32_t untilized_input_cb_id = untilized_input1_cb_id;
     if (!is_input1) {
@@ -55,8 +59,7 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
-    const InterleavedAddrGenFast<cache_is_dram> s0 = {
-        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
+    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
@@ -74,13 +77,25 @@ void kernel_main() {
             skip_update = true;
         } else {
             if constexpr (is_paged_cache) {
-                cb_wait_front(page_table_cb_id, 1);
+                uint32_t num_pages_to_read = page_table_is_dram ? 1 : batch_size;
+                cb_wait_front(page_table_cb_id, num_pages_to_read);
                 uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
-                volatile tt_l1_ptr uint32_t* page_table_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
+                if constexpr (!page_table_is_dram) {
+                    page_table_cb_rd_ptr += my_batch_idx * page_table_stick_size;
+                }
+                // DRAM uses uint32 entries; L1-sharded page table uses uint16 entries
+                volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
+                volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
+                if constexpr (page_table_is_dram) {
+                    page_table_ptr_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
+                } else {
+                    page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_rd_ptr);
+                }
 
                 const uint32_t virtual_block_id = update_idx / block_size;
-                const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
+                const uint32_t physical_block_id = (page_table_is_dram)
+                                                       ? page_table_ptr_u32[virtual_block_id]
+                                                       : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
                 const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
                 const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
                 const uint32_t block_offset = block_row_tile * Wt;

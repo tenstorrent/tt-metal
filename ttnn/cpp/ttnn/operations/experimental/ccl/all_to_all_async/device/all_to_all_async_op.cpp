@@ -121,7 +121,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllToAllAsync::create_mesh_wo
 tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
 
     std::optional<IDevice*> forward_device = std::nullopt;
@@ -130,7 +130,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
 
     TT_FATAL(this->topology == ttnn::ccl::Topology::Ring, "DEBUG: topology: {}", this->topology);
 
-    std::vector<IDevice*> devices_to_use = input_tensors[0].mesh_device()->get_view().get_ring_devices();
+    std::vector<IDevice*> devices_to_use = input_tensors[0].device()->get_view().get_ring_devices();
 
     for (uint32_t i = 0; i < this->ring_size; ++i) {
         if (devices_to_use.at(i) == target_device) {
