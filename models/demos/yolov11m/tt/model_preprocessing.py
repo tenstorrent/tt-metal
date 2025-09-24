@@ -12,7 +12,7 @@ from models.demos.yolov11m.tt.common import get_mesh_mappers
 
 
 def create_yolov11_input_tensors(
-    device, batch=1, input_channels=3, input_height=640, input_width=640, is_sub_module=True
+    device, batch=1, input_channels=3, input_height=320, input_width=320, is_sub_module=True
 ):
     num_devices = device.get_num_devices()
     inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
