@@ -34,6 +34,9 @@ class TtnnOBB:
         self.cv2_0_0 = TtnnConv(device, parameter.cv2[0][0], conv_pt.cv2[0][0], is_detect=True)
         self.cv2_0_1 = TtnnConv(device, parameter.cv2[0][1], conv_pt.cv2[0][1], is_detect=True)
         self.cv2_0_2 = Yolov11Conv2D(parameter.cv2[0][2], conv_pt.cv2[0][2], device=device, is_detect=True)
+        print(f"🔍 cv2_0_2 weights range: {ttnn.to_torch(self.cv2_0_2.weight).min():.6f} to {ttnn.to_torch(self.cv2_0_2.weight).max():.6f}")
+        if self.cv2_0_2.bias is not None:
+            print(f"🔍 cv2_0_2 bias range: {ttnn.to_torch(self.cv2_0_2.bias).min():.6f} to {ttnn.to_torch(self.cv2_0_2.bias).max():.6f}")
         
         # Scale 1 (512 -> 64 -> 64 -> 64)
         self.cv2_1_0 = TtnnConv(device, parameter.cv2[1][0], conv_pt.cv2[1][0], is_detect=True)
@@ -52,6 +55,9 @@ class TtnnOBB:
         self.cv3_0_1_dw = TtnnDWConv(device, parameter.cv3[0][1][0], conv_pt.cv3[0][1][0], enable_act=True, is_detect=True)
         self.cv3_0_1_conv = TtnnConv(device, parameter.cv3[0][1][1], conv_pt.cv3[0][1][1], is_detect=True)
         self.cv3_0_2 = Yolov11Conv2D(parameter.cv3[0][2], conv_pt.cv3[0][2], device=device, is_detect=True)
+        print(f"🔍 cv3_0_2 weights range: {ttnn.to_torch(self.cv3_0_2.weight).min():.6f} to {ttnn.to_torch(self.cv3_0_2.weight).max():.6f}")
+        if self.cv3_0_2.bias is not None:
+            print(f"🔍 cv3_0_2 bias range: {ttnn.to_torch(self.cv3_0_2.bias).min():.6f} to {ttnn.to_torch(self.cv3_0_2.bias).max():.6f}")
         
         # Scale 1: DWConv(512->512) -> Conv(512->256) -> DWConv(256->256) -> Conv(256->256) -> Conv2d(256->15)
         self.cv3_1_0_dw = TtnnDWConv(device, parameter.cv3[1][0][0], conv_pt.cv3[1][0][0], enable_act=True, is_detect=True)
