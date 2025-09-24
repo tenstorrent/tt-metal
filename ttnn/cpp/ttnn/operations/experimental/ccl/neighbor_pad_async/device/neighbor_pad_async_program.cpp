@@ -128,7 +128,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     auto [num_cores, worker_core_ranges, core_group_1, core_group_2, dims_per_core_group_1, dims_per_core_group_2] =
         (dim > 0) ? tt::tt_metal::split_work_to_cores(core_grid, outer_dim_size * 2)
                   : tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_halo_dim * 2);
-    ;
 
     // L1 Scratch CB Creation
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
@@ -186,7 +185,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 is_padding_zeros,
                 page_size};
             TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
-            TensorAccessorArgs(*output_buffer).append_to(reader_kernel_config.compile_args);
             auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
