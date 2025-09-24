@@ -7,11 +7,11 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
-from models.utility_functions import skip_for_blackhole, run_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, run_for_blackhole
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
@@ -895,7 +895,6 @@ def test_conv_ws(
     enable_act_double_buffer,
     enable_weights_double_buffer,
 ):
-    print("Device Core Grid:", device.core_grid)
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
