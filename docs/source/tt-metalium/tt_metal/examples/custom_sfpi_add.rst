@@ -29,13 +29,20 @@ The host-side setup for this custom SFPI example follows the standard pattern: d
 
     // Standard device and program setup
     constexpr int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+
+    // Submit work via the mesh command queue: uploads/downloads and program execution
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    // Allocate mesh buffers: two inputs + one output (replicated across mesh)
+    auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+
     Program program = CreateProgram();
 
-    // DRAM buffers: two inputs + one output
-    auto src0_dram_buffer = CreateBuffer(config);
-    auto src1_dram_buffer = CreateBuffer(config);
-    auto dst_dram_buffer = CreateBuffer(config);
+    // Create mesh workload for program execution across the mesh
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     // Circular buffers for kernel communication
     CreateCircularBuffer(program, core, /* cb_in0 config */);
@@ -232,27 +239,39 @@ Back on the host, we set the runtime arguments for the kernels. The reader and w
         n_tiles
     });
 
-Finally, we enqueue the program for execution and read back the results from the destination DRAM buffer to verify correctness.
+For mesh execution, we add the program to a mesh workload and enqueue it for execution across the mesh. We also upload input data using the mesh buffer API.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
 
+    // Upload input data to mesh buffers (non-blocking)
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, /*blocking=*/false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, /*blocking=*/false);
+
+    // Add program to mesh workload and execute
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    distributed::Finish(cq);
+
+Finally, we read back the results from the mesh buffer using the distributed API to verify correctness.
+
+.. code-block:: cpp
+
+    // tt_metal/programming_examples/custom_sfpi_add/custom_sfpi_add.cpp
     std::vector<bfloat16> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     // Validation against golden output...
 
 Conclusion
 ----------
 
-This example demonstrated how to create a custom SFPI kernel for vector addition. Key takeaways include:
+This example demonstrated how to create a custom SFPI kernel for vector addition using the Mesh API. Key takeaways include:
 
 *   The layered approach to SFPI kernel development (high-level API, LLK wrapper, low-level face function).
 *   The use of destination registers (``dst_reg``) for SFPU computations.
 *   The role of the LLK API (e.g., ``_llk_math_eltwise_binary_sfpu_params_``) in simplifying SFPI programming by handling tile face iteration.
 *   The standard pipeline of reader, compute, and writer kernels for processing data on Tensix cores.
 
-By following this pattern, you can implement a wide variety of custom element-wise operations on the SFPU to accelerate your specific workloads.
+By following this pattern, you can implement a wide variety of custom element-wise operations on the SFPU to accelerate your specific workloads while leveraging the distributed programming capabilities of the Mesh API.

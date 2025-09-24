@@ -49,18 +49,32 @@ Run the example:
 Program setup
 -------------
 
-The host-side setup for this custom SFPI example follows the standard pattern: device initialization, DRAM buffer creation, circular buffer allocation for kernel communication, and kernel creation. Unlike binary operations that require two input buffers, smoothstep is a unary operation requiring only a single input buffer (``src0_dram_buffer``) plus the output buffer (``dst_dram_buffer``). Correspondingly, we need only one input circular buffer (``cb_in0``) and one output buffer (``cb_out0``).
+The host-side setup for this custom SFPI example follows the standard pattern: mesh device initialization, DRAM buffer creation, circular buffer allocation for kernel communication, and kernel creation. Unlike binary operations that require two input buffers, smoothstep is a unary operation requiring only a single input buffer (``src0_dram_buffer``) plus the output buffer (``dst_dram_buffer``). Correspondingly, we need only one input circular buffer (``cb_in0``) and one output buffer (``cb_out0``).
 
 .. code-block:: cpp
 
-    // Standard device and program setup
+    // Create a 1x1 mesh on device 0 (same API scales to multi-device meshes)
     constexpr int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+
+    // Submit work via the mesh command queue: uploads/downloads and program execution
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     Program program = CreateProgram();
 
+    // A MeshWorkload is a collection of programs that will be executed on the mesh
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    // Configure mesh buffers with single-tile page size
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = tile_size_bytes,
+        .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig dram_buffer_config{
+        .size = dram_buffer_size};
+
     // DRAM buffers: single input + one output for unary operation
-    auto src0_dram_buffer = CreateBuffer(config);
-    auto dst_dram_buffer = CreateBuffer(config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
 
     // Circular buffers for kernel communication
     CreateCircularBuffer(program, core, /* cb_in0 config */);
@@ -245,16 +259,20 @@ Back on the host, we set the runtime arguments for the kernels. Since this is a 
         n_tiles
     });
 
-Finally, we enqueue the program for execution and read back the results from the destination DRAM buffer to verify correctness against the expected smoothstep function output.
+Finally, we add the program to the mesh workload and enqueue it for execution, then read back the results from the destination DRAM buffer to verify correctness against the expected smoothstep function output.
 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    // Add the program to the workload for the mesh
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+
+    // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    distributed::Finish(cq);
 
     std::vector<bfloat16> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking*/ true);
 
     // Validation against golden smoothstep output
     for (size_t i = 0; i < result_vec.size(); ++i) {
