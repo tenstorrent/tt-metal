@@ -643,12 +643,12 @@ void DPrintServer::Impl::attach_devices() {
 void DPrintServer::Impl::attach_device(chip_id_t device_id) {
     // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are virtual.
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(device_id);
-    tt::tt_metal::CoreDescriptorSet dispatch_cores = tt::tt_metal::GetDispatchCores(device_id);
+    CoreDescriptorSet all_cores = GetAllCores(device_id);
+    CoreDescriptorSet dispatch_cores = GetDispatchCores(device_id);
 
     // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
     // to the server.
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = MetalContext::instance().rtoptions();
     std::vector<chip_id_t> chip_ids = rtoptions.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!rtoptions.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device_id) == chip_ids.end()) {
@@ -668,10 +668,7 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
                 }
             }
             log_info(
-                tt::LogMetal,
-                "DPRINT enabled on device {}, all {} cores.",
-                device_id,
-                tt::tt_metal::get_core_type_name(core_type));
+                tt::LogMetal, "DPRINT enabled on device {}, all {} cores.", device_id, get_core_type_name(core_type));
         } else if (
             rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassDispatch) {
@@ -684,7 +681,7 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
                 tt::LogMetal,
                 "DPRINT enabled on device {}, {} dispatch cores.",
                 device_id,
-                tt::tt_metal::get_core_type_name(core_type));
+                get_core_type_name(core_type));
         } else if (
             rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassWorker) {
@@ -700,7 +697,7 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
                 tt::LogMetal,
                 "DPRINT enabled on device {}, {} worker cores.",
                 device_id,
-                tt::tt_metal::get_core_type_name(core_type));
+                get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
             const std::vector<CoreCoord>& print_cores =
@@ -714,9 +711,8 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
                 bool valid_logical_core = true;
                 try {
                     virtual_core =
-                        tt::tt_metal::MetalContext::instance()
-                            .get_cluster()
-                            .get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, core_type);
+                        MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                            device_id, logical_core, core_type);
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
@@ -726,7 +722,7 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
                         tt::LogMetal,
                         "DPRINT enabled on device {}, {} core {} (virtual {}).",
                         device_id,
-                        tt::tt_metal::get_core_type_name(core_type),
+                        get_core_type_name(core_type),
                         logical_core.str(),
                         virtual_core.str());
                 } else {
@@ -734,7 +730,7 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
                         tt::LogMetal,
                         "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (virtual coordinates {}), "
                         "which is not a valid core on device {}. This coordinate will be ignored by the dprint server.",
-                        tt::tt_metal::get_core_type_name(core_type),
+                        get_core_type_name(core_type),
                         logical_core.str(),
                         valid_logical_core ? virtual_core.str() : "INVALID",
                         device_id);
@@ -745,14 +741,13 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
 
     // Write print enable magic for the cores the user specified.
     for (auto& logical_core : print_cores_sanitized) {
-        CoreCoord virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                device_id, logical_core.coord, logical_core.type);
+        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core.coord, logical_core.type);
         auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-        uint32_t num_processors =
-            tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+        uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+        const auto& enabled_processors = rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
         for (int risc_index = 0; risc_index < num_processors; risc_index++) {
-            if (RiscEnabled(programmable_core_type, risc_index)) {
+            if (enabled_processors.contains(programmable_core_type, risc_index)) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
             }
         }
