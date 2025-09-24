@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tools &mdash; TT-Metalium  documentation</title>
+  <title>tt-triage &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/index.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/triage.html" />
   <!--[if lt IE 9]>
     <script src="../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Kernel Debug Print" href="kernel_print.html" />
-    <link rel="prev" title="Low Level Kernels" href="../tt_metal/apis/kernel_apis/sfpu/llk.html" /> 
+    <link rel="next" title="Support" href="../resources/support.html" />
+    <link rel="prev" title="Inspector" href="inspector.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -61,13 +61,19 @@
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
-<li class="toctree-l1 current"><a class="current reference internal" href="#">Tools</a><ul>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
 <li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
 <li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
-<li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">tt-triage</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#running">Running</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#arguments">Arguments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#extending">Extending</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -91,9 +97,10 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">Tools</li>
+          <li class="breadcrumb-item"><a href="index.html">Tools</a></li>
+      <li class="breadcrumb-item active">tt-triage</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../_sources/tools/index.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../_sources/tools/triage.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -101,50 +108,49 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="tools">
-<h1>Tools<a class="headerlink" href="#tools" title="Permalink to this heading"></a>
+  <section id="tt-triage">
+<h1>tt-triage<a class="headerlink" href="#tt-triage" title="Permalink to this heading"></a>
 </h1>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Tools are only fully supported on source builds.</p>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>tt-triage is a tool that provides insights into Metal execution. It is designed to be easily extensible.
+It consists of data provider scripts that gather data from various sources (such as Inspector, tt-exalens, etc.) and
+analysis scripts that process data supplied by the data provider scripts.</p>
+</section>
+<section id="running">
+<h2>Running<a class="headerlink" href="#running" title="Permalink to this heading"></a>
+</h2>
+<p>To run tt-triage, execute the <code class="docutils literal notranslate"><span class="pre">scripts/debugging_scripts/tt-triage.py</span></code> script using Python 3.10 or newer.</p>
+<p>Example use with tt-metal:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>~/work/tt-metal
+./build_metal.sh<span class="w"> </span>--build-programming-examples
+build/programming_examples/matmul_multi_core
+triage
+</pre></div>
 </div>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+</section>
+<section id="arguments">
+<h2>Arguments<a class="headerlink" href="#arguments" title="Permalink to this heading"></a>
+</h2>
+<p>You can run <code class="docutils literal notranslate"><span class="pre">tt-triage</span> <span class="pre">--help</span></code> to see the available options.
+Some notable options include:</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--initialize-with-noc1</span></code>: Initializes the debugger context with NOC1 enabled (default: False). Useful if NOC0 is not functioning.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--dev=&lt;device_id&gt;</span></code>: Specifies the device ID to analyze (default: <code class="docutils literal notranslate"><span class="pre">in_use</span></code>). You can provide multiple <code class="docutils literal notranslate"><span class="pre">--dev</span></code> options to analyze several devices. Use <code class="docutils literal notranslate"><span class="pre">all</span></code> to analyze every device.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--remote-exalens</span></code>: Connects to a remote exalens server (default: False). This is helpful if tt-triage is fails during UMD initialization. If you encounter errors indicating UMD cannot be initialized, try this option. Open a new terminal and run <code class="docutils literal notranslate"><span class="pre">tt-exalens</span> <span class="pre">--server</span></code> before starting your workload. Then, in your original terminal, run <code class="docutils literal notranslate"><span class="pre">tt-triage</span> <span class="pre">--remote-exalens</span></code>.</p></li>
 </ul>
 </div>
-<p>Kernel print is the debug tool for printing tiles, scalers, and strings from device to host.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="watcher.html">Watcher</a></li>
-</ul>
-</div>
-<p>The Watcher is a thread that monitors the status of the TT device to help with
-debug.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
-</ul>
-</div>
-<p>Tracy profiler is for profiling device-side RISCV code and host-side python and C++ code.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
-</ul>
-</div>
-<p>Device program profiler brings visibility to execution of device side programs by providing duration counts on marked portions of the code.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="inspector.html">Inspector</a></li>
-</ul>
-</div>
-<p>The Inspector is a tool that provides insights into Metal host runtime.</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="triage.html">tt-triage</a></li>
-</ul>
-</div>
-<p>The tt-triage is a collection of Python scripts for analyzing and debugging Metal workload.</p>
+</blockquote>
+</section>
+<section id="extending">
+<h2>Extending<a class="headerlink" href="#extending" title="Permalink to this heading"></a>
+</h2>
+<p>Take a look at the <code class="docutils literal notranslate"><span class="pre">scripts/debugging_scripts/tt-triage.md</span></code> file for instructions on how to extend tt-triage with new data providers and analysis scripts.</p>
+</section>
 </section>
 
 
@@ -152,8 +158,8 @@ debug.</p>
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="../tt_metal/apis/kernel_apis/sfpu/llk.html" class="btn btn-neutral float-left" title="Low Level Kernels" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="kernel_print.html" class="btn btn-neutral float-right" title="Kernel Debug Print" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="inspector.html" class="btn btn-neutral float-left" title="Inspector" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../resources/support.html" class="btn btn-neutral float-right" title="Support" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
