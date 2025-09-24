@@ -47,14 +47,9 @@ void kernel_main() {
     constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(33);
     constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(34) == 1;
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(35) == 1;
+#endif
+#endif
     constexpr uint32_t ct_arg_idx = 36;
-#else
-    constexpr uint32_t ct_arg_idx = 27;
-#endif
-#else
-    constexpr uint32_t ct_arg_idx = 18;
-#endif
-
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
