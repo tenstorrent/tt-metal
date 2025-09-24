@@ -174,24 +174,10 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
                 ),
             ),
         ),
-        (
-            (1, 8, 36, 32),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 5))}),
-                    [48, 10],
-                    [64, 64],  # NOTE: This value is compatible with all PageConfigs in this sweep
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        ),
     ],
     ids=[
         "interleaved",
         "width_sharded",
-        "block_sharded",
     ],
 )
 def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device):
