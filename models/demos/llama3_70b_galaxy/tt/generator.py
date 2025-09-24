@@ -374,8 +374,6 @@ class Generator:
                 temp=[1 / sampling_params.temperature] * 32,
             )
         if tt_out_logits_saved is not None:
-            if return_logits and tt_out_logits_saved is None:
-                tt_out_logits_saved = torch.zeros(1, 131072)
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
             tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits)
