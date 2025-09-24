@@ -150,26 +150,20 @@ void MAIN {
                 }
             }
             if constexpr (is_output_tiled) {
-                if (last_c_block) {
 #ifdef ARCH_BLACKHOLE
-                    pack_untilize_dest_init<partial_iter_output_tiles>(
-                        pre_tilize_cb_id, num_out_sticks, num_faces_in_output_tile);
-#else
+                MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+#endif
+                if (last_c_block) {
                     PACK((llk_pack_untilize_init<
                           partial_iter_output_tiles,
                           partial_iter_output_tiles,
                           false,
                           false,
                           TILE_C_DIM>(pre_tilize_cb_id, 1, num_faces_in_output_tile)));
-#endif
+
                 } else if (first_c_block) {
-#ifdef ARCH_BLACKHOLE
-                    pack_untilize_dest_init<max_tiles_per_iter>(
-                        pre_tilize_cb_id, num_out_sticks, num_faces_in_output_tile);
-#else
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                         pre_tilize_cb_id, 1, num_faces_in_output_tile)));
-#endif
                 }
             }
             tile_regs_acquire();
