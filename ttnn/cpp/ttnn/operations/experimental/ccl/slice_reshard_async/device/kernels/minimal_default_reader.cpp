@@ -43,7 +43,6 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     // Load the input tensor spec
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
