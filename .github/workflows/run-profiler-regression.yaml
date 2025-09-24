@@ -66,7 +66,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
     runs-on: >-
-      ${{ 
+      ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
