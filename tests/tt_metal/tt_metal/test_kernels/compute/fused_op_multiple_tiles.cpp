@@ -7,6 +7,8 @@
 // #include "compute_kernel_api/fused_eltwise_binary_reduce.h"
 #include "compute_kernel_api/fused_eltwise_binary_reduce_multiple_tiles.h"
 
+#include "/localdev/vbabic/tt-metal/tt_metal/hw/inc/debug/dprint_tensix.h"
+
 #include <cstdint>
 
 namespace NAMESPACE {
@@ -34,30 +36,43 @@ void MAIN {
         fused_eltwise_binary_compute<ELTWISE_OP_TYPE>(cb_inp0, cb_inp1, tile_idx, tile_idx, tile_idx);
     }
 
-    // now we have, in theory, 8 tiles one below other in dest.
-
-    // we reduce those tiles going from index 0 to index 7
-    // remember that reduce will run over the first tile in dest, that's why this particular order matters
+    // dprint_tensix_dest_reg(0); // - all of dest is filled with expected data
 
     fused_eltwise_binary_reuse_dest_multiple_tiles(0);
     fused_reduce_populate_ones();
 
-    fused_reduce_init<REDUCE_OP, REDUCE_DIM>();  // THIS SHOULD NOT ZERO OUT THE DEST, just the first tile
+    fused_reduce_init<REDUCE_OP, REDUCE_DIM>();
 
     int reduce_dst_idx = 0;
 
     for (uint32_t tile_idx = 0; tile_idx < tile_cnt; ++tile_idx) {
         // For tiles after the first one, we need to reuse the destination as input for that specific tile
         if (tile_idx != 0) {
-            fused_eltwise_binary_reuse_dest_multiple_tiles(tile_idx);  // todo: fix this method
+            fused_eltwise_binary_reuse_dest_multiple_tiles(tile_idx);
         }
+        // else{
+        //     dprint_tensix_dest_reg(0); // - prints out ones, except for the first row (16 datums)
+        // }
+
+        // if(tile_idx == 0){
+        //     while(true){} // for debugging srcA - tt-exalens - dr 0,0 srca
+        // }
 
         // Perform the reduce operation on the current tile
-        fused_reduce_compute<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);  // is this the input or the output tile
-        // todo: alter the math thread only to clear dvalid after the for loop
+        fused_reduce_compute<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
+
+        // if(tile_idx == 0){
+        //     dprint_tensix_dest_reg(tile_idx);
+        // }
     }
 
+    // math hanga nakon compute-a
+
+    // dprint_tensix_dest_reg(0); // - does not hang
+
     fused_reduce_clear_dvalid_after_for_loop();
+
+    // dprint_tensix_dest_reg(0);    // does not hang
 
     tile_regs_commit();  // math thread commits the dst register
     tile_regs_wait();    // pack thread waits for the math thread to commit the dst register
@@ -66,11 +81,11 @@ void MAIN {
     cb_pop_front(cb_inp1, tile_cnt);  // Done with second input
 
     // pack tiles
-    pack_tile(reduce_dst_idx, cb_out0);  // output of reduce is always 0
+    pack_tile(reduce_dst_idx, cb_out0);
 
     PACK(for (uint32_t i = 0; i < 32; ++i) { TTI_NOP; });  // stall the packer bcs of the dprint
 
-    DPRINT_PACK({ DPRINT << "After pack" << ENDL(); });
+    // DPRINT_PACK({ DPRINT << "After pack" << ENDL(); });
 
     DPRINT_PACK({
         DPRINT << "Output tile in cb_out0:" << ENDL();
@@ -97,5 +112,9 @@ void MAIN {
     tile_regs_release();  // pack thread releases the dst register
 
     fused_reduce_uninit();
+
+    // DPRINT_MATH({ DPRINT << "After reduce_uninit" << ENDL(); }); // hanga nakon N-tog poziva
+    // DPRINT_PACK({ DPRINT << "After reduce_uninit" << ENDL(); }); // takodje
+    // DPRINT_UNPACK({ DPRINT << "After reduce_uninit" << ENDL(); }); // takodje
 }
 }  // namespace NAMESPACE

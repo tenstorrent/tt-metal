@@ -130,7 +130,6 @@ ALWI void fused_reduce_compute(uint32_t idst) {
     // **FIXED: Use llk_math_reduce_fused which doesn't clear data valid flags**
     MATH((llk_math_reduce_fused<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(idst)));
     UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
-    // PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>())); // Disabled for fused ops
 }
 
 // =============================================================================
