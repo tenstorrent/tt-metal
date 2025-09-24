@@ -1258,7 +1258,7 @@ private:
         summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
         // Output directory already set in initialize_bandwidth_results_csv_file()
         std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
         std::filesystem::path summary_csv_file_path = output_path / summary_oss.str();
 
         // Create detailed CSV file with header
