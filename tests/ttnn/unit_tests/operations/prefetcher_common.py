@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 import math
-import os
 from loguru import logger
 
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
