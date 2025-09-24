@@ -75,7 +75,7 @@ PipelineParallelLlama::PipelineParallelLlama(
     fmt::print("    Theta: {}\n", theta);
 
     fmt::println("  Pipeline parallel configuration:");
-    fmt::println("    Num blocks: {}\n", pipeline_parallel_config.num_blocks);
+    fmt::println("    Num blocks: {}", pipeline_parallel_config.num_blocks);
     fmt::println("    Blocks per rank:");
     for (const auto& [rank, blocks] : pipeline_parallel_config.blocks_per_rank) {
         fmt::println("      Rank {}: {}", rank, blocks);
