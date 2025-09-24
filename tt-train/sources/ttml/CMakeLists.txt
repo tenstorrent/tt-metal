@@ -166,6 +166,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tokenizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
@@ -235,6 +237,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # SDPA Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
