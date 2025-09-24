@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
 def fa_rand(*shape):
@@ -760,7 +760,7 @@ def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_ch
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tt_metal.tools.profiler.process_model_log import run_device_profiler, get_latest_ops_log_filename
+from tracy.process_model_log import run_device_profiler, get_latest_ops_log_filename
 
 
 @pytest.mark.skip()

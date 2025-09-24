@@ -26,10 +26,8 @@ void bind_create_qkv_heads_from_separate_tensors_template(
                const std::optional<uint32_t> num_kv_heads,
                const bool transpose_k_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::array<Tensor, 3>> optional_output_tensors,
-               QueueId queue_id) {
+               std::optional<std::array<Tensor, 3>> optional_output_tensors) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_kv,
                     num_heads,
@@ -45,8 +43,7 @@ void bind_create_qkv_heads_from_separate_tensors_template(
             pybind11::arg("num_kv_heads").noconvert() = std::nullopt,
             pybind11::arg("transpose_k_heads").noconvert() = true,
             pybind11::arg("memory_config").noconvert() = std::nullopt,
-            pybind11::arg("output_tensors").noconvert() = std::nullopt,
-            pybind11::arg("queue_id") = DefaultQueueId});
+            pybind11::arg("output_tensors").noconvert() = std::nullopt});
 };
 
 void bind_create_qkv_heads_from_separate_tensors(pybind11::module& module) {

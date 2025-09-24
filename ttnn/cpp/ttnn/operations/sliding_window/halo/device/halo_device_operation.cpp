@@ -90,11 +90,14 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         input_tensor.memory_config().shard_spec()->shape[1]};
 
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
-        output_memory_config_.shard_spec()->grid,
-        shard_shape,
-        shard_shape,
-        output_memory_config_.shard_spec()->orientation});
-    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
+        output_memory_config_.shard_spec()->grid, shard_shape, output_memory_config_.shard_spec()->orientation});
+    auto padded_output_shape = output_shape;
+    padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
+    padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
+    return {TensorSpec(
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape))};
 }
 
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
@@ -113,6 +116,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, input_shard_height);
 
     Program program = CreateProgram();
+
+    uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
 
     if (this->in_place_) {
         // after untilize bfloat8 is converted to bfloat16
@@ -143,6 +148,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             remote_read_,
             is_in_tiled,
             device,
+            num_cores_x,
             max_out_nsticks_per_core_,
             in_nsticks_per_core_,
             this->in_place_,
@@ -178,6 +184,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             padding_exists,
             config_.num_cores_nhw,
             config_.num_cores_c,
+            num_cores_x,
             max_out_nsticks_per_core_,
             max_ref_size,
             in_out_shard_size_delta,
@@ -197,6 +204,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             transpose_mcast_,
             remote_read_,
             device,
+            num_cores_x,
             is_in_tiled,
             UNTILIZE_BLOCK_SIZE);
 

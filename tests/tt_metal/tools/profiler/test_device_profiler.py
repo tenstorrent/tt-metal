@@ -14,7 +14,7 @@ from conftest import is_6u
 import pandas as pd
 import numpy as np
 
-from tt_metal.tools.profiler.common import (
+from tracy.common import (
     TT_METAL_HOME,
     PROFILER_HOST_DEVICE_SYNC_INFO,
     PROFILER_SCRIPTS_ROOT,
@@ -23,7 +23,7 @@ from tt_metal.tools.profiler.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"

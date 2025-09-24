@@ -151,9 +151,8 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
-                tt::tt_metal::ClusterType::GALAXY ||
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             should_skip_ = true;
             return;
         }

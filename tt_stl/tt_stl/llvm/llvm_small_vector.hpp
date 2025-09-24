@@ -694,7 +694,7 @@ public:
         return Result;
     }
 
-    void swap(SmallVectorImpl& RHS);
+    void swap(SmallVectorImpl& RHS) noexcept;
 
     /// Add the specified range to the end of the SmallVector.
     template <typename ItTy, typename = EnableIfConvertibleToInputIterator<ItTy>>
@@ -959,7 +959,7 @@ public:
 
     SmallVectorImpl& operator=(const SmallVectorImpl& RHS);
 
-    SmallVectorImpl& operator=(SmallVectorImpl&& RHS);
+    SmallVectorImpl& operator=(SmallVectorImpl&& RHS) noexcept;
 
     bool operator==(const SmallVectorImpl& RHS) const {
         if (this->size() != RHS.size()) {
@@ -978,7 +978,7 @@ public:
 };
 
 template <typename T>
-void SmallVectorImpl<T>::swap(SmallVectorImpl<T>& RHS) {
+void SmallVectorImpl<T>::swap(SmallVectorImpl<T>& RHS) noexcept {
     if (this == &RHS) {
         return;
     }
@@ -1068,7 +1068,7 @@ SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(const SmallVectorImpl<T>& RHS)
 }
 
 template <typename T>
-SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(SmallVectorImpl<T>&& RHS) {
+SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(SmallVectorImpl<T>&& RHS) noexcept {
     // Avoid self-assignment.
     if (this == &RHS) {
         return *this;
@@ -1254,7 +1254,7 @@ public:
         return *this;
     }
 
-    SmallVector(SmallVector&& RHS) : SmallVectorImpl<T>(N) {
+    SmallVector(SmallVector&& RHS) noexcept : SmallVectorImpl<T>(N) {
         if (!RHS.empty()) {
             SmallVectorImpl<T>::operator=(::std::move(RHS));
         }
@@ -1266,7 +1266,7 @@ public:
         }
     }
 
-    SmallVector& operator=(SmallVector&& RHS) {
+    SmallVector& operator=(SmallVector&& RHS) noexcept {
         if (N) {
             SmallVectorImpl<T>::operator=(::std::move(RHS));
             return *this;
@@ -1308,6 +1308,7 @@ using ValueTypeFromRangeType =
 /// Given a range of type R, iterate the entire range and return a
 /// SmallVector with elements of the vector.  This is useful, for example,
 /// when you want to iterate a range and then sort the results.
+// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <unsigned Size, typename R>
 SmallVector<ValueTypeFromRangeType<R>, Size> to_vector(R&& Range) {
     return {std::begin(Range), std::end(Range)};
@@ -1326,6 +1327,7 @@ template <typename Out, typename R>
 SmallVector<Out> to_vector_of(R&& Range) {
     return {std::begin(Range), std::end(Range)};
 }
+// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 // Explicit instantiations
 extern template class llvm::SmallVectorBase<uint32_t>;
@@ -1339,13 +1341,13 @@ namespace std {
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T>
-inline void swap(ttsl::detail::llvm::SmallVectorImpl<T>& LHS, ttsl::detail::llvm::SmallVectorImpl<T>& RHS) {
+inline void swap(ttsl::detail::llvm::SmallVectorImpl<T>& LHS, ttsl::detail::llvm::SmallVectorImpl<T>& RHS) noexcept {
     LHS.swap(RHS);
 }
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T, unsigned N>
-inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm::SmallVector<T, N>& RHS) {
+inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm::SmallVector<T, N>& RHS) noexcept {
     LHS.swap(RHS);
 }
 

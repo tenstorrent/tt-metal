@@ -79,6 +79,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -441,7 +442,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
-    uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
+    uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
     uint32_t out_cb_size;
     if (output_sharded) {
         out_cb_size = output.buffer()->aligned_size_per_bank();
@@ -606,6 +607,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////

@@ -165,8 +165,9 @@ run_t3000_llama3_vision_tests() {
   n300=N300
   t3k=T3K
 
-  for mesh_device in "$t3k"; do  # Issue #28247 Running this demo on a N300 mesh causes a CI ND hang
-    MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
+  for mesh_device in "$n300" "$t3k"; do
+    MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b \
+    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
@@ -183,14 +184,15 @@ run_t3000_llama3_90b_vision_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
-
   echo "LOG_METAL: Running run_t3000_llama3_90b_vision_tests"
+
+  export PYTEST_ADDOPTS="--tb=short"
 
   # Llama3.2-90B
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 1200; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 1000 || fail=1
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
@@ -343,7 +345,7 @@ run_t3000_gemma3_tests() {
   start_time=$(date +%s)
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 27B tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
   # Record the end time
   end_time=$(date +%s)
