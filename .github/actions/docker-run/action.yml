@@ -95,16 +95,17 @@ runs:
           -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           --rm
           -v /etc/passwd:/etc/passwd:ro
-          -v /etc/shadow:/etc/shadow:ro
-          -v /etc/bashrc:/etc/bashrc:ro
-          -v ${{ github.workspace }}:${{ github.workspace }}
+          # /etc/shadow is not needed for UID mapping; drop it to reduce surprises
+          # -v /etc/shadow:/etc/shadow:ro
+          -v ${{ github.workspace }}:${{ github.workspace }}:rw
           --net=host
           --log-driver local
           --log-opt max-size=50m
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
-          -e HOME=${{ github.workspace }}
+          # give tools a writable HOME outside the bind mount
+          -e HOME=/tmp/home
           -e GITHUB_ACTIONS=true
           -e CI=true
           -e GITHUB_REPOSITORY=${{ github.repository }}
@@ -123,8 +124,6 @@ runs:
           -w ${{ github.workspace }}
         run: |
           set -eu
-
-          source $PYTHON_ENV_DIR/bin/activate
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
