@@ -34,6 +34,13 @@ DEVICE_TYPE = get_device_type()
             marks=pytest.mark.skipif(DEVICE_TYPE != "p100", reason=f"Skipping P100 test on {DEVICE_TYPE} device"),
         ),
         pytest.param(
+            32,
+            "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0",
+            9380.0,
+            "p100",
+            marks=pytest.mark.skipif(DEVICE_TYPE != "p100", reason=f"Skipping P100 test on {DEVICE_TYPE} device"),
+        ),
+        pytest.param(
             16,
             "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0",
             10601.0,
@@ -47,14 +54,8 @@ DEVICE_TYPE = get_device_type()
             "p150",
             marks=pytest.mark.skipif(DEVICE_TYPE != "p150", reason=f"Skipping P150 test on {DEVICE_TYPE} device"),
         ),
-        pytest.param(
-            32,
-            "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0",
-            9380.0,
-            "p100",
-            marks=pytest.mark.skipif(DEVICE_TYPE != "p100", reason=f"Skipping P100 test on {DEVICE_TYPE} device"),
-        ),
     ],
+    ids=["batch16-p100", "batch32-p100", "batch16-p150", "batch32-p150"],
 )
 def test_perf_device(batch_size, test, expected_perf, device_type):
     command = (
