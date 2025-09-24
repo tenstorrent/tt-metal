@@ -15,6 +15,57 @@ namespace ttnn {
 void NeighborPadAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(this->dim < 3, "Error, neighbor pad currently only supports padding non last dim, provided {}", this->dim);
+
+    TT_FATAL(
+        input_tensors[0].layout() == Layout::ROW_MAJOR,
+        "Unsupported input tensor layout {}.",
+        input_tensors[0].layout());
+
+    TT_FATAL(padding_mode == "zeros" || padding_mode == "replicate", "Unsupported padding mode {}.", padding_mode);
+
+    const auto& input_tensor_shape = input_tensors[0].padded_shape();
+    TT_FATAL(
+        padding_left <= input_tensor_shape[this->dim] && padding_right <= input_tensor_shape[this->dim],
+        "One of the padding values {} or {} exceeds the shape of the input tensor in that dim {}.",
+        this->padding_left,
+        this->padding_right,
+        input_tensor_shape[this->dim]);
+
+    TT_FATAL(cluster_axis == 0 || cluster_axis == 1, "Unsupported cluster axis {}.", cluster_axis);
+
+    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
+    if (this->dim > 0) {
+        uint32_t num_sticks_per_halo_dim = 1;
+        for (int d = this->dim + 1; d < input_tensor_shape.size() - 1; d++) {
+            num_sticks_per_halo_dim *= input_tensor_shape[d];
+        }
+        TT_FATAL(num_sticks_per_halo_dim >= this->num_links, "Not enough work to split among links, reduce num links");
+    } else {
+        uint32_t outer_dim_size = 1;
+        for (int d = 0; d < this->dim; d++) {
+            outer_dim_size *= input_tensor_shape[d];
+        }
+        TT_FATAL(outer_dim_size >= this->num_links, "Not enough work to split among links, reduce num links");
+    }
+
+    if (secondary_cluster_axis.has_value()) {
+        const auto& mesh_view = input_tensors[0].device()->get_view();
+        uint32_t target_ring_size = (this->cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+        TT_FATAL(
+            secondary_cluster_axis.value() == 0 || secondary_cluster_axis.value() == 1,
+            "Unsupported secondary cluster axis {}.",
+            secondary_cluster_axis.value());
+        TT_FATAL(
+            secondary_mesh_shape.has_value(),
+            "If secondary cluster axis is specified, need to have a secondary mesh shape");
+        TT_FATAL(
+            !(target_ring_size % secondary_mesh_shape.value().at(0)) &&
+                !(target_ring_size % secondary_mesh_shape.value().at(1)),
+            "Secondary mesh shape ({},{}) is not valid given main cluster axis device count {}",
+            secondary_mesh_shape.value().at(0),
+            secondary_mesh_shape.value().at(1),
+            target_ring_size);
+    }
 }
 
 std::vector<ttnn::TensorSpec> NeighborPadAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -52,7 +103,7 @@ tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_a
         (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
     uint32_t target_ring_size = devices_to_use.size();
 
-    // secondary_cluster_axis
+    // cluster_axis
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
