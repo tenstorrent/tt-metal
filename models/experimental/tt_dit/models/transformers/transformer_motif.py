@@ -215,12 +215,12 @@ class MotifTransformer(Module):
         """Run the model forward.
 
         Args:
-            spatial: Tensor with shape [batch_size, latent_height, latent_width, channels].
+            spatial: Tensor with shape [batch_size, spatial_sequence_length, channels].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, joint_attention_dim].
             pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
         """
-        batch_size, height, width, _ = spatial.shape
+        batch_size, _, _ = spatial.shape
         assert len(prompt.shape) == 3
         assert len(pooled.shape) == 2
         assert timestep.shape == [batch_size, 1]
@@ -235,7 +235,11 @@ class MotifTransformer(Module):
         time_embed = time_embed.reshape([batch_size, 1, time_embed.shape[-1]])
         time_embed_silu = ttnn.silu(time_embed)
 
-        spatial = ttnn.squeeze(self.pos_embed(spatial), 0)
+        spatial = (
+            ttnn.linear(spatial, self.pos_embed.proj_weight, bias=ttnn.squeeze(self.pos_embed.proj_bias, 0))
+            + self.pos_embed.pos_embed
+        )
+
         prompt = self.context_embedder(prompt)
 
         # prepend register tokens
@@ -272,30 +276,13 @@ class MotifTransformer(Module):
 
         spatial = spatial * (1 + scale) + shift
 
-        spatial = self.proj_out(
+        return self.proj_out(
             spatial  # , core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config
         )
-
-        # unpatchify
-        spatial = spatial.reshape(
-            [
-                batch_size,
-                height // self.patch_size,
-                width // self.patch_size,
-                self.patch_size,
-                self.patch_size * self.out_channels,
-            ]
-        )
-        spatial = ttnn.transpose(spatial, 2, 3)
-        return spatial.reshape([batch_size, height, width, self.out_channels])
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "norm_out.linear", "time_embed_out")  # chunks=2 if sharded
         rename_substate(state, "norm_out.norm", "norm_out")
-
-    @staticmethod
-    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
-        return TransformerBlock.pad_spatial_sequence(x, sp_factor=sp_factor)
 
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
