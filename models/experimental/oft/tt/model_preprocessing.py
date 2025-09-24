@@ -27,10 +27,8 @@ def custom_preprocessor(model, name):
             parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
     if isinstance(model, torch.nn.Linear):
         parameters[f"weight"] = preprocess_linear_weight(model.weight, dtype=ttnn.bfloat16)
-        # parameters["weight"] = model.weight
         if model.bias is not None:
             parameters[f"bias"] = preprocess_linear_bias(model.bias, dtype=ttnn.bfloat16)
-            # parameters["bias"] = model.bias
     if isinstance(model, nn.GroupNorm):
         parameters["weight"] = model.weight
         if model.bias is not None:
@@ -39,7 +37,6 @@ def custom_preprocessor(model, name):
     return parameters
 
 
-# def create_OFT_model_parameters_resnet(model: OftNet, input_tensor: torch.Tensor, device):
 def create_OFT_model_parameters_resnet(model, input_tensor: torch.Tensor, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -48,26 +45,22 @@ def create_OFT_model_parameters_resnet(model, input_tensor: torch.Tensor, device
     )
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
-    # logger.debug(f"Parameters conv_args: {parameters.conv_args}")
     parameters["model_args"] = model
 
     return parameters
 
 
-# def create_OFT_model_parameters_oft(
-#     model: OftNet, input_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor], device
-# ):
 def create_OFT_model_parameters_oft(model, input_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor], device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
-    input1, input2, input3 = input_tensors
+
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(
         model=model,
-        run_model=lambda model: model(input1, input2, input3),
+        run_model=lambda model: model(*input_tensors),
         device=None,
     )
 
@@ -76,7 +69,6 @@ def create_OFT_model_parameters_oft(model, input_tensors: tuple[torch.Tensor, to
     return parameters
 
 
-# def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor], device):
 def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor, torch.Tensor, torch.Tensor], device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -90,29 +82,18 @@ def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor
     parameters.oft32.conv3d.weight = ttnn.to_device(parameters.oft32.conv3d.weight, device=device)
     parameters.oft32.conv3d.bias = ttnn.to_device(parameters.oft32.conv3d.bias, device=device)
 
-    input1, input2, input3 = input_tensors
-
-    # # Ensure all inputs have the same dtype as the model
-    # model_dtype = next(model.parameters()).dtype
-    # input1 = input1.to(model_dtype)
-    # input2 = input2.to(model_dtype)
-    # input3 = input3.to(model_dtype)
-
-    # logger.debug(f"Input1 shape: {input1.shape}, Input2 shape: {input2.shape}, Input3 shape: {input3.shape}")
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(
         model=model,
-        run_model=lambda model: model(input1, input2, input3),
+        run_model=lambda model: model(*input_tensors),
         device=None,
     )
-    # logger.debug(f"Parameters conv_args: {parameters.conv_args}")
 
     parameters["model_args"] = model
 
     return parameters
 
 
-# def create_OFT_model_parameters_resnet(model: OftNet, input_tensor: torch.Tensor, device):
 def create_decoder_model_parameters(model, input_tensors: torch.Tensor, device):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -120,11 +101,10 @@ def create_decoder_model_parameters(model, input_tensors: torch.Tensor, device):
         device=None,
     )
 
-    input1, input2, input3, input4, input5 = input_tensors
     parameters.conv_args = infer_ttnn_module_args(
-        model=model, run_model=lambda model: model.decode(input1, input2, input3, input4, input5), device=None
+        model=model, run_model=lambda model: model.decode(*input_tensors), device=None
     )
-    # logger.debug(f"Parameters conv_args: {parameters.conv_args}")
+
     parameters["model_args"] = model
 
     return parameters
