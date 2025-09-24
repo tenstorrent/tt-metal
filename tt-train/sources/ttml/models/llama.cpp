@@ -15,11 +15,14 @@
 #include "serialization/safetensors.hpp"
 #include "serialization/serializable.hpp"
 #include <set>
+#include <random>
+#include <algorithm>
+#include <numeric>
+#include <cmath>
 
 namespace {
 
 static std::vector<float> transpose_2d_flat(const std::vector<float> &flat, int64_t rows, int64_t cols) {
-    fmt::print("Transposing!\n");
     assert(rows * cols == static_cast<int64_t>(flat.size()));
     std::vector<int> shape_vec = {static_cast<int>(rows), static_cast<int>(cols)};
     auto src = xt::adapt(flat, shape_vec);
@@ -35,7 +38,8 @@ static std::vector<float> pad_and_resize_flat(
         return flat;
     }
     
-    // Create output tensor with target dimensions, initialized to zero
+    
+    // Create output tensor with target dimensions
     std::vector<float> out(static_cast<size_t>(target_rows * target_cols), 0.0f);
     
     // Copy data from source to target, handling both row and column differences
@@ -48,7 +52,73 @@ static std::vector<float> pad_and_resize_flat(
         }
     }
     
+    // For additional rows (if target_rows > rows), use small random initialization
+    // instead of zeros to avoid dead neurons
+    if (target_rows > rows) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::normal_distribution<float> dist(0.0f, 0.02f); // Small random values
+        
+        for (int64_t r = copy_rows; r < target_rows; ++r) {
+            for (int64_t c = 0; c < target_cols; ++c) {
+                out[r * target_cols + c] = dist(gen);
+            }
+        }
+    }
+    
+    // For additional columns (if target_cols > cols), use small random initialization
+    if (target_cols > cols) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::normal_distribution<float> dist(0.0f, 0.02f); // Small random values
+        
+        for (int64_t r = 0; r < copy_rows; ++r) {
+            for (int64_t c = copy_cols; c < target_cols; ++c) {
+                out[r * target_cols + c] = dist(gen);
+            }
+        }
+    }
+    
     return out;
+}
+
+static void validate_weight_distribution(const std::vector<float>& weights, const std::string& weight_name) {
+    if (weights.empty()) {
+        fmt::print("[WARNING] Weight {} is empty\n", weight_name);
+        return;
+    }
+    
+    // Calculate basic statistics
+    float min_val = *std::min_element(weights.begin(), weights.end());
+    float max_val = *std::max_element(weights.begin(), weights.end());
+    float sum = std::accumulate(weights.begin(), weights.end(), 0.0f);
+    float mean = sum / weights.size();
+    
+    // Calculate standard deviation
+    float sq_sum = std::inner_product(weights.begin(), weights.end(), weights.begin(), 0.0f);
+    float variance = sq_sum / weights.size() - mean * mean;
+    float std_dev = std::sqrt(variance);
+    
+    // Count zeros and extreme values
+    int zero_count = std::count(weights.begin(), weights.end(), 0.0f);
+    int extreme_count = std::count_if(weights.begin(), weights.end(), 
+        [](float val) { return std::abs(val) > 10.0f; });
+    
+    fmt::print("[WEIGHT_VALIDATION] {}: min={:.6f}, max={:.6f}, mean={:.6f}, std={:.6f}, zeros={}/{}, extreme_vals={}\n",
+               weight_name, min_val, max_val, mean, std_dev, zero_count, weights.size(), extreme_count);
+    
+    // Check for potential issues
+    if (zero_count > weights.size() * 0.5) {
+        fmt::print("[WARNING] Weight {} has >50% zeros, this may cause issues\n", weight_name);
+    }
+    if (extreme_count > 0) {
+        fmt::print("[WARNING] Weight {} has {} extreme values (>10.0), this may cause issues\n", 
+                   weight_name, extreme_count);
+    }
+    if (std::abs(mean) > 1.0f) {
+        fmt::print("[WARNING] Weight {} has large mean ({:.6f}), this may cause issues\n", 
+                   weight_name, mean);
+    }
 }
 }  // namespace
 
@@ -94,12 +164,16 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
             "embedding_dim={}",
             embedding_dim));
     }
-    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
+    // Ensure consistent vocab size between embedding and output layers
+    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size_divisible_by_32, /* bias */ false);
     if (config.weight_tying == WeightTyingType::Enabled) {
         tok_emb = std::make_shared<ttml::modules::Embedding>(last_fc->get_weight());
     } else {
         tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
     }
+    
+    // Store the original vocab size for token validation
+    m_original_vocab_size = vocab_size;
 
     // Create RoPE scaling params if they are set
     ops::RopeScalingParams rope_scaling_params;
@@ -242,10 +316,6 @@ void Llama::load_from_safetensors(const std::filesystem::path& model_path) {
 }
 
 void load_model_from_safetensors(const std::filesystem::path &path, serialization::NamedParameters &parameters, const LlamaConfig& config) {
-    for (auto &[k, v] : parameters) {
-        fmt::print("parameter name: {}\n", k);
-    }
-    
     // Track which parameters have been used
     std::set<std::string> used_parameters;
     
@@ -254,7 +324,6 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_value().logical_shape());
         used_parameters.insert(name);
         return it->second;
     };
@@ -291,6 +360,9 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 
                 fmt::print("Loading embedding weight from: {}\n", info.name);
                 
+                // Validate original weights
+                validate_weight_distribution(float_vec, fmt::format("original_{}", info.name));
+                
                 // Load to embedding layer
                 auto out_tensor1 = get_parameter("llama/tok_emb/weight");
                 auto resized_emb = pad_and_resize_flat(
@@ -299,6 +371,10 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                     info.shape[1], 
                     out_tensor1->get_value().logical_shape()[-2],
                     out_tensor1->get_value().logical_shape()[-1]);
+                
+                // Validate resized weights
+                validate_weight_distribution(resized_emb, "resized_embedding_weight");
+                
                 out_tensor1->set_value(core::from_vector(
                     resized_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 
