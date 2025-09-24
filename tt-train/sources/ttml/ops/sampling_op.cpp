@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "sampling_op.hpp"
 
 namespace ttml::ops {
 
 autograd::TensorPtr sample_op(
-    autograd::TensorPtr& t, float temperature, uint32_t seed, const autograd::TensorPtr& logits_padding_mask) {
+    const autograd::TensorPtr& t, float temperature, uint32_t seed, const autograd::TensorPtr& logits_padding_mask) {
     auto sampled_tensor = ttnn_fixed::sample(
         t->get_value(),
         temperature,
