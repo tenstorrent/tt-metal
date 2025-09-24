@@ -14,6 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 # from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
 
@@ -31,6 +32,7 @@ from loguru import logger
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
 def test_resnetfeatures_forward(device, input_image_path, input_shape, layers, expected_pcc):
+    skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(0)
 
     torch_tensor = load_image(input_image_path, pad_hw=(input_shape[-2], input_shape[-1]))[None]
