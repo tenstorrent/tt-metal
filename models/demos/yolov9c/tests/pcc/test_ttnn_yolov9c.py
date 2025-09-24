@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "model_task",
     [
         "segment",  # To run the demo for instance segmentation
-        "detect",  # Uncomment to run the demo for Object Detection
+        "detect",  # To run the demo for Object Detection
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV9C_L1_SMALL_SIZE}], indirect=True)

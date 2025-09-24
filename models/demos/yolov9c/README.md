@@ -83,7 +83,7 @@ Note: To test the demo with your own images, replace images with `models/demos/y
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant
   ```
 
-- For `640x640` - `Detection`, end-2-end perf is `82` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- For `640x640` - `Detection`, end-2-end perf is `98` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant
   ```
