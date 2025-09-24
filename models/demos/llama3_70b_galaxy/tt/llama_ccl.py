@@ -524,7 +524,7 @@ class TT_CCL:
                 "FF3": [(1, 1, seqlen, 3584)],
                 "FF2": [(1, 1, seqlen, 2048)],
                 "LAYERNORM": [(1, 1, seqlen, 128)],
-                "LM_HEAD": [(1, 1, 32, 16384)],
+                "LM_HEAD": [(4, 1, 32, 16384)],
                 "SAMPLING": [(1, 1, 32, 128 * 1024)],
             }
             for key, shape in buffers_dict.items():
@@ -535,7 +535,7 @@ class TT_CCL:
                     dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
+                    # cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
                 )
                 ag_persistent_buffers[key] = tt_buffer
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
@@ -1005,10 +1005,14 @@ class TT_CCL:
         if "SDPA" in buffer_key:
             # SDPA input is 8x (4= ring_size (number of devices in ring), 2 = number of chunks per device) shorter than the sequence length
             seqlen = seqlen * 8
+
+        if "LM_HEAD" in buffer_key or "SAMPLING" in buffer_key:
+            seqlen = 128  # we do not allocate buffers for these two since their seqlen will be gathered in dim (-2) which is seqlen dim. So dim=1 gathered by 32 is seqlen=32
+            # TODO proper solution is to allocate buffers for seqlen 32 for these two keys
+
         persistent_buffers = (
             self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
         )
-        # persistent_buffers = None
 
         num_links = 4
         if reverse_order:
@@ -1032,7 +1036,7 @@ class TT_CCL:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
-            if buffer_key != "LM_HEAD":
+            if buffer_key not in ("LM_HEAD", "SAMPLING"):
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out

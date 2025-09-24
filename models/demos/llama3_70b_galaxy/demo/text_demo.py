@@ -238,10 +238,10 @@ def create_tt_model(
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
             True,  # instruct mode
-            16,  # repeat_batches
+            6,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            1024,  # max_generated_tokens
+            300,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
@@ -881,7 +881,7 @@ def test_demo_text(
 
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
-
+        logger.info(f"prefill out token = {out_tok}")
         if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
             out_tok = out_tok.repeat(32, 1)
 
@@ -1014,6 +1014,7 @@ def test_demo_text(
 
                 # Print out generated outputs for each user at the end of every iteration
                 if print_outputs and not is_ci_env and not pcc_check:
+                    logger.info(f"{all_outputs[0]}")
                     for user in range(batch_size):
                         text = "".join(tokenizer.decode(all_outputs[user]))
                         if len(text) > 100:
@@ -1058,6 +1059,7 @@ def test_demo_text(
             if not users_decoding and not pcc_check:
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
+                logger.info(f"User 0 output tokens: {all_outputs[0]}")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                     text = tokenizer.decode(output)
                     prompt_including_assistant_tags = tokenizer.decode(
