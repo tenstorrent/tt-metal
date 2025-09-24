@@ -570,8 +570,7 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     TT_FATAL(
         user_chip_ids.size() >= mesh_container.size(),
-        "Number of chips visible ({}) is less than the number of chips specified in mesh graph descriptor ({}), check "
-        "system status with tt-smi that all chips are visible.",
+        "Number of chips visible ({}) is less than the number of chips specified in mesh graph descriptor ({}), check system status with tt-smi that all chips are visible.",
         user_chip_ids.size(),
         mesh_container.size());
 
@@ -753,10 +752,10 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
                 auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
                 num_ports_per_chip = tt::tt_metal::MetalContext::instance()
-                                         .get_cluster()
-                                         .get_soc_desc(physical_chip_id)
-                                         .get_cores(CoreType::ETH)
-                                         .size();
+                                        .get_cluster()
+                                        .get_soc_desc(physical_chip_id)
+                                        .get_cores(CoreType::ETH)
+                                        .size();
                 break;
             }
         }
@@ -1085,18 +1084,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         for (auto src_mesh : local_mesh_binding_.mesh_ids) {
             for (std::size_t chip_id = 0; chip_id < intermesh_connectivity[*src_mesh].size(); chip_id++) {
                 for (const auto& [dst_mesh, edge] : intermesh_connectivity[*src_mesh][chip_id]) {
-                    auto src_physical_id =
-                        this->get_physical_chip_id_from_fabric_node_id(FabricNodeId(src_mesh, chip_id));
-                    const auto src_asic_id =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(src_physical_id);
-                    for (const auto& asic_neigbor :
-                         physical_system_descriptor_->get_asic_neighbors(tt::tt_metal::AsicID{src_asic_id})) {
+                    auto src_physical_id = this->get_physical_chip_id_from_fabric_node_id(FabricNodeId(src_mesh, chip_id));
+                    const auto src_asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(src_physical_id);
+                    for (const auto& asic_neigbor : physical_system_descriptor_->get_asic_neighbors(tt::tt_metal::AsicID{src_asic_id})) {
                         auto neighbor_fabric_node_id = this->get_fabric_node_id_from_asic_id(*asic_neigbor);
                         if (neighbor_fabric_node_id.mesh_id == dst_mesh) {
-                            for (const auto chan : physical_system_descriptor_->get_eth_connections(
-                                     tt::tt_metal::AsicID{src_asic_id}, asic_neigbor)) {
-                                this->assign_direction_to_fabric_eth_chan(
-                                    FabricNodeId(src_mesh, chip_id), chan.src_chan, edge.port_direction);
+                            for (const auto chan : physical_system_descriptor_->get_eth_connections(tt::tt_metal::AsicID{src_asic_id}, asic_neigbor)) {
+                                this->assign_direction_to_fabric_eth_chan(FabricNodeId(src_mesh, chip_id), chan.src_chan, edge.port_direction);
                             }
                         }
                     }
@@ -1220,11 +1214,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(chip_id_t ph
             return fabric_node_id;
         }
     }
-    TT_FATAL(
-        false,
-        "Physical chip id {} not found in control plane chip mapping. You are calling for a chip outside of the fabric "
-        "cluster. Check that your mesh graph descriptor specifies the correct topology",
-        physical_chip_id);
+    TT_FATAL(false, "Physical chip id {} not found in control plane chip mapping. You are calling for a chip outside of the fabric cluster. Check that your mesh graph descriptor specifies the correct topology", physical_chip_id);
     return FabricNodeId(MeshId{0}, 0);
 }
 
@@ -2296,6 +2286,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         distributed_context.barrier();
     }
 }
+
 
 // Intermesh Connectivity Generation Functions
 
