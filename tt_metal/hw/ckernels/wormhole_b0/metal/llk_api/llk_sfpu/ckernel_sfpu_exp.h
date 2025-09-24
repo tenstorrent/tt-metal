@@ -40,29 +40,56 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
-        // Polynomial coefficients for approximation of exp on [1; 2]
-        constexpr float POLY_D1 = 0.40196114e-7f;
-        constexpr int POLY_D2 = 0xf94ee7;
-        constexpr int POLY_D3 = 0x560e;
-
-        sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
-        d2 = d1 * d2;
-        zif = sfpu::_float_to_int32_(d2 * d3);
-
-        // Restore exponent
-        zii = sfpi::reinterpret<sfpi::vInt>(
-            sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
-
-        y = sfpi::reinterpret<sfpi::vFloat>(zii);
-
         if constexpr (!is_fp32_dest_acc_en) {
+            // Polynomial coefficients for approximation of exp on [1; 2]
+            constexpr float POLY_D1 = 0.40196114e-7f;
+            constexpr int POLY_D2 = 0xf94ee7;
+            constexpr int POLY_D3 = 0x560e;
+
+            sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
+            sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
+            sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
+            d2 = d1 * d2;
+            zif = sfpu::_float_to_int32_(d2 * d3);
+
+            // Restore exponent
+            zii = sfpi::reinterpret<sfpi::vInt>(
+                sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
+
+            y = sfpi::reinterpret<sfpi::vFloat>(zii);
+
             // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
             // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
             // rather than 81 (which would have been correct).
             // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
             y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+        } else {
+            // Normalize mantissa field into a fractional value in [0,1)
+            sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.0f / float(1 << 23));
+
+            // Degree-6 polynomial coefficients
+            constexpr float C0 = 1.0000000018f;
+            constexpr float C1 = 0.69314699f;
+            constexpr float C2 = 0.24022982f;
+            constexpr float C3 = 0.055483369f;
+            constexpr float C4 = 0.0096788315f;
+            constexpr float C5 = 0.001243946f;
+            constexpr float C6 = 0.0002170391f;
+
+            // Evaluate polynomial using Horner’s rule
+            sfpi::vFloat poly =
+                ((((((sfpi::vFloat(C6) * frac + sfpi::vFloat(C5)) * frac + sfpi::vFloat(C4)) * frac +
+                    sfpi::vFloat(C3)) *
+                       frac +
+                   sfpi::vFloat(C2)) *
+                      frac +
+                  sfpi::vFloat(C1)) *
+                     frac +
+                 sfpi::vFloat(C0));
+
+            // Restore exponent
+            zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
+            y = sfpi::reinterpret<sfpi::vFloat>(zii);
         }
     }
     v_endif;
