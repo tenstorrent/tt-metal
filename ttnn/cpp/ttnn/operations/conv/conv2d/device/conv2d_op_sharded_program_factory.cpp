@@ -995,10 +995,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
+    CoreRangeSet writer_act_reader_cores = CoreRangeSet();
+    const bool populate_skipped_work_cores =
+        enable_split_reader && block_sharded && input_cores.num_cores() > output_cores.num_cores();
+    if (populate_skipped_work_cores) {
+        writer_act_reader_cores = all_cores.subtract(mcast_receiver_cores.merge(CoreRangeSet(mcast_sender_cores)));
+    }
+    CoreRangeSet all_writer_cores =
+        populate_skipped_work_cores ? all_cores.subtract(CoreRangeSet(mcast_receiver_cores)) : mcast_sender_cores;
     tt::tt_metal::KernelHandle writer_mcast_sender_id = CreateKernel(
         program,
         writer_mcast_sender_kernel,
-        mcast_sender_cores,
+        all_writer_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_mcast_noc,
@@ -1180,11 +1188,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                 sender_rt_args.insert(
                     sender_rt_args.end(),
-                    {num_cores_y - 1,
-                     num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
-                     weights_mcast_sender_semaphore_id,
-                     weights_mcast_receiver_semaphore_id,
-                     static_cast<uint32_t>(is_sender_core)});
+                    {
+                        num_cores_y - 1,
+                        num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
+                        weights_mcast_sender_semaphore_id,
+                        weights_mcast_receiver_semaphore_id,
+                        static_cast<uint32_t>(is_sender_core),
+                        static_cast<uint32_t>(false)  // skip_work
+                    });
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
             }
         } else {
@@ -1263,6 +1274,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 }
             }
             SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
+        }
+    }
+
+    for (const CoreRange& range : writer_act_reader_cores.ranges()) {
+        for (const CoreCoord core : range) {
+            const bool is_sender_core = input_cores.contains(core);
+            std::vector<uint32_t> args = std::vector<uint32_t>(14, 0);
+            args[12] = static_cast<uint32_t>(is_sender_core);
+            args[13] = static_cast<uint32_t>(true);  //  skip work
+            SetRuntimeArgs(program, writer_mcast_sender_id, core, args);
         }
     }
 

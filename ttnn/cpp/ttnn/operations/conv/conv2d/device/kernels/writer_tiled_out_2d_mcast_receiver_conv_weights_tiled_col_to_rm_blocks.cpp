@@ -138,7 +138,6 @@ void kernel_main() {
     // Write out col major blocks in row major layout to output
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
-            DPRINT << "WRITER RECEIVER: bw=" << bw << " bh=" << bh << ENDL();
 #ifdef SPLIT_READER
             // Read activation data using block sharded pattern (for second reader)
             uint32_t reader_offset = act_l1_read_addr;
