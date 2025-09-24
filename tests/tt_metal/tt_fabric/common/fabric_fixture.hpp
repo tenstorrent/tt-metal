@@ -109,7 +109,7 @@ public:
     static void TearDownTestSuite() { TT_THROW("TearDownTestSuite not implemented in BaseFabricFixture"); }
 
     void RunProgramNonblocking(
-        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device, tt::tt_metal::Program& program) {
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device->get_devices()[0], program, false);
         } else {
@@ -127,7 +127,7 @@ public:
     }
 
     void WaitForSingleProgramDone(
-        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device, tt::tt_metal::Program& program) {
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             // Wait for the program to finish
             tt::tt_metal::detail::WaitProgramDone(device->get_devices()[0], program);
@@ -151,9 +151,8 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
-                tt::tt_metal::ClusterType::GALAXY ||
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             should_skip_ = true;
             return;
         }

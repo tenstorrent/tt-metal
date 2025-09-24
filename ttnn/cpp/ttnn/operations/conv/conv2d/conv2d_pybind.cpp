@@ -86,10 +86,8 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const Conv2dSliceConfig>& slice_config_,
                bool return_output_dim,
-               bool return_weights_and_bias,
-               QueueId queue_id) -> ResultWithOptions {
+               bool return_weights_and_bias) -> ResultWithOptions {
                 return self(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -133,8 +131,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("slice_config") = std::nullopt,
             py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("return_weights_and_bias") = false});
     module.def(
         "prepare_conv_weights",
         prepare_conv_weights,
@@ -320,7 +317,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
-            bool>(),
+            std::optional<bool>>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
@@ -338,10 +335,10 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("full_inner_dim") = false,
-        py::arg("enable_split_reader") = false,
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = false,
-        py::arg("enable_activation_reuse") = false);
+        py::arg("enable_activation_reuse") = false,
+        py::arg("force_split_reader") = std::nullopt);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -431,11 +428,6 @@ void py_bind_conv2d(py::module& module) {
             If L1 constraints allowed it we can use full inner dim.
             This will increase perf, but it will take more L1 space.
         )doc");
-    py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
-            This uses both the reader & writer cores to carry out the activation reader operation.
-            This is useful when the input tensor is large, and the activation reader is a bottleneck.
-            This is only supported for Height Sharded Conv2D.
-        )doc");
     py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(
             Enables support for in_place halo.
             This re-uses the input tensor as the output for halo, overwriting the input tensor.
@@ -477,6 +469,17 @@ void py_bind_conv2d(py::module& module) {
         Enables reusing data between consecutive image rows.
         It can be enabled for height sharding only and boosts image2column performance,
         so its meant to be used for reader-bound convolutions.
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite("force_split_reader", &Conv2dConfig::force_split_reader, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        This uses both the reader & writer cores to carry out the activation reader operation.
+        This is useful when the input tensor is large, and the activation reader is a bottleneck.
+        This is only supported for Height Sharded Conv2D.
+        Setting this overrides the split reader heuristic.
 
         ===============================================================
     )doc");

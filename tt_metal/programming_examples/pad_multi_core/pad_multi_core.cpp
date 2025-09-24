@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -19,10 +20,12 @@ using namespace tt::tt_metal;
 #endif
 
 int main() {
-    // get program/device
+    // Initialize Mesh API constructs: mesh device, command queue, workload, device range, and program
     int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
-    CommandQueue& cq = device->command_queue();
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // initialize source data
@@ -61,29 +64,19 @@ int main() {
 
     // configure and create DRAM buffers for input, pad, output
     uint32_t src_buffer_size = packed_data_size * src_num_values_packed;
-    tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = device,
-        .size = src_buffer_size,
-        .page_size = packed_data_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    std::shared_ptr<tt::tt_metal::Buffer> src_buffer = CreateBuffer(input_dram_config);
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = packed_data_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig input_buffer_config{.size = src_buffer_size};
+    auto src_buffer = distributed::MeshBuffer::create(input_buffer_config, dram_config, mesh_device.get());
     uint32_t src_addr = src_buffer->address();
 
     uint32_t pad_buffer_size = packed_data_size * pad_vec.size();
-    tt_metal::InterleavedBufferConfig pad_dram_config{
-        .device = device,
-        .size = pad_buffer_size,
-        .page_size = packed_data_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config);
+    distributed::ReplicatedBufferConfig pad_buffer_config{.size = pad_buffer_size};
+    auto pad_buffer = distributed::MeshBuffer::create(pad_buffer_config, dram_config, mesh_device.get());
 
     uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;
-    tt_metal::InterleavedBufferConfig output_dram_config{
-        .device = device,
-        .size = dst_buffer_size,
-        .page_size = packed_data_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    std::shared_ptr<tt::tt_metal::Buffer> dst_buffer = CreateBuffer(output_dram_config);
+    distributed::ReplicatedBufferConfig output_buffer_config{.size = dst_buffer_size};
+    auto dst_buffer = distributed::MeshBuffer::create(output_buffer_config, dram_config, mesh_device.get());
     uint32_t dst_addr = dst_buffer->address();
 
     // configure circular buffers expected by TTNN reader/writer: c_0 (main), c_1 (pad), c_2 (align)
@@ -190,7 +183,7 @@ int main() {
         src_N,
         dst_M,
         dst_N,
-        pad_value.to_uint16());
+        std::bit_cast<uint16_t>(pad_value));
     printf("Original tensor with shape (%d, %d):\n", src_M, src_N);
     for (uint32_t m = 0; m < src_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_src; n++) {
@@ -201,12 +194,13 @@ int main() {
     }
     printf("\n");
 
-    // dispatch program to device for execution
-    EnqueueWriteBuffer(cq, src_buffer, src_vec.data(), false);
-    EnqueueWriteBuffer(cq, pad_buffer, pad_vec.data(), false);
-    EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_buffer, dst_vec.data(), false);
-    Finish(cq);
+    // Upload inputs (non-blocking), enqueue mesh workload (non-blocking), read back result, then wait for completion
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
+    distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueReadMeshBuffer(cq, dst_vec, dst_buffer, true);
+    distributed::Finish(cq);
 
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);
     for (uint32_t m = 0; m < dst_M; m++) {
@@ -217,5 +211,5 @@ int main() {
         printf("\n");
     }
 
-    CloseDevice(device);
+    mesh_device->close();
 }

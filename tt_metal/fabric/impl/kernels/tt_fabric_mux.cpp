@@ -37,6 +37,11 @@ constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(14);
 constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15);
 
 constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
+constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
+constexpr size_t num_upstream_routers = get_compile_time_arg_val(18);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(19);
+
+constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 20;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
@@ -107,6 +112,7 @@ void forward_data(
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
+        invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
         fabric_connection.wait_for_empty_write_slot();
@@ -138,6 +144,17 @@ void forward_data(
 void kernel_main() {
     size_t rt_args_idx = 0;
 
+    std::array<uint8_t, num_upstream_routers> upstream_noc_x;
+    std::array<uint8_t, num_upstream_routers> upstream_noc_y;
+    if constexpr (num_upstream_routers > 0) {
+        for (uint32_t i = 0; i < num_upstream_routers; i++) {
+            upstream_noc_x[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
+        }
+        for (uint32_t i = 0; i < num_upstream_routers; i++) {
+            upstream_noc_y[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
+        }
+    }
+
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
@@ -165,7 +182,6 @@ void kernel_main() {
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
 
     // Stream IDs
-    constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 17;
     constexpr size_t NUM_TOTAL_CHANNELS = NUM_FULL_SIZE_CHANNELS + NUM_HEADER_ONLY_CHANNELS;
     constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
         fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
@@ -213,12 +229,22 @@ void kernel_main() {
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
+    // signal the upstream routers the mux is ready
+    if constexpr (num_upstream_routers > 0) {
+        for (uint32_t i = 0; i < num_upstream_routers; i++) {
+            auto noc_addr = get_noc_addr(upstream_noc_x[i], upstream_noc_y[i], fabric_router_sync_address);
+            noc_semaphore_inc(noc_addr, 1);
+        }
+    }
+
     // wait for fabric router to be ready before setting up the connection
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
-        fabric_connection.edm_noc_x,
-        fabric_connection.edm_noc_y,
-        fabric_router_status_address,
-        local_fabric_router_status_address);
+    if constexpr (wait_for_fabric_endpoint) {
+        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            fabric_connection.edm_noc_x,
+            fabric_connection.edm_noc_y,
+            fabric_router_status_address,
+            local_fabric_router_status_address);
+    }
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();

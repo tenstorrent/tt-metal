@@ -16,6 +16,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "llrt/hal.hpp"
@@ -85,6 +86,9 @@ struct InspectorSettings {
     bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
+    std::string rpc_server_host = "localhost";
+    uint16_t rpc_server_port = 50051;
+    bool rpc_server_enabled = true;
 };
 
 class RunTimeOptions {
@@ -201,6 +205,9 @@ class RunTimeOptions {
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
+    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
+    bool use_mesh_graph_descriptor_2_0 = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -269,6 +276,12 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
+    const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
+    void set_inspector_rpc_server_host(const std::string& host) { inspector_settings.rpc_server_host = host; }
+    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
+    void set_inspector_rpc_server_port(uint16_t port) { inspector_settings.rpc_server_port = port; }
+    bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
+    void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -279,7 +292,7 @@ public:
         return feature_targets[feature].cores;
     }
     void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
-        feature_targets[feature].cores = cores;
+        feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
@@ -301,7 +314,7 @@ public:
         return feature_targets[feature].chip_ids;
     }
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
-        feature_targets[feature].chip_ids = chip_ids;
+        feature_targets[feature].chip_ids = std::move(chip_ids);
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
@@ -316,7 +329,7 @@ public:
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
-        feature_targets[feature].file_name = file_name;
+        feature_targets[feature].file_name = std::move(file_name);
     }
     bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
@@ -332,7 +345,7 @@ public:
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
-        feature_targets[feature] = targets;
+        feature_targets[feature] = std::move(targets);
     }
 
     bool get_record_noc_transfers() const { return record_noc_transfer_data; }
@@ -478,9 +491,13 @@ public:
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor
-    inline TargetDevice get_target_device() const { return runtime_target_device_; }
+    TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+
+    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
+    // TODO: This will be removed after MGD 1.0 is deprecated
+    bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

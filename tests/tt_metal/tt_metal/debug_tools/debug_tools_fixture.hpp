@@ -5,7 +5,6 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -17,19 +16,21 @@ class DebugToolsMeshFixture : public MeshDispatchFixture {
        void TearDown() override { MeshDispatchFixture::TearDown(); }
 
        template <typename T>
-       void RunTestOnDevice(const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function, std::shared_ptr<distributed::MeshDevice> mesh_device) {
-           auto run_function_no_args = [=, this]() { run_function(static_cast<T*>(this), mesh_device); };
+       void RunTestOnDevice(
+           const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+           const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+           auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
            MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
        }
 };
 
-// A version of DispatchFixture with DPrint enabled on all cores.
+// A version of MeshDispatchFixture with DPrint enabled on all cores.
 class DPrintMeshFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshWorkload& workload) {
+    void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
@@ -85,8 +86,7 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void(DPrintMeshFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
-        std::shared_ptr<distributed::MeshDevice> mesh_device
-    ) {
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         MetalContext::instance().dprint_server()->clear_log_file();
         MetalContext::instance().dprint_server()->clear_signals();
@@ -111,14 +111,17 @@ protected:
     }
 };
 
-// A version of DispatchFixture with watcher enabled
+// A version of MeshDispatchFixture with watcher enabled
 class MeshWatcherFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshWorkload& workload, bool wait_for_dump = false) {
+    void RunProgram(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        distributed::MeshWorkload& workload,
+        bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
@@ -177,8 +180,7 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void(MeshWatcherFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
-        std::shared_ptr<distributed::MeshDevice> mesh_device
-    ) {
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         // Wait for a final watcher poll and then clear the log.
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));

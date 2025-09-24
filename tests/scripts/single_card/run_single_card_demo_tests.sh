@@ -61,7 +61,7 @@ run_gemma3_func() {
 run_gemma3_perf() {
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 
@@ -85,6 +85,13 @@ run_yolov11_func() {
 
  #Yolov11 Demo
  pytest models/demos/yolov11/demo/demo.py
+
+}
+
+run_yolov11m_func() {
+
+ #Yolov11m Demo
+ pytest --disable-warnings models/demos/yolov11m/demo/demo.py --timeout 600; fail+=$?
 
 }
 
@@ -164,7 +171,7 @@ run_resnet_func() {
 }
 
 run_sdxl_func() {
-  TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae"
+  TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
 }
 
 run_distilbert_func() {

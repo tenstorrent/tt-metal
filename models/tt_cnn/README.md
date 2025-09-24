@@ -1,6 +1,8 @@
 # TT-CNN
 
-The TT-CNN library comprises several modules with reusable functions designed to facilitate the development of high-performance vision models in TT-NN. The goal of the library is to minimize code duplication and enhance maintainability, enabling quicker model deployment with superior initial performance. One of these modules is the Pipeline API.
+The TT-CNN library comprises several modules with reusable functions designed to facilitate the development of high-performance vision models in TT-NN. The goal of the library is to minimize code duplication and enhance maintainability, as well as enabling quicker model development with superior initial model performance.
+
+The following sections will document usage for each of these modules.
 
 ## Pipeline
 
@@ -57,7 +59,7 @@ pipeline.cleanup()
 
 ### User Guide
 
-The TT-CNN Pipeline API provides advanced performance optimization techniques to improve throughput and lower latency for CNN models. This guide helps you understand and configure these optimizations effectively.
+The TT-CNN Pipeline API provides end-to-end performance optimization techniques to improve throughput and lower latency for CNN models. This guide helps you understand and configure these optimizations effectively.
 
 ### Performance Optimization Techniques
 
@@ -153,6 +155,14 @@ dram_memory_config = get_memory_config_for_persistent_dram_tensor(
 
 The L1 memory configs are also required by the Pipeline API and are typically model-specific. The pipeline automatically reshards tensors from DRAM to L1 using these configurations before passing them to your model function.
 
+#### Preallocating Host Memory for Output Tensors
+
+Some workloads can become bottlenecked by host memory allocations. To pre-allocate host memory for output tensors, configure your pipeline with the following call:
+
+```python
+pipe.preallocate_output_tensors_on_host(number_of_inputs)
+```
+
 ### Troubleshooting
 
 #### Common Issues
@@ -164,6 +174,120 @@ The L1 memory configs are also required by the Pipeline API and are typically mo
 
 See the following model implementations for examples of real-world usage:
 
-- **[YOLOv8x](models/demos/yolov8x/tests/perf/test_e2e_performant.py)** - Object detection with trace+2CQ
-- **[ResNet50](models/demos/ttnn_resnet/tests/perf_e2e_resnet50.py)** - Image classification pipeline
-- **[YOLOv4](models/demos/yolov4/demo.py)** - Demo with pipeline integration
+- **[YOLOv8x](../demos/yolov8x/tests/perf/test_e2e_performant.py)** - Object detection with trace+2CQ
+- **[ResNet50](../demos/ttnn_resnet/tests/perf_e2e_resnet50.py)** - Image classification pipeline
+- **[YOLOv4](../demos/yolov4/demo.py)** - Demo with pipeline integration
+
+## Builder
+
+The TT-CNN Builder API provides a configuration-driven approach to composing CNN layers. It simplifies the creation of convolution and pooling operations by abstracting low-level TTNN details into reusable configuration classes and wrapper layers.
+
+### Getting Started
+
+```python
+import torch
+import ttnn
+from models.tt_cnn.tt.builder import (
+    Conv2dConfiguration,
+    TtConv2d,
+    HeightShardedStrategyConfiguration
+)
+
+
+# Option 1: Create configuration from PyTorch layer
+torch_conv = torch.nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1)
+config = Conv2dConfiguration.from_torch(
+    torch_layer=torch_conv,
+    input_height=224,
+    input_width=224,
+    batch_size=1,
+    sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64)
+)
+
+# Option 2: Create configuration manually
+config = Conv2dConfiguration.with_random_weights(
+    input_height=224,
+    input_width=224,
+    in_channels=16,
+    out_channels=32,
+    batch_size=1,
+    kernel_size=(3, 3),
+    padding=(1, 1),
+    sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64)
+)
+
+# Instantiate the layer
+layer = TtConv2d(config, device)
+
+# Execute layer
+output = layer(ttnn_input_tensor)
+```
+
+### Building Model Blocks
+
+The Builder API excels at constructing reusable model components:
+
+```python
+from models.tt_cnn.tt.builder import (
+    Conv2dConfiguration,
+    TtConv2d,
+    MaxPool2dConfiguration,
+    TtMaxPool2d,
+    HeightShardedStrategyConfiguration
+)
+
+def create_conv_block(in_channels, out_channels, input_size, batch_size, device):
+    """Create a typical CNN block: Conv -> Conv -> MaxPool"""
+
+    input_height, input_width = input_size
+    sharding_strategy = HeightShardedStrategyConfiguration(
+        act_block_h_override=64,
+        reshard_if_not_optimal=False
+    )
+
+    # First convolution
+    conv1_config = Conv2dConfiguration.with_random_weights(
+        input_height=input_height, input_width=input_width,
+        in_channels=in_channels, out_channels=out_channels,
+        batch_size=batch_size, kernel_size=(3, 3), padding=(1, 1),
+        sharding_strategy=sharding_strategy
+    )
+
+    # Second convolution
+    conv2_config = Conv2dConfiguration.with_random_weights(
+        input_height=input_height, input_width=input_width,
+        in_channels=out_channels, out_channels=out_channels,
+        batch_size=batch_size, kernel_size=(3, 3), padding=(1, 1),
+        sharding_strategy=sharding_strategy
+    )
+
+    # Max pooling (reduces spatial dimensions by 2x)
+    pool_config = MaxPool2dConfiguration(
+        input_height, input_width, out_channels,
+        batch_size=batch_size, kernel_size=(2, 2), stride=(2, 2)
+    )
+
+    # Create layer instances
+    return [
+        TtConv2d(conv1_config, device),
+        TtConv2d(conv2_config, device),
+        TtMaxPool2d(pool_config, device)
+    ]
+
+# Usage
+block_layers = create_conv_block(16, 32, (224, 224), 1, device)
+
+# Execute the block
+x = input_tensor
+for layer in block_layers:
+    x = layer(x)
+output = x
+```
+
+### Examples
+
+For complete working examples, see the test implementations in [test_builder.py](models/tt_cnn/tests/test_builder.py), which demonstrate:
+- Single layer execution with different sharding strategies
+- PyTorch layer conversion and validation
+- Multi-layer block construction and execution
+- Performance comparison between configurations
