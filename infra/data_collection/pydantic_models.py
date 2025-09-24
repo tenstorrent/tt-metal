@@ -36,6 +36,20 @@ class Test(BaseModel):
     tags: Optional[dict] = Field(None, description="Tags associated with the test, as key/value pairs.")
 
 
+class Step(BaseModel):
+    """
+    Contains information about the execution of CI/CD steps, each one associated with a
+    specific CI/CD job execution.
+    """
+
+    name: Optional[str] = Field(description="Name of the step.")
+    status: Optional[str] = Field(description="Status of the step.")
+    conclusion: Optional[str] = Field(description="Conclusion of the step.")
+    number: int = Field(description="Step number.")
+    started_at: Optional[datetime] = Field(description="Timestamp with timezone when the step execution started.")
+    completed_at: Optional[datetime] = Field(description="Timestamp with timezone when the step execution ended.")
+
+
 class JobStatus(str, Enum):
     success = "success"
     failure = "failure"
@@ -90,6 +104,7 @@ class Job(BaseModel):
     failure_signature: Optional[str] = Field(None, description="Failure signature.")
     failure_description: Optional[str] = Field(None, description="Failure description.")
     tests: List[Test] = []
+    steps: Optional[List[Step]] = Field(None, description="Steps of the job.")
     job_label: Optional[str] = Field(None, description="GitHub CI runner label for the job.")
     tt_smi_version: Optional[str] = Field(
         None, description="Version of the tt-smi tool in order to check consistency across CI fleets."
@@ -476,6 +491,7 @@ class OpTest(BaseModel):
     success: bool = Field(description="Test execution success.")
     skipped: bool = Field(description="Some tests in a job can be skipped.")
     error_message: Optional[str] = Field(None, description="Succinct error string, such as exception type.")
+    error_hash: Optional[str] = Field(None, description="Hash of the error message for traceability.")
     config: Optional[dict] = Field(default=None, description="Test configuration, as key/value pairs.")
     frontend: str = Field(description="ML frontend or framework used to run the test.")
     model_name: str = Field(description="Name of the ML model in which this operation is used.")

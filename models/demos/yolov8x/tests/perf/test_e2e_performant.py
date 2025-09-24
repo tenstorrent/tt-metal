@@ -6,12 +6,12 @@
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE
 from models.demos.yolov8x.runner.performant_runner_infra import YOLOv8xPerformanceRunnerInfra
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-from models.utility_functions import profiler, run_for_wormhole_b0
 
 
 def _run_model_pipeline(device, test_infra, num_measurement_iterations, num_command_queues, trace):
@@ -113,7 +113,6 @@ def run_perf_e2e_yolov8x(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],

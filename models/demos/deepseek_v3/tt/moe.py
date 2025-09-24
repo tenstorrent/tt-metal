@@ -8,7 +8,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
+    MeshDeviceStub,
     MulConfig,
     ReduceScatterAsyncConfig,
     RepeatConfig,
@@ -59,14 +60,14 @@ class MoE(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        ccl: CCL1D,
+        ccl: CCL,
     ) -> ModelState:
         """Create model state containing CCL-related communication configurations.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL1D instance for communication configuration
+            ccl: CCL instance for communication configuration
         Returns:
             ModelState containing CCL configurations
         """
@@ -131,12 +132,12 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # Construct the config
         return {
-            "device": mesh_device,
+            "device": MeshDeviceStub(mesh_device.shape),
             "num_devices": mesh_device.get_num_devices(),
             "num_experts_per_device": num_experts_per_device,
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
-            "num_dispatch_devices": tuple(mesh_device.shape)[0],
+            "num_dispatch_devices": mesh_device.shape[0],
             "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -150,7 +151,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
             "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
             "final_output_reduce_scatter": ReduceScatterAsyncConfig(
-                mesh_device=mesh_device,
+                mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=1,
                 dim=3,
                 math_op=ttnn.ReduceType.Sum,
@@ -158,7 +159,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 topology=ttnn.Topology.Linear,
             ),
             "revert_tp": AllGatherAsyncConfig(
-                mesh_device=mesh_device,
+                mesh_device=MeshDeviceStub(mesh_device.shape),
                 dim=-1,  # Last dimension
                 memory_config=memory_config,
                 cluster_axis=1,

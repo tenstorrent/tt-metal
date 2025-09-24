@@ -21,7 +21,6 @@
 namespace ttnn::operations::data_movement {
 
 std::vector<Tensor> fold_with_transpose_(
-    QueueId queue_id,
     const Tensor& input,
     const std::optional<const ttnn::Shape>& output_shape,
     uint32_t stride_h,
@@ -144,7 +143,6 @@ ttnn::MemoryConfig create_sharded_memory_config(
 }
 
 std::vector<Tensor> fold_with_transpose_sharded_(
-    QueueId queue_id,
     const Tensor& input,
     const std::optional<const ttnn::Shape>& output_shape,
     uint32_t stride_h,
@@ -286,7 +284,6 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 }
 
 Tensor FoldOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     uint32_t stride_h,
     uint32_t stride_w,
@@ -301,7 +298,6 @@ Tensor FoldOperation::invoke(
         if (input_tensor.is_sharded()) {
             if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return fold_with_transpose_sharded_(
-                           queue_id,
                            input_tensor,
                            output_shape,
                            stride_h,
@@ -316,8 +312,7 @@ Tensor FoldOperation::invoke(
                 TT_THROW("fold op does not support non height-sharding!");
             }
         } else {
-            return fold_with_transpose_(queue_id, input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
-                .at(0);
+            return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
         }
     }
     if (input_tensor.memory_config().is_dram()) {
@@ -328,9 +323,14 @@ Tensor FoldOperation::invoke(
         auto input_height = input_tensor.logical_shape()[1];
         auto input_width = input_tensor.logical_shape()[2];
         auto in_channels = input_tensor.logical_shape()[3];
-        auto output_tensor =
-            ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
-        if (input_tensor.layout() == Layout::TILE) {
+        auto fold_input_tensor = input_tensor;
+        if (in_channels % 32 == 0 && fold_input_tensor.layout() == Layout::TILE) {
+            // Convert to row-major layout for 32-channel aligned tensors to leverage faster untilize+RM fold path
+            fold_input_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
+        }
+
+        auto output_tensor = ttnn::prim::fold(fold_input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+        if (fold_input_tensor.layout() == Layout::TILE) {
             return ttnn::reshape(
                 output_tensor,
                 ttnn::Shape(
@@ -338,31 +338,7 @@ Tensor FoldOperation::invoke(
         }
         return output_tensor;
     }
-    return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+    return ttnn::prim::fold(input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 
-Tensor FoldOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    bool use_transpose_as_fold,
-    const std::optional<const ttnn::Shape>& output_shape,
-    uint32_t pad_c,
-    uint32_t pad_h,
-    uint32_t pad_w,
-    const std::optional<CoreRangeSet>& core_grid,
-    const std::optional<MemoryConfig>& override_memory_config) {
-    QueueId queue_id = DefaultQueueId;
-    return invoke(
-        queue_id,
-        input_tensor,
-        stride_h,
-        stride_w,
-        use_transpose_as_fold,
-        output_shape,
-        pad_c,
-        pad_h,
-        pad_w,
-        core_grid);
-}
 }  // namespace ttnn::operations::data_movement

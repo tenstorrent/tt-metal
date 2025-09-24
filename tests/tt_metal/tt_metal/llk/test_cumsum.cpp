@@ -33,7 +33,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -73,7 +73,7 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
         for (int k = 0; k < dim_a; k++) {
             float res = 0;
             for (int j = 0; j < dim_b; j++) {
-                res += src[i * W * H + j * j_mul + k * k_mul].to_float();
+                res += static_cast<float>(src[i * W * H + j * j_mul + k * k_mul]);
                 golden[i * W * H + j * j_mul + k * k_mul] = res;
             }
         }
@@ -82,7 +82,8 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
     return golden;
 }
 
-void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device, const CumsumConfig& test_config) {
+void run_single_core_cumsum(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CumsumConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -97,7 +98,7 @@ void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t tile_height = 32;
 
-    constexpr uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
+    constexpr uint32_t single_tile_size = tile_width * tile_height * sizeof(bfloat16);
 
     uint32_t W = test_config.Wt * tile_width;
     uint32_t H = test_config.Ht * tile_height;
@@ -187,7 +188,7 @@ void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device
         });
 
     std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
-        -1.0f, 1.0f, dram_buffer_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, dram_buffer_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
 
     std::vector<bfloat16> golden = gold_cumsum(input, {test_config.N, W, H}, test_config.rowwise);
     auto golden_packed = pack_vector<uint32_t, bfloat16>(golden);

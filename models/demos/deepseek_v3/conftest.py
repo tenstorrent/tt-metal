@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from tests.scripts.common import get_updated_device_params
 
 
@@ -71,6 +72,14 @@ def hf_config(model_path):
     return config
 
 
+@pytest.fixture(scope="session")
+def hf_config_short(request, hf_config):
+    hf_config_out = deepcopy(hf_config)
+    hf_config_out.num_hidden_layers = getattr(request, "param", 1)
+    hf_config_out.max_seq_len = 3 * 1024
+    return hf_config_out
+
+
 @pytest.fixture
 def mesh_row(mesh_device):
     """
@@ -89,10 +98,10 @@ def mesh_row(mesh_device):
 @pytest.fixture
 def ccl(mesh_device):
     """
-    Fixture to create a CCL1D instance for testing.
+    Fixture to create a CCL instance for testing.
     This is used to test distributed operations in DeepSeek modules.
     """
-    return CCL1D(mesh_device)
+    return CCL(mesh_device)
 
 
 @pytest.fixture(scope="function")

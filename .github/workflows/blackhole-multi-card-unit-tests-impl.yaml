@@ -28,19 +28,23 @@ jobs:
       matrix:
         test-group:
           - name: fabric 1D unit tests
-            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
-            timeout: 15
-          - name: fabric 1D performance microbenchmarks
-            cmd: pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
+            cmd: |
+              TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+              TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DMuxFixture.*"
             timeout: 15
           - name: fabric 2D fixture unit tests
-            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+            cmd: TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
             timeout: 15
+          - name: fabric stability nightly tests
+            cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
+            timeout: 30
           - name: cpp unit tests eth
-            cmd: ./build/test/tt_metal/unit_tests_eth
+            cmd: |
+              ./build/test/tt_metal/unit_tests_eth
+              ./build/test/tt_metal/unit_tests_tunneling
             timeout: 15
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
@@ -86,7 +90,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U0883RN6CRE # William Ly
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

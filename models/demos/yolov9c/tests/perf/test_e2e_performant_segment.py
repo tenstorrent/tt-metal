@@ -5,9 +5,9 @@
 
 import pytest
 
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 from models.demos.yolov9c.tests.perf.test_e2e_performant_detect import run_yolov9c_inference
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
@@ -25,7 +25,6 @@ from models.utility_functions import run_for_wormhole_b0
         ),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 def test_e2e_performant(
     model_location_generator,
     device,

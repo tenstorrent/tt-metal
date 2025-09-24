@@ -63,7 +63,7 @@ class TtGemmaTransformerVision(LightweightModule):
         )
 
     def forward(self, images):
-        vision_tokens = self.vision_encoder(images)[0, :, :, :]
+        vision_tokens = self.vision_encoder(images)[:, 0, :, :]
 
         vision_tokens = self.mmp(vision_tokens)
         return vision_tokens

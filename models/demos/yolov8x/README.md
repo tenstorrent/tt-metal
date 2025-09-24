@@ -19,13 +19,13 @@ pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_y
 
 ## Model performant running with Trace+2CQ
 ### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `62` FPS:
+- For `640x640`, end-2-end perf is `66` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant
   ```
 
 ### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `121` FPS:
+- For `640x640`, end-2-end perf is `124` FPS:
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant_dp
   ```

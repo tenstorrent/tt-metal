@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
+from models.common.utility_functions import is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -485,16 +485,7 @@ class resnet50:
         return layers
 
     def preprocessing(self, torch_input_tensor):
-        resnet50_first_conv_kernel_size = 3
-        resnet50_first_conv_stride = 2
-        input_tensor = pad_and_fold_conv_activation_for_unity_stride(
-            torch_input_tensor,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_stride,
-            resnet50_first_conv_stride,
-        )
-        input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
+        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         return input_tensor
 
@@ -521,12 +512,12 @@ class resnet50:
             out_channels=self.conv1_output_channels,
             device=device,
             bias_tensor=self.conv1_bias_tensor,
-            kernel_size=(4, 4),
-            stride=(1, 1),
-            padding=(0, 0),
+            kernel_size=(7, 7),
+            stride=(2, 2),
+            padding=(3, 3),
             batch_size=self.batch_size,
-            input_height=self.conv1_input_height,
-            input_width=self.conv1_input_width,
+            input_height=896,
+            input_width=896,
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
@@ -851,12 +842,12 @@ class resnet50:
             out_channels=self.conv1_output_channels,
             device=device,
             bias_tensor=self.conv1_bias_tensor,
-            kernel_size=(4, 4),
-            stride=(1, 1),
-            padding=(0, 0),
+            kernel_size=(7, 7),
+            stride=(2, 2),
+            padding=(3, 3),
             batch_size=self.batch_size,
-            input_height=451,
-            input_width=451,
+            input_height=896,
+            input_width=896,
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",

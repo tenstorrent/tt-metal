@@ -8,13 +8,13 @@ import re
 import inspect
 import pytest
 import subprocess
-import glob
 from loguru import logger
+from conftest import is_6u
 
 import pandas as pd
 import numpy as np
 
-from tt_metal.tools.profiler.common import (
+from tracy.common import (
     TT_METAL_HOME,
     PROFILER_HOST_DEVICE_SYNC_INFO,
     PROFILER_SCRIPTS_ROOT,
@@ -515,13 +515,13 @@ def test_noc_event_profiler():
 
 
 @skip_for_blackhole()
-def test_fabric_event_profiler_unicast():
+def test_fabric_event_profiler_1d():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
 
     # test that current device has a valid fabric API connection
     sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    sanity_check_test_name = "Fabric1DFixture.TestUnicastConnAPI"
+    sanity_check_test_name = "Fabric1DFixture.TestChipMCast1DWithTracing2"
     sanity_check_succeeded = run_gtest_profiler_test(
         sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
     )
@@ -531,71 +531,18 @@ def test_fabric_event_profiler_unicast():
 
     # if device supports fabric API, test fabric event profiler
     test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    test_name = "Fabric1DFixture.TestUnicastRawWithTracing"
-    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
-    try:
-        not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
-        assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
-    except subprocess.CalledProcessError as e:
-        ret_code = e.returncode
-        assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-    expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-    assert os.path.isfile(
-        expected_cluster_coords_file
-    ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
-
-    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
-    assert os.path.isfile(expected_trace_file), f"expected noc trace file '{expected_trace_file}' does not exist"
-
-    fabric_event_count = 0
-    with open(expected_trace_file, "r") as nocTraceJson:
-        try:
-            noc_trace_data = json.load(nocTraceJson)
-        except json.JSONDecodeError:
-            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
-
-        assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
-        assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
-        for event in noc_trace_data:
-            assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
-            if event.get("type", "") == "FABRIC_UNICAST_WRITE":
-                fabric_event_count += 1
-                fabric_send_metadata = event.get("fabric_send", None)
-                if fabric_send_metadata is not None:
-                    assert fabric_send_metadata.get("eth_chan", None) is not None
-                    assert fabric_send_metadata.get("start_distance", None) is not None
-
-    EXPECTED_FABRIC_EVENT_COUNT = 10
-    assert (
-        fabric_event_count == EXPECTED_FABRIC_EVENT_COUNT
-    ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {EXPECTED_FABRIC_EVENT_COUNT}"
-
-
-@skip_for_blackhole()
-def test_fabric_event_profiler_1d_multicast():
-    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
-
-    # test that current device has a valid fabric API connection
-    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    sanity_check_test_name = "Fabric1DFixture.TestMCastConnAPI"
-    sanity_check_succeeded = run_gtest_profiler_test(
-        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
-    )
-    if not sanity_check_succeeded:
-        logger.info("Device does not have testable fabric connections, skipping ...")
-        return
-
-    # if device supports fabric API, test fabric event profiler
-    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    tests = ["Fabric1DFixture.TestChipMCast1DWithTracing", "Fabric1DFixture.TestChipMCast1DWithTracing2"]
-    expected_outputs = [
-        {"START_DISTANCE": 1, "RANGE": 3, "FABRIC_EVENT_COUNT": 100},
-        {"START_DISTANCE": 2, "RANGE": 2, "FABRIC_EVENT_COUNT": 100},
+    tests = [
+        "Fabric1DFixture.TestUnicastRaw",
+        "Fabric1DFixture.TestChipMCast1DWithTracing",
+        "Fabric1DFixture.TestChipMCast1DWithTracing2",
+    ]
+    all_tests_expected_event_counts = [
+        {frozenset({"start_distance": 1, "range": 1}.items()): 10},
+        {frozenset({"start_distance": 1, "range": 3}.items()): 100},
+        {frozenset({"start_distance": 2, "range": 2}.items()): 100},
     ]
 
-    for test_name, expected_output in zip(tests, expected_outputs):
+    for test_name, expected_event_counts in zip(tests, all_tests_expected_event_counts):
         nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
         try:
             not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
@@ -609,11 +556,14 @@ def test_fabric_event_profiler_1d_multicast():
             expected_cluster_coords_file
         ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
-        noc_trace_files = glob.glob(f"{PROFILER_LOGS_DIR}/noc_trace_dev[0-9]_ID[0-9].json")
+        noc_trace_files = []
+        for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
+            if re.match(r"^noc_trace_dev[0-9]+_ID[0-9]+.json$", f):
+                noc_trace_files.append(f)
 
-        fabric_event_count = 0
+        actual_event_counts = {}
         for trace_file in noc_trace_files:
-            with open(trace_file, "r") as nocTraceJson:
+            with open(f"{PROFILER_LOGS_DIR}/{trace_file}", "r") as nocTraceJson:
                 try:
                     noc_trace_data = json.load(nocTraceJson)
                 except json.JSONDecodeError:
@@ -623,27 +573,28 @@ def test_fabric_event_profiler_1d_multicast():
                 assert len(noc_trace_data) > 0, f"noc trace file '{trace_file}' is empty"
                 for event in noc_trace_data:
                     assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
-                    if event.get("type", "") == "FABRIC_UNICAST_WRITE":
-                        fabric_event_count += 1
+                    if event.get("type", "").startswith("FABRIC_"):
+                        assert event.get("fabric_send", None) is not None
                         fabric_send_metadata = event.get("fabric_send", None)
-                        if fabric_send_metadata is not None:
-                            assert fabric_send_metadata.get("eth_chan", None) is not None
-                            assert (
-                                fabric_send_metadata.get("start_distance", None) == expected_output["START_DISTANCE"]
-                            ), f"Incorrect start distance for fabric event in noc trace: {fabric_send_metadata.get('start_distance', None)}, "
-                            f"expected {expected_output['START_DISTANCE']}"
-                            assert (
-                                fabric_send_metadata.get("range", None) == expected_output["RANGE"]
-                            ), f"Incorrect range for fabric event in noc trace: {fabric_send_metadata.get('range', None)}, "
-                            f"expected {expected_output['RANGE']}"
+                        assert fabric_send_metadata.get("eth_chan", None) is not None
+                        del fabric_send_metadata["eth_chan"]
+                        key = frozenset(fabric_send_metadata.items())
+                        if key not in actual_event_counts:
+                            actual_event_counts[key] = 0
+                        actual_event_counts[key] += 1
 
-        assert (
-            fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
-        ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
+        # compare expected event counts to actual event_counts
+        for event in expected_event_counts.keys() | actual_event_counts.keys():
+            assert expected_event_counts.get(event, 0) == actual_event_counts.get(
+                event, 0
+            ), f"There are {actual_event_counts.get(event, 0)} fabric events with fields {event}, expected {expected_event_counts.get(event, 0)}"
 
 
 @skip_for_blackhole()
 def test_fabric_event_profiler_fabric_mux():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+
     # test that current device has a valid fabric API connection
     sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
     sanity_check_test_name = "Fabric1DFixture.TestUnicastConnAPI"
@@ -675,11 +626,14 @@ def test_fabric_event_profiler_fabric_mux():
             expected_cluster_coords_file
         ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
-        noc_trace_files = glob.glob(f"{PROFILER_LOGS_DIR}/noc_trace_dev[0-9]_ID[0-9].json")
+        noc_trace_files = []
+        for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
+            if re.match(r"^noc_trace_dev[0-9]+_ID[0-9]+.json$", f):
+                noc_trace_files.append(f)
 
         fabric_event_count = 0
         for trace_file in noc_trace_files:
-            with open(trace_file, "r") as nocTraceJson:
+            with open(f"{PROFILER_LOGS_DIR}/{trace_file}", "r") as nocTraceJson:
                 try:
                     noc_trace_data = json.load(nocTraceJson)
                 except json.JSONDecodeError:
@@ -707,6 +661,122 @@ def test_fabric_event_profiler_fabric_mux():
         assert (
             fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
+
+
+@skip_for_blackhole()
+def test_fabric_event_profiler_2d():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+
+    # test that current device has a valid fabric API connection
+    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    sanity_check_test_name = "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W"
+    sanity_check_succeeded = run_gtest_profiler_test(
+        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
+    )
+    if not sanity_check_succeeded:
+        logger.info("Device does not have testable fabric connections, skipping ...")
+        return
+
+    # if device supports fabric API, test fabric event profiler
+    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    tests = [
+        "Fabric2DFixture.TestUnicastRaw_3E",
+        "Fabric2DFixture.TestMCastConnAPI_1W2E",
+        "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W",
+    ]
+
+    if is_6u():
+        tests.extend(
+            [
+                "Fabric2DFixture.TestUnicastRaw_3N",
+                "Fabric2DFixture.TestUnicastRaw_3N3E",
+                "Fabric2DFixture.TestMCastConnAPI_2N1S",
+                "Fabric2DFixture.Test2DMCastConnAPI_7N3E",
+            ]
+        )
+
+    all_tests_expected_event_counts = [
+        {
+            frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": False}.items()): 10,
+        },
+        {
+            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
+            frozenset({"ns_hops": 0, "e_hops": 2, "w_hops": 0, "is_mcast": True}.items()): 100,
+        },
+        {
+            frozenset({"ns_hops": 1, "e_hops": 1, "w_hops": 1, "is_mcast": True}.items()): 100,
+            frozenset({"ns_hops": 0, "e_hops": 1, "w_hops": 0, "is_mcast": False}.items()): 100,
+            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
+        },
+    ]
+
+    if is_6u():
+        all_tests_expected_event_counts.extend(
+            [
+                {
+                    frozenset({"ns_hops": 3, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 10,
+                },
+                {
+                    frozenset({"ns_hops": 2, "e_hops": 4, "w_hops": 0, "is_mcast": False}.items()): 10,
+                },
+                {
+                    frozenset({"ns_hops": 2, "e_hops": 0, "w_hops": 0, "is_mcast": True}.items()): 100,
+                    frozenset({"ns_hops": 1, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 100,
+                },
+                {
+                    frozenset({"ns_hops": 7, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
+                    frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
+                },
+            ]
+        )
+
+    for test_name, expected_event_counts in zip(tests, all_tests_expected_event_counts):
+        nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+        try:
+            not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
+            assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
+        except subprocess.CalledProcessError as e:
+            ret_code = e.returncode
+            assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
+
+        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
+        assert os.path.isfile(
+            expected_cluster_coords_file
+        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
+
+        noc_trace_files = []
+        for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
+            if re.match(r"^noc_trace_dev[0-9]+_ID[0-9]+.json$", f):
+                noc_trace_files.append(f)
+
+        actual_event_counts = {}
+        for trace_file in noc_trace_files:
+            with open(f"{PROFILER_LOGS_DIR}/{trace_file}", "r") as nocTraceJson:
+                try:
+                    noc_trace_data = json.load(nocTraceJson)
+                except json.JSONDecodeError:
+                    raise ValueError(f"noc trace file '{trace_file}' is not a valid JSON file")
+
+                assert isinstance(noc_trace_data, list), f"noc trace file '{trace_file}' format is incorrect"
+                assert len(noc_trace_data) > 0, f"noc trace file '{trace_file}' is empty"
+                for event in noc_trace_data:
+                    assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+                    if event.get("type", "").startswith("FABRIC_"):
+                        assert event.get("fabric_send", None) is not None
+                        fabric_send_metadata = event.get("fabric_send", None)
+                        assert fabric_send_metadata.get("eth_chan", None) is not None
+                        del fabric_send_metadata["eth_chan"]
+                        key = frozenset(fabric_send_metadata.items())
+                        if key not in actual_event_counts:
+                            actual_event_counts[key] = 0
+                        actual_event_counts[key] += 1
+
+        # compare expected event counts to actual event_counts
+        for event in expected_event_counts.keys() | actual_event_counts.keys():
+            assert expected_event_counts.get(event, 0) == actual_event_counts.get(
+                event, 0
+            ), f"There are {actual_event_counts.get(event, 0)} fabric events with fields {event}, expected {expected_event_counts.get(event, 0)}"
 
 
 def test_sub_device_profiler():

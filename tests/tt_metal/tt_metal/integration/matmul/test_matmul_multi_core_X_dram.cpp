@@ -45,7 +45,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 
@@ -61,7 +61,7 @@ struct MatmulConfig {
 };
 
 std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -184,7 +184,7 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
     return {std::move(workload), mm_reader_kernel, unary_writer_kernel};
 }
 
-bool matmul_multi_core_single_dram(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     CoreCoord compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
     int num_cores_r = compute_with_storage_grid_size.y;
@@ -365,7 +365,7 @@ bool matmul_multi_core_single_dram(std::shared_ptr<distributed::MeshDevice> mesh
 }
 
 bool assign_runtime_args_to_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload& workload,
     int num_cores_r,
     int num_cores_c,
@@ -465,7 +465,7 @@ bool assign_runtime_args_to_program(
 }
 
 bool matmul_multi_core_multi_dram(
-    tt_metal::MeshDispatchFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    tt_metal::MeshDispatchFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     int num_cores_r = mesh_device->compute_with_storage_grid_size().y;
     int num_cores_c = mesh_device->compute_with_storage_grid_size().x;

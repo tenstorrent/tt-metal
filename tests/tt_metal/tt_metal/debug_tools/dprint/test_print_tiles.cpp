@@ -132,10 +132,10 @@ static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{:.6} {:.6} {:.6} {:.6}",
-                fp16b_vec[col * 32 + 0].to_float(),
-                fp16b_vec[col * 32 + 8].to_float(),
-                fp16b_vec[col * 32 + 16].to_float(),
-                fp16b_vec[col * 32 + 24].to_float());
+                static_cast<float>(fp16b_vec[col * 32 + 0]),
+                static_cast<float>(fp16b_vec[col * 32 + 8]),
+                static_cast<float>(fp16b_vec[col * 32 + 16]),
+                static_cast<float>(fp16b_vec[col * 32 + 24]));
         }
     } else if (data_format == tt::DataFormat::Bfp8_b) {
         std::vector<float> float_vec = unpack_bfp8_tiles_into_float_vec(input_tile, true, false);
@@ -222,7 +222,9 @@ static std::string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<
 }
 
 static void RunTest(
-    DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, tt::DataFormat data_format) {
+    DPrintMeshFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    tt::DataFormat data_format) {
     // Set up program + CQ, run on just one core
     constexpr CoreCoord core = {0, 0};
     distributed::MeshWorkload workload;
@@ -299,7 +301,7 @@ static void RunTest(
 TEST_F(DPrintMeshFixture, TestPrintTilesFloat32) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::Float32);
             },
             mesh_device);
@@ -308,7 +310,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesFloat32) {
 TEST_F(DPrintMeshFixture, TestPrintTilesFloat16_b) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::Float16_b);
             },
             mesh_device);
@@ -317,7 +319,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesFloat16_b) {
 TEST_F(DPrintMeshFixture, TestPrintTilesBfp4_b) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::Bfp4_b);
             },
             mesh_device);
@@ -326,7 +328,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesBfp4_b) {
 TEST_F(DPrintMeshFixture, TestPrintTilesBfp8_b) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::Bfp8_b);
             },
             mesh_device);
@@ -335,7 +337,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesBfp8_b) {
 TEST_F(DPrintMeshFixture, TestPrintTilesInt8) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::Int8);
             },
             mesh_device);
@@ -344,7 +346,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesInt8) {
 TEST_F(DPrintMeshFixture, TestPrintTilesInt32) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::Int32);
             },
             mesh_device);
@@ -353,7 +355,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesInt32) {
 TEST_F(DPrintMeshFixture, TestPrintTilesUInt8) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::UInt8);
             },
             mesh_device);
@@ -362,7 +364,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesUInt8) {
 TEST_F(DPrintMeshFixture, TestPrintTilesUInt16) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::UInt16);
             },
             mesh_device);
@@ -371,7 +373,7 @@ TEST_F(DPrintMeshFixture, TestPrintTilesUInt16) {
 TEST_F(DPrintMeshFixture, TestPrintTilesUInt32) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, tt::DataFormat::UInt32);
             },
             mesh_device);

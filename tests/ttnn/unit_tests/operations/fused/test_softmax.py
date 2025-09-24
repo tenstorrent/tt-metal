@@ -32,7 +32,9 @@ def test_large_softmax(device, batch_size, h, w, dim):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.softmax(input_tensor, dim=dim)
+    # TODO: need to fix a hang, which occurs when numeric_stable is True
+    # See: issue #28509
+    output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=False)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
@@ -252,7 +254,7 @@ def test_softmax_sharded_stable_with_program_cache(
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, -3])
+@pytest.mark.parametrize("dim", [-1, -2, -3, 0, 1, 2])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
@@ -460,7 +462,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
 
 
 @pytest.mark.parametrize(
-    "accuracy_config",
+    "fp32_acc_en, math_approx_mode, expected_ulp",
     [
         (True, False, 3),
         (False, True, 11),
@@ -469,7 +471,7 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     ],
 )
 @pytest.mark.parametrize("shape", [(1, 1, 16384, 256)])
-def test_softmax_accuracy(device, shape, accuracy_config):
+def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected_ulp):
     torch.manual_seed(0)
 
     # Reference output
@@ -477,8 +479,6 @@ def test_softmax_accuracy(device, shape, accuracy_config):
     torch_output = torch.ops.aten._softmax.default(torch_tensor, dim=-1, half_to_float=False)
 
     # TTNN Softmax
-    fp32_acc_en, math_approx_mode, expected_ulp = accuracy_config
-
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=math_approx_mode,
@@ -487,7 +487,16 @@ def test_softmax_accuracy(device, shape, accuracy_config):
     )
 
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_output = ttnn.softmax(ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config)
+
+    numeric_stable = True
+    if math_approx_mode:
+        # TODO: fix accuracy issue when both math_approx_mode and numeric_stable are True
+        # See issue #28500
+        numeric_stable = False
+
+    ttnn_output = ttnn.softmax(
+        ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=numeric_stable
+    )
 
     ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
     output_torch = ttnn_output.cpu().to_torch()

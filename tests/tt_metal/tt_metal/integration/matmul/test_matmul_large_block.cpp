@@ -36,7 +36,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -74,7 +74,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -212,7 +212,7 @@ void create_CBs_for_fused_matmul(
 
 bool matmul_large_block(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool activations_rm,
     bool output_rm,
     MathFidelity math_fidelity = MathFidelity::HiFi4) {
@@ -415,7 +415,7 @@ bool matmul_large_block(
     // If we're testing LoFi/HiFi2 we generate matching golden (trunc LSB).
     // Note that this will work only for multiplying with identity matrix
     for (auto i = 0; i < golden.size(); i++) {
-        golden[i] = bfloat16(golden[i].to_uint16() & math_fid_mask);
+        golden[i] = std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(golden[i]) & math_fid_mask));
     }
 
     if (output_rm) {

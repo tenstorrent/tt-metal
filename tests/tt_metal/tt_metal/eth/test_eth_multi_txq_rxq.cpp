@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdint>
@@ -14,19 +14,20 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 
 using namespace tt;
+using namespace tt::tt_metal;
 using namespace tt::test_utils;
 namespace unit_tests::erisc::direct_send {
 
 static void eth_direct_send_multi_txq_rxq(
-    tt_metal::DispatchFixture* fixture,
-    tt_metal::IDevice* sender_device,
-    tt_metal::IDevice* receiver_device,
+    tt_metal::MeshDispatchFixture* fixture,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> sender_mesh_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> receiver_mesh_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     uint32_t data_txq_id,
@@ -35,6 +36,9 @@ static void eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
+    distributed::MeshWorkload sender_workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program sender_program = tt_metal::Program();
 
     constexpr size_t PAYLOAD_SIZE = 32;
@@ -66,6 +70,7 @@ static void eth_direct_send_multi_txq_rxq(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
+    distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
@@ -93,15 +98,19 @@ static void eth_direct_send_multi_txq_rxq(
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
-        t1 = std::thread([&]() { fixture->RunProgram(sender_device, sender_program); });
-        t2 = std::thread([&]() { fixture->RunProgram(receiver_device, receiver_program); });
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
+        t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
+        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
-        fixture->RunProgram(sender_device, sender_program, true);
-        fixture->RunProgram(receiver_device, receiver_program, true);
+        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
+        fixture->RunProgram(sender_mesh_device, sender_workload, true);
+        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }
 
-    fixture->FinishCommands(sender_device);
-    fixture->FinishCommands(receiver_device);
+    fixture->FinishCommands(sender_mesh_device);
+    fixture->FinishCommands(receiver_mesh_device);
 
     if (fixture->IsSlowDispatch()) {
         t1.join();
@@ -114,12 +123,14 @@ static void eth_direct_send_multi_txq_rxq(
 namespace tt::tt_metal {
 
 static void run_multi_txq_rxq_test(
-    DispatchFixture* fixture,
-    IDevice* device_0,
-    IDevice* device_1,
+    MeshDispatchFixture* fixture,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device_0,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device_1,
     uint32_t data_txq_id,
     uint32_t ack_txq_id,
     uint32_t num_messages) {
+    auto device_0 = mesh_device_0->get_devices()[0];
+    auto device_1 = mesh_device_1->get_devices()[0];
     // Find ethernet cores that connect device_0 and device_1 using standard metal APIs
     std::optional<CoreCoord> sender_core_0;
     std::optional<CoreCoord> receiver_core_0;
@@ -147,8 +158,8 @@ static void run_multi_txq_rxq_test(
 
     unit_tests::erisc::direct_send::eth_direct_send_multi_txq_rxq(
         fixture,
-        device_0,
-        device_1,
+        mesh_device_0,
+        mesh_device_1,
         sender_core_0.value(),
         receiver_core_0.value(),
         data_txq_id,

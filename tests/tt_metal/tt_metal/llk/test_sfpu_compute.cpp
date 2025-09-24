@@ -39,7 +39,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
@@ -67,29 +67,30 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "relu") {
-        return bfloat16(fmaxf(input.to_float(), 0.0f));
+        return bfloat16(fmaxf(static_cast<float>(input), 0.0f));
     } else if (op_name == "exponential") {
-        return bfloat16(std::exp(input.to_float()));
+        return bfloat16(std::exp(static_cast<float>(input)));
     } else if (op_name == "reciprocal") {
-        return bfloat16(1 / input.to_float());
+        return bfloat16(1 / static_cast<float>(input));
     } else if (op_name == "gelu") {
         static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
-        auto x = input.to_float();
+        auto x = static_cast<float>(input);
         auto x3 = x * x * x;
         float result = x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
         return bfloat16(result);
     } else if (op_name == "sqrt") {
-        return bfloat16(sqrtf(input.to_float()));
+        return bfloat16(sqrtf(static_cast<float>(input)));
     } else if (op_name == "sigmoid") {
-        auto x = input.to_float();
+        auto x = static_cast<float>(input);
         float result = 1 / (1 + std::exp(-x));
         return bfloat16(result);
     } else if (op_name == "log") {
-        return bfloat16(logf(input.to_float()));
+        return bfloat16(logf(static_cast<float>(input)));
     } else if (op_name == "tanh") {
-        return bfloat16(std::tanh(input.to_float()));
+        return bfloat16(std::tanh(static_cast<float>(input)));
     } else if (op_name == "sign") {
-        return bfloat16((0.0f < input.to_float()) ? 1.0f : ((input.to_float() < 0.0f) ? -1.0f : 0.0f));
+        return bfloat16(
+            (0.0f < static_cast<float>(input)) ? 1.0f : ((static_cast<float>(input) < 0.0f) ? -1.0f : 0.0f));
     } else {
         TT_THROW("Unsupported op_name in test");
         return bfloat16(0.0f);
@@ -145,7 +146,8 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(std::shared_ptr<distributed::MeshDevice> mesh_device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -171,7 +173,7 @@ bool run_sfpu_all_same_buffer(std::shared_ptr<distributed::MeshDevice> mesh_devi
 
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
-        byte_size / bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
+        byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
