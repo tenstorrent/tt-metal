@@ -4,12 +4,20 @@
 
 #include "sampling_op.hpp"
 
+#include "autograd/auto_context.hpp"
+#include "autograd/graph.hpp"
+#include "autograd/graph_utils.hpp"
+#include "core/tt_tensor_utils.hpp"
+
 namespace ttml::ops {
 
 autograd::TensorPtr sample_op(
-    const autograd::TensorPtr& t, float temperature, uint32_t seed, const autograd::TensorPtr& logits_padding_mask) {
+    const autograd::TensorPtr& logits,
+    float temperature,
+    uint32_t seed,
+    const autograd::TensorPtr& logits_padding_mask) {
     auto sampled_tensor = ttnn_fixed::sample(
-        t->get_value(),
+        logits->get_value(),
         temperature,
         seed,
         logits_padding_mask == nullptr ? std::nullopt
@@ -18,13 +26,12 @@ autograd::TensorPtr sample_op(
     auto out = autograd::create_tensor();
     out->set_value(sampled_tensor);
 
-    autograd::GradFunction grad = [t, out]() {
+    autograd::GradFunction grad = [logits, out]() {
         // Argmax in sampling is non-differentiable; no gradient to propagate.
-        // TODO: replace argmax with softmax?
         throw std::runtime_error("Sampling operation backward pass is not implemented.");
     };
 
-    auto links = autograd::get_links(t);
+    auto links = autograd::get_links(logits, logits_padding_mask);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
 
     return out;

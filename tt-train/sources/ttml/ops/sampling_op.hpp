@@ -10,6 +10,9 @@
 namespace ttml::ops {
 
 autograd::TensorPtr sample_op(
-    const autograd::TensorPtr& t, float temperature, uint32_t seed, const autograd::TensorPtr& logits_padding_mask);
+    const autograd::TensorPtr& logits,
+    float temperature,
+    uint32_t seed,
+    const autograd::TensorPtr& logits_padding_mask);
 
 }  // namespace ttml::ops
