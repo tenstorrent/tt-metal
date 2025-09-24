@@ -429,9 +429,9 @@ public:
         std::filesystem::create_directory_symlink(bandwidth_results_path, ci_symlink_path);
         log_info(tt::LogTest, "Created symlink to bandwidth results directory: {}", ci_symlink_path);
         
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
 
         // Generate detailed CSV filename
+        auto arch_name = tt::tt_metal::hal::get_arch_name();
         std::ostringstream oss;
         oss << "bandwidth_results_" << arch_name << ".csv";
         csv_file_path_ = bandwidth_results_path / oss.str();
