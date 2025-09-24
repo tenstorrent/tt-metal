@@ -95,7 +95,7 @@ runs:
           -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           --rm
           -v /etc/passwd:/etc/passwd:ro
-          -v ${{ github.workspace }}:${{ github.workspace }}:rw
+          -v ${{ github.workspace }}:/work:rw
           --net=host
           --log-driver local
           --log-opt max-size=50m
@@ -118,7 +118,7 @@ runs:
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e NO_PROXY={0}', env.CIV2_NO_PROXY)) || '' }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e no_proxy={0}', env.CIV2_no_proxy)) || '' }}
           ${{ inputs.device }}
-          -w ${{ github.workspace }}
+          -w /work
         run: |
           set -eu
 
@@ -170,13 +170,15 @@ runs:
             ls -la . | head -10
 
             echo "=== DEBUG: Trying pip install with isolation ==="
-            # Try to install with isolation from current directory
-            cd /tmp/home
+            # Try to install with isolation from current directory and clean environment
+            mkdir -p "$HOME/wheels"
+            cp -f "/workspace/$WHEEL_FILENAME" "$HOME/wheels/"
+            chmod 0644 "$HOME/wheels/$WHEEL_FILENAME"
+
             PYTHONPATH="" PYTHONSAFEPATH=1 python3 -P -m pip install \
               --isolated --no-deps --no-input --disable-pip-version-check \
               --cache-dir "$PIP_CACHE_DIR" \
-              "${{ github.workspace }}/$WHEEL_FILENAME"
-            cd "${{ github.workspace }}"
+              "$HOME/wheels/$WHEEL_FILENAME"
 
             echo "Wheel installation completed"
           else
