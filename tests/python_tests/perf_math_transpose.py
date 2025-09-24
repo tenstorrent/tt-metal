@@ -3,7 +3,7 @@
 
 import pytest
 
-from conftest import skip_for_blackhole
+from conftest import skip_for_blackhole, skip_for_wormhole
 from helpers.format_arg_mapping import DestAccumulation, Transpose
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats, parametrize
@@ -15,14 +15,12 @@ from helpers.perf import (
 
 
 @skip_for_blackhole
+@skip_for_wormhole
 @pytest.mark.perf
 @parametrize(
     test_name="math_transpose_perf",
     formats=input_output_formats(
-        [
-            # DataFormat.Float16_b,     # Waiting for resolution of issue 549
-            DataFormat.Int32
-        ],
+        [DataFormat.Float16_b, DataFormat.Int32],
     ),
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     math_transpose_faces=[Transpose.No, Transpose.Yes],
