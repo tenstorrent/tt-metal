@@ -199,12 +199,23 @@ void MeshCommandQueueBase::enqueue_write_mesh_buffer(
 
 void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
-    auto lock = lock_api_function_();
     TT_FATAL(
-        buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
+        (buffer->global_layout() == MeshBufferLayout::SHARDED) || (buffer->device()->num_devices() == 1),
+        "Can only read a Sharded MeshBuffer from a MeshDevice or a Replicated MeshBuffer from a Unit-Mesh.");
     TT_FATAL(
         blocking, "Non-Blocking reads are not supported through {}. Use enqueue_read_shards_instead.", __FUNCTION__);
-    this->read_sharded_buffer(*buffer, host_data);
+    if (buffer->global_layout() == MeshBufferLayout::SHARDED) {
+        auto lock = lock_api_function_();
+        this->read_sharded_buffer(*buffer, host_data);
+    } else {
+        std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+            .shard_coord = MeshCoordinate(0, 0),
+            .host_data = host_data,
+            .region = std::nullopt,
+        }};
+        // enqueue_read_shards will call lock_api_function_(), no need to call it here
+        this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
+    }
 }
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(
