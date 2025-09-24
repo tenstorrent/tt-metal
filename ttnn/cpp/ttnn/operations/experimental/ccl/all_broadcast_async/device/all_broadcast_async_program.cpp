@@ -78,7 +78,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+        topology,
+        sender_device,
+        forward_device,
+        backward_device,
+        num_targets_forward,
+        num_targets_backward,
+        input_tensor);
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;

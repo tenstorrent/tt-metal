@@ -84,7 +84,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [forward_args, backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, target_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+        topology,
+        target_device,
+        forward_device,
+        backward_device,
+        num_targets_forward,
+        num_targets_backward,
+        input_tensor);
 
     // Tensor Info
     [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();

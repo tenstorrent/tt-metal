@@ -1537,14 +1537,9 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
-void validate_fabric_2d_dynamic_config(Topology topology) {
+void validate_fabric_2d_dynamic_config(Topology topology, const Tensor& input_tensor) {
+    auto physical_mesh_shape = input_tensor.device()->shape();
     TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-    auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
-    TT_FATAL(
-        physical_mesh_shapes.size() == 1,
-        "Fabric 2D dynamic CCLs expected a single Physical Mesh to be instantiated, but got {} meshes",
-        physical_mesh_shapes.size());
-    const auto& physical_mesh_shape = physical_mesh_shapes.begin()->second;
     TT_FATAL(
         physical_mesh_shape.dims() == 2,
         "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
@@ -1589,13 +1584,14 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     Topology topology,
     IDevice* src_device,
     std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device) {
+    std::optional<IDevice*> backward_device,
+    const Tensor& input_tensor) {
     std::array<uint32_t, 2> forward_args = {};
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        validate_fabric_2d_dynamic_config(topology);
+        validate_fabric_2d_dynamic_config(topology, input_tensor);
         if (forward_device) {
             auto forward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());
@@ -1650,7 +1646,8 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     uint32_t num_targets_forward,
-    uint32_t num_targets_backward) {
+    uint32_t num_targets_backward,
+    const Tensor& input_tensor) {
     std::array<uint32_t, 6> forward_args = {};
     std::array<uint32_t, 6> backward_args = {};
     // Used for experimentation for optimal perf
@@ -1658,7 +1655,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        validate_fabric_2d_dynamic_config(topology);
+        validate_fabric_2d_dynamic_config(topology, input_tensor);
         auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
         auto set_mcast_args = [&src_fabric_node_id](std::array<uint32_t, 6>& args, std::optional<IDevice*> device, uint32_t num_targets) {
             if (device) {

@@ -710,14 +710,14 @@ private:
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
 
 // Forward/backward devices are assumed to be neighbors for 1D fabric for now
-std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device);
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device, const Tensor& input_tensor);
 
 std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
     size_t ring_size, size_t ring_index, Topology topology, bool static_alternate);
 
 // Forward/backward devices are assumed to be neighbors for 1D fabric for now
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
-    Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device, uint32_t num_targets_forward, uint32_t num_targets_backward);
+    Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device, uint32_t num_targets_forward, uint32_t num_targets_backward,const Tensor& input_tensor);
 
 
 }  // namespace ccl
