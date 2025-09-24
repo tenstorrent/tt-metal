@@ -118,6 +118,11 @@ If you set `disabled` to `True`, your script will not be executed (and all scrip
 
 `depends` is a list of scripts that your script depends on. Scripts that perform checks per device depend on the `check_per_device` script. Scripts that depend on checking operations, kernels, or firmware depend on the `dispatcher_data` script.
 
+## Additional pip requirements
+
+If your `tt-triage` script requires extra Python libraries, add the package name (and version if needed) to `scripts/debugging_scripts/requirements.txt`.
+After updating `requirements.txt`, also update `triage.py` in the section "Check if requirements are installed" to ensure your dependency is checked and installed automatically.
+
 ## Enabling standalone script execution
 
 If you would like to enable your script to be executed as a standalone script, add these lines to the end:
