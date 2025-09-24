@@ -10,12 +10,9 @@ import inspect
 from typing import List, Optional, Union
 
 from ttnn.distributed.distributed import ConcatMeshToTensor
-from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
-    TtCLIPConfig,
-    TtCLIPTextTransformer,
-    TtCLIPTextTransformerParameters,
-)
-from models.common.utility_functions import profiler
+from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.utility_functions import profiler
 
 from tqdm import tqdm
 import ttnn
@@ -29,47 +26,52 @@ SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
 
 
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
-    tt_parameters_text_encoder = TtCLIPTextTransformerParameters.from_torch(
-        pipeline.text_encoder.state_dict(),
-        device=ttnn_device,
-        dtype=ttnn.bfloat16,
-        parallel_manager=None,
-        has_text_projection=False,  # Text encoder 1 does not have text projection
+    text_encoder_1 = pipeline.text_encoder
+    config_1 = CLIPConfig(
+        vocab_size=text_encoder_1.config.vocab_size,
+        embed_dim=text_encoder_1.config.hidden_size,
+        ff_dim=text_encoder_1.config.intermediate_size,
+        num_heads=text_encoder_1.config.num_attention_heads,
+        num_hidden_layers=text_encoder_1.config.num_hidden_layers,
+        max_prompt_length=77,
+        layer_norm_eps=text_encoder_1.config.layer_norm_eps,
+        attention_dropout=text_encoder_1.config.attention_dropout,
+        hidden_act=text_encoder_1.config.hidden_act,
     )
-    tt_config_text_encoder = TtCLIPConfig(
-        vocab_size=pipeline.text_encoder.config.vocab_size,
-        d_model=pipeline.text_encoder.config.hidden_size,
-        d_ff=pipeline.text_encoder.config.intermediate_size,
-        num_heads=pipeline.text_encoder.config.num_attention_heads,
-        num_layers=pipeline.text_encoder.config.num_hidden_layers,
-        max_position_embeddings=77,
-        layer_norm_eps=pipeline.text_encoder.config.layer_norm_eps,
-        attention_dropout=pipeline.text_encoder.config.attention_dropout,
-        hidden_act=pipeline.text_encoder.config.hidden_act,
-    )
-    tt_text_encoder = TtCLIPTextTransformer(tt_parameters_text_encoder, tt_config_text_encoder)
+    ccl_manager = None
 
-    # TT text encoder 2 setup
-    tt_parameters_text_encoder_2 = TtCLIPTextTransformerParameters.from_torch(
-        pipeline.text_encoder_2.state_dict(),
-        device=ttnn_device,
-        dtype=ttnn.bfloat16,
-        parallel_manager=None,
-        has_text_projection=True,  # Text encoder 2 has text projection
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config_1 = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
     )
 
-    tt_config_text_encoder_2 = TtCLIPConfig(
-        vocab_size=pipeline.text_encoder_2.config.vocab_size,
-        d_model=pipeline.text_encoder_2.config.hidden_size,
-        d_ff=pipeline.text_encoder_2.config.intermediate_size,
-        num_heads=pipeline.text_encoder_2.config.num_attention_heads,
-        num_layers=pipeline.text_encoder_2.config.num_hidden_layers,
-        max_position_embeddings=77,
-        layer_norm_eps=pipeline.text_encoder_2.config.layer_norm_eps,
-        attention_dropout=pipeline.text_encoder_2.config.attention_dropout,
-        hidden_act=pipeline.text_encoder_2.config.hidden_act,
+    tt_text_encoder = CLIPEncoder(
+        config_1, ttnn_device, ccl_manager, parallel_config_1, text_encoder_1.config.eos_token_id
     )
-    tt_text_encoder_2 = TtCLIPTextTransformer(tt_parameters_text_encoder_2, tt_config_text_encoder_2)
+    tt_text_encoder.load_state_dict(text_encoder_1.state_dict())
+
+    text_encoder_2 = pipeline.text_encoder_2
+    config_2 = CLIPConfig(
+        vocab_size=text_encoder_2.config.vocab_size,
+        embed_dim=text_encoder_2.config.hidden_size,
+        ff_dim=text_encoder_2.config.intermediate_size,
+        num_heads=text_encoder_2.config.num_attention_heads,
+        num_hidden_layers=text_encoder_2.config.num_hidden_layers,
+        max_prompt_length=77,
+        layer_norm_eps=text_encoder_2.config.layer_norm_eps,
+        attention_dropout=text_encoder_2.config.attention_dropout,
+        hidden_act=text_encoder_2.config.hidden_act,
+    )
+
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config_2 = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+
+    tt_text_encoder_2 = CLIPEncoder(
+        config_2, ttnn_device, ccl_manager, parallel_config_2, text_encoder_2.config.eos_token_id
+    )
+    tt_text_encoder_2.load_state_dict(text_encoder_2.state_dict())
 
     return tt_text_encoder, tt_text_encoder_2
 
@@ -108,8 +110,8 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
 
-    _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, parallel_manager=None)
-    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, parallel_manager=None)
+    _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, with_projection=False)
+    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, with_projection=True)
     ttnn.synchronize_device(ttnn_device)
 
 
@@ -245,10 +247,10 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
-            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=(ind > 0))
 
             tt_sequence_output_torch = ttnn.to_torch(
-                tt_sequence_output.hidden_states[-2],
+                tt_sequence_output[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
             tt_pooled_output_torch = ttnn.to_torch(
@@ -262,7 +264,7 @@ def batch_encode_prompt_on_device(
             # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)
             if ind == 0:
                 tt_pooled_prompt_embeds = ttnn.to_torch(
-                    tt_sequence_output.hidden_states[-1],
+                    tt_sequence_output[-1],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                 ).to(torch.float32)
                 pooled_prompt_embeds = tt_pooled_prompt_embeds.to(torch.float32)
@@ -274,7 +276,7 @@ def batch_encode_prompt_on_device(
             else:
                 assert False, "Clip skip not none path not tested, use at your own risk!"
                 prompt_embeds = ttnn.to_torch(
-                    tt_sequence_output.hidden_states[-(clip_skip + 2)],
+                    tt_sequence_output[-(clip_skip + 2)],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                 ).to(torch.float32)
 
@@ -330,9 +332,11 @@ def batch_encode_prompt_on_device(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
-            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
+            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(
+                tt_tokens, ttnn_device, with_projection=(ind > 0)
+            )
             tt_sequence_output_neg_torch = ttnn.to_torch(
-                tt_sequence_output_neg.hidden_states[-2],
+                tt_sequence_output_neg[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
             tt_pooled_output_neg_torch = ttnn.to_torch(
@@ -347,7 +351,7 @@ def batch_encode_prompt_on_device(
             if ind == 0:
                 tt_pooled_prompt_embeds = (
                     ttnn.to_torch(
-                        tt_sequence_output_neg.hidden_states[-1],
+                        tt_sequence_output_neg[-1],
                         mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                     )
                 ).to(torch.float32)
