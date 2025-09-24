@@ -140,3 +140,9 @@ context_for_claude/UNPACR_NOP_OverlayClear.md
 context_for_claude/UNPACR_NOP_SETDVALID.md
 context_for_claude/UNPACR_NOP_SETREG.md
 context_for_claude/UNPACR_NOP_ZEROSRC.md
+context_for_claude/MOVD2A.md
+log.txt
+context_for_claude/GAPOOL.md
+context_for_claude/MVMUL.md
+context_for_claude/ZEROACC.md
+context_for_claude/debug.md

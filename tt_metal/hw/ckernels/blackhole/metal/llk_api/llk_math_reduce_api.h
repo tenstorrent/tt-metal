@@ -69,3 +69,6 @@ inline void llk_math_reduce_fused(const uint dst_index, const uint num_faces = 4
         enforce_fp32_accumulation,
         false>(dst_index, false, num_faces);
 }
+
+// **NEW: Clear data valid flags after for loop - used in fused operations**
+inline void llk_math_reduce_clear_dvalid_after_for_loop() { _llk_math_reduce_clear_dvalid_after_for_loop_(); }
