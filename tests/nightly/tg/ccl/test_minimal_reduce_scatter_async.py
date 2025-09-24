@@ -103,14 +103,14 @@ def test_reduce_scatter_async(
 
 
 @skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [1], ids=["3links"])
+@pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
         (8, [1, 1, 8, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
     ],
     ids=[
-        "batch_8",
+        "deepseek_like",
     ],
 )
 @pytest.mark.parametrize(
@@ -154,7 +154,7 @@ def test_reduce_scatter_async_big_mesh(
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     mesh_mapper_config = ttnn.MeshMapperConfig(
-        [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()], ttnn.MeshShape(1, num_devices)
+        [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
     )
     cluster_axis = None
     run_reduce_scatter_impl(
