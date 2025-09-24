@@ -19,7 +19,7 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_shape, pcc, vae_block",
     [
-        ((1, 4, 128, 128), 0.928, "decoder"),
+        ((1, 4, 128, 128), 0.933, "decoder"),
         ((1, 3, 1024, 1024), 0.977, "encoder"),
     ],
     ids=("test_decode", "test_encode"),
