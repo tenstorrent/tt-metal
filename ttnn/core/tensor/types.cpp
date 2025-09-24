@@ -64,7 +64,7 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
         case tt::DataFormat::UInt32: return tt::tt_metal::DataType::UINT32;
         case tt::DataFormat::UInt16: return tt::tt_metal::DataType::UINT16;
         case tt::DataFormat::UInt8: return tt::tt_metal::DataType::UINT8;
-        default: TT_ASSERT(false, "Unsupported DataFormat"); return tt::tt_metal::DataType::BFLOAT16;
+        default: TT_ASSERT(false, "Unsupported DataFormat");
     }
 }
 
