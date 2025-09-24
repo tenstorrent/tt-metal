@@ -110,6 +110,8 @@ class PETRMultiheadAttention:
             value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, v_weight, bias=v_bias)
 
+        # import pdb; pdb.set_trace()
+
         query = ttnn.reshape(query, (tgt_len, bsz * self.num_heads, q_head_size))
         query = ttnn.permute(query, (1, 0, 2))
 
@@ -126,12 +128,20 @@ class PETRMultiheadAttention:
         key_transposed = ttnn.permute(key, (0, 2, 1))
 
         if attn_mask is not None:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
             attn_output_weights = attn_output_weights + attn_mask
         else:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
 
-        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
+        # TTNN Softmax
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
 
         # attn_output_weights = torch.load("softmax_out.pt")
         # attn_output_weights = ttnn.from_torch(attn_output_weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device = self.device)
@@ -150,8 +160,8 @@ class PETRMultiheadAttention:
         attn_output = ttnn.linear(attn_output, self.attn_out_proj_weight, bias=self.attn_out_proj_bias)
         attn_output = ttnn.reshape(attn_output, (tgt_len, bsz, attn_output.shape[1]))
         attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
-        attn_output_weights = ttnn.to_layout(attn_output_weights, ttnn.ROW_MAJOR_LAYOUT)
+        # attn_output_weights = ttnn.to_layout(attn_output_weights, ttnn.ROW_MAJOR_LAYOUT)
         attn_output_weights = ttnn.mean(attn_output_weights, dim=1)
-        identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
+        # identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
 
         return attn_output + identity, attn_output_weights
