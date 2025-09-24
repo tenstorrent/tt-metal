@@ -29,8 +29,8 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     constexpr bool using_mock_cluster_descriptor = false;
     constexpr bool run_discovery = true;
 
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, using_mock_cluster_descriptor, run_discovery);
+    auto physical_system_desc =
+        tt::tt_metal::PhysicalSystemDescriptor(cluster.get_driver(), distributed_context, false);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
     auto hostnames = physical_system_desc.get_all_hostnames();
