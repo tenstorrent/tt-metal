@@ -232,3 +232,29 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
 }
 
 }  // namespace ckernel
+
+ALWI void sub_bcast_row_tiles_hw_configure(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    UNPACK((llk_unpack_AB_sub_bcast_row_hw_configure<false, StochRndType::NONE>(
+        uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)));
+
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure_disaggregated(icb0, icb1)));
+
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+}
+
+ALWI void sub_bcast_row_tile_init() {
+    UNPACK((llk_unpack_AB_sub_bcast_row_init<>()));
+    MATH((llk_math_eltwise_sub_bcast_row_init<>()));
+}
+
+ALWI void sub_bcast_row_tile() {
+    UNPACK((llk_unpack_AB_sub_bcast_row<>(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1)));
+    MATH((llk_math_eltwise_binary_sub_bcast_row<
+          EltwiseBinaryType::ELWSUB,
+          BroadcastType::NONE,
+          DstSync::SyncHalf,
+          DST_ACCUM_MODE>(0)));
+}
