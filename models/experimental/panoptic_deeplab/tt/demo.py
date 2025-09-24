@@ -32,6 +32,7 @@ def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> 
     Returns:
         Updated panoptic segmentation map
     """
+
     from scipy.spatial.distance import cdist
 
     result = panoptic_seg.copy()
@@ -243,14 +244,12 @@ def create_panoptic_visualization(
     offset_tensor = torch.from_numpy(offset_pred).permute(2, 0, 1)  # [2, H, W]
 
     # Get panoptic segmentation using reference implementation
-    # Add debug logging to understand what's happening
     logger.info(
         f"DEBUG: Using thresholds - center: {center_threshold}, score: {score_threshold}, stuff_area: {stuff_area}"
     )
     logger.info(f"DEBUG: Max center prediction: {center_tensor.max().item():.6f}")
     logger.info(f"DEBUG: Number of pixels above center threshold: {(center_tensor > center_threshold).sum().item()}")
 
-    # Additional debug info for threshold tuning
     logger.debug(f"DEBUG: Center values > 0.01: {(center_tensor > 0.01).sum().item()}")
     logger.debug(f"DEBUG: Center values > 0.05: {(center_tensor > 0.05).sum().item()}")
 

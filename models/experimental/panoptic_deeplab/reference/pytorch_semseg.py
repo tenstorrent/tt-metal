@@ -26,12 +26,12 @@ class ShapeSpec:
     stride: Optional[int] = None
 
 
+# This is shared with InsEmbHead
 class DeepLabV3PlusHead(nn.Module):
     """
     A semantic segmentation head described in :paper:`DeepLabV3+`.
     """
 
-    # @configurable
     def __init__(
         self,
         input_shape: Dict[str, ShapeSpec],
@@ -105,8 +105,8 @@ class DeepLabV3PlusHead(nn.Module):
             decoder_stage = nn.ModuleDict()
             feature_name = self.in_features[idx]
 
+            # Last project conv is ASPP
             if idx == len(self.in_features) - 1:
-                # ASPP module
                 if train_size is not None:
                     train_h, train_w = train_size
                     encoder_stride = in_strides[-1]
@@ -128,6 +128,7 @@ class DeepLabV3PlusHead(nn.Module):
                     dropout=aspp_dropout,
                 )
                 fuse_conv = None
+            # Other project convs are normal convs
             else:
                 project_conv = Conv2d(
                     in_channel,
@@ -235,7 +236,6 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
     A semantic segmentation head described in paper `Panoptic-DeepLab`.
     """
 
-    # @configurable
     def __init__(
         self,
         input_shape: Dict[str, ShapeSpec],

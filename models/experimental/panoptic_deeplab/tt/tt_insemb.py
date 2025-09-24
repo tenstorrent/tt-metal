@@ -18,11 +18,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
     def __init__(
         self,
-        # NOVO: Svi torch.Tensor argumenti su zamijenjeni
         parameters,
         device: ttnn.Device,
         *,
-        # Konfiguracioni parametri ostaju
         input_shape: Dict[str, ShapeSpec],
         head_channels: int,
         project_channels,
@@ -53,9 +51,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabInsEmbedHead with head_channels: {head_channels}")
 
-        # --- ISPRAVLJENO: Kreiranje slojeva sa ispravnim putanjama i provjerama ---
-
-        # --- Center Prediction Grana ---
+        # --- Center Prediction Branch ---
         # center_head_0
         # Handle both dict and object parameter formats
         center_head_params = parameters["center_head"] if isinstance(parameters, dict) else parameters.center_head
@@ -74,7 +70,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.center_head_0 = TtConv2d.create_with_height_slicing(
             ch0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        # BatchNorm is now fused into center_head_0 weights
 
         # center_head_1
         center_head1_path = center_head_params[1]
@@ -92,7 +87,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.center_head_1 = TtConv2d.create_with_height_slicing(
             ch1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        # BatchNorm is now fused into center_head_1 weights
 
         # center_predictor
         center_predictor_params = (
@@ -114,7 +108,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         )
         self.center_predictor = TtConv2d.create(cp_params, stride=(1, 1), padding=(0, 0))
 
-        # --- Offset Prediction Grana ---
+        # --- Offset Prediction Branch ---
         # offset_head_0
         offset_head_params = parameters["offset_head"] if isinstance(parameters, dict) else parameters.offset_head
         offset_head0_path = offset_head_params[0]
@@ -132,7 +126,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.offset_head_0 = TtConv2d.create_with_height_slicing(
             oh0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        # BatchNorm is now fused into offset_head_0 weights
 
         # offset_head_1
         offset_head1_path = offset_head_params[1]
@@ -150,7 +143,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.offset_head_1 = TtConv2d.create_with_height_slicing(
             oh1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        # BatchNorm is now fused into offset_head_1 weights
 
         # offset_predictor
         offset_predictor_params = (
@@ -172,7 +164,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         )
         self.offset_predictor = TtConv2d.create(op_params, stride=(1, 1), padding=(0, 0))
 
-        # --- Inicijalizacija Upsample operacija ---
         self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
         logger.debug("TtPanopticDeepLabInsEmbedHead initialization complete")
 
@@ -197,21 +188,17 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
-        # --- 2. Center Prediction Branch ---
+        # --- Center Prediction Branch ---
         center_y = self.center_head_0(y)
-        # BatchNorm is now fused into center_head_0 weights
         center_y = self.activation(center_y)
         center_y = self.center_head_1(center_y)
-        # BatchNorm is now fused into center_head_1 weights
         center_y = self.activation(center_y)
         center_logits = self.center_predictor(center_y)
 
-        # --- 3. Offset Prediction Branch ---
+        # --- Offset Prediction Branch ---
         offset_y = self.offset_head_0(y)
-        # BatchNorm is now fused into offset_head_0 weights
         offset_y = self.activation(offset_y)
         offset_y = self.offset_head_1(offset_y)
-        # BatchNorm is now fused into offset_head_1 weights
         offset_y = self.activation(offset_y)
         offset_logits = self.offset_predictor(offset_y)
 

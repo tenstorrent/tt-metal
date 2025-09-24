@@ -104,7 +104,6 @@ class ASPP(nn.Module):
         self.dropout = dropout
         use_bias = norm == ""
 
-        # --- NOVO: Kreiramo slojeve kao standardne atribute modula ---
         self.convs = nn.ModuleList()
 
         # conv 1x1
@@ -119,7 +118,7 @@ class ASPP(nn.Module):
             )
         )
 
-        # Dilations convs
+        # Dilation convs
         for dilation in dilations:
             self.convs.append(
                 Conv2d(
@@ -134,7 +133,7 @@ class ASPP(nn.Module):
                 )
             )
 
-        # Image pooling branch - add to convs as index 4 to match pkl structure
+        # Image pooling branch
         pooling_branch = nn.Sequential(
             nn.AvgPool2d(kernel_size=pool_kernel_size, stride=1),
             Conv2d(

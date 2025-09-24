@@ -23,6 +23,7 @@ PDL_L1_SMALL_SIZE = 37 * 1024  # Minimum L1 small size for Panoptic DeepLab
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 def test_ttnn_insemb(device, model_location_generator):
     """Test instance embedding head using the full model with real weights."""
+
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
@@ -31,7 +32,7 @@ def test_ttnn_insemb(device, model_location_generator):
 
     # Determine weights path based on environment
     if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path (old method)
+        # Use local path
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:

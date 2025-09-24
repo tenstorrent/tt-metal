@@ -95,7 +95,7 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
 
     # Determine weights path based on environment
     if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path (old method)
+        # Use local path
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:
@@ -145,6 +145,7 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
 @pytest.mark.parametrize("layer_name", ["res2", "res3", "res4", "res5"])
 def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_seeds, model_location_generator):
     """Test ResNet individual layer PCC between PyTorch and TTNN implementations."""
+
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
@@ -153,7 +154,7 @@ def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_s
 
     # Determine weights path based on environment
     if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path (old method)
+        # Use local path
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:
@@ -253,7 +254,7 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
 
     # Determine weights path based on environment
     if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path (old method)
+        # Use local path
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:
