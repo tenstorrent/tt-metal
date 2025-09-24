@@ -102,8 +102,8 @@ runs:
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
-          -e HOME=/tmp/home
-          -e PIP_CACHE_DIR=/tmp/home/.cache/pip
+          -e HOME=${{ github.workspace }}
+          -e PIP_CACHE_DIR=${{ github.workspace }}/.cache/pip
           -e GITHUB_ACTIONS=true
           -e CI=true
           -e GITHUB_REPOSITORY=${{ github.repository }}
@@ -138,9 +138,9 @@ runs:
 
           echo "=== DEBUG: Setting up home directory ==="
           # Create and set up home directory with proper ownership
-          mkdir -p /tmp/home/.cache/pip
-          echo "Created /tmp/home/.cache/pip"
-          ls -la /tmp/home/
+          mkdir -p $PIP_CACHE_DIR
+          echo "Created $PIP_CACHE_DIR"
+          ls -la $HOME
 
           echo "=== DEBUG: Checking workspace ownership ==="
           # Fix ownership of workspace files if needed
@@ -172,7 +172,7 @@ runs:
 
             echo "=== DEBUG: Trying pip install with isolation ==="
             # Try to install with isolation from current directory
-            cd /tmp/home
+            cd $HOME
             pip3 install --isolated --no-deps "${{ github.workspace }}/$WHEEL_FILENAME"
             cd "${{ github.workspace }}"
 
