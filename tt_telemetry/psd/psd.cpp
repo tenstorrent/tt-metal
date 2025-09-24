@@ -104,9 +104,18 @@ struct EthEndpoint {
 PSD::PSD(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    bool run_discovery,
-    bool using_mock_cluster_desc) :
-    cluster_(cluster), distributed_context_(distributed_context), using_mock_cluster_desc_(using_mock_cluster_desc) {
+    const llrt::RunTimeOptions& rtoptions,
+    bool run_discovery) :
+    PSD(cluster, distributed_context, rtoptions.get_mock_enabled(), run_discovery) {}
+
+PSD::PSD(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    bool using_mock_cluster_descriptor,
+    bool run_discovery) :
+    cluster_(cluster),
+    distributed_context_(distributed_context),
+    using_mock_cluster_desc_(using_mock_cluster_descriptor) {
     if (run_discovery) {
         this->run_discovery();
     }
@@ -357,8 +366,8 @@ void PSD::exchange_metadata(bool issue_gather) {
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
-            auto peer_desc = deserialize_physical_system_descriptor_from_bytes(
-                cluster_, distributed_context_, serialized_peer_desc, using_mock_cluster_desc_);
+            auto peer_desc =
+                deserialize_physical_system_descriptor_from_bytes(cluster_, distributed_context_, serialized_peer_desc);
             this->merge(std::move(peer_desc));
         }
     }
