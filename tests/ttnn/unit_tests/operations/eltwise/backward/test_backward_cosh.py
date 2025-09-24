@@ -9,7 +9,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     compare_pcc,
 )
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
