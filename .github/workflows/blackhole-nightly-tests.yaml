@@ -89,7 +89,7 @@ jobs:
             runner-label: BH-LLMBox
           - name: DeskBox ttnn stress tests
             runner-label: BH-DeskBox
-          - name: LoudBox unit tests
+          - name: LoudBox ttnn stress tests
             runner-label: BH-LoudBox
     with:
       arch: blackhole
