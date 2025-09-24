@@ -10,7 +10,7 @@ from models.demos.yolov11.tt.ttnn_yolov11_c3k import TtnnC3K
 
 
 def p(x, a="x"):
-    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  shape: {x.shape,x.padded_shape}")
     print(f"{a}'s  layout: {x.layout}")
     print(f"{a}'s  dtype: {x.dtype}")
     print(f"{a}'s config: {x.memory_config()}")
@@ -41,10 +41,17 @@ class TtnnC3k2:
             self.c3k = TtnnC3K(device, parameter[0], conv_pt.m[0])
 
     def __call__(self, device, x, use_shard_concat=True, tile_shape=32):
-        print("c3k2 wt bias for cv1", self.cv1_a.conv.weight.shape, self.cv1_a.conv.bias.shape)
         cv1_a = self.cv1_a(device, x)
-        cv1_b = self.cv1_b(device, x)
-        print("outputs are", cv1_a.shape, cv1_b.shape)
+        p(cv1_a, "cv1_a out is")
+        print("cv1_a out is", cv1_a.shape, cv1_a.memory_config())
+        if x.shape[2] == 400 and x.shape[-1] == 384:
+            print("spcl case true is triggered")
+            spcl_case = True
+        else:
+            spcl_case = False
+        cv1_b = self.cv1_b(device, x, output_rm_needed=False, spcl_case=spcl_case)
+        p(cv1_b, "cv1_b out is")
+        print("cv1_b out is", cv1_b.shape, cv1_b.memory_config())
         # p(cv1_a, "c3k2 cv1_a")
         # p(cv1_b, "c3k2 cv1_b")
         # x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
@@ -56,7 +63,7 @@ class TtnnC3k2:
             y3 = self.k(device, cv1_b)
         else:
             y3 = self.c3k(device, cv1_b)
-        print("bott out config", y3.memory_config())
+        p(y3, "y3 out is ")
         if cv1_b.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             cv1_b = ttnn.to_layout(cv1_b, ttnn.ROW_MAJOR_LAYOUT)
         if cv1_a.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
@@ -74,8 +81,8 @@ class TtnnC3k2:
             cv1_b = ttnn.sharded_to_interleaved(cv1_b, ttnn.L1_MEMORY_CONFIG)
             y3 = ttnn.sharded_to_interleaved(y3, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.concat((cv1_a, cv1_b, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        p(x, "concat out is")
+        # p(x, "concat out is")
 
-        x = self.cv2(device, x)
+        x = self.cv2(device, x, output_rm_needed=False)
         deallocate_tensors(cv1_a, cv1_b, y3)
         return x

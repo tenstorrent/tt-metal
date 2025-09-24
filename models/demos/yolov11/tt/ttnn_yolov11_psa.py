@@ -14,6 +14,13 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape,x.padded_shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 class TtnnPSABlock:
     def __init__(self, device, parameter, conv_pt):
         self.attn = TtnnAttention(device=device, parameter=parameter.attn, conv_pt=conv_pt.attn)
@@ -21,6 +28,9 @@ class TtnnPSABlock:
         self.ffn_conv2 = TtnnConv(device, parameter.ffn[1], conv_pt.ffn[1], enable_act=False)
 
     def __call__(self, device, x):
+        p(x, "before slice in psa")
+        # x = x[:,:,:400,:]
+        p(x, "after slice in psa")
         x1 = x
         if use_signpost:
             signpost(header="attn blckkk")
