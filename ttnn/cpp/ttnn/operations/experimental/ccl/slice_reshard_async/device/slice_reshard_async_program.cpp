@@ -97,20 +97,6 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     uint32_t outer_dims_to_forward =
         is_last_device ? 0 : std::max((int32_t)global_input_outer_dim_end - forward_device_output_start + 1, 0);
 
-    /****TODO BARRIER SEMAPHORE****/
-    // auto [unicast_forward_args, unicast_backward_args] =
-    //     ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device,
-    //     backward_device);
-    // auto [barrier_mcast_forward_args, barrier_mcast_backward_args] =
-    // ccl::get_forward_backward_line_mcast_configuration(
-    //     topology,
-    //     sender_device,
-    //     forward_device,
-    //     backward_device,
-    //     topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
-    //     topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
-    /*******/
-
     // Get worker cores
     CoreCoord core_grid(num_links * 2, 1);
     auto
@@ -138,7 +124,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
-    static constexpr auto num_packet_headers_storable = 2;
+    static constexpr auto num_packet_headers_storable = 3;
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
@@ -156,7 +142,9 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
         uint32_t num_sticks_to_read = 0;
         for (uint32_t direction = 0; direction < num_directions; direction++) {
             CoreCoord core = {link * num_directions + direction, 0};
+            CoreCoord opposite_core = {link * num_directions + (1 - direction), 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
+            CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
             if (core_group_1.contains(core)) {
                 num_sticks_to_read = num_sticks_per_core_group_1;
             } else {
@@ -173,7 +161,6 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 page_size,
             };
             TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
-            TensorAccessorArgs(*output_buffer).append_to(reader_kernel_config.compile_args);
             auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/kernels/"
@@ -230,7 +217,11 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 num_sticks_per_outer_dim,                                        // num_sticks_per_outer_dim
                 virtual_core.x,                                                  // out_ready_sem_noc0_x
                 virtual_core.y,                                                  // out_ready_sem_noc0_y
-                final_semaphore.address()  // out_ready_sem_bank_addr (absolute address)
+                final_semaphore.address(),  // out_ready_sem_bank_addr (absolute address)
+                true,                       // use_barrier_semaphore
+                virtual_opposite_core.x,    // barrier_sem_noc0_x
+                virtual_opposite_core.y,    // barrier_sem_noc0_y
+                barrier_semaphore.address(),
             };
             if (direction) {
                 writer_rt_args.push_back(forward_device.has_value());
@@ -280,6 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
 
                     auto out_ready_semaphore = static_cast<const ttnn::SliceReshardAsync*>(operation)->final_semaphore;
+                    auto barrier_semaphore = static_cast<const ttnn::SliceReshardAsync*>(operation)->barrier_semaphore;
                     // reader
                     auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                     worker_reader_runtime_args[0] = input.buffer()->address();
@@ -290,10 +282,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                     worker_writer_runtime_args[0] = input.buffer()->address();
                     worker_writer_runtime_args[1] = output.buffer()->address();
                     worker_writer_runtime_args[14] = out_ready_semaphore.address();
-
-                    // if (barrier_semaphore.has_value()) {
-                    // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
-                    // }
+                    worker_writer_runtime_args[18] = barrier_semaphore.address();
 
                     core_idx++;
                 }
