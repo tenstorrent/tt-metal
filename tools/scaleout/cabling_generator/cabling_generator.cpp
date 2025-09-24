@@ -57,7 +57,9 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor find_node_descripto
     }
 
     auto node_type = get_node_type_from_string(node_descriptor_name);
-    return create_node_descriptor(node_type);
+    auto node_desc_wrapper = create_node_descriptor(node_type);
+    return *static_cast<const tt::scaleout_tools::cabling_generator::proto::NodeDescriptor*>(
+        node_desc_wrapper.get_internal_proto());
 }
 
 void create_port_connection(

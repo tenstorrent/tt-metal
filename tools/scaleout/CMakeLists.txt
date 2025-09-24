@@ -31,6 +31,7 @@ target_sources(
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
             node/node_types.hpp
+            node/node.hpp
     PRIVATE
         node/node.cpp
         node/node_types.cpp

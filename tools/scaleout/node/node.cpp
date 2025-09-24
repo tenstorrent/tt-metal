@@ -4,6 +4,7 @@
 
 #include "node.hpp"
 #include "node_types.hpp"
+#include "protobuf/node_config.pb.h"
 
 #include <enchantum/enchantum.hpp>
 #include <stdexcept>
@@ -47,6 +48,41 @@ get_port_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescripto
 }
 
 }  // anonymous namespace
+
+// Pimpl implementation class to hide protobuf details
+class NodeDescriptorImpl {
+public:
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor proto_;
+
+    explicit NodeDescriptorImpl(const tt::scaleout_tools::cabling_generator::proto::NodeDescriptor& proto) :
+        proto_(proto) {}
+
+    NodeDescriptorImpl(const NodeDescriptorImpl& other) = default;
+};
+
+// NodeDescriptor wrapper implementation
+NodeDescriptor::NodeDescriptor() :
+    impl_(std::make_unique<NodeDescriptorImpl>(tt::scaleout_tools::cabling_generator::proto::NodeDescriptor())) {}
+
+NodeDescriptor::~NodeDescriptor() = default;
+
+NodeDescriptor::NodeDescriptor(const NodeDescriptor& other) :
+    impl_(std::make_unique<NodeDescriptorImpl>(*other.impl_)) {}
+
+NodeDescriptor& NodeDescriptor::operator=(const NodeDescriptor& other) {
+    if (this != &other) {
+        impl_ = std::make_unique<NodeDescriptorImpl>(*other.impl_);
+    }
+    return *this;
+}
+
+NodeDescriptor::NodeDescriptor(NodeDescriptor&& other) noexcept = default;
+
+NodeDescriptor& NodeDescriptor::operator=(NodeDescriptor&& other) noexcept = default;
+
+NodeDescriptor::NodeDescriptor(std::unique_ptr<NodeDescriptorImpl> impl) : impl_(std::move(impl)) {}
+
+void* NodeDescriptor::get_internal_proto() const { return static_cast<void*>(&impl_->proto_); }
 
 // N300 Node class
 class N300T3KNode {
@@ -340,22 +376,26 @@ public:
 };
 
 // Factory function to create node descriptors by name
-tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descriptor(NodeType node_type) {
+NodeDescriptor create_node_descriptor(NodeType node_type) {
+    tt::scaleout_tools::cabling_generator::proto::NodeDescriptor proto_desc;
+
     switch (node_type) {
-        case NodeType::N300_LB: return N300LBNode::create();
-        case NodeType::N300_QB: return N300QBNode::create();
-        case NodeType::WH_GALAXY: return WHGalaxyNode::create();
-        case NodeType::WH_GALAXY_X_TORUS: return WHGalaxyXTorusNode::create();
-        case NodeType::WH_GALAXY_Y_TORUS: return WHGalaxyYTorusNode::create();
-        case NodeType::WH_GALAXY_XY_TORUS: return WHGalaxyXYTorusNode::create();
-        case NodeType::P150_QB_GLOBAL: return P150QBGlobalNode::create();
-        case NodeType::P300_QB_AMERICA: return P300QBAmericaNode::create();
-        case NodeType::BH_GALAXY: return BHGalaxyNode::create();
-        case NodeType::BH_GALAXY_X_TORUS: return BHGalaxyXTorusNode::create();
-        case NodeType::BH_GALAXY_Y_TORUS: return BHGalaxyYTorusNode::create();
-        case NodeType::BH_GALAXY_XY_TORUS: return BHGalaxyXYTorusNode::create();
+        case NodeType::N300_LB: proto_desc = N300LBNode::create(); break;
+        case NodeType::N300_QB: proto_desc = N300QBNode::create(); break;
+        case NodeType::WH_GALAXY: proto_desc = WHGalaxyNode::create(); break;
+        case NodeType::WH_GALAXY_X_TORUS: proto_desc = WHGalaxyXTorusNode::create(); break;
+        case NodeType::WH_GALAXY_Y_TORUS: proto_desc = WHGalaxyYTorusNode::create(); break;
+        case NodeType::WH_GALAXY_XY_TORUS: proto_desc = WHGalaxyXYTorusNode::create(); break;
+        case NodeType::P150_QB_GLOBAL: proto_desc = P150QBGlobalNode::create(); break;
+        case NodeType::P300_QB_AMERICA: proto_desc = P300QBAmericaNode::create(); break;
+        case NodeType::BH_GALAXY: proto_desc = BHGalaxyNode::create(); break;
+        case NodeType::BH_GALAXY_X_TORUS: proto_desc = BHGalaxyXTorusNode::create(); break;
+        case NodeType::BH_GALAXY_Y_TORUS: proto_desc = BHGalaxyYTorusNode::create(); break;
+        case NodeType::BH_GALAXY_XY_TORUS: proto_desc = BHGalaxyXYTorusNode::create(); break;
+        default: throw std::runtime_error("Unknown node type: " + std::string(enchantum::to_string(node_type)));
     }
-    throw std::runtime_error("Unknown node type: " + std::string(enchantum::to_string(node_type)));
+
+    return NodeDescriptor(std::make_unique<NodeDescriptorImpl>(proto_desc));
 }
 
 }  // namespace tt::scaleout_tools
