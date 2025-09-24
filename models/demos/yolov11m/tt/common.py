@@ -65,23 +65,20 @@ class Yolov11Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        print(f"🔍 Yolov11Conv2D [{layer_name}] - Received conv_pth type: {type(conv_pth)}")
-        print(f"🔍 Yolov11Conv2D [{layer_name}] - conv_pth has 'bias': {'bias' in conv_pth}")
-        
         if "bias" in conv_pth and conv_pth["bias"] is not None:
-            # Bias is already preprocessed in TTNN format
+            # Ensure bias is properly prepared for device operations
             self.bias = conv_pth["bias"]
-            print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded bias shape: {self.bias.shape}")
-            print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded bias range: {ttnn.to_torch(self.bias).min():.6f} to {ttnn.to_torch(self.bias).max():.6f}")
+            # Ensure bias is on device and in correct layout
+            if not self.bias.is_on_device():
+                self.bias = ttnn.to_device(self.bias, device)
         else:
             self.bias = None
-            print(f"🔍 Yolov11Conv2D [{layer_name}] - No bias loaded")
 
-        # Weight is already preprocessed in TTNN format  
+        # Ensure weight is properly prepared for device operations
         self.weight = conv_pth["weight"]
-        print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded weight shape: {self.weight.shape}")
-        print(f"🔍 Yolov11Conv2D [{layer_name}] - Loaded weight range: {ttnn.to_torch(self.weight).min():.6f} to {ttnn.to_torch(self.weight).max():.6f}")
-        print(f"🔍 Yolov11Conv2D [{layer_name}] - Initialization complete\n")
+        # Ensure weight is on device and in correct layout
+        if not self.weight.is_on_device():
+            self.weight = ttnn.to_device(self.weight, device)
 
     def __call__(self, x):
         if self.is_detect:
