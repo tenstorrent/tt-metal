@@ -425,11 +425,11 @@ if __name__ == "__main__":
     # Test images - use existing demo images
     test_images = [
         "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
-        #"./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
-        #"./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
-        #"./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
-        #"./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
-        #"./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
+        "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
+        "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
+        "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
+        "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
+        "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
     ]
 
     #pytorch_results = pytorch_obb_with_real_images(test_images)
