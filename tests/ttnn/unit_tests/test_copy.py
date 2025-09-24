@@ -10,7 +10,7 @@ import ttnn
 import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 
 
 # Test for int types

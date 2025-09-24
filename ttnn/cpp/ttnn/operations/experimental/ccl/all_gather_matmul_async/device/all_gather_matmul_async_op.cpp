@@ -247,7 +247,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     std::vector<Tensor> output_tensors;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
-        optional_input_tensors.push_back(bias.value());
+        optional_input_tensors.push_back(bias);
     } else {
         optional_input_tensors.push_back(std::nullopt);
     }

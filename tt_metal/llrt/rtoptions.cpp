@@ -385,6 +385,24 @@ void RunTimeOptions::ParseInspectorEnv() {
             inspector_settings.warn_on_write_exceptions = false;
         }
     }
+
+    const char* inspector_rpc_server_host_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_HOST");
+    if (inspector_rpc_server_host_str != nullptr) {
+        inspector_settings.rpc_server_host = std::string(inspector_rpc_server_host_str);
+    }
+
+    const char* inspector_rpc_server_port_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_PORT");
+    if (inspector_rpc_server_port_str != nullptr) {
+        inspector_settings.rpc_server_port = static_cast<uint16_t>(std::stoul(inspector_rpc_server_port_str));
+    }
+
+    const char* inspector_rpc_str = getenv("TT_METAL_INSPECTOR_RPC");
+    if (inspector_rpc_str != nullptr) {
+        inspector_settings.rpc_server_enabled = true;
+        if (std::strncmp(inspector_rpc_str, "0", 1) == 0) {
+            inspector_settings.rpc_server_enabled = false;
+        }
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
