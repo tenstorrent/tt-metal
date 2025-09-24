@@ -16,7 +16,8 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_dims = get_compile_time_arg_val(4);
     constexpr uint32_t pad_value = get_compile_time_arg_val(5);
-    const uint32_t element_size = get_compile_time_arg_val(6);
+    constexpr uint32_t element_size = get_compile_time_arg_val(6);
+    constexpr uint32_t num_elements = page_size / element_size;
 
     uint32_t rt_ind = 0;
     const uint32_t output_addr = get_arg_val<uint32_t>(rt_ind++);
@@ -36,7 +37,7 @@ void kernel_main() {
     uint32_t l1_write_addr = get_write_ptr(pad_val_cb_id);
     volatile tt_l1_ptr uint8_t* pad_val_page = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
     const volatile tt_l1_ptr uint8_t* pad_val = reinterpret_cast<const volatile tt_l1_ptr uint8_t*>(&pad_value);
-    for (uint32_t i = 0; i < page_size / element_size; i++) {
+    for (uint32_t i = 0; i < num_elements; i++) {
         for (uint32_t b = 0; b < element_size; b++) {
             pad_val_page[i * element_size + b] = pad_val[b];
         }

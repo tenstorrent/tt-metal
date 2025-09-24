@@ -1466,7 +1466,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
 
 static inline int advance_tensor_index(std::vector<uint32_t>& idx, ttnn::Shape& dims, uint32_t ndims) {
     // increment least-significant dim first
-    for (uint32_t d = ndims; d-- > 0;) {
+    for (int32_t d = ndims - 1; d >= 0; d--) {
         uint32_t v = idx[d] + 1;
         if (v < dims[d]) {
             idx[d] = v;

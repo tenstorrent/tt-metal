@@ -7,7 +7,7 @@
 static inline int advance_tensor_index(
     volatile tt_l1_ptr uint32_t* idx, volatile tt_l1_ptr uint32_t* dims, uint32_t ndims) {
     // increment least-significant dim first
-    for (uint32_t d = ndims; d-- > 0;) {
+    for (int32_t d = ndims - 1; d >= 0; d--) {
         uint32_t v = idx[d] + 1;
         if (v < dims[d]) {
             idx[d] = v;
