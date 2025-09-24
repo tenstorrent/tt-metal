@@ -840,7 +840,9 @@ class TransformerDecoderLayer(nn.Module):
         # print("TransformerDecoderLayer forward pre is called")
         tgt2 = self.norm1(tgt)
         q = k = self.with_pos_embed(tgt2, query_pos)
-        tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask)[0]
+        # q=k=v=tgt2=tgt
+        tgt2, _ = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask)
+        # return tgt2, None
         tgt = tgt + self.dropout1(tgt2)
         tgt2 = self.norm2(tgt)
         tgt2, attn = self.multihead_attn(
