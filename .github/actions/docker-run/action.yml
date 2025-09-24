@@ -95,8 +95,6 @@ runs:
           -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           --rm
           -v /etc/passwd:/etc/passwd:ro
-          # /etc/shadow is not needed for UID mapping; drop it to reduce surprises
-          # -v /etc/shadow:/etc/shadow:ro
           -v ${{ github.workspace }}:${{ github.workspace }}:rw
           --net=host
           --log-driver local
@@ -104,7 +102,6 @@ runs:
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
-          # give tools a writable HOME outside the bind mount
           -e HOME=/tmp/home
           -e GITHUB_ACTIONS=true
           -e CI=true
