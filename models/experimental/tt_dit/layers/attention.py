@@ -288,6 +288,10 @@ class Attention(Module):
                 ccl_core_grid_offset=(0, sdpa_worker_grid[1]),
             )
         else:
+            assert spatial_sequence_length == spatial.shape[1], (
+                "spatial sequence must not be padded without sequence parallelism"
+            )
+
             spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
                 q,
                 k,

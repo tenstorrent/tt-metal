@@ -311,17 +311,62 @@ def _convert_ada_norm(state: dict[str, torch.Tensor], prefix: str, *, pre_only: 
         state[f"{prefix}.bias"] = torch.concat([bs[1], bs[0], bs[2] + 1, bs[4], bs[3] - 1, bs[5]])
 
 
+def convert_motif_attention_state(
+    state: dict[str, torch.Tensor],
+    *,
+    prefix: str = "",
+    is_last_block: bool,
+    x_weight: torch.Tensor,
+    x_bias: torch.Tensor,
+    c_weight: torch.Tensor,
+    c_bias: torch.Tensor,
+) -> None:
+    renames = {
+        "o_proj.weight": "to_out.0.weight",
+        "add_o_proj.weight": "to_add_out.weight",
+        "q_norm_x.weight": "norm_q.weight",
+        "k_norm_x.weight": "norm_k.weight",
+        "q_norm_c.weight": "norm_added_q.weight",
+        "k_norm_c.weight": "norm_added_k.weight",
+        "q_scale": "context_head_factors",
+    }
+
+    for src, dst in renames.items():
+        state[f"{prefix}{dst}"] = state.pop(f"{prefix}{src}")
+
+    q_weight = state.pop(f"{prefix}q_proj.weight")
+    state[f"{prefix}to_q.weight"] = q_weight @ x_weight
+    state[f"{prefix}to_q.bias"] = q_weight @ x_bias
+    k_weight = state.pop(f"{prefix}k_proj.weight")
+    state[f"{prefix}to_k.weight"] = k_weight @ x_weight
+    state[f"{prefix}to_k.bias"] = k_weight @ x_bias
+    v_weight = state.pop(f"{prefix}v_proj.weight")
+    state[f"{prefix}to_v.weight"] = v_weight @ x_weight
+    state[f"{prefix}to_v.bias"] = v_weight @ x_bias
+
+    add_q_weight = state.pop(f"{prefix}add_q_proj.weight")
+    state[f"{prefix}add_q_proj.weight"] = add_q_weight @ c_weight
+    state[f"{prefix}add_q_proj.bias"] = add_q_weight @ c_bias
+    add_k_weight = state.pop(f"{prefix}add_k_proj.weight")
+    state[f"{prefix}add_k_proj.weight"] = add_k_weight @ c_weight
+    state[f"{prefix}add_k_proj.bias"] = add_k_weight @ c_bias
+    add_v_weight = state.pop(f"{prefix}add_v_proj.weight")
+    state[f"{prefix}add_v_proj.weight"] = add_v_weight @ c_weight
+    state[f"{prefix}add_v_proj.bias"] = add_v_weight @ c_bias
+
+    state[f"{prefix}to_out.0.bias"] = torch.zeros_like(state[f"{prefix}to_out.0.weight"][0])
+    state[f"{prefix}to_add_out.bias"] = torch.zeros_like(state[f"{prefix}to_add_out.weight"][0])
+
+    # Unused since we can set context_pre_only=True in the last block.
+    if is_last_block:
+        del state[f"{prefix}to_add_out.weight"]
+        del state[f"{prefix}to_add_out.bias"]
+
+
 def convert_motif_transformer_block_state(
     state: dict[str, torch.Tensor], *, prefix: str = "", is_last_block: bool
 ) -> None:
     renames = {
-        "attn.o_proj.weight": "attn.to_out.0.weight",
-        "attn.add_o_proj.weight": "attn.to_add_out.weight",
-        "attn.q_norm_x.weight": "attn.norm_q.weight",
-        "attn.k_norm_x.weight": "attn.norm_k.weight",
-        "attn.q_norm_c.weight": "attn.norm_added_q.weight",
-        "attn.k_norm_c.weight": "attn.norm_added_k.weight",
-        "attn.q_scale": "attn.context_head_factors",
         "affine_params_c.projection.weight": "norm1_context.linear.weight",
         "affine_params_c.projection.bias": "norm1_context.linear.bias",
         "affine_params_x.projection.weight": "norm1.linear.weight",
@@ -341,40 +386,24 @@ def convert_motif_transformer_block_state(
 
     x_weight = state.pop(f"{prefix}linear_1_x.weight")
     x_bias = state.pop(f"{prefix}linear_1_x.bias")
-
-    q_weight = state.pop(f"{prefix}attn.q_proj.weight")
-    state[f"{prefix}attn.to_q.weight"] = q_weight @ x_weight
-    state[f"{prefix}attn.to_q.bias"] = q_weight @ x_bias
-    k_weight = state.pop(f"{prefix}attn.k_proj.weight")
-    state[f"{prefix}attn.to_k.weight"] = k_weight @ x_weight
-    state[f"{prefix}attn.to_k.bias"] = k_weight @ x_bias
-    v_weight = state.pop(f"{prefix}attn.v_proj.weight")
-    state[f"{prefix}attn.to_v.weight"] = v_weight @ x_weight
-    state[f"{prefix}attn.to_v.bias"] = v_weight @ x_bias
-
     c_weight = state.pop(f"{prefix}linear_1_c.weight")
     c_bias = state.pop(f"{prefix}linear_1_c.bias")
 
-    add_q_weight = state.pop(f"{prefix}attn.add_q_proj.weight")
-    state[f"{prefix}attn.add_q_proj.weight"] = add_q_weight @ c_weight
-    state[f"{prefix}attn.add_q_proj.bias"] = add_q_weight @ c_bias
-    add_k_weight = state.pop(f"{prefix}attn.add_k_proj.weight")
-    state[f"{prefix}attn.add_k_proj.weight"] = add_k_weight @ c_weight
-    state[f"{prefix}attn.add_k_proj.bias"] = add_k_weight @ c_bias
-    add_v_weight = state.pop(f"{prefix}attn.add_v_proj.weight")
-    state[f"{prefix}attn.add_v_proj.weight"] = add_v_weight @ c_weight
-    state[f"{prefix}attn.add_v_proj.bias"] = add_v_weight @ c_bias
-
-    state[f"{prefix}attn.to_out.0.bias"] = torch.zeros_like(state[f"{prefix}attn.to_out.0.weight"][0])
-    state[f"{prefix}attn.to_add_out.bias"] = torch.zeros_like(state[f"{prefix}attn.to_add_out.weight"][0])
+    convert_motif_attention_state(
+        state,
+        prefix=f"{prefix}attn",
+        x_weight=x_weight,
+        x_bias=x_bias,
+        c_weight=c_weight,
+        c_bias=c_bias,
+        is_last_block=is_last_block,
+    )
 
     _convert_ada_norm(state, f"{prefix}norm1.linear", pre_only=False)
     _convert_ada_norm(state, f"{prefix}norm1_context.linear", pre_only=is_last_block)
 
     # Unused since we can set context_pre_only=True in the last block.
     if is_last_block:
-        del state[f"{prefix}attn.to_add_out.weight"]
-        del state[f"{prefix}attn.to_add_out.bias"]
         del state[f"{prefix}ff_context.net.0.proj.weight"]
         del state[f"{prefix}ff_context.net.0.proj.bias"]
         del state[f"{prefix}ff_context.net.2.weight"]
