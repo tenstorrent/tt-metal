@@ -8,7 +8,7 @@ import ttnn
 
 
 def prepare_conv_weights_and_bias_for_device(
-    weight_tensor, bias_tensor, x, layer_params, device, conv_config, compute_config
+    weight_tensor, bias_tensor, x, layer_params, device, conv_config, compute_config, force_preparation=False
 ):
     """
     Utility function to properly prepare conv2d weights and bias tensors for device operations.
@@ -22,18 +22,28 @@ def prepare_conv_weights_and_bias_for_device(
         device: Target device
         conv_config: Conv2D configuration
         compute_config: Compute configuration
+        force_preparation: If True, always prepare even if tensors are on device
     
     Returns:
         Tuple of (prepared_weight, prepared_bias) ready for conv2d
     """
+    # Optimization: If tensors are already on device and we're not forcing preparation,
+    # assume they're properly prepared (this skips the expensive host/device transfers)
+    if not force_preparation and weight_tensor.storage_type() == ttnn.StorageType.DEVICE:
+        if bias_tensor is None or bias_tensor.storage_type() == ttnn.StorageType.DEVICE:
+            print("[DEBUG] Tensors already on device - skipping preparation")
+            return weight_tensor, bias_tensor
+    
+    print("[DEBUG] Performing full tensor preparation with host/device transfers")
+    
     # Move tensors to host for preparation if they're on device
     if weight_tensor.storage_type() == ttnn.StorageType.DEVICE:
-        weight_host = ttnn.to_cpu(weight_tensor)
+        weight_host = weight_tensor.cpu()
     else:
         weight_host = weight_tensor
     
     if bias_tensor is not None and bias_tensor.storage_type() == ttnn.StorageType.DEVICE:
-        bias_host = ttnn.to_cpu(bias_tensor)
+        bias_host = bias_tensor.cpu()
     else:
         bias_host = bias_tensor
     
@@ -204,8 +214,10 @@ class Yolov11Conv2D:
             }
             
             # Use utility function to prepare both weight and bias
+            # Try optimized path first (skip preparation if tensors are already on device)
             self.weight, self.bias = prepare_conv_weights_and_bias_for_device(
-                self.weight, self.bias, x, layer_params, self.device, self.conv_config, self.compute_config
+                self.weight, self.bias, x, layer_params, self.device, self.conv_config, self.compute_config, 
+                force_preparation=False  # Try optimized path first
             )
             
             self.tensors_prepared = True
