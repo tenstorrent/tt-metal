@@ -120,7 +120,7 @@ def main():
             sys.exit(1)
     elif args.min_p50_GB_s is not None:
         last_p50 = float(rows[-1]["p50_GB_s"])
-        if last_p50 < args.min_p50_GB_ss:
+        if last_p50 < args.min_p50_GB_s:
             sys.exit(f"FAIL: p50_GB_s={last_p50} < min={args.min_p50_GB_s}")
         print(f"PASS: p50_GB_s={last_p50} ≥ min={args.min_p50_GB_s}")
     else:
