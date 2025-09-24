@@ -263,7 +263,7 @@ jobs:
       - name: Run multimodal benchmark
         if: ${{ matrix.test-group.multimodal }}
         run: |
-          python3 benchmarks/benchmark_serving.py \
+          python3 vllm/benchmarks/benchmark_serving.py \
             --backend openai-chat \
             --endpoint /v1/chat/completions \
             --model ${{ matrix.test-group.model }} \
