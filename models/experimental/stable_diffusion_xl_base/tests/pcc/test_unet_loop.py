@@ -309,6 +309,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
         guidance_scale=guidance_scale,
         extra_step_kwargs=extra_step_kwargs,
         tid=None,
+        compile_run=True,
     )
 
     ttnn.synchronize_device(ttnn_device)
@@ -340,6 +341,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
                 guidance_scale=guidance_scale,
                 extra_step_kwargs=extra_step_kwargs,
                 tid=tid,
+                compile_run=True,
             )
             latents = run_torch_denoising(
                 latents=latents,
@@ -367,7 +369,8 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
             pcc_per_iter.append(float(pcc_message))
 
         tt_scheduler.set_step_index(0)
-    ttnn.release_trace(ttnn_device, tid)
+    if tid is not None:
+        ttnn.release_trace(ttnn_device, tid)
     if not is_ci_env:
         plt.plot(pcc_per_iter, marker="o")
         plt.title("PCC per iteration")
