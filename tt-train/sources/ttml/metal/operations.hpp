@@ -37,4 +37,7 @@ constexpr auto profiler_no_op =
 constexpr auto silu_bw =
     ttnn::register_operation<"ttml::metal::silu_bw", ttml::metal::ops::silu_bw::SiLUBackwardOperation>();
 
+constexpr auto sampling_bw =
+    ttnn::register_operation<"ttml::metal::sampling_bw", ttml::metal::ops::sampling_bw::SamplingBackwardOperation>();
+
 }  // namespace ttml::metal
