@@ -19,7 +19,9 @@ def test_ttnn_multihead_attention_vs_torch(device, batch_size, seq_len, d_model,
     """Test TTNN MultiheadAttention against PyTorch reference implementation"""
 
     # Create PyTorch reference model
-    torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=True, bias=True).eval()
+    # torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead).eval()
+    torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=False).eval()
+    # torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=True, bias=True).eval()
 
     # Create TTNN model
     ttnn_mha = TTNNMultiheadAttention(d_model, nhead, device)
@@ -27,32 +29,57 @@ def test_ttnn_multihead_attention_vs_torch(device, batch_size, seq_len, d_model,
     # Extract and convert PyTorch weights to TTNN format
     with torch.no_grad():
         # Get PyTorch weights
-        torch_qkv_weight = torch.cat(
-            [
-                torch_mha.in_proj_weight[:d_model],  # query
-                torch_mha.in_proj_weight[d_model : 2 * d_model],  # key
-                torch_mha.in_proj_weight[2 * d_model :],  # value
-            ],
-            dim=0,
-        )
-        torch_qkv_bias = torch.cat(
-            [
-                torch_mha.in_proj_bias[:d_model],  # query
-                torch_mha.in_proj_bias[d_model : 2 * d_model],  # key
-                torch_mha.in_proj_bias[2 * d_model :],  # value
-            ],
-            dim=0,
-        )
+
+        # torch_qkv_weight = torch.cat(
+        #     [
+        #         torch_mha.in_proj_weight[:d_model],  # query
+        #         torch_mha.in_proj_weight[d_model : 2 * d_model],  # key
+        #         torch_mha.in_proj_weight[2 * d_model :],  # value
+        #     ],
+        #     dim=0,
+        # )
+        # torch_qkv_bias = torch.cat(
+        #     [
+        #         torch_mha.in_proj_bias[:d_model],  # query
+        #         torch_mha.in_proj_bias[d_model : 2 * d_model],  # key
+        #         torch_mha.in_proj_bias[2 * d_model :],  # value
+        #     ],
+        #     dim=0,
+        # )
 
         # Convert to TTNN tensors
-        ttnn_mha.qkv_weight = ttnn.from_torch(
-            torch_qkv_weight.T,  # Transpose for linear layer
+        ttnn_mha.q_weight = ttnn.from_torch(
+            torch_mha.in_proj_weight[:d_model].T,  # Transpose for linear layer
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
-        ttnn_mha.qkv_bias = ttnn.from_torch(
-            torch_qkv_bias.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        ttnn_mha.k_weight = ttnn.from_torch(
+            torch_mha.in_proj_weight[d_model : 2 * d_model].T,  # Transpose for linear layer
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.v_weight = ttnn.from_torch(
+            torch_mha.in_proj_weight[2 * d_model :].T,  # Transpose for linear layer
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.q_bias = ttnn.from_torch(
+            torch_mha.in_proj_bias[:d_model].reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        ttnn_mha.k_bias = ttnn.from_torch(
+            torch_mha.in_proj_bias[d_model : 2 * d_model].reshape(1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.v_bias = ttnn.from_torch(
+            torch_mha.in_proj_bias[2 * d_model :].reshape(1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
         ttnn_mha.out_weight = ttnn.from_torch(
             torch_mha.out_proj.weight.T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
@@ -69,10 +96,18 @@ def test_ttnn_multihead_attention_vs_torch(device, batch_size, seq_len, d_model,
         torch_output, _ = torch_mha(torch_input, torch_input, torch_input)
 
     # TTNN forward pass
-    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(
+        torch_input.permute(1, 0, 2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    print(f"{ttnn_input.shape=}")
+    print(f"{torch_output.shape=}")
 
     ttnn_output = ttnn_mha(ttnn_input, ttnn_input, ttnn_input)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
+    ttnn_output_torch = torch.permute(ttnn_output_torch, (1, 0, 2))
+
+    print(f"{ttnn_output_torch.shape=}")
 
     # Calculate and log PCC before assertion
     passing, pcc_message = comp_pcc(torch_output, ttnn_output_torch, 0.99)
@@ -101,6 +136,8 @@ def create_transformer_decoder_layer_preprocessor(device, weight_dtype=ttnn.bflo
                 qkv_weight = torch_model.self_attn.in_proj_weight
                 d_model = qkv_weight.shape[1]
                 q_weight, k_weight, v_weight = qkv_weight.chunk(3, dim=0)
+                qkv_bias = torch_model.self_attn.in_proj_bias
+                q_bias, k_bias, v_bias = qkv_bias.chunk(3, dim=0)
 
                 parameters["self_attn"]["q_weight"] = ttnn.from_torch(
                     q_weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
@@ -111,11 +148,21 @@ def create_transformer_decoder_layer_preprocessor(device, weight_dtype=ttnn.bflo
                 parameters["self_attn"]["v_weight"] = ttnn.from_torch(
                     v_weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
                 )
+                parameters["self_attn"]["q_bias"] = ttnn.from_torch(
+                    q_bias.reshape(1, -1), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
+                )
+                parameters["self_attn"]["k_bias"] = ttnn.from_torch(
+                    k_bias.reshape(1, -1), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
+                )
+                parameters["self_attn"]["v_bias"] = ttnn.from_torch(
+                    v_bias.reshape(1, -1), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
+                )
 
             if hasattr(torch_model.self_attn, "out_proj"):
                 parameters["self_attn"]["out_weight"] = ttnn.from_torch(
                     torch_model.self_attn.out_proj.weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
                 )
+                parameters["self_attn"]["out_bias"] = None
                 if torch_model.self_attn.out_proj.bias is not None:
                     parameters["self_attn"]["out_bias"] = ttnn.from_torch(
                         torch_model.self_attn.out_proj.bias.reshape(1, -1),
@@ -213,15 +260,17 @@ def test_transformer_decoder_layer_inference(
     dim_feedforward = d_model * 4
 
     # Initialize reference model
-    reference_model = TransformerDecoderLayer(d_model, nhead, dim_feedforward, normalize_before).eval()
+    reference_model = TransformerDecoderLayer(
+        d_model, nhead, dim_feedforward, dropout=0.0, normalize_before=normalize_before
+    ).eval()
 
     # Create test inputs with consistent dimensions
-    tgt_input = torch.randn(batch_size, seq_len, d_model, dtype=torch.float32)
-    memory_input = torch.randn(batch_size, seq_len, d_model, dtype=torch.float32)  # Same seq_len as tgt
+    tgt_input = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
+    memory_input = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)  # Same seq_len as tgt
 
     # Create proper positional embeddings
-    query_pos = torch.randn(batch_size, seq_len, d_model, dtype=torch.float32)
-    pos = torch.randn(batch_size, seq_len, d_model, dtype=torch.float32)  # Match memory_input shape
+    query_pos = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
+    pos = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)  # Match memory_input shape
 
     # Get reference output with explicit None masks
     with torch.no_grad():
@@ -249,34 +298,36 @@ def test_transformer_decoder_layer_inference(
         parameters=parameters,  # Pass preprocessed weights
     )
 
+    # print(f"{parameters=}")
+
     # Load weights from reference model to TTNN model
     # (In practice, this would be done through state_dict loading)
     state_dict = reference_model.state_dict()
 
     # Convert inputs to TTNN tensors
     tt_tgt = ttnn.from_torch(
-        tgt_input,
+        tgt_input.permute(1, 0, 2),
         dtype=dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_memory = ttnn.from_torch(
-        memory_input,
+        memory_input.permute(1, 0, 2),
         dtype=dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_query_pos = ttnn.from_torch(
-        query_pos,
+        query_pos.permute(1, 0, 2),
         dtype=dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_pos = ttnn.from_torch(
-        pos,
+        pos.permute(1, 0, 2),
         dtype=dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
@@ -290,6 +341,7 @@ def test_transformer_decoder_layer_inference(
         ref_output = ref_output[0]  # Get the tensor, ignore attention weights
     # Convert back to torch for comparison
     tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output_torch = torch.permute(tt_output_torch, (1, 0, 2))
 
     # Compare outputs
     passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc=0.99)
@@ -305,4 +357,4 @@ def test_transformer_decoder_layer_inference(
     else:
         logger.warning("TransformerDecoderLayer Test Failed!")
 
-    assert passing, f"PCC value is lower than 0.99. Check implementation!"
+    assert passing, f"PCC value is lower than 0.99. Check implementation! {pcc_message}"
