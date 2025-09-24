@@ -8,7 +8,6 @@ ResNet Tests for Panoptic DeepLab using real weights from model_final_bd324a.pkl
 import pytest
 import torch
 import ttnn
-import os
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from loguru import logger
 
@@ -18,7 +17,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
-from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
+from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE, get_panoptic_deeplab_weights_path
 
 
 def create_panoptic_models(device, weights_path):
@@ -91,24 +90,8 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
 
     torch.manual_seed(0)
 
-    # Determine weights path based on environment
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
-    else:
-        # Check if weights already exist in CI v2 cache first
-        cached_weights_path = (
-            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
-        )
-        if os.path.exists(cached_weights_path):
-            complete_weights_path = cached_weights_path
-        else:
-            # Use CI v2 model location generator to download
-            complete_weights_path = (
-                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-                / "model_final_bd324a.pkl"
-            )
+    # Get the weights path using the common utility function
+    complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
@@ -140,8 +123,10 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
     "height,width",
     [(512, 1024)],
 )
-@pytest.mark.parametrize("layer_name", ["res2", "res3", "res4", "res5"])
-def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_seeds, model_location_generator):
+@pytest.mark.parametrize("layer_name, expected_pcc", [("res2", 0.99), ("res3", 0.99), ("res4", 0.95), ("res5", 0.93)])
+def test_resnet_layer_pcc(
+    device, batch_size, height, width, layer_name, expected_pcc, reset_seeds, model_location_generator
+):
     """Test ResNet individual layer PCC between PyTorch and TTNN implementations."""
 
     compute_grid = device.compute_with_storage_grid_size()
@@ -150,24 +135,8 @@ def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_s
 
     torch.manual_seed(0)
 
-    # Determine weights path based on environment
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
-    else:
-        # Check if weights already exist in CI v2 cache first
-        cached_weights_path = (
-            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
-        )
-        if os.path.exists(cached_weights_path):
-            complete_weights_path = cached_weights_path
-        else:
-            # Use CI v2 model location generator to download
-            complete_weights_path = (
-                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-                / "model_final_bd324a.pkl"
-            )
+    # Get the weights path using the common utility function
+    complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
@@ -222,15 +191,7 @@ def test_resnet_layer_pcc(device, batch_size, height, width, layer_name, reset_s
 
     ttnn_output_torch = ttnn.to_torch(ttnn_layer_output).permute(0, 3, 1, 2)
 
-    # Set layer-specific PCC thresholds based on test failures
-    layer_pcc_thresholds = {
-        "res2": 0.99,  # No failure reported
-        "res3": 0.99,  # No failure reported
-        "res4": 0.95,  # Failed with 0.9525
-        "res5": 0.93,  # Failed with 0.9346
-    }
-    pcc_threshold = layer_pcc_thresholds[layer_name]
-    pcc_passed, pcc_message = assert_with_pcc(torch_layer_output, ttnn_output_torch, pcc_threshold)
+    pcc_passed, pcc_message = assert_with_pcc(torch_layer_output, ttnn_output_torch, expected_pcc)
 
     logger.info(f"ResNet {layer_name} PCC: {pcc_message}")
     assert pcc_passed, f"ResNet {layer_name} PCC test failed: {pcc_message}"
@@ -250,24 +211,8 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
 
     torch.manual_seed(0)
 
-    # Determine weights path based on environment
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
-    else:
-        # Check if weights already exist in CI v2 cache first
-        cached_weights_path = (
-            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
-        )
-        if os.path.exists(cached_weights_path):
-            complete_weights_path = cached_weights_path
-        else:
-            # Use CI v2 model location generator to download
-            complete_weights_path = (
-                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-                / "model_final_bd324a.pkl"
-            )
+    # Get the weights path using the common utility function
+    complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
 
     try:
         pytorch_model, ttnn_model = create_panoptic_models(device, complete_weights_path)
