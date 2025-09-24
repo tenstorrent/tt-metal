@@ -345,7 +345,15 @@ def run_demo_whisper_for_audio_classification_inference(
     total_inputs = num_inputs * batch_size
 
     if not label and len(input_data) < total_inputs:
-        raise ValueError("num_inputs exceeds number of audio files available in folder")
+        # Repeat inputs cyclically to match total_inputs
+        logger.info(
+            f"Only {len(input_data)} audio files available, repeating cyclically to match {total_inputs} total inputs"
+        )
+        original_input_data = input_data.copy()
+        while len(input_data) < total_inputs:
+            input_data.extend(original_input_data)
+        # Trim to exact size needed
+        input_data = input_data[:total_inputs]
 
     for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
         current_batch_size = min(batch_size, total_inputs - i)
@@ -429,7 +437,15 @@ def run_demo_whisper_for_conditional_generation_inference(
     total_inputs = num_inputs * batch_size
 
     if len(input_data) < total_inputs:
-        raise ValueError("num_inputs exceeds number of audio files available in folder")
+        # Repeat inputs cyclically to match total_inputs
+        logger.info(
+            f"Only {len(input_data)} audio files available, repeating cyclically to match {total_inputs} total inputs"
+        )
+        original_input_data = input_data.copy()
+        while len(input_data) < total_inputs:
+            input_data.extend(original_input_data)
+        # Trim to exact size needed
+        input_data = input_data[:total_inputs]
 
     total_ttft = 0
     total_decode_throughput = 0
@@ -509,6 +525,10 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, mesh_device,
     "num_inputs,batch_size_per_device",
     [(1, 1)],
 )
+@pytest.mark.parametrize(
+    "input_path",
+    (["models/demos/whisper/demo/dataset/audio_classification"]),
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
@@ -586,6 +606,10 @@ def test_demo_for_audio_classification_dataset(
     if os.getenv("CI") != "true"
     else ([1, available_devices] if available_devices != 1 else [available_devices]),
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "input_path",
+    (["models/demos/whisper/demo/dataset/conditional_generation"]),
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
