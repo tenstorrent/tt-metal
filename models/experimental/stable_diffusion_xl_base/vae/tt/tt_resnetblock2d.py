@@ -200,7 +200,7 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.silu(hidden_states)
 
-        [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [_, _]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
             in_channels=self.conv1_params["input_channels"],
@@ -277,7 +277,7 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 
-        [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [_, _]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],

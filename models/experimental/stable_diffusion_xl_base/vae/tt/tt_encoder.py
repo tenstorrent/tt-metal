@@ -106,7 +106,7 @@ class TtEncoder(LightweightModule):
         B, C, H, W = input_shape
         hidden_states = sample
 
-        [hidden_states, [H, W], [self.tt_conv_in_weights, self.tt_conv_in_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [_, _]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_in_weights,
             in_channels=self.conv_in_params["input_channels"],
@@ -182,7 +182,7 @@ class TtEncoder(LightweightModule):
 
         hidden_states = ttnn.silu(hidden_states)
 
-        [hidden_states, [H, W], [self.tt_conv_out_weights, self.tt_conv_out_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [_, _]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_out_weights,
             in_channels=self.conv_out_params["input_channels"],
