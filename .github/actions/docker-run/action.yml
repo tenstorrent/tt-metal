@@ -101,7 +101,6 @@ runs:
           --log-opt max-size=50m
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
-          -e PYTHONPATH=${{ github.workspace }}
           -e HOME=/tmp/home
           -e PIP_CACHE_DIR=/tmp/home/.cache/pip
           -e GITHUB_ACTIONS=true
@@ -173,13 +172,16 @@ runs:
             echo "=== DEBUG: Trying pip install with isolation ==="
             # Try to install with isolation from current directory
             cd /tmp/home
-            pip3 install --isolated --no-deps "${{ github.workspace }}/$WHEEL_FILENAME"
+            PYTHONPATH="" PYTHONSAFEPATH=1 python3 -P -m pip install \
+              --isolated --no-deps --no-input --disable-pip-version-check \
+              --cache-dir "$PIP_CACHE_DIR" \
+              "${{ github.workspace }}/$WHEEL_FILENAME"
             cd "${{ github.workspace }}"
 
             echo "Wheel installation completed"
           else
             echo "Skipping wheel installation"
           fi
-
+          export PYTHONPATH=${{ github.workspace }}
           echo "=== DEBUG: Running user commands ==="
           ${{ inputs.run_args }}
