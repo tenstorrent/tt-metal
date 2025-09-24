@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
