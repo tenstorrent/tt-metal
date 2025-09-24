@@ -21,6 +21,8 @@ from models.experimental.detr3d.reference.model_utils import SunrgbdDatasetConfi
 
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
 
+# from tests.ttnn.utils_for_testing import assert_with_pcc
+
 
 @pytest.mark.parametrize(
     " encoder_only, input_shapes",
