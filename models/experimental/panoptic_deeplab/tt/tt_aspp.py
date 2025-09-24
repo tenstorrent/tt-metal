@@ -92,11 +92,9 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: Any = 
 class TtASPP(nn.Module):
     def __init__(
         self,
-        # NOVO: Potpuno promijenjen __init__ potpis
         parameters,
         device: ttnn.Device,
         *,
-        # Konfiguracioni parametri ostaju
         in_channels: int,
         out_channels: int,
         dilations,
@@ -117,7 +115,6 @@ class TtASPP(nn.Module):
         self.device = device
         self.pool_kernel_size = pool_kernel_size
 
-        # --- UPDATED: Creating layers from fused parameters ---
         self.conv_branches = []
 
         # Branch 1: 1x1 convolution (BatchNorm fused into Conv)
@@ -130,7 +127,6 @@ class TtASPP(nn.Module):
             device=self.device,
         )
         conv0 = TtConv2d.create(conv0_params, stride=(1, 1), padding=(0, 0))
-        # No separate normalization - it's fused into the conv weights
         self.conv_branches.append(conv0)
 
         # Branches 2, 3, 4: 3x3 convolutions with dilations (BatchNorm fused)
@@ -147,7 +143,6 @@ class TtASPP(nn.Module):
             conv = TtConv2d.create_with_channel_slicing(
                 conv_params, stride=(1, 1), padding=(dilation, dilation), num_slices=channel_slices[i]
             )
-            # No separate normalization - it's fused into the conv weights
             self.conv_branches.append(conv)
 
         # Branch 5: Global pooling (BatchNorm fused into Conv)
@@ -159,7 +154,6 @@ class TtASPP(nn.Module):
             device=self.device,
         )
         self.pool_conv = TtConv2d.create(pool_conv_params, stride=(1, 1), padding=(0, 0))
-        # No separate normalization - it's fused into the conv weights
 
         # Final Project convolution (BatchNorm fused into Conv)
         project_conv_path = parameters["project"]
@@ -170,9 +164,7 @@ class TtASPP(nn.Module):
             device=self.device,
         )
         self.project_conv = TtConv2d.create(project_conv_params, stride=(1, 1), padding=(0, 0))
-        # No separate normalization - it's fused into the conv weights
 
-        # Inicijalizacija upsample wrappera (ostaje ista)
         self.pool_upsample = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
 
         logger.debug("TtASPP initialization complete")
@@ -194,7 +186,6 @@ class TtASPP(nn.Module):
         res = []
         for conv in self.conv_branches:
             branch_out = conv(x)
-            # BatchNorm is now fused into conv weights, so we only apply activation
             branch_out = self.activation(branch_out)
             res.append(branch_out)
         input_shape = (1, 1, N * H * W, C)
@@ -222,7 +213,6 @@ class TtASPP(nn.Module):
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
         pooled = self.pool_conv(pooled)
-        # BatchNorm is now fused into pool_conv weights, so we only apply activation
         pooled = self.activation(pooled)
 
         current_h, current_w = pooled.shape[1], pooled.shape[2]
@@ -249,7 +239,6 @@ class TtASPP(nn.Module):
         logger.debug(f"TtASPP concatenated branches, shape: {res.shape}")
 
         res = self.project_conv(res)
-        # BatchNorm is now fused into project_conv weights, so we only apply activation
         res = self.activation(res)
         logger.debug(f"TtASPP forward pass complete - output shape: {res.shape}")
         return res

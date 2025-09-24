@@ -5,6 +5,7 @@ import ttnn
 import torch
 import torch.nn as nn
 from ttnn.model_preprocessing import preprocess_model_parameters
+from loguru import logger
 
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_conv2d_wrapper import Conv2d
@@ -109,7 +110,7 @@ def fuse_conv_bn_parameters(parameters, eps=1e-5):
             if isinstance(value, dict):
                 # Check if this is a Conv+BN pattern (has both 'weight' and 'norm' keys)
                 if "weight" in value and "norm" in value:
-                    print(f"Fusing Conv+BN parameters at: {current_path}")
+                    logger.debug(f"Fusing Conv+BN parameters at: {current_path}")
 
                     # Extract conv parameters (TTNN tensors)
                     conv_weight = value["weight"]
@@ -145,7 +146,7 @@ def fuse_conv_bn_parameters(parameters, eps=1e-5):
                 for i, item in enumerate(value):
                     item_path = f"{current_path}[{i}]"
                     if isinstance(item, dict) and "weight" in item and "norm" in item:
-                        print(f"Fusing Conv+BN parameters at: {item_path}")
+                        logger.debug(f"Fusing Conv+BN parameters at: {item_path}")
 
                         # Extract conv parameters (TTNN tensors)
                         conv_weight = item["weight"]
@@ -309,8 +310,3 @@ def create_panoptic_deeplab_parameters(model: PytorchPanopticDeepLab, device):
     logger.debug(f"Generated parameter structure: {list(parameters.keys())}")
 
     return parameters
-
-
-# Main API functions:
-# 1. create_panoptic_deeplab_parameters() - Standard preprocessing
-# 2. fuse_conv_bn_parameters() - Fuse Conv+BN patterns in preprocessed parameters

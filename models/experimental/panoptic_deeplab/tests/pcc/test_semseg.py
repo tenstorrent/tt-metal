@@ -31,7 +31,7 @@ def test_ttnn_semseg(device, model_location_generator):
 
     # Determine weights path based on environment
     if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path (old method)
+        # Use local path
         current_dir = os.path.dirname(os.path.abspath(__file__))
         complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
     else:

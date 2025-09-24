@@ -66,7 +66,3 @@ def from_torch_fast(
         tensor = tensor.cpu()
 
     return tensor
-
-
-# Note: Legacy weight loading functions have been removed.
-# Use the unified preprocess_model_parameters system in model_preprocessing.py instead.

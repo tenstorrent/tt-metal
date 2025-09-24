@@ -20,11 +20,9 @@ class TtDeepLabV3PlusHead(nn.Module):
 
     def __init__(
         self,
-        # NOVO: Svi torch.Tensor argumenti su zamijenjeni sa jednim 'parameters' objektom
         parameters,
         device: ttnn.Device,
         *,
-        # Konfiguracioni parametri ostaju isti
         input_shape: Dict[str, ShapeSpec],
         project_channels: List[int],
         aspp_dilations: List[int],
@@ -91,11 +89,8 @@ class TtDeepLabV3PlusHead(nn.Module):
                 proj_out_ch = project_channels[idx]
                 fuse_out_ch = decoder_channels[idx]
 
-                # Generalna putanja do parametara za ovaj dekoder stejdž
+                # Parameter path for this decoder stage
                 base_path = parameters[feature_name]
-
-                # --- FINALNA ISPRAVKA OVDJE ---
-                # Koristimo 'in' operator za provjeru postojanja ključa
 
                 # Project Conv
                 # Handle both dict and object parameter formats
@@ -145,7 +140,6 @@ class TtDeepLabV3PlusHead(nn.Module):
                     fuse1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
                 )
 
-                # With fused Conv+BN, we no longer need separate normalization layers
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["fuse_conv_0_no_slice"] = fuse_conv_0_no_slice
                 decoder_stage["fuse_conv_0_height_slice"] = fuse_conv_0_slice
@@ -191,7 +185,6 @@ class TtDeepLabV3PlusHead(nn.Module):
             x = features[f_key]
             stage = self.decoder[f_key]
             proj_x = stage["project_conv"](x)
-            # BatchNorm is now fused into project_conv weights
             proj_x = self.activation(proj_x)
             proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"TtDeepLabV3PlusHead fusion stage {i+1} projection complete, shape: {proj_x.shape}")
@@ -231,7 +224,6 @@ class TtDeepLabV3PlusHead(nn.Module):
             else:
                 y_conv0 = stage["fuse_conv_0_height_slice"](y)
             ttnn.deallocate(y)
-            # BatchNorm is now fused into fuse_conv_0 weights
             y_act0 = self.activation(y_conv0)
             ttnn.deallocate(y_conv0)
 
@@ -241,7 +233,6 @@ class TtDeepLabV3PlusHead(nn.Module):
                 y_conv1 = stage["fuse_conv_1_no_slice"](y_act0)
             else:
                 y_conv1 = stage["fuse_conv_1_height_slice"](y_act0)
-            # BatchNorm is now fused into fuse_conv_1 weights
             y = self.activation(y_conv1)
             ttnn.deallocate(y_conv1)
 
@@ -256,11 +247,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
     def __init__(
         self,
-        # NOVO: Svi torch.Tensor argumenti su zamijenjeni
         parameters,
         device: ttnn.Device,
         *,
-        # Konfiguracioni parametri ostaju
         input_shape: Dict[str, ShapeSpec],
         head_channels: int,
         num_classes: int,
@@ -292,11 +281,6 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabSemSegHead with {num_classes} classes")
 
-        # --- ISPRAVKA OVDJE ---
-        # Putanje sada kreću od 'parameters', a ne od 'parameters.semantic_head'
-        # jer smo 'semantic_head' dio već proslijedili u super() i on nije dostupan ovdje.
-        # MORAMO da koristimo punu putanju `parameters.semantic_head...`
-
         # Head 0
         # Handle both dict and object parameter formats
         head_params = parameters["head"] if isinstance(parameters, dict) else parameters.head
@@ -313,7 +297,6 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.head_0 = TtConv2d.create_with_height_slicing(head0_params, num_slices=2, stride=(1, 1), padding=(1, 1))
-        # BatchNorm is now fused into head_0 weights
 
         # Head 1
         head1_path = head_params[1]
@@ -329,9 +312,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.head_1 = TtConv2d.create_with_height_slicing(head1_params, num_slices=2, stride=(1, 1), padding=(1, 1))
-        # BatchNorm is now fused into head_1 weights
 
-        # --- ISPRAVKA OVDJE ---
         # Predictor
         predictor_params = parameters["predictor"] if isinstance(parameters, dict) else parameters.predictor
         predictor_path = predictor_params
@@ -366,11 +347,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         y = super().layers(features)
 
         y = self.head_0(y)
-        # BatchNorm is now fused into head_0 weights
         y = self.activation(y)
 
         y = self.head_1(y)
-        # BatchNorm is now fused into head_1 weights
         y = self.activation(y)
 
         y = self.predictor(y)

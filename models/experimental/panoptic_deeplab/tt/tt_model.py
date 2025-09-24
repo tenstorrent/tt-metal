@@ -93,16 +93,7 @@ class TtPanopticDeepLab:
         # Define feature map specifications based on ResNet output
         self.input_shape = self._create_input_shape_spec()
 
-        # # Initialize or create shared weights
-        # if shared_weight_tensor_kernel1 is None:
-        #     shared_weight_tensor_kernel1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
-        # if shared_weight_tensor_kernel3 is None:
-        #     shared_weight_tensor_kernel3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
-        # if shared_weight_tensor_kernel1_output5 is None:
-        #     shared_weight_tensor_kernel1_output5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
-
-        # Create default weights if not provided
-        # Handle both dict and object parameter formats
+        # Initialize semantic segmentation head
         semantic_params = parameters["semantic_head"] if isinstance(parameters, dict) else parameters.semantic_head
         self.semantic_head = TtPanopticDeepLabSemSegHead(
             parameters=semantic_params,
@@ -121,14 +112,11 @@ class TtPanopticDeepLab:
         )
         logger.debug("Semantic segmentation head initialization complete")
 
-        # 3. Inicijalizacija Instance Head-a sa 'parameters' objektom
-        logger.debug("Initializing instance embedding head from parameters")
-        # Handle both dict and object parameter formats
+        # Initialize instance embedding head
         instance_params = parameters["instance_head"] if isinstance(parameters, dict) else parameters.instance_head
         self.instance_head = TtPanopticDeepLabInsEmbedHead(
             parameters=instance_params,
             device=device,
-            # Prosljeđujemo sve potrebne konfiguracione parametre
             input_shape=self.input_shape,
             head_channels=ins_embed_head_channels,
             project_channels=project_channels,
@@ -291,22 +279,3 @@ class TtPanopticDeepLab:
             "input_shape": {k: (v.channels, v.stride) for k, v in self.input_shape.items()},
             "train_size": self.train_size,
         }
-
-
-def create_panoptic_deeplab_model(device: ttnn.MeshDevice, num_classes: int = 19, **kwargs) -> TtPanopticDeepLab:
-    """
-    Factory function to create a Panoptic-DeepLab model with default configuration.
-
-    Args:
-        device: TTNN device
-        num_classes: Number of semantic classes
-        **kwargs: Additional model configuration parameters
-
-    Returns:
-        Configured TtPanopticDeepLab model (uses weights from R-52.pkl)
-    """
-    # DEPRICATED; USING "PARAMETERS" NOW, NO SHARED WEIGHTS!
-    return NotImplementedError(
-        "This function is deprecated. Please use the TtPanopticDeepLab constructor directly with 'parameters' argument."
-    )
-    # return TtPanopticDeepLab(device=device, num_classes=num_classes, **kwargs)

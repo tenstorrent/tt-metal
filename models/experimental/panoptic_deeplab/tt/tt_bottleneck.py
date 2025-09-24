@@ -88,9 +88,6 @@ class TtBottleneck(nn.Module):
                 padding=(0, 0),
             )
 
-        # With fused Conv+BN, we no longer need separate normalization parameters
-        # All BatchNorm operations are now fused into the Conv weights and biases
-
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")
 

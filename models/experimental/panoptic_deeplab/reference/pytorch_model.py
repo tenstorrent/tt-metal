@@ -138,7 +138,7 @@ class PytorchPanopticDeepLab(nn.Module):
         try:
             with open(weights_path, "rb") as f:
                 state_dict = pickle.load(f)
-            # Provjeravamo da li je state_dict unutar 'model' ključa, što je česta praksa
+            # Check if the state_dict is under the "model" key
             if "model" in state_dict:
                 state_dict = state_dict["model"]
 
