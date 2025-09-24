@@ -903,6 +903,7 @@ def test_reshard_diff_width(
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+@pytest.mark.timeout(120)
 def test_sd_reshard(
     device,
     input_shape,
