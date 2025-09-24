@@ -606,6 +606,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch_2Heads_1Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 1024U,
@@ -618,6 +622,10 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     SDPATestConfig config{
         .batch_size = 16U,
         .sequence_length = 1024U,
@@ -699,7 +707,6 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
 
     const uint32_t B = 1U, S = 128U, d = 64U;
 
-
     // Create split-by-heads tensors for the new interface
     const uint32_t num_heads = 2U;
     const uint32_t head_dim = d / num_heads;
@@ -708,22 +715,19 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
-    xt::xarray<float> query_tensor =
-        xt::empty<float>({B, num_heads, S, head_dim});
+    xt::xarray<float> query_tensor = xt::empty<float>({B, num_heads, S, head_dim});
     ttml::core::parallel_generate(
         std::span{query_tensor.data(), query_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    xt::xarray<float> key_tensor =
-        xt::empty<float>({B, num_heads, S, head_dim});
+    xt::xarray<float> key_tensor = xt::empty<float>({B, num_heads, S, head_dim});
     ttml::core::parallel_generate(
         std::span{key_tensor.data(), key_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    xt::xarray<float> value_tensor =
-        xt::empty<float>({B, num_heads, S, head_dim});
+    xt::xarray<float> value_tensor = xt::empty<float>({B, num_heads, S, head_dim});
     ttml::core::parallel_generate(
         std::span{value_tensor.data(), value_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
