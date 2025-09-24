@@ -275,7 +275,7 @@ Result conv_transpose2d(
         return matmul_output;
     }
     // call conv micro op
-    auto conv_output = optimized_conv_new(
+    auto conv_output = ttnn::operations::conv::conv2d::conv2d(
         halo_output,
         weight_tensor_on_device,
         bias_tensor_on_device,

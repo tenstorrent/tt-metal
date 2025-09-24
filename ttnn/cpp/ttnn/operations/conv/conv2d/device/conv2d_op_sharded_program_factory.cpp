@@ -154,7 +154,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     return config;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -169,8 +169,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool untilize_out,
     bool has_bias,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
