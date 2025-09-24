@@ -6,6 +6,13 @@ import ttnn
 from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded_concat
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape,x.padded_shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 class TtnnSPPF:
     def __init__(self, device, parameter, conv_pt):
         self.parameter = parameter
@@ -13,7 +20,9 @@ class TtnnSPPF:
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
 
     def __call__(self, device, x, use_sharded_concat=True):
-        x = self.cv1(device, x)
+        p(x, "before cv1")
+        x = self.cv1(device, x, output_rm_needed=True)
+        p(x, "after cv1")
         if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x1 = x
@@ -65,6 +74,8 @@ class TtnnSPPF:
             y = sharded_concat([x1, m1, m2, m3], to_interleaved=False)
         else:
             y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = self.cv2(device, y)
+        p(x, "before cv2")
+        x = self.cv2(device, y, output_rm_needed=True)
+        p(x, "after cv2")
         deallocate_tensors(x1, m1, m2, m3)
         return x

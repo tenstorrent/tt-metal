@@ -20,6 +20,13 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape,x.padded_shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 class TtnnYoloV11:
     def __init__(self, device, parameters):
         self.device = device
@@ -90,6 +97,7 @@ class TtnnYoloV11:
         if use_signpost:
             signpost(header="C2PSA")
         x = self.c2psa(self.device, x)
+        p(x, "c2psa end")
         if use_signpost:
             signpost(header="C2PSA end")
         x10 = x
@@ -132,24 +140,30 @@ class TtnnYoloV11:
         ttnn.deallocate(x4)
         if use_signpost:
             signpost(header="c3k2_6")
+        p(x, "c3k2_6 input")
         x = self.c3k2_6(self.device, x)
         x16 = x
         if use_signpost:
             signpost(header="conv7")
+        p(x, "conv7 input")
         x = self.conv7(self.device, x)
         x = sharded_concat_2(x, x13)
         ttnn.deallocate(x13)
         if use_signpost:
             signpost(header="c3k2_7")
+        p(x, "c3k2_7 input")
         x = self.c3k2_7(self.device, x)
         x19 = x
         if use_signpost:
             signpost(header="conv8")
+        p(x, "conv8 input")
         x = self.conv8(self.device, x)
+        p(x, "conv8 out")
         x = sharded_concat_2(x, x10)
         ttnn.deallocate(x10)
         if use_signpost:
             signpost(header="c3k2_8")
+        p(x, "c3k2_8 input")
         x = self.c3k2_8(self.device, x)
         x22 = x
         if use_signpost:

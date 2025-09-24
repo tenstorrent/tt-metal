@@ -8,7 +8,7 @@ import ttnn
 
 
 def p(x, a="x"):
-    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  shape: {x.shape,x.padded_shape}")
     print(f"{a}'s  layout: {x.layout}")
     print(f"{a}'s  dtype: {x.dtype}")
     print(f"{a}'s config: {x.memory_config()}")
@@ -63,6 +63,7 @@ class Yolov11Conv2D:
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
             enable_weights_double_buffer=True,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
@@ -75,7 +76,7 @@ class Yolov11Conv2D:
         weight = ttnn.from_device(conv_pth.weight)
         self.weight = weight
 
-    def __call__(self, x):
+    def __call__(self, x, output_rm_needed=False, spcl_case=False):
         if self.is_detect:
             input_height = int(math.sqrt(x.shape[2]))
             input_width = int(math.sqrt(x.shape[2]))
@@ -112,10 +113,24 @@ class Yolov11Conv2D:
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
         )
+        print("out h&w is", output_height, output_width)
         hw = output_height * output_width
-        if x.shape[2] != hw:
+        if spcl_case:
+            print("spcl case true is triggered in conv")
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = x[:, :, :hw, :]
+        else:
+            if x.shape[2] != hw and output_rm_needed:
+                print("it is triggereddddd")
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = x[:, :, :hw, :]
+        # if x.shape[2] != hw:
+        #     print("stol and slice is called")
+        #     x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        #     p(x,"before")
+        #     # x = ttnn.to_layout(x,ttnn.ROW_MAJOR_LAYOUT)
+        #     x = x[:, :, :hw, :]
+        #     p(x,"after")
         return x
 
 
@@ -154,10 +169,10 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
     )
     out_shard_width = 0
     for i in range(len(input_tensors)):
-        p(input_tensors[i], f"{i}th tensor for sharded concat is")
+        # p(input_tensors[i], f"{i}th tensor for sharded concat is")
         out_shard_width += input_tensors[i].shape[-1]
         input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
-    print("sharding h adn w for concat is ", shard_height, in_shard_width, shard_height, out_shard_width)
+    # print("sharding h adn w for concat is ", shard_height, in_shard_width, shard_height, out_shard_width)
     output_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, out_shard_width),
         core_grid=shard_grid,
@@ -337,8 +352,8 @@ class TtnnConv:
             split_weights=split_weights,
         )
 
-    def __call__(self, device, x):
-        x = self.conv(x)
+    def __call__(self, device, x, output_rm_needed=True, spcl_case=False):
+        x = self.conv(x, output_rm_needed, spcl_case)
         return x
 
 
