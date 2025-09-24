@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "pipeline_parallel_comm_ops.hpp"
 
 #include "autograd/graph_utils.hpp"
