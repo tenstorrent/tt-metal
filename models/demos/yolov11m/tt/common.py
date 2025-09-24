@@ -7,6 +7,87 @@ import math
 import ttnn
 
 
+def prepare_conv_weights_and_bias_for_device(
+    weight_tensor, bias_tensor, x, layer_params, device, conv_config, compute_config
+):
+    """
+    Utility function to properly prepare conv2d weights and bias tensors for device operations.
+    This handles the full preparation pipeline including host/device transfers.
+    
+    Args:
+        weight_tensor: Weight tensor (on host or device)
+        bias_tensor: Bias tensor (on host or device) or None
+        x: Input tensor to get memory config and layout
+        layer_params: Dict with conv parameters (in_channels, out_channels, etc.)
+        device: Target device
+        conv_config: Conv2D configuration
+        compute_config: Compute configuration
+    
+    Returns:
+        Tuple of (prepared_weight, prepared_bias) ready for conv2d
+    """
+    # Move tensors to host for preparation if they're on device
+    if weight_tensor.storage_type() == ttnn.StorageType.DEVICE:
+        weight_host = ttnn.to_cpu(weight_tensor)
+    else:
+        weight_host = weight_tensor
+    
+    if bias_tensor is not None and bias_tensor.storage_type() == ttnn.StorageType.DEVICE:
+        bias_host = ttnn.to_cpu(bias_tensor)
+    else:
+        bias_host = bias_tensor
+    
+    # Prepare weights
+    prepared_weight = ttnn.prepare_conv_weights(
+        weight_tensor=weight_host,
+        weights_format="OIHW",
+        input_memory_config=x.memory_config(),
+        input_layout=x.get_layout(),
+        in_channels=layer_params["in_channels"],
+        out_channels=layer_params["out_channels"],
+        batch_size=layer_params["batch_size"],
+        input_height=layer_params["input_height"],
+        input_width=layer_params["input_width"],
+        kernel_size=layer_params["kernel_size"],
+        stride=layer_params["stride"],
+        padding=layer_params["padding"],
+        dilation=(1, 1),
+        has_bias=bias_tensor is not None,
+        groups=layer_params["groups"],
+        device=device,
+        input_dtype=x.dtype,
+        conv_config=conv_config,
+        compute_config=compute_config,
+    )
+    prepared_weight = ttnn.to_device(prepared_weight, device)
+    
+    # Prepare bias if it exists
+    prepared_bias = None
+    if bias_tensor is not None:
+        prepared_bias = ttnn.prepare_conv_bias(
+            bias_tensor=bias_host,
+            input_memory_config=x.memory_config(),
+            input_layout=x.get_layout(),
+            in_channels=layer_params["in_channels"],
+            out_channels=layer_params["out_channels"],
+            batch_size=layer_params["batch_size"],
+            input_height=layer_params["input_height"],
+            input_width=layer_params["input_width"],
+            kernel_size=layer_params["kernel_size"],
+            stride=layer_params["stride"],
+            padding=layer_params["padding"],
+            dilation=(1, 1),
+            groups=layer_params["groups"],
+            device=device,
+            input_dtype=x.dtype,
+            conv_config=conv_config,
+            compute_config=compute_config,
+        )
+        prepared_bias = ttnn.to_device(prepared_bias, device)
+    
+    return prepared_weight, prepared_bias
+
+
 class Yolov11Conv2D:
     def __init__(
         self,
@@ -66,35 +147,23 @@ class Yolov11Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        if "bias" in conv_pth and conv_pth["bias"] is not None:
-            # Ensure bias is properly prepared for device operations
-            self.bias = conv_pth["bias"]
-            print(f"[DEBUG {layer_name}] Bias storage type before: {self.bias.storage_type()}")
-            print(f"[DEBUG {layer_name}] Bias shape: {self.bias.shape}")
-            print(f"[DEBUG {layer_name}] Bias dtype: {self.bias.dtype}")
-            # Ensure bias is on device and in correct layout
-            if self.bias.storage_type() != ttnn.StorageType.DEVICE:
-                print(f"[DEBUG {layer_name}] Moving bias to device...")
-                self.bias = ttnn.to_device(self.bias, device)
-                print(f"[DEBUG {layer_name}] Bias storage type after to_device: {self.bias.storage_type()}")
-            else:
-                print(f"[DEBUG {layer_name}] Bias already on device")
-        else:
-            self.bias = None
-            print(f"[DEBUG {layer_name}] No bias tensor")
-
-        # Ensure weight is properly prepared for device operations
+        # Store raw tensors initially
         self.weight = conv_pth["weight"]
-        print(f"[DEBUG {layer_name}] Weight storage type before: {self.weight.storage_type()}")
+        self.bias = conv_pth["bias"] if "bias" in conv_pth and conv_pth["bias"] is not None else None
+        
+        print(f"[DEBUG {layer_name}] Weight storage type before preparation: {self.weight.storage_type()}")
         print(f"[DEBUG {layer_name}] Weight shape: {self.weight.shape}")
         print(f"[DEBUG {layer_name}] Weight dtype: {self.weight.dtype}")
-        # Ensure weight is on device and in correct layout
-        if self.weight.storage_type() != ttnn.StorageType.DEVICE:
-            print(f"[DEBUG {layer_name}] Moving weight to device...")
-            self.weight = ttnn.to_device(self.weight, device)
-            print(f"[DEBUG {layer_name}] Weight storage type after to_device: {self.weight.storage_type()}")
+        
+        if self.bias is not None:
+            print(f"[DEBUG {layer_name}] Bias storage type before preparation: {self.bias.storage_type()}")
+            print(f"[DEBUG {layer_name}] Bias shape: {self.bias.shape}")
+            print(f"[DEBUG {layer_name}] Bias dtype: {self.bias.dtype}")
         else:
-            print(f"[DEBUG {layer_name}] Weight already on device")
+            print(f"[DEBUG {layer_name}] No bias tensor")
+        
+        # Mark that tensors need preparation - will be done on first forward call
+        self.tensors_prepared = False
 
     def __call__(self, x):
         print(f"[DEBUG {self.layer_name}] Conv2D call started")
@@ -116,6 +185,31 @@ class Yolov11Conv2D:
 
         print(f"[DEBUG {self.layer_name}] Conv params: in_ch={self.in_channels}, out_ch={self.out_channels}, kernel={self.kernel_size}, stride={self.stride}, padding={self.padding}")
         print(f"[DEBUG {self.layer_name}] Input dims: batch={batch_size}, height={input_height}, width={input_width}")
+        
+        # Prepare tensors on first forward call if needed
+        if not self.tensors_prepared:
+            print(f"[DEBUG {self.layer_name}] Preparing weights and bias using utility function...")
+            
+            # Prepare parameters for utility function
+            layer_params = {
+                "in_channels": self.in_channels,
+                "out_channels": self.out_channels,
+                "batch_size": batch_size,
+                "input_height": input_height,
+                "input_width": input_width,
+                "kernel_size": self.kernel_size,
+                "stride": self.stride,
+                "padding": self.padding,
+                "groups": self.groups,
+            }
+            
+            # Use utility function to prepare both weight and bias
+            self.weight, self.bias = prepare_conv_weights_and_bias_for_device(
+                self.weight, self.bias, x, layer_params, self.device, self.conv_config, self.compute_config
+            )
+            
+            self.tensors_prepared = True
+            print(f"[DEBUG {self.layer_name}] Tensor preparation completed")
         
         # Check tensor states before conv2d
         print(f"[DEBUG {self.layer_name}] Weight storage type before conv2d: {self.weight.storage_type()}")
