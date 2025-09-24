@@ -73,11 +73,14 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         enable_trace=True,
-        sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
+        sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
-        return_logits=False,
     ):
+        if sampling_params is None:
+            return_logits = True
+        else:
+            return_logits = False
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
@@ -336,11 +339,14 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
-        return_logits=False,
     ):
-        if return_logits:
-            assert reset_inputs, "reset_inputs must be True when return_logits is True"
-            assert not read_from_device, "read_from_device must be False when return_logits is True"
+        if sampling_params is None:
+            return_logits = True
+            read_from_device = False
+            reset_inputs = True
+        else:
+            return_logits = False
+
         if self.prev_page_table is None:
             self.prev_page_table = page_table
         if torch.any(self.prev_page_table != page_table).item():
@@ -367,18 +373,14 @@ class Generator:
                 p=[sampling_params.top_p] * 32,
                 temp=[1 / sampling_params.temperature] * 32,
             )
-        if tt_out_logits_saved is not None or return_logits:
+        if tt_out_logits_saved is not None:
             if return_logits and tt_out_logits_saved is None:
-                tt_out_logits_saved = torch.zeros(tokens.shape[0], 131072)
+                tt_out_logits_saved = torch.zeros(1, 131072)
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
-            tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
+            tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits)
         else:
-            tt_tok = self._decode_forward_no_trace_text(**decode_kwargs)
-
-        if return_logits:
-            # Return logits instead of tokens
-            return tt_out_logits_saved
+            tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
 
         if read_from_device:
             tt_tok, read_event = self.read_decode_output(tt_tok, tokens.shape[0])
@@ -395,6 +397,7 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        return_logits=False,
     ):
         """
         Performs text decode step.
@@ -411,11 +414,19 @@ class Generator:
             kv_cache=kv_cache,
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
+            return_logits=return_logits,
         )
         return tt_tok
 
     def _capture_trace_text(
-        self, tokens, current_pos, page_table=None, kv_cache=None, is_cur_pos_sharded=False, is_page_table_sharded=False
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        is_cur_pos_sharded=False,
+        is_page_table_sharded=False,
+        return_logits=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -429,6 +440,7 @@ class Generator:
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             is_page_table_sharded=is_page_table_sharded,
+            return_logits=return_logits,
         )
         logger.info("Done Compiling Model")
 
@@ -446,6 +458,7 @@ class Generator:
             page_table_tt,
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
+            return_logits=return_logits,
         )
 
         # Try allocating our persistent tensors here and verifying it matches the address that trace captured
@@ -478,6 +491,7 @@ class Generator:
         reset_inputs=False,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        return_logits=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -492,6 +506,7 @@ class Generator:
                 kv_cache=kv_cache,
                 is_cur_pos_sharded=is_cur_pos_sharded,
                 is_page_table_sharded=is_page_table_sharded,
+                return_logits=return_logits,
             )
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
@@ -506,7 +521,6 @@ class Generator:
                 device_tensors=self.trace_inputs_text,
                 shard_specs=shard_specs,
             )
-
         trace_tok_rm = self._decode_forward_trace_text(
             self.trace_id_text,
             self.trace_inputs_text,
@@ -515,6 +529,9 @@ class Generator:
             current_pos,
             page_table=page_table,
         )
+        if return_logits:
+            # prevent race condition
+            ttnn.synchronize_device(self.mesh_device)
         return trace_tok_rm
 
     def read_decode_output(self, tt_out, async_read=True):
@@ -525,6 +542,13 @@ class Generator:
         return logits, [read_event]
 
     def process_decode_output_host(self, tt_out, is_tokens=True):
+        if isinstance(tt_out, tuple):
+            tt_out = tt_out[0]
+        if tt_out.shape[-1] >= self.model.vocab_size // 8:
+            out = ttnn.to_torch(
+                tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 1), mesh_shape=(8, 4))
+            )
+            return out[0, 0, :, : self.model.vocab_size].unsqueeze(1)
         return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, 0, 0, :]
 
     def chat_completion(
