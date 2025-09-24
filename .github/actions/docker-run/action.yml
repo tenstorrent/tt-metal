@@ -158,7 +158,24 @@ runs:
             echo "Installing wheel..."
             WHEEL_FILENAME=$(ls -1 *.whl)
             echo "Wheel filename: $WHEEL_FILENAME"
-            pip3 install "$WHEEL_FILENAME"
+
+            echo "=== DEBUG: Python environment info ==="
+            which python3
+            which pip3
+            echo "Python sys.path:"
+            python3 -c "import sys; print('\n'.join(sys.path))"
+            echo "Pip version:"
+            pip3 --version
+
+            echo "=== DEBUG: Current directory permissions ==="
+            ls -la . | head -10
+
+            echo "=== DEBUG: Trying pip install with isolation ==="
+            # Try to install with isolation from current directory
+            cd /tmp/home
+            pip3 install --isolated --no-deps "${{ github.workspace }}/$WHEEL_FILENAME"
+            cd "${{ github.workspace }}"
+
             echo "Wheel installation completed"
           else
             echo "Skipping wheel installation"
