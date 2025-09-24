@@ -61,7 +61,7 @@ class TtUpsample2D(LightweightModule):
             ttnn.deallocate(hidden_state_l1)
         else:
             hidden_states = hidden_state_l1
-        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [_, _]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],

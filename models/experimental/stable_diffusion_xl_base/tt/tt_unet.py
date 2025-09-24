@@ -179,7 +179,7 @@ class TtUNet2DConditionModel(LightweightModule):
         temb = ttnn.add(temb, temb_add, use_legacy=False)
         ttnn.deallocate(temb_add)
 
-        [sample, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
+        [sample, [H, W], [_, _]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv1_weights,
             in_channels=self.conv1_params["input_channels"],
@@ -274,7 +274,7 @@ class TtUNet2DConditionModel(LightweightModule):
 
         sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG)
 
-        [sample, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
+        [sample, [H, W], [_, _]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
