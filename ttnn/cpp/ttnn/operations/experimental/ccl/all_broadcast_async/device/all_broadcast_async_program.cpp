@@ -112,8 +112,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         if (num_width_shards > 1) {
             buffer_page_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
         }
-        cb_src0_config = tt::tt_metal::CircularBufferConfig(3 * buffer_page_size, {{src0_cb_index, df}})
-                             .set_page_size(src0_cb_index, buffer_page_size);
+        uint32_t num_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
+        cb_src0_config =
+            tt::tt_metal::CircularBufferConfig(3 * buffer_page_size * num_rows_per_packet, {{src0_cb_index, df}})
+                .set_page_size(src0_cb_index, buffer_page_size);
     }
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
@@ -130,11 +132,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     if (!tilized) {
         reader_compile_args = {
-            src0_cb_index,                                        // cb0_id
-            num_width_shards > 1 ? buffer_page_size : page_size,  // page_size
-            row_size,
-            num_packets_per_row,  // num_packets_per_row
-            max_packet_size       // max_packet_size
+            src0_cb_index,                                      // cb0_id
+            buffer_page_size,                                   // page_size
+            row_size,                                           // row_size
+            (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
         };
     }
 
@@ -149,12 +150,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     if (!tilized) {
         writer_compile_args = {
             src0_cb_index,  // cb0_id
-            num_width_shards > 1 ? buffer_page_size : page_size,
+            buffer_page_size,
             row_size,
             max_packet_size,
-            num_packets_per_row,   // num_packets_per_row
-            num_targets_forward,   // num_targets_forward_direction
-            num_targets_backward,  // num_targets_backward_direction
+            (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
+            num_packets_per_row,                                // num_packets_per_row
+            num_targets_forward,                                // num_targets_forward_direction
+            num_targets_backward,                               // num_targets_backward_direction
         };
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);

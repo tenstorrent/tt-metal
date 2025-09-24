@@ -33,8 +33,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt;
@@ -86,8 +86,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device0,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device1,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,

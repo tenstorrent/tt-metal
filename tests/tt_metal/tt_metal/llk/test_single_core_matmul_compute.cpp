@@ -52,7 +52,7 @@ namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -192,7 +192,7 @@ void create_CBs_for_fused_matmul(
     }
 }
 
-bool single_tile_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -266,11 +266,11 @@ bool single_tile_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device) {
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         1.0f / 32.0f,
         1.0f / 32.0f,
-        byte_size / bfloat16::SIZEOF,
+        byte_size / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     // Setup the weights such that final result is the original input.
 
@@ -320,7 +320,8 @@ bool single_tile_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device) {
     return pass;
 }
 // blocked matmul has blocking, but still fits within dst, so no spill/reloads or intermediates
-bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t M, uint32_t K, uint32_t N) {
+bool single_block_matmul(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -414,11 +415,11 @@ bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, u
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, in0_byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        1.0f, 1.0f, in0_byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0.03125f,
         0.03125f,
-        in1_byte_size / bfloat16::SIZEOF,
+        in1_byte_size / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
@@ -426,7 +427,7 @@ bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, u
     auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         1.0f * K,
         1.0f * K,
-        (out_byte_size) / bfloat16::SIZEOF,
+        (out_byte_size) / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////
@@ -481,7 +482,7 @@ bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, u
     return pass;
 }
 // blocked matmul has blocking on output, spill/reloads using intermediate
-bool blocked_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t M, uint32_t K, uint32_t N) {
+bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -591,11 +592,11 @@ bool blocked_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        1.0f, 1.0f, in0_byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        1.0f, 1.0f, in0_byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0.03125f,
         0.03125f,
-        in1_byte_size / bfloat16::SIZEOF,
+        in1_byte_size / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
@@ -603,7 +604,7 @@ bool blocked_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32
     auto packed_golden = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         1.0f * K,
         1.0f * K,
-        (out_byte_size) / bfloat16::SIZEOF,
+        (out_byte_size) / sizeof(bfloat16),
         std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////

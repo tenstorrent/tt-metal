@@ -12,16 +12,16 @@ from torchvision import datasets, transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.mnist.reference.mnist import MnistModel
-from models.demos.mnist.tt import tt_mnist
-from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     is_grayskull,
     is_wormhole_b0,
 )
+from models.demos.mnist.reference.mnist import MnistModel
+from models.demos.mnist.tt import tt_mnist
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
 
 transform = transforms.Compose([transforms.ToTensor()])
 test_dataset = datasets.MNIST(root="./data", train=False, transform=None, download=True)
@@ -111,7 +111,7 @@ def test_perf_device_bare_metal(batch_size, reset_seeds):
     subdir = "ttnn_mnist"
     num_iterations = 1
     margin = 0.04
-    expected_perf = 890000
+    expected_perf = 1029400
 
     command = f"pytest tests/ttnn/integration_tests/mnist/test_mnist.py::test_mnist"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

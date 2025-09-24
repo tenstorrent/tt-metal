@@ -14,15 +14,15 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <optional>
 #include <set>
 #include <vector>
-#include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include <umd/device/types/xy_pair.h>
+#include "impl/kernels/kernel_impl.hpp"
+#include <umd/device/types/xy_pair.hpp>
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
@@ -269,7 +269,7 @@ void append_routing_plane_connection_manager_rt_args(
             }
         } else {
             const auto links = get_forwarding_link_indices(src_fabric_node_id, dst_node);
-            TT_FATAL(links.size() > 0, "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
+            TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
             link_idx = links[0];
         }
 

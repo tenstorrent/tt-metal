@@ -35,9 +35,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt;
@@ -90,8 +89,8 @@ struct ChipSenderReceiverEthCore {
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device0,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device1,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
@@ -255,9 +254,10 @@ int main(int argc, char** argv) {
         }
         eth_sender_core_iter++;
     } while (device_id == std::numeric_limits<chip_id_t>::max() ||
-             !test_fixture.devices_.at(device_id)->is_mmio_capable());
+             !test_fixture.devices_.at(device_id)->get_devices()[0]->is_mmio_capable());
     TT_FATAL(device_id != std::numeric_limits<chip_id_t>::max(), "No valid receiver device found to connect to");
-    TT_FATAL(test_fixture.devices_.at(device_id)->is_mmio_capable(), "Receiver device is not mmio capable");
+    auto* receiver_device = test_fixture.devices_.at(device_id)->get_devices()[0];
+    TT_FATAL(receiver_device->is_mmio_capable(), "Receiver device is not mmio capable");
     const auto& device_1 = test_fixture.devices_.at(device_id);
 
     // Add more configurations here until proper argc parsing added

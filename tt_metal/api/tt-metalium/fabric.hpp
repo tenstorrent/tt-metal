@@ -10,9 +10,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <vector>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <optional>
 
 namespace tt {
@@ -133,9 +133,9 @@ size_t get_number_of_available_routing_planes(
 enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_CHANNEL = 1 };
 
 class FabricMuxConfig {
-    inline static constexpr uint8_t default_num_buffers = 8;
-    inline static constexpr size_t default_num_full_size_channel_iters = 1;
-    inline static constexpr size_t default_num_iters_between_teardown_checks = 32;
+    static constexpr uint8_t default_num_buffers = 8;
+    static constexpr size_t default_num_full_size_channel_iters = 1;
+    static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
 public:
     FabricMuxConfig(
@@ -150,10 +150,12 @@ public:
     // Returns the compile time args to be passed for the mux kernel
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
+    // Returns the compile time args for relay mux
+    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux() const;
+
     // Returns the base compile time args without stream IDs (for custom stream ID override)
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
-    std::vector<uint32_t> get_fabric_mux_compile_time_main_args() const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
     std::vector<uint32_t> get_fabric_mux_run_time_args(
@@ -176,6 +178,9 @@ public:
     size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     void set_num_full_size_channel_iters(size_t new_val);
     void set_num_iters_between_teardown_checks(size_t new_val);
+    void set_wait_for_fabric_endpoint_ready(bool wait_for_ready);
+    void set_fabric_endpoint_channel_num_buffers(size_t num_buffers);
+    void set_fabric_endpoint_status_address(size_t address);
 
     size_t get_memory_map_end_address() const;
 
@@ -185,6 +190,10 @@ public:
 private:
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
+
+    // Helper function to add stream IDs and flags to compile time args
+    void append_default_stream_ids_to_ct_args(std::vector<uint32_t>& ct_args) const;
+    void append_default_persistent_channel_flags_to_ct_args(std::vector<uint32_t>& ct_args) const;
 
     // Private struct for memory management
     struct MemoryRegion {
@@ -217,6 +226,9 @@ private:
 
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
+    mutable bool wait_for_fabric_endpoint_ready_ = false;
+    mutable size_t fabric_endpoint_channel_num_buffers_ = 0;
+    mutable size_t fabric_endpoint_status_address_ = 0;
 
     // memory regions
     MemoryRegion status_region_{};

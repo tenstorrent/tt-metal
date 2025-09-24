@@ -1,5 +1,12 @@
 name: Package and release
 on:
+  workflow_call:
+    inputs:
+      dry-run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       dry-run:
@@ -7,10 +14,10 @@ on:
         required: false
         default: false
         type: boolean
-  # schedule:
-  #   # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
-  #   # dev testing and builds for beginning of work week
-  #   - cron: "0 0 * * *"
+  schedule:
+    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+    # dev testing and builds for beginning of work week
+    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -43,13 +50,20 @@ jobs:
           echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
 
           # Set tag-type
-          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]]; then
+          echo "Determining tag-type for GITHUB_REF: ${GITHUB_REF}"
+          echo "isReleaseCandidate: $isReleaseCandidate"
+
+          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]] || [[ "${GITHUB_REF}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
+            echo "Matched stable branch or RC tag pattern"
             if [[ "$isReleaseCandidate" == "true" ]]; then
+              echo "Setting tag-type=rc (release candidate)"
               echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
+              echo "Setting tag-type= (production release)"
               echo "tag-type=" >> "$GITHUB_OUTPUT"
             fi
           else
+            echo "No stable/RC match - setting tag-type=dev (development build)"
             echo "tag-type=dev" >> "$GITHUB_OUTPUT"
           fi
 
@@ -74,7 +88,7 @@ jobs:
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
       tag-type: ${{ needs.release-precheck.outputs.tag-type }}
-      dry-run: ${{ inputs.dry-run }}
+      dry-run: ${{ inputs.dry-run || false }}
 
 
   build-test-publish:
@@ -86,9 +100,44 @@ jobs:
         version: [22.04, 24.04]
     with:
       version: ${{ matrix.version }}
-      dry-run: ${{ inputs.dry-run }}
+      dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
+
+  publish-to-pypi:
+    needs: [build-test-publish, create-tag]
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ttnn/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download ALL wheels (separate folders)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: eager-dist-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Remove profiler artifacts
+        run: |
+          find artifacts -maxdepth 1 -type d -name '*profiler*' -print -exec rm -rf {} +
+
+      - name: Flatten into dist/
+        run: |
+          mkdir -p dist
+          # copy wheel/sdist files from remaining artifact dirs
+          find artifacts -type f -name '*.whl' -exec cp {} dist/ \;
+          find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -l dist
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: ${{ !inputs.dry-run }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+
 
 
   create-changelog:
@@ -149,7 +198,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
+    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

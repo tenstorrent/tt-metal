@@ -46,7 +46,7 @@ using namespace tt;
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 std::shared_ptr<distributed::MeshBuffer> MakeMeshBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t size, uint32_t page_size, bool sram) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t page_size, bool sram) {
     distributed::DeviceLocalBufferConfig local_config = {
         .page_size = page_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM), .bottom_up = false};
     distributed::ReplicatedBufferConfig replicated_config = {.size = size};
@@ -54,7 +54,7 @@ std::shared_ptr<distributed::MeshBuffer> MakeMeshBuffer(
 }
 
 std::shared_ptr<distributed::MeshBuffer> MakeMeshBufferBFP16(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t n_tiles, bool sram) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
@@ -75,7 +75,7 @@ CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBI
 namespace unit_tests_common::vecadd::test_vecadd_multi_core {
 
 bool vecadd_multi_core(
-    MeshDispatchFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t n_tiles) {
+    MeshDispatchFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles) {
     const uint32_t num_core = 4;
     TT_FATAL(n_tiles >= num_core, "Parameter mismatch {} {}", n_tiles, num_core);
 
@@ -165,8 +165,8 @@ bool vecadd_multi_core(
         const auto core_offset = core * (tile_size + tiles_per_core);
         for (int index = 0; index < data_per_core; index++) {
             const auto i = core_offset + index;
-            float golden = a_data[i].to_float() + b_data[i].to_float();
-            pass &= tt::test_utils::is_close<float>(golden, c_data[i].to_float(), 0.015f);
+            float golden = static_cast<float>(a_data[i]) + static_cast<float>(b_data[i]);
+            pass &= tt::test_utils::is_close<float>(golden, static_cast<float>(c_data[i]), 0.015f);
         }
     }
 

@@ -27,15 +27,16 @@ constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
 constexpr uint32_t row_size = get_compile_time_arg_val(2);
 constexpr uint32_t max_packet_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
-constexpr uint32_t start_distance_in_hops_forward = get_compile_time_arg_val(7);
-constexpr uint32_t range_hops_forward = get_compile_time_arg_val(8);
-constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(9);
-constexpr uint32_t range_hops_backward = get_compile_time_arg_val(10);
+constexpr uint32_t num_rows_per_packet = get_compile_time_arg_val(4);
+constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr uint32_t start_distance_in_hops_forward = get_compile_time_arg_val(8);
+constexpr uint32_t range_hops_forward = get_compile_time_arg_val(9);
+constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(10);
+constexpr uint32_t range_hops_backward = get_compile_time_arg_val(11);
 
-inline constexpr uint32_t sharded_args_start_idx = 11;
+inline constexpr uint32_t sharded_args_start_idx = 12;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -63,7 +64,8 @@ void kernel_main() {
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
-    auto data_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 #ifdef SHARDED
@@ -96,7 +98,17 @@ void kernel_main() {
         ranges[0] = ranges[1];
     }
     fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-        fabric_connection, data_route_id, starts, ranges);
+        fabric_connection, unicast_route_id, starts, ranges);
+    fabric_multicast_noc_scatter_write_set_state<
+        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+        fabric_connection,
+        scatter_route_id,
+        starts,
+        ranges,
+        NocUnicastScatterCommandHeader{
+            {0, 0},  // ignore
+            static_cast<uint16_t>(page_size)},
+        page_size * 2);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
@@ -124,31 +136,62 @@ void kernel_main() {
     uint32_t row_id = row_id_start;
     while (row_id < row_id_end) {
         size_t l1_read_addr = get_read_ptr(cb0_id);
-        cb_wait_front(cb0_id, 1);
+        cb_wait_front(cb0_id, num_rows_per_packet);
 
-        uint32_t offset = 0;
+        if constexpr (num_rows_per_packet == 1) {
+            uint32_t offset = 0;
+            for (uint32_t j = 0; j < num_packets_per_row; j++) {
+                uint32_t packet_size = std::min(max_packet_size, page_size);
+                packet_size = std::min(packet_size, page_size - max_packet_size * j);
 
-        for (uint32_t j = 0; j < num_packets_per_row; j++) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(row_id, tensor0_addrgen, offset, 0);
-
-            uint32_t packet_size = std::min(max_packet_size, page_size);
-            packet_size = std::min(packet_size, page_size - max_packet_size * j);
-
-            const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
-            noc_async_write(l1_read_addr, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), packet_size);
-            fabric_multicast_noc_unicast_write_with_state<
-                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                fabric_connection,
-                data_route_id,
-                l1_read_addr,
-                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr},
-                packet_size);
-            noc_async_writes_flushed();
-            l1_read_addr += packet_size;
-            offset += packet_size;  // advance the noc address for the next packet
+                noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(row_id, offset), packet_size);
+                fabric_multicast_noc_unicast_write_with_state<
+                    UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                    fabric_connection,
+                    unicast_route_id,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastCommandHeader{
+                        linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, offset)},
+                    packet_size);
+                noc_async_writes_flushed();
+                l1_read_addr += packet_size;
+                offset += packet_size;  // advance the noc address for the next packet
+            }
+            row_id++;
+        } else {
+            uint32_t num_pages_for_current_packet = std::min<uint32_t>(row_id_end - row_id, num_rows_per_packet);
+            if (num_pages_for_current_packet == 1) {
+                noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(row_id, 0), page_size);
+                fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    fabric_connection,
+                    unicast_route_id,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastCommandHeader{
+                        linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, 0)},
+                    page_size);
+                noc_async_writes_flushed();
+                l1_read_addr += page_size;
+                row_id++;
+            } else if (num_pages_for_current_packet == 2) {
+                noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(row_id, 0), page_size);
+                noc_async_write(l1_read_addr + page_size, tensor0_addrgen.get_noc_addr(row_id + 1, 0), page_size);
+                fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                    fabric_connection,
+                    scatter_route_id,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastScatterCommandHeader{
+                        {linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, 0),
+                         linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id + 1, 0)},
+                        static_cast<uint16_t>(page_size)},  // ignore
+                    page_size * 2);                         // ignore
+                noc_async_writes_flushed();
+                l1_read_addr += page_size * 2;
+                row_id += 2;
+            } else {
+                ASSERT(false);
+            }
         }
-        row_id++;
-        cb_pop_front(cb0_id, 1);
+        cb_pop_front(cb0_id, num_rows_per_packet);
     }
 
     // 2. mcast output ready semaphore

@@ -61,7 +61,8 @@ void kernel_main() {
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
-    auto data_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 #ifdef SHARDED
@@ -95,7 +96,17 @@ void kernel_main() {
         ranges[0] = ranges[1];
     }
     fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, data_route_id, starts, ranges, nullptr, tensor0_page_size);
+        fabric_connection, unicast_route_id, starts, ranges, nullptr, tensor0_page_size);
+    fabric_multicast_noc_scatter_write_set_state<
+        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+        fabric_connection,
+        scatter_route_id,
+        starts,
+        ranges,
+        NocUnicastScatterCommandHeader{
+            {0, 0},  // ignore
+            static_cast<uint16_t>(tensor0_page_size)},
+        tensor0_page_size * 2);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
@@ -122,24 +133,45 @@ void kernel_main() {
     while (tile_id < tile_id_end) {
         cb_wait_front(cb0_id, packet_size_in_pages);
         size_t l1_read_addr = get_read_ptr(cb0_id);
+
+        uint32_t num_pages_read = 0;
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
-
-        for (uint32_t j = 0; j < num_pages_to_read; j++) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-            const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
-            noc_async_write(
-                l1_read_addr, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), tensor0_page_size);
-            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                fabric_connection,
-                data_route_id,
-                l1_read_addr,
-                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr});
-            noc_async_writes_flushed();
-            l1_read_addr += tensor0_page_size;
-            tile_id++;
+        while (num_pages_read < num_pages_to_read) {
+            // scatter-write currently only supports up to 2 distinct addresses
+            uint32_t num_pages_for_current_packet = std::min<uint32_t>(num_pages_to_read - num_pages_read, 2);
+            if (num_pages_for_current_packet == 1) {
+                noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(tile_id, 0), tensor0_page_size);
+                fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    fabric_connection,
+                    unicast_route_id,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastCommandHeader{
+                        linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id, 0)});
+                noc_async_writes_flushed();
+                l1_read_addr += tensor0_page_size;
+                tile_id++;
+                num_pages_read++;
+            } else if (num_pages_for_current_packet == 2) {
+                noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(tile_id, 0), tensor0_page_size);
+                noc_async_write(
+                    l1_read_addr + tensor0_page_size, tensor0_addrgen.get_noc_addr(tile_id + 1, 0), tensor0_page_size);
+                fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                    fabric_connection,
+                    scatter_route_id,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastScatterCommandHeader{
+                        {linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id, 0),
+                         linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id + 1, 0)},
+                        static_cast<uint16_t>(tensor0_page_size)},  // ignore
+                    tensor0_page_size * 2);                         // ignore
+                noc_async_writes_flushed();
+                l1_read_addr += tensor0_page_size * 2;
+                tile_id += 2;
+                num_pages_read += 2;
+            } else {
+                ASSERT(false);
+            }
         }
-
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
     // 2. mcast output ready semaphore

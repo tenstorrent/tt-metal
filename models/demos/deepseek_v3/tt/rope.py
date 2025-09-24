@@ -5,8 +5,8 @@
 import torch
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
-from models.utility_functions import nearest_32
 
 
 def get_rot_transformation_mat():

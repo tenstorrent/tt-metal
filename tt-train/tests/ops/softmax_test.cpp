@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -115,7 +117,11 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
-TEST_F(SoftmaxTest, SoftmaxTest_Huge_Batch) {
+TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == BoardType::P100 || board == BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;

@@ -127,7 +127,7 @@ int main() {
 
             flush_erisc_icache();
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
 

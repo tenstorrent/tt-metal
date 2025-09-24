@@ -9,10 +9,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_yolov11_inference(
@@ -66,7 +66,6 @@ def run_yolov11_inference(
         (640, 640),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
@@ -103,6 +102,7 @@ def test_e2e_performant(
     ],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",

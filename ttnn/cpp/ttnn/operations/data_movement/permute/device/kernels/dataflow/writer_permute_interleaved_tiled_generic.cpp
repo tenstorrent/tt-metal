@@ -25,30 +25,30 @@ void kernel_main() {
     // 1) Compile-time Arguments
     //--------------------------------------------------------------------------
 
-    constexpr uint32_t RANK = get_compile_time_arg_val(0);
+    constexpr uint32_t RANK = get_named_compile_time_arg_val("rank");
     // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t element_size = get_compile_time_arg_val(2);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(3);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(4);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(5);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(6);
-    constexpr uint32_t x_dim_in_input = get_compile_time_arg_val(7);
-    constexpr uint32_t X = get_compile_time_arg_val(8);
-    constexpr uint32_t W = get_compile_time_arg_val(9);
-    constexpr uint32_t Y = get_compile_time_arg_val(10);
-    constexpr uint32_t X_p = get_compile_time_arg_val(11);
-    constexpr uint32_t W_p = get_compile_time_arg_val(12);
-    constexpr uint32_t rows_per_x = get_compile_time_arg_val(13);
+    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
+    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
+    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
+    constexpr uint32_t FACE_HEIGHT = get_named_compile_time_arg_val("face_height");
+    constexpr uint32_t FACE_WIDTH = get_named_compile_time_arg_val("face_width");
+    constexpr uint32_t x_dim_index_in_input = get_named_compile_time_arg_val("x_dim_index_in_input");
+    constexpr uint32_t X = get_named_compile_time_arg_val("X");
+    constexpr uint32_t W = get_named_compile_time_arg_val("W");
+    constexpr uint32_t Y = get_named_compile_time_arg_val("Y");
+    constexpr uint32_t X_p = get_named_compile_time_arg_val("X_p");
+    constexpr uint32_t W_p = get_named_compile_time_arg_val("W_p");
+    constexpr uint32_t rows_per_x = get_named_compile_time_arg_val("rows_per_x");
     // 15 is Y_t, see below
-    constexpr uint32_t W_t = get_compile_time_arg_val(15);
-    constexpr uint32_t final_tile_real_x = get_compile_time_arg_val(16);
-    constexpr uint32_t final_tile_real_faces_x = get_compile_time_arg_val(17);
-    constexpr uint32_t xw_blocks = get_compile_time_arg_val(18);
-    constexpr uint32_t x_blocks = get_compile_time_arg_val(19);
-    constexpr uint32_t w_blocks = get_compile_time_arg_val(20);
-    constexpr bool needs_y_padding = (bool)get_compile_time_arg_val(21);
-    constexpr uint32_t permuted_w_dim = get_compile_time_arg_val(22);
-    constexpr auto dst_args = TensorAccessorArgs<23>();
+    constexpr uint32_t W_t = get_named_compile_time_arg_val("W_t");
+    constexpr uint32_t final_tile_real_x = get_named_compile_time_arg_val("final_tile_real_x");
+    constexpr uint32_t final_tile_real_faces_x = get_named_compile_time_arg_val("final_tile_real_faces_x");
+    constexpr uint32_t xw_blocks = get_named_compile_time_arg_val("xw_blocks");
+    constexpr uint32_t x_blocks = get_named_compile_time_arg_val("x_blocks");
+    constexpr uint32_t w_blocks = get_named_compile_time_arg_val("w_blocks");
+    constexpr bool needs_y_padding = (bool)get_named_compile_time_arg_val("needs_y_padding");
+    constexpr uint32_t permuted_w_dim = get_named_compile_time_arg_val("permuted_w_dim");
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     //--------------------------------------------------------------------------
     // 2) Derived Constants (all constexpr)
@@ -155,9 +155,9 @@ void kernel_main() {
         uint32_t w_end =
             (w_start + w_block_size < input_shape[RANK - 1]) ? (w_start + w_block_size) : input_shape[RANK - 1];
 
-        // Fill idxs except for x_dim_in_input
+        // Fill idxs except for x_dim_index_in_input
         for (int32_t d = RANK - 2; d >= 0; --d) {
-            if (d == (int32_t)x_dim_in_input) {
+            if (d == (int32_t)x_dim_index_in_input) {
                 idxs[d] = 0;
                 continue;
             }
