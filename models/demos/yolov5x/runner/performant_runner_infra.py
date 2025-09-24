@@ -23,12 +23,19 @@ class YOLOv5xPerformanceRunnerInfra:
         model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        mesh_mapper=None,
+        weights_mesh_mapper=None,
+        mesh_composer=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
+        self.num_devices = self.device.get_num_devices()
+        self.mesh_mapper = mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.mesh_composer = mesh_composer
         self.batch_size = batch_size
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
@@ -39,12 +46,13 @@ class YOLOv5xPerformanceRunnerInfra:
         self.torch_model = self.torch_model.model
 
         self.torch_input_tensor = (
-            torch.randn((1, 3, 640, 640), dtype=torch.float32)
+            torch.randn((self.batch_size * self.num_devices, 3, 640, 640), dtype=torch.float32)
             if self.torch_input_tensor is None
             else self.torch_input_tensor
         )
 
-        self.parameters = create_yolov5x_model_parameters(self.torch_model, self.torch_input_tensor, self.device)
+        self.torch_input_params = torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
+        self.parameters = create_yolov5x_model_parameters(self.torch_model, self.torch_input_params, self.device)
 
         self.ttnn_yolov5x_model = Yolov5x(device=self.device, parameters=self.parameters, conv_pt=self.parameters)
 
@@ -60,14 +68,23 @@ class YOLOv5xPerformanceRunnerInfra:
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
         n, c, h, w = torch_input_tensor.shape
-        if c == 3:
+        if c < min_channels:
             c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+        n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
+
+        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+        tt_inputs_host = ttnn.from_host_shards(
+            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
+        )
+
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
@@ -95,7 +112,7 @@ class YOLOv5xPerformanceRunnerInfra:
     def validate(self, output_tensor=None, torch_output_tensor=None):
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(ttnn_output_tensor)
+        output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.mesh_composer)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.99)
 
         logger.info(

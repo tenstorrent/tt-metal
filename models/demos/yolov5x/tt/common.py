@@ -174,3 +174,15 @@ class TtnnBottleneck:
         if self.label:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         return ttnn.add(input_tensor, cv1) if self.shortcut else cv1
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
