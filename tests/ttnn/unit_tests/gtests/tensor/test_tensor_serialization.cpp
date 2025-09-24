@@ -355,10 +355,8 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, FullyReplicatedRoundtrip) {
 
     std::vector<float> test_data(total_elements, 0.0f);
 
-    Tensor input_tensor = Tensor::from_vector(
-        test_data,
-        get_tensor_spec(ttnn::Shape{1, 1, kHeight, kWidth}, DataType::FLOAT32)
-            .with_memory_config(MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 1, kHeight, kWidth}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device_);
     Tensor replicated_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
