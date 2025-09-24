@@ -93,7 +93,7 @@ def test_clip_encoder(
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
     hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
-    tt_prompt = ttnn.from_torch(
+    tt_tokens = ttnn.from_torch(
         hf_inputs.input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
@@ -117,12 +117,12 @@ def test_clip_encoder(
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
     logger.info("compiling text encoder...")
-    tt_clip(tt_prompt, mesh_device, with_projection=has_projection)
+    tt_clip(tt_tokens, mesh_device, with_projection=has_projection)
 
     logger.info("executing text encoder...")
     start_time = time.time()
 
-    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, mesh_device, with_projection=has_projection)
+    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device, with_projection=has_projection)
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")
