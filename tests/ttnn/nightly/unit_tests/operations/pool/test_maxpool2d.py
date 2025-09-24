@@ -9,7 +9,7 @@ import ttnn
 import pytest
 import math
 
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED

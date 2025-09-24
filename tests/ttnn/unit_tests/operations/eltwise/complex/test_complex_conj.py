@@ -10,7 +10,7 @@ from loguru import logger
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
 
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.unit_tests.operations.eltwise.complex.utility_funcs import (
     convert_complex_to_torch_tensor,
     random_complex_tensor,
