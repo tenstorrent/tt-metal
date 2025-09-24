@@ -6,8 +6,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
-#include <ttnn/distributed/create_socket.hpp>
-#include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
 #include "3tier/remote_optimizer.hpp"
@@ -32,6 +30,7 @@
 #include "optimizers/no_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 
@@ -570,15 +569,10 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    if (config.socket_type == SocketType::FABRIC) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
-            throw std::runtime_error(fmt::format(
-                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
-                device_config.mesh_shape));
-        }
-    } else if (device_config.enable_tp || device_config.enable_ddp) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+    auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
+    // enable fabric config for 3-tier architecture, tp, ddp
+    if (config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
+        ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
@@ -663,7 +657,6 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
     std::visit(
         [&](auto &&arg) {
