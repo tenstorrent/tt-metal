@@ -36,7 +36,7 @@ std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_m
         auto device_ids = get_devices_controlled_by_mmio_device(cluster, mmio_chip_id);
         device_ids.erase(mmio_chip_id);
 
-        if (device_ids.size() == 0) {
+        if (device_ids.empty()) {
             tunnels_from_mmio_device.insert({mmio_chip_id, {}});
             continue;
         }
