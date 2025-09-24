@@ -263,32 +263,28 @@ jobs:
       - name: Run multimodal benchmark
         if: ${{ matrix.test-group.multimodal }}
         run: |
-          if [ "${{ matrix.test-group.multimodal }}" = "true" ]; then
-            python3 benchmarks/benchmark_serving.py \
-              --backend openai-chat \
-              --endpoint /v1/chat/completions \
-              --model ${{ matrix.test-group.model }} \
-              --dataset-name hf \
-              --dataset-path lmarena-ai/vision-arena-bench-v0.1 \
-              --num-prompts 32 \
-              --random-input-len 100 \
-              --random-output-len 100 \
-              --ignore-eos \
-              --percentile-metrics ttft,tpot,itl,e2el \
-              --save-result \
-              --result-filename output/vllm_result.json \
-              2>&1 | tee ${FILE_MULTIMODAL_BENCHMARK_LOG}
+          python3 benchmarks/benchmark_serving.py \
+            --backend openai-chat \
+            --endpoint /v1/chat/completions \
+            --model ${{ matrix.test-group.model }} \
+            --dataset-name hf \
+            --dataset-path lmarena-ai/vision-arena-bench-v0.1 \
+            --num-prompts 32 \
+            --random-input-len 100 \
+            --random-output-len 100 \
+            --ignore-eos \
+            --percentile-metrics ttft,tpot,itl,e2el \
+            --save-result \
+            --result-filename output/vllm_result.json \
+            2>&1 | tee ${FILE_MULTIMODAL_BENCHMARK_LOG}
 
-            # If the backend fails, the benchmark will still complete successfully but with all-zero results.
-            # It will contain a warning message, though
-            warning_message="All requests failed"
-            if grep -q "$warning_message" "${FILE_MULTIMODAL_BENCHMARK_LOG}"; then
-              echo "❌ All requests failed"
-              echo "Check out the server log in a step below."
-              exit 1
-            fi
-          else
-            exit 0
+          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
+          # It will contain a warning message, though
+          warning_message="All requests failed"
+          if grep -q "$warning_message" "${FILE_MULTIMODAL_BENCHMARK_LOG}"; then
+            echo "❌ All requests failed"
+            echo "Check out the server log in a step below."
+            exit 1
           fi
       - name: 🧹 Cleanup server process
         if: always()
