@@ -13,7 +13,7 @@
 
 namespace tt::jit_build::utils {
 
-inline bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
+bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
     int ret;
@@ -38,7 +38,7 @@ inline bool run_command(const std::string& cmd, const std::string& log_file, con
     return (ret == 0);
 }
 
-inline void create_file(const std::string& file_path_str) {
+void create_file(const std::string& file_path_str) {
     namespace fs = std::filesystem;
 
     fs::path file_path(file_path_str);

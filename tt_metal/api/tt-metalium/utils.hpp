@@ -10,7 +10,7 @@
 
 namespace tt::tt_metal::detail {
 
-inline DeviceAddr SizeBytesPerBank(
+constexpr DeviceAddr SizeBytesPerBank(
     DeviceAddr size_bytes, DeviceAddr page_size_bytes, uint32_t num_banks, uint32_t alignment_bytes) {
     TT_ASSERT(
         page_size_bytes == 0 ? size_bytes == 0 : size_bytes % page_size_bytes == 0,

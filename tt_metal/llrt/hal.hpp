@@ -645,7 +645,7 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
 }
 
 // Core type conversion utility
-inline HalProgrammableCoreType hal_programmable_core_type_from_core_type(CoreType core_type) {
+constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(CoreType core_type) {
     switch (core_type) {
         case CoreType::WORKER:
         case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
