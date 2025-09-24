@@ -98,11 +98,15 @@ def test_flux(
     rope_cos = torch.randn([spatial_seq_len + prompt_seq_len, head_dim])
     rope_sin = torch.randn([spatial_seq_len + prompt_seq_len, head_dim])
 
-    tt_spatial = bf16_tensor_2dshard(spatial, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
+    spatial_padded = tt_model.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+    spatial_rope_cos_padded = tt_model.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
+    spatial_rope_sin_padded = tt_model.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
+
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
     tt_prompt = bf16_tensor(prompt, device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
     tt_time_embed = bf16_tensor(time_embed.unsqueeze(1), device=submesh_device)
-    tt_spatial_rope_cos = bf16_tensor(rope_cos[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_spatial_rope_sin = bf16_tensor(rope_sin[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
+    tt_spatial_rope_cos = bf16_tensor(spatial_rope_cos_padded, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
+    tt_spatial_rope_sin = bf16_tensor(spatial_rope_sin_padded, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
     tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=submesh_device)
     tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=submesh_device)
 
@@ -225,7 +229,9 @@ def test_motif(
     prompt = torch.randn([batch_size, prompt_seq_len, inner_dim])
     time_embed = torch.randn([batch_size, modulation_dim])
 
-    tt_spatial = bf16_tensor_2dshard(spatial, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
+    spatial_padded = tt_model.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
     tt_prompt = bf16_tensor(prompt, device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
     tt_time_embed = bf16_tensor(time_embed.unsqueeze(1), device=submesh_device)
 
@@ -240,6 +246,7 @@ def test_motif(
     )
 
     tt_spatial_torch = to_torch(tt_spatial_out, device=submesh_device, mesh_mapping={sp_axis: 1, tp_axis: 2})
+    tt_spatial_torch = tt_spatial_torch[:, :spatial_seq_len]
     assert_quality(torch_spatial, tt_spatial_torch, pcc=0.999996, relative_rmse=0.003)
 
     if is_last_block:

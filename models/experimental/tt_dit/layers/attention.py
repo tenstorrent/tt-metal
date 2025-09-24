@@ -32,13 +32,13 @@ class Attention(Module):
         added_kv_proj_dim: int,
         context_pre_only: bool = False,
         pre_only: bool = False,
+        use_spatial_weights_for_prompt: bool = False,
+        context_head_scaling: bool = False,
         eps: float,
         mesh_device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        use_spatial_weights_for_prompt: bool = False,
-        context_head_scaling: bool = False,
     ) -> None:
         super().__init__()
 
@@ -315,6 +315,18 @@ class Attention(Module):
             prompt = self.to_add_out(prompt, core_grid=core_grid)
 
         return spatial, prompt
+
+    @staticmethod
+    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
+        if sp_factor == 1:
+            return x
+
+        seq_len = x.shape[-2]
+
+        divisor = 512 * sp_factor
+        padding_len = -seq_len % divisor
+
+        return torch.nn.functional.pad(x, (0, 0, 0, padding_len))
 
 
 def _apply_rope(x: ttnn.Tensor, freqs_cis: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:

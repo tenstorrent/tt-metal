@@ -283,6 +283,10 @@ class TransformerBlock(Module):
 
         return spatial, prompt
 
+    @staticmethod
+    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
+        return Attention.pad_spatial_sequence(x, sp_factor=sp_factor)
+
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count

@@ -293,6 +293,10 @@ class MotifTransformer(Module):
         rename_substate(state, "norm_out.linear", "time_embed_out")  # chunks=2 if sharded
         rename_substate(state, "norm_out.norm", "norm_out")
 
+    @staticmethod
+    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
+        return TransformerBlock.pad_spatial_sequence(x, sp_factor=sp_factor)
+
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
@@ -391,7 +395,7 @@ def convert_motif_transformer_block_state(
 
     convert_motif_attention_state(
         state,
-        prefix=f"{prefix}attn",
+        prefix=f"{prefix}attn.",
         x_weight=x_weight,
         x_bias=x_bias,
         c_weight=c_weight,
