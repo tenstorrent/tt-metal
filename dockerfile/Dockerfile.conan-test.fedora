@@ -21,7 +21,7 @@ RUN dnf update -y && dnf install -y \
     python3-pip python3-devel \
     wget \
     curl \
-    clang \
+    clang perl-core \
     python3-virtualenv python3-devel python3 python3-pip \
     clang clang-tools-extra \
     llvm llvm-devel \
@@ -33,10 +33,12 @@ ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal
 ENV PYTHONPATH=/tt-metal
 
-RUN git config --global --add safe.directory /workspace
+ENV HOME="/root"
+WORKDIR $HOME
+ENV PATH_FIRST="$PATH"
 
-ENV VIRTUAL_ENV=/root/tt-metal-virtualenv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+ENV VIRTUAL_ENV=/root/tt-metal-virtualenv-tmp
+ENV PATH="$VIRTUAL_ENV/bin:$PATH_FIRST"
 
 RUN python3 -m venv $VIRTUAL_ENV
 
@@ -44,11 +46,22 @@ RUN pip3 install conan
 RUN conan profile detect --force
 COPY conan_profile_clang_17.txt /tmp/profile
 RUN cp /tmp/profile $(conan profile path default)
+RUN git config --global --add safe.directory /workspace
 RUN conan profile show
+
+WORKDIR /tt-conan
+COPY .git /tt-conan/.git
+COPY conanfile.py /tt-conan/conanfile.py
+RUN conan install . --build=missing -cc core.net.http:timeout=240
+RUN . .conan-build/Release/generators/conanrun.sh && python3.10 -m venv /root/tt-metal-virtualenv
+
+ENV VIRTUAL_ENV=/root/tt-metal-virtualenv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH_FIRST"
+RUN pip3 install conan
 
 WORKDIR /tt-metal
 COPY . /tt-metal
-RUN conan install . --build=missing
+
 
 # # Build tt-metal and venv, then clear cache
 # RUN /bin/bash -c "./build_metal.sh"

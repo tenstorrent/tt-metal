@@ -1,4 +1,4 @@
-# TT-Metalium Dockerfile
+# TT-Metalium Dockerfile for Debian
 
 #############################################################
 
@@ -37,11 +37,10 @@ RUN cp /tmp/profile $(conan profile path default)
 RUN git config --global --add safe.directory /workspace
 RUN conan profile show
 
-
 WORKDIR /tt-conan
 COPY .git /tt-conan/.git
 COPY conanfile.py /tt-conan/conanfile.py
-RUN conan install . --build=missing
+RUN conan install . --build=missing -cc core.net.http:timeout=240
 RUN . .conan-build/Release/generators/conanrun.sh && python3.10 -m venv /root/tt-metal-virtualenv
 
 ENV VIRTUAL_ENV=/root/tt-metal-virtualenv

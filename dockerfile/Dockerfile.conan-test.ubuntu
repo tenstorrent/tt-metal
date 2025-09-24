@@ -40,4 +40,4 @@ RUN conan profile show
 
 WORKDIR /tt-metal
 COPY . /tt-metal
-RUN conan install . --build=missing
+RUN conan install . --build=missing -cc core.net.http:timeout=240
