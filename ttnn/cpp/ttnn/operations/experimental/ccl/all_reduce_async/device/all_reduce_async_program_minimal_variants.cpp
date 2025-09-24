@@ -49,7 +49,6 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
-    IDevice* target_device,
     MeshCoordinate& target_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
@@ -366,7 +365,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
-        CoreCoord drain_sync_core = target_device->worker_core_from_logical_core(core);
+        CoreCoord drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         uint32_t worker_num_tiles_to_read = output_tensor_pages_in_link[link];
 
         uint32_t input_first_core_tile_start_offset = input_tensor_tile_offset_per_link[link];
@@ -377,14 +376,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         std::vector<uint32_t> output_tensor_cores_x;
         std::vector<uint32_t> output_tensor_cores_y;
         for (uint32_t i = input_cores_idx_per_link[link].first; i < input_cores_idx_per_link[link].second; i++) {
-            auto this_core = target_device->worker_core_from_logical_core(input_cores_vec[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
         for (uint32_t i = output_cores_per_link * link;
              i < output_cores_per_link * link + num_output_cores_in_link[link];
              i++) {
-            auto this_core = target_device->worker_core_from_logical_core(output_cores_vec[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(output_cores_vec[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
@@ -413,8 +412,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
         uint32_t num_mcast_cores = 0;
         for (const auto& range : output_corerangeset_per_link[link].ranges()) {
-            auto start_core = target_device->worker_core_from_logical_core(range.start_coord);
-            auto end_core = target_device->worker_core_from_logical_core(range.end_coord);
+            auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
+            auto end_core = mesh_device->worker_core_from_logical_core(range.end_coord);
             num_mcast_cores += (end_core.x - start_core.x + 1) * (end_core.y - start_core.y + 1);
             bool mcast_range_contains_self =
                 start_core.x <= core.x && core.x <= end_core.x && start_core.y <= core.y && core.y <= end_core.y;

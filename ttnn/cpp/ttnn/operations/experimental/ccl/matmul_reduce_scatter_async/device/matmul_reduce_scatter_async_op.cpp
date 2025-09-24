@@ -101,47 +101,24 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].device();
-    ::ttnn::ccl::get_device_sender_receiver_config(
-        mesh_device->get_device(mesh_coord),
-        ttnn::ccl::get_devices(*mesh_device, mesh_coord, this->reduce_scatter_minimal_async_struct.cluster_axis),
-        this->reduce_scatter_minimal_async_struct.topology);
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
     auto target_device_coord = mesh_coord;
 
-    std::vector<IDevice*> devices_to_use =
-        ttnn::ccl::get_devices(*mesh_device, mesh_coord, this->reduce_scatter_minimal_async_struct.cluster_axis);
+    auto tensor_topology = input_tensors[0].tensor_topology();
+    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor(
+        tensor_topology,
+        target_device_coord,
+        1,
+        this->reduce_scatter_minimal_async_struct.topology,
+        this->reduce_scatter_minimal_async_struct.cluster_axis);
 
-    std::optional<MeshCoordinate> backward_coord = std::nullopt;
-    std::optional<MeshCoordinate> forward_coord = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < this->reduce_scatter_minimal_async_struct.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_coord = MeshCoordinate(
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? i - 1 : mesh_coord[0],
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? mesh_coord[1] : i - 1);
-            } else if (this->reduce_scatter_minimal_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                backward_coord = MeshCoordinate(
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0)
-                        ? this->reduce_scatter_minimal_async_struct.ring_size - 1
-                        : mesh_coord[0],
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0)
-                        ? mesh_coord[1]
-                        : this->reduce_scatter_minimal_async_struct.ring_size - 1);
-            }
-            if (i != this->reduce_scatter_minimal_async_struct.ring_size - 1) {
-                forward_coord = MeshCoordinate(
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? i + 1 : mesh_coord[0],
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? mesh_coord[1] : i + 1);
-            } else if (this->reduce_scatter_minimal_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                forward_coord = MeshCoordinate(
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? 0 : mesh_coord[0],
-                    (this->reduce_scatter_minimal_async_struct.cluster_axis.value() == 0) ? mesh_coord[1] : 0);
-            }
-        }
-    }
+    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor(
+        tensor_topology,
+        target_device_coord,
+        -1,
+        this->reduce_scatter_minimal_async_struct.topology,
+        this->reduce_scatter_minimal_async_struct.cluster_axis);
+    uint32_t device_index = ccl::get_physical_linearized_index(
+        tensor_topology, target_device_coord, this->reduce_scatter_minimal_async_struct.cluster_axis);
 
     // Return the MatmulReduceScatterAsync program with callbacks
     return matmul_reduce_scatter_async_multi_core_with_workers(
@@ -152,7 +129,6 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         output_tensors[0],  // matmul_output_tensor
 
         /* Reduce Scatter Params */
-        target_device,
         target_device_coord,
         forward_coord,
         backward_coord,

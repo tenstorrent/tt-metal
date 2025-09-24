@@ -38,7 +38,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     Tensor& matmul_output_tensor,
 
     /* All Gather Params */
-    IDevice* target_device,
     MeshCoordinate& target_device_coord,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,
