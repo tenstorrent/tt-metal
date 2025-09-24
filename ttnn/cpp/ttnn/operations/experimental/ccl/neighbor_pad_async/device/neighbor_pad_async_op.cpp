@@ -84,8 +84,8 @@ tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_a
         this->topology,
         target_ring_size,
         device_index,
-        secondary_cluster_axis,
-        secondary_mesh_shape);
+        this->secondary_cluster_axis,
+        this->secondary_mesh_shape);
 }
 
 tt::tt_metal::operation::Hash NeighborPadAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -105,6 +105,8 @@ tt::tt_metal::operation::Hash NeighborPadAsync::compute_program_hash(const std::
         this->topology,
         this->cluster_axis,
         this->ring_size,
+        this->secondary_cluster_axis,
+        this->secondary_mesh_shape,
         input_shape,
         input_memory_layout,
         input_dtype,
