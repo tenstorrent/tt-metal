@@ -1642,7 +1642,7 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
     initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
 
-    if (!is_mid_run_dump) {
+    if (true) {
         for (auto& [core, _] : this->device_markers_per_core_risc_map) {
             this->thread_pool->enqueue([this, core]() {
                 for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {

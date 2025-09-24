@@ -840,9 +840,7 @@ void ProcessDeviceProfilerResults(
             profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         }
 
-        if (dumpDeviceProfilerDataMidRun(state)) {
-            profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
-        }
+        profiler.dumpDeviceResults(dumpDeviceProfilerDataMidRun(state));
     }
 #endif
 }
