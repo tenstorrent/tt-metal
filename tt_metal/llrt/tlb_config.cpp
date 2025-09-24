@@ -30,7 +30,7 @@ static constexpr uint32_t ETH_STATIC_TLB_START = 0;
 
 int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
     if (target.y >= tt::umd::wormhole::ETH_LOCATIONS.size()) {
-        return -1;
+        TT_THROW("Invalid ETH core coordinate for generating static TLB index");
     }
     int32_t tlb_index = ETH_STATIC_TLB_START + target.y;
     return tlb_index;
@@ -39,19 +39,19 @@ int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
 int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
     if ((target.x >= tt::umd::wormhole::T6_X_LOCATIONS.size()) ||
         (target.y >= tt::umd::wormhole::T6_Y_LOCATIONS.size())) {
-        return -1;
+        TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
     return TENSIX_STATIC_TLB_START + target.y * 8 + target.x;
 }
 
 int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
     if (target.coord_system != CoordSystem::LOGICAL) {
-        return -1;
+        TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
     switch (target.core_type) {
         case CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
         case CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
-        default: return -1;
+        default: TT_THROW("Invalid core type for generating static TLB index");
     }
 }
 
@@ -67,8 +67,7 @@ static constexpr uint32_t TENSIX_STATIC_TLB_START = 38;
 
 int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
     if (target.y >= tt::umd::blackhole::ETH_LOCATIONS.size()) {
-        TT_ASSERT(false, "Invalid TLB location for ETH core");
-        return -1;
+        TT_THROW("Invalid ETH core coordinate for generating static TLB index");
     }
     int tlb_index = ETH_STATIC_TLB_START + target.y;
     return tlb_index;
@@ -77,8 +76,7 @@ int32_t get_static_tlb_index_logical_eth(CoreCoord target) {
 int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
     if ((target.x >= tt::umd::blackhole::T6_X_LOCATIONS.size()) ||
         (target.y >= tt::umd::blackhole::T6_Y_LOCATIONS.size())) {
-        TT_ASSERT(false, "Invalid TLB location for TENSIX core");
-        return -1;
+        TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
     return TENSIX_STATIC_TLB_START + target.y * 14 + target.x;
 }
@@ -86,7 +84,7 @@ int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
 int32_t get_static_tlb_index_logical_dram(CoreCoord target) {
     auto dram_tlb_index = target.x;
     if (dram_tlb_index > 7) {
-        return -1;
+        TT_THROW("Invalid DRAM core coordinate for generating static TLB index");
     }
     // Each DRAM channel has 3 ports, and the logical x coordinate directly corresponds to the channel.
     // Therefore, the x coordinate alone is sufficient for determining the TLB mapping.
@@ -95,13 +93,13 @@ int32_t get_static_tlb_index_logical_dram(CoreCoord target) {
 
 int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
     if (target.coord_system != CoordSystem::LOGICAL) {
-        return -1;
+        TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
     switch (target.core_type) {
         case CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
         case CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
         case CoreType::DRAM: return get_static_tlb_index_logical_dram({target.x, target.y});
-        default: return -1;
+        default: TT_THROW("Invalid core type for generating static TLB index");
     }
 }
 
