@@ -4953,10 +4953,16 @@ def test_conv2d_1kX1k(
     "batch_size",
     [1],
 )
+@pytest.mark.parametrize("config_in_dram", [False,True])
+@pytest.mark.parametrize("full_inner_dim", [False,True])
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w,dilation_h, dilation_w, pad_h, pad_w, act_block_h_override",
     (
-        (64, 64, 3, 32, 3, 3, 1, 1, 1, 1),
+        # (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# single core
+        # (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
+        # (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
+        # (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
+        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
 @pytest.mark.parametrize(
@@ -4969,8 +4975,8 @@ def test_conv2d_1kX1k(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
-@pytest.mark.parametrize("force_split_reader", [True])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("force_split_reader", [True, False])
 def test_conv_block_sharding(
     device,
     torch_tensor_map,
@@ -4978,6 +4984,7 @@ def test_conv_block_sharding(
     output_dtype,
     weights_dtype,
     batch_size,
+    config_in_dram,
     output_channels,
     input_channels,
     input_height,
@@ -4988,8 +4995,12 @@ def test_conv_block_sharding(
     stride_w,
     pad_h,
     pad_w,
+    dilation_h,
+    dilation_w,
     output_layout,
     force_split_reader,
+    full_inner_dim,
+    act_block_h_override,
 ):
 
     run_conv(
@@ -5008,11 +5019,15 @@ def test_conv_block_sharding(
         stride_h,
         stride_w,
         (pad_h, pad_w),
-        {"act_block_h": 96},
+        {"act_block_h": act_block_h_override},
         shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
         output_layout=output_layout,
         groups=1,
         in_place=False,
         force_split_reader=force_split_reader,
+        config_tensors_in_dram=config_in_dram,
+        dilation_h=dilation_h,
+        dilation_w=dilation_w,
+        bs_full_inner_dim=full_inner_dim,
     )
