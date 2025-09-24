@@ -132,7 +132,7 @@ class PytorchPanopticDeepLab(nn.Module):
 
     def load_model_weights(self, weights_path: str, strict: bool = True):
         """
-        Učitava kompletan state_dict za cijeli model (backbone + heads).
+        Loads the complete state_dict for the entire model (backbone + heads).
         """
         logger.info(f"Loading complete model weights from {weights_path}")
         try:
