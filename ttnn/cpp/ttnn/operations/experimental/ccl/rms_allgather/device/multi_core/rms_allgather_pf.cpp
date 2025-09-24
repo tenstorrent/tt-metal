@@ -683,8 +683,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = NOC::NOC_1;
     if (!use_noc1_only) {
-        reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(mesh_device->arch());
-        writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(mesh_device->arch());
+        reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch());
+        writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch());
 
         if (!skip_write_back) {
             reader_noc = NOC::NOC_0;

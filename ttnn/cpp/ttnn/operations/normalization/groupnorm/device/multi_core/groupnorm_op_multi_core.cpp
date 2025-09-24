@@ -582,8 +582,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     if (use_welford) {
         reader_mcast_receiver_compile_time_args.push_back(block_ht * block_wt);
     }
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -1785,8 +1785,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_rows_per_batch_per_core_group_2};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(

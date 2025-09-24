@@ -23,14 +23,14 @@ enum NOC : uint8_t {
 
 namespace detail {
 
-inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
+inline NOC preferred_noc_for_dram_read(ARCH arch) {
     switch (arch) {
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_0;
     }
 }
 
-inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
+inline NOC preferred_noc_for_dram_write(ARCH arch) {
     switch (arch) {
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_1;

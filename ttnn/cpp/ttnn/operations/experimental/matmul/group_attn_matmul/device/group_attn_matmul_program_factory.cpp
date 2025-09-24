@@ -238,7 +238,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     }
 
     tt::tt_metal::NOC reader_noc =
-        tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());  // Default is NOC_1
+        tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());  // Default is NOC_1
     const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
     tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto reader_id = tt::tt_metal::CreateKernel(

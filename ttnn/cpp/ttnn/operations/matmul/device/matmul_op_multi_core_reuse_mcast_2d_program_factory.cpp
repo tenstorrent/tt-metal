@@ -575,10 +575,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     tt::tt_metal::KernelHandle mm_kernel_in0_sender_id = 0;
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
