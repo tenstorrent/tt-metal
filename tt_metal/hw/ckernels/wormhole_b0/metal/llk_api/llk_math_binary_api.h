@@ -83,6 +83,10 @@ inline void llk_math_eltwise_binary(
         binary_reuse_dest>(num_faces, dst_index, clear_fp32_dst_acc);
 }
 
+/*************************************************************************
+ * LLK COL - TILE eltwise subtraction unpacker implementation for SDPA
+ *************************************************************************/
+
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWSUB,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,

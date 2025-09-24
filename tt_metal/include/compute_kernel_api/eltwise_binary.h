@@ -233,6 +233,10 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
 
 }  // namespace ckernel
 
+/*************************************************************************
+ * LLK COL - TILE eltwise subtraction unpacker implementation for SDPA
+ *************************************************************************/
+
 ALWI void sub_bcast_row_tiles_hw_configure(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
 
@@ -249,11 +253,11 @@ ALWI void sub_bcast_row_tile_init() {
     MATH((llk_math_eltwise_sub_bcast_row_init<>()));
 }
 
-ALWI void sub_bcast_row_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1) {
+ALWI void sub_bcast_row_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint dst_index) {
     UNPACK((llk_unpack_AB_sub_bcast_row<>(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary_sub_bcast_row<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::NONE,
           DstSync::SyncHalf,
-          DST_ACCUM_MODE>(0)));
+          DST_ACCUM_MODE>(dst_index)));
 }

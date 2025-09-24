@@ -5,6 +5,8 @@
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
@@ -32,18 +34,23 @@ void MAIN {
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
 
-        tile_regs_acquire();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            tile_regs_acquire();  // llk_math_wait_for_dest_available
             // ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
-            sub_bcast_row_tile(cb_inp0, cb_inp1, 0, 0);
-            tile_regs_commit();
+            sub_bcast_row_tile(cb_inp0, cb_inp1, 0, 0, i /*dst_index*/);
+
+            // UNPACK(( tt::compute::common::print_full_tile(cb_inp0,0,false) ));
+
+            tile_regs_commit();  // llk_math_dest_section_done
+            tile_regs_wait();    // llk_packer_wait_for_math_done
+            pack_tile(i, cb_out0);
+            tile_regs_release();  // llk_pack_dest_section_done
         }
 
-        tile_regs_wait();
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, cb_out0);
-        }
-        tile_regs_release();
+        // tile_regs_wait();
+        // for (uint32_t i = 0; i < per_core_block_size; ++i) {
+        //     pack_tile(i, cb_out0);
+        // }
 
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
