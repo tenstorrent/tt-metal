@@ -94,7 +94,6 @@ def vae_neighbor_pad(
     global_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
 
-    ttnn.synchronize_device(x.device())
     x_pad = ttnn.experimental.neighbor_pad_async(
         x,
         dim=dim,
@@ -120,7 +119,6 @@ def vae_slice_reshard(
     global_semaphore = ccl_manager.get_sr_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
 
-    ttnn.synchronize_device(x.device())
     x_sr = ttnn.experimental.slice_reshard_async(
         x,
         dim=dim,
