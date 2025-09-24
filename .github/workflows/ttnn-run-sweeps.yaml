@@ -10,6 +10,7 @@ on:
         default: "ALL SWEEPS (Nightly)"
         options:
           - ALL SWEEPS (Nightly)
+          - add
           - ccl.generality.all_broadcast
           - ccl.generality.all_gather
           - ccl.generality.all_reduce

@@ -60,7 +60,7 @@ class SweepsConfig:
     summary: bool = False
     run_contents: str = None
     arch_name: Optional[str] = None
-    debug: bool = False
+    main_proc_verbose: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -82,7 +82,7 @@ def create_config_from_args(args) -> SweepsConfig:
         skip_on_timeout=args.skip_on_timeout,
         keep_invalid=args.keep_invalid,
         summary=args.summary,
-        debug=args.debug,
+        main_proc_verbose=args.main_proc_verbose,
     )
 
     if args.vector_source == "elastic" or args.result_dest == "elastic":
@@ -341,7 +341,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                     status, message = results
                     e2e_perf = None
             except Exception as e:
-                if config.debug:
+                if config.main_proc_verbose:
                     logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
@@ -382,8 +382,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
         result["start_time_ts"] = dt.datetime.now()
-        validity =  deserialize(test_vector["validity""])
-        if validity.value == "INVALID":
+        validity = deserialize(test_vector["validity"]).split(".")[-1]
+        if validity == VectorValidity.INVALID:
             invalid_vectors_count += 1
             if not config.keep_invalid:
                 # Skip this vector entirely - don't add to results
