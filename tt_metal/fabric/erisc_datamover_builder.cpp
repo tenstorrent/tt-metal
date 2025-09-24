@@ -298,8 +298,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
     this->edm_local_sync_address = termination_signal_address + field_size;
-    this->edm_local_tensix_sync_address = edm_local_sync_address + field_size;
-    this->edm_status_address = edm_local_tensix_sync_address + field_size;
+    this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
 
@@ -353,6 +352,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
+
+    this->edm_local_tensix_sync_address = buffer_address + field_size;
+    buffer_address += field_size;
 
     // Channel Allocations
     this->max_l1_loading_size =
