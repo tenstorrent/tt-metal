@@ -298,6 +298,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
 static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
+    ret.reserve(tensors.size());
     for (auto& tensor : tensors) {
         ret.push_back(get_tensor_json(tensor));
     }
@@ -418,7 +419,7 @@ inline std::string op_meta_data_serialized_json(
     uint32_t opID, const tt::tt_metal::operation::ExternalOperation& op, const std::vector<Tensor>& input_tensors) {
     auto j = get_base_json<true>(opID, op, input_tensors);
     j["op_type"] = enchantum::to_string(OpType::python_fallback);
-    std::string ser = j.dump(4);
+    std::string ser = j.dump();
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"].dump(), ser);
 }
 
@@ -472,7 +473,7 @@ inline std::string op_meta_data_serialized_json(
             cached_ops.at(device_id).emplace(program_hash, short_str);
         }
 
-        std::string ser = j.dump(4);
+        std::string ser = j.dump();
         return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
     } else {
         auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
@@ -500,17 +501,17 @@ inline std::string op_meta_data_serialized_json(
 
 #define TracyOpMeshWorkload(                                                                                   \
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)             \
-    for (const auto& [range, program] : mesh_workload.get_programs()) {                                        \
+    for (const auto& [range, program] : (mesh_workload).get_programs()) {                                      \
         auto base_program_id = program.get_runtime_id();                                                       \
         for (auto coord : range) {                                                                             \
             /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
             /* regression tests well-formed data. */                                                           \
             /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
-            if (!mesh_device->is_local(coord)) {                                                               \
+            if (!(mesh_device)->is_local(coord)) {                                                             \
                 continue;                                                                                      \
             }                                                                                                  \
             ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
-            auto device_id = mesh_device->get_device(coord)->id();                                             \
+            auto device_id = (mesh_device)->get_device(coord)->id();                                           \
             auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
             std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
                 operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \

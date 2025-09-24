@@ -34,10 +34,10 @@ To collect profiling data, you’ll need the [tt-metal](https://github.com/tenst
 * A **memory report**
 * A **performance report**
 
-You can generate both by enabling profiling during model execution. To do this, clone and build `tt-metal` with the profiler enabled:
+You can generate both by enabling profiling during model execution. Clone and build `tt-metal`:
 
 ```bash
-./build_metal.sh -p
+./build_metal.sh
 ```
 
 Then, install `ttnn-visualizer` via pip:
@@ -307,10 +307,10 @@ Visualize performance on graphs.
 
 To summarize:
 
-1. **Build tt-metal with profiler support**:
+1. **Build tt-metal**:
 
    ```bash
-   ./build_metal.sh -p
+   ./build_metal.sh
    ```
 2. **Install and launch TTNN Visualizer**:
 

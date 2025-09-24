@@ -52,11 +52,11 @@ Profiling Host
 C++
 ~~~
 
-Build with the profiler option (i.e. ``ENABLE_TRACY=ON`` cmake option) is required for profiling with tracy.
+Builds must have Tracy enabled (i.e. ``ENABLE_TRACY=ON`` cmake option) for profiling with Tracy.
 
 ..  code-block:: sh
 
-    build_metal.sh --enable-profiler
+    build_metal.sh
 
 With this build variant, all C++ marked zones will be profiled.
 
