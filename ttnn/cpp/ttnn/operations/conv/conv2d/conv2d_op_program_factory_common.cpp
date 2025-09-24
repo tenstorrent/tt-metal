@@ -103,6 +103,7 @@ std::vector<CBInfo> get_cb_info(
     const bool split_reader_enabled =
         is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles) &&
         conv_config.force_split_reader.value_or(is_split_reader_viable(
+            sharding_scheme,
             block_config.act_block_h_ntiles,
             input_channels_padded,
             kernel_size[1],
@@ -591,6 +592,7 @@ static uint32_t get_tilize_cycles_per_tile(
     which is why we use it to convert transfer rates to cycles.
 */
 bool is_split_reader_viable(
+    TensorMemoryLayout memory_layout,
     uint32_t act_block_h_ntiles,
     uint32_t input_channels_padded,
     uint32_t kernel_width,
@@ -604,6 +606,9 @@ bool is_split_reader_viable(
     bool fp32_dest_acc,
     DataType output_datatype,
     bool act_reuse_enabled) {
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        return true;
+    }
     // If activation reuse is enabled, we always enable split_reader
     if (act_reuse_enabled) {
         return true;
