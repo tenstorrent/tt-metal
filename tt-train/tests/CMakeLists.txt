@@ -53,6 +53,10 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/slice_repeat_ops_test.cpp
+    ops/binary_ops_test.cpp
+    ops/multi_head_utils_test.cpp
+    ops/multi_head_diagnostic_test.cpp
+    ops/scaled_dot_product_attention_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
