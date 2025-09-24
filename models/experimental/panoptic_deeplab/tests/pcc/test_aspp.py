@@ -13,7 +13,11 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE, get_panoptic_deeplab_weights_path
+from models.experimental.panoptic_deeplab.tt.common import (
+    PDL_L1_SMALL_SIZE,
+    get_panoptic_deeplab_weights_path,
+    get_panoptic_deeplab_config,
+)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -29,15 +33,16 @@ def test_ttnn_aspp(device, model_location_generator):
     # Get the weights path using the common utility function
     complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
 
-    # Model configuration
-    batch_size = 1
-    num_classes = 19
-    project_channels = [32, 64]
-    decoder_channels = [256, 256, 256]
-    sem_seg_head_channels = 256
-    ins_embed_head_channels = 32
-    common_stride = 4
-    train_size = (512, 1024)
+    # Get model configuration
+    config = get_panoptic_deeplab_config()
+    batch_size = config["batch_size"]
+    num_classes = config["num_classes"]
+    project_channels = config["project_channels"]
+    decoder_channels = config["decoder_channels"]
+    sem_seg_head_channels = config["sem_seg_head_channels"]
+    ins_embed_head_channels = config["ins_embed_head_channels"]
+    common_stride = config["common_stride"]
+    train_size = config["train_size"]
 
     # Create input for ASPP testing (res5 feature map size)
     input_height, input_width = 32, 64  # res5 feature map size

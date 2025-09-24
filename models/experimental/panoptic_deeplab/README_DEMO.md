@@ -52,16 +52,6 @@ python models/experimental/panoptic_deeplab/tt/demo.py \
     --batch
 ```
 
-### Using pytest
-
-```bash
-# Run single image test
-pytest models/experimental/panoptic_deeplab/tt/demo.py::test_panoptic_deeplab_demo -v
-
-# Run batch processing test
-pytest models/experimental/panoptic_deeplab/tt/demo.py::test_panoptic_deeplab_batch_demo -v
-```
-
 ## Output Files
 
 The demo generates several output files for each processed image:

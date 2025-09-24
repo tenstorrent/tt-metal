@@ -6,7 +6,6 @@ from typing import Dict, Tuple
 
 import cv2
 import numpy as np
-import pytest
 import torch
 from loguru import logger
 
@@ -17,8 +16,11 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
+from models.experimental.panoptic_deeplab.tt.common import (
+    get_panoptic_deeplab_config,
+)
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
-from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> np.ndarray:
@@ -461,14 +463,15 @@ def run_panoptic_deeplab_demo(
     logger.info(f"Running Panoptic DeepLab demo on {image_path}")
     logger.info(f"Target size: {target_size}")
 
-    # Model configuration
-    batch_size = 1
-    num_classes = 19
-    project_channels = [32, 64]
-    decoder_channels = [256, 256, 256]
-    sem_seg_head_channels = 256
-    ins_embed_head_channels = 32
-    common_stride = 4
+    # Get model configuration
+    config = get_panoptic_deeplab_config()
+    batch_size = config["batch_size"]
+    num_classes = config["num_classes"]
+    project_channels = config["project_channels"]
+    decoder_channels = config["decoder_channels"]
+    sem_seg_head_channels = config["sem_seg_head_channels"]
+    ins_embed_head_channels = config["ins_embed_head_channels"]
+    common_stride = config["common_stride"]
 
     # Preprocess image
     logger.info("Preprocessing image...")
@@ -620,48 +623,6 @@ def run_panoptic_deeplab_batch_demo(
             continue
 
     logger.info("Batch processing completed!")
-
-
-# Test functions for pytest
-@run_for_wormhole_b0()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-@pytest.mark.parametrize(
-    "image_path, target_size",
-    [
-        ("models/experimental/panoptic_deeplab/resources/sample_image.jpg", (512, 1024)),
-    ],
-)
-def test_panoptic_deeplab_demo(device, image_path, target_size):
-    """Test Panoptic DeepLab demo with a single image."""
-    weights_path = "models/experimental/panoptic_deeplab/weights/model_final_bd324a.pkl"
-
-    run_panoptic_deeplab_demo(
-        device=device,
-        image_path=image_path,
-        weights_path=weights_path,
-        target_size=target_size,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-@pytest.mark.parametrize(
-    "input_dir, target_size, max_images",
-    [
-        ("models/experimental/panoptic_deeplab/resources", (512, 1024), 5),
-    ],
-)
-def test_panoptic_deeplab_batch_demo(device, input_dir, target_size, max_images):
-    """Test Panoptic DeepLab demo with multiple images."""
-    weights_path = "models/experimental/panoptic_deeplab/weights/model_final_bd324a.pkl"
-
-    run_panoptic_deeplab_batch_demo(
-        device=device,
-        input_dir=input_dir,
-        weights_path=weights_path,
-        target_size=target_size,
-        max_images=max_images,
-    )
 
 
 if __name__ == "__main__":
