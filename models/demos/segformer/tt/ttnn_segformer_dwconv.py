@@ -14,7 +14,7 @@ except ModuleNotFoundError:
 
 
 class TtSegformerDWConv:
-    def __init__(self, parameters, dim):
+    def __init__(self, parameters, dim, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)):
         super().__init__()
         if dim == 1024:
             self.dwconv = Conv(
@@ -24,7 +24,7 @@ class TtSegformerDWConv:
                 height_sharding=False,
                 act_block_h=32,
                 dtype=ttnn.bfloat8_b,
-                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+                activation=activation,
             )
         elif dim == 640:
             self.dwconv = Conv(
@@ -34,7 +34,7 @@ class TtSegformerDWConv:
                 height_sharding=False,
                 act_block_h=32,
                 dtype=ttnn.bfloat8_b,
-                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+                activation=activation,
             )
         else:
             self.dwconv = Conv(
@@ -42,7 +42,7 @@ class TtSegformerDWConv:
                 parameters=parameters["dwconv"],
                 groups=dim,
                 dtype=ttnn.bfloat8_b,
-                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+                activation=activation,
             )
 
     def __call__(
