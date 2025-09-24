@@ -18,7 +18,6 @@ from models.demos.yolov11m.tt import ttnn_yolov11
 from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
 
 
-
 def test_obb_simple():
     """Simple test for OBB (Oriented Bounding Box) model"""
     print("🧪 Testing OBB Model...")
@@ -515,7 +514,6 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
                 torch_output = torch_model(input_tensor)
             print(f"📤 PyTorch output shape: {torch_output.shape}")
             
-            from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_input_tensors
 
             torch_input, ttnn_input = create_yolov11_input_tensors(
                 device,
