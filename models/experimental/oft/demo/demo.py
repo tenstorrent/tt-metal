@@ -60,11 +60,9 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     ],
     # fmt: on
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
 @torch.no_grad()
 def test_demo_inference(
     device,
-    checkpoints_path,
     input_image_path,
     calib_path,
     model_dtype,
@@ -76,6 +74,7 @@ def test_demo_inference(
     pcc_positions_oft,
     pcc_dimensions_oft,
     pcc_angles_oft,
+    model_location_generator,
 ):
     assert use_host_decoder == False, "Only use_host_decoder=False is supported for now"
     # Create output directory for saving visualizations
@@ -105,7 +104,7 @@ def test_demo_inference(
         dtype=model_dtype,
     )
 
-    ref_model = load_checkpoint(checkpoints_path, ref_model)
+    ref_model = load_checkpoint(ref_model, model_location_generator)
     parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
 
     # 3 Create reference encoder

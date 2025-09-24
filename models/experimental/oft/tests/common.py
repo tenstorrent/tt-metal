@@ -11,13 +11,45 @@ H_PADDED = 384
 W_PADDED = 1280
 
 NMS_THRESH = 0.2
+CHECKPOINTS_PATH_ENV = "CHECKPOINTS_PATH"
 
 import os
 import torch
 from loguru import logger
 
 
-def load_checkpoint(checkpoints_path, ref_model):
+def prepare_checkpoint_path(model_location_generator):
+    checkpoints_path = None
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
+        checkpoints_path = os.environ.get(CHECKPOINTS_PATH_ENV)
+        if checkpoints_path is None:
+            logger.error(f"Environment variable {CHECKPOINTS_PATH_ENV} is not set!")
+            raise RuntimeError(f"Environment variable {CHECKPOINTS_PATH_ENV} is not set!")
+    else:
+        cached_weights_path = "/tmp/ttnn_model_cache/model_weights/vision-models/oft/checkpoint-0600.pth"
+        if os.path.exists(cached_weights_path):
+            checkpoints_path = cached_weights_path
+        else:
+            # Use CI v2 model location generator to download
+            checkpoints_path = (
+                model_location_generator("vision-models/oft", model_subdir="", download_if_ci_v2=True)
+                / "checkpoint.pth"
+            )
+
+    if checkpoints_path is not None and os.path.isfile(checkpoints_path):
+        logger.info(f"Using model weights from {checkpoints_path}")
+    else:
+        logger.error(f"Checkpoint path {checkpoints_path} does not exist")
+        raise RuntimeError(f"Checkpoint path {checkpoints_path} does not exist")
+
+    return checkpoints_path
+
+
+def load_checkpoint(ref_model, model_location_generator=None):
+    checkpoints_path = prepare_checkpoint_path(model_location_generator)
+    if checkpoints_path is None:
+        logger.error("Environment variable CHECKPOINTS_PATH is not set!")
+        raise RuntimeError("Environment variable CHECKPOINTS_PATH is not set!")
     if checkpoints_path is not None and os.path.isfile(checkpoints_path):
         logger.info(f"Loading model weights from {checkpoints_path}")
         checkpoint = torch.load(checkpoints_path, map_location="cpu")

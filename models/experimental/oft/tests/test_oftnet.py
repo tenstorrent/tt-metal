@@ -44,10 +44,8 @@ from loguru import logger
         "fp32_use_host_oft",
     ],
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/localdev/njovanovic/checkpoint-0600.pth"])
 def test_oftnet(
     device,
-    checkpoints_path,
     input_image_path,
     calib_path,
     model_dtype,
@@ -56,6 +54,7 @@ def test_oftnet(
     pcc_positions_oft,
     pcc_dimensions_oft,
     pcc_angles_oft,
+    model_location_generator,
 ):
     torch.manual_seed(42)
 
@@ -74,7 +73,7 @@ def test_oftnet(
         dtype=model_dtype,
     )
 
-    ref_model = load_checkpoint(checkpoints_path, ref_model)
+    ref_model = load_checkpoint(ref_model, model_location_generator)
     parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
 
     tt_input = input_tensor.permute((0, 2, 3, 1))
