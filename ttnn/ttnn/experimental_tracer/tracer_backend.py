@@ -1012,8 +1012,11 @@ def create_graph_json_structure(operation_graph: OperationGraph):
         function_call_name = operation_graph.graph.nodes[node]["operation"].function_call_name
         if function_call_name is None or function_call_name == "":
             function_call_name = operation_graph.graph.nodes[node]["operation"].__class__.__name__
+        op_name = function_call_name.replace("torch.ops.", "")
+        if op_name.endswith(".Tensor"):
+            op_name = op_name[:-7]
         node_entry = {
-            "op": function_call_name.replace("torch.ops.", ""),
+            "op": op_name,
             "name": op,
             "attrs": serialized_attrs,
             "inputs": [[id_to_row[input_node], 0, 0] if input_node in id_to_row else [] for input_node in inputs],

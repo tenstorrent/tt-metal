@@ -47,16 +47,31 @@ allowed_modes = [
 allowed_dtypes = ["float32", "float64", "int32", "int64", "bfloat16"]
 
 
+class CustomClass2(torch.nn.Module):
+    def forward(self, x):
+        return x - 1
+
+
+class CustomClass3(torch.nn.Module):
+    def forward(self, x):
+        return x * 2
+
+
+class CustomClass4(torch.nn.Module):
+    def forward(self, x):
+        return x + 1
+
+
 class CustomClass(torch.nn.Module):
     def forward(self, x):
-        x = x - 1
-        for i in range(6):
-            x = x * 2
-            x = x + 1
-            x = x - 1
-            x = x + 1
-            x = x - 1
-        res = x * 2
+        x = CustomClass2()(x)
+        for _ in range(2):
+            x = CustomClass3()(x)
+            x = CustomClass4()(x)
+            x = CustomClass2()(x)
+            x = CustomClass4()(x)
+            x = CustomClass2()(x)
+        res = CustomClass3()(x)
         return res
 
 
