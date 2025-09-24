@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
@@ -47,7 +48,7 @@ ScopeGuard with_command_queue_id(QueueId cq_id);
 template <typename T>
 void with_command_queue_id(QueueId cq_id, T&& func) {
     auto guard = with_command_queue_id(cq_id);
-    func();
+    std::forward<T>(func)();
 }
 
 }  // namespace core
