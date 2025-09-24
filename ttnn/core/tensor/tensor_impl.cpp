@@ -762,7 +762,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     device_tensor = Tensor(
         std::move(mesh_storage),
         host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        tensor_topology);  // Tensor topology preservation tested in test_mesh_tensor.cpp
+        tensor_topology);
 }
 
 template Tensor to_device<bfloat16>(
