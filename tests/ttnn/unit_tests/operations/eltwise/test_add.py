@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import os
 
 import torch
 
@@ -522,6 +523,9 @@ def test_01_volume_tensors(device, data, memory_config):
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_sharded, shard_orientation):
+    if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1":
+        pytest.skip("Requires fast dispatch, skipping test")
+
     torch.manual_seed(0)
     shape = (1, 1, 1024, 1024)
     torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)

@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 import math
+import os
 from loguru import logger
 
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
@@ -37,6 +38,9 @@ def run_prefetcher_mm(
     enable_performance_mode=False,
     batch_weights=False,
 ):
+    if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1":
+        pytest.skip("Requires fast dispatch, skipping test")
+
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
     assert len(input_shapes) == len(dtypes)
     assert num_tensors == len(input_shapes)
