@@ -17,7 +17,7 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
-#include "tt_metal/impl/debug/inspector_impl.hpp"
+#include "tt_metal/impl/debug/inspector/data.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -239,6 +239,9 @@ void MetalContext::teardown() {
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
+
+    // Deinitialize inspector
+    inspector_data_.reset();
 }
 
 MetalContext& MetalContext::instance() {
