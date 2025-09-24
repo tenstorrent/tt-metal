@@ -315,9 +315,14 @@ def run_conv2d_short_sweep(
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    torch_out_golden_tensor = torch.permute(torch_out_golden_tensor, (0, 2, 3, 1))
 
-    return [check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
+    return [
+        *check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985),
+        e2e_perf,
+        torch_output_tensor,
+        torch_out_golden_tensor,
+    ]
 
 
 def run_conv1d_short_sweep(
