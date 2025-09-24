@@ -70,6 +70,21 @@ CPMAddPackage(
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 
+# Export protobuf targets for downstream consumers
+install(
+    TARGETS
+        libprotobuf
+        libprotobuf-lite
+        protoc
+    EXPORT Metalium
+    LIBRARY
+        COMPONENT metalium-runtime
+    ARCHIVE
+        COMPONENT metalium-dev
+    RUNTIME
+        COMPONENT metalium-runtime
+)
+
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################
