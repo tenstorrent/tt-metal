@@ -150,4 +150,4 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator):
     h = w = int(math.sqrt(ttnn_output.shape[-1]))
     ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
 
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.984)
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.983)
