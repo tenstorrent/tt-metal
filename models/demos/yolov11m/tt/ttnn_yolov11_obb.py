@@ -105,16 +105,9 @@ class TtnnOBB:
         """
         
         # cv2: Box coordinate regression for all scales
-        print(f"🔍 Debug cv2_0 - y1 input: {ttnn.to_torch(y1).min():.6f} to {ttnn.to_torch(y1).max():.6f}")
-        
         x1 = self.cv2_0_0(device, y1)
-        print(f"🔍 Debug cv2_0 - after conv0: {ttnn.to_torch(x1).min():.6f} to {ttnn.to_torch(x1).max():.6f}")
-        
         x1 = self.cv2_0_1(device, x1)
-        print(f"🔍 Debug cv2_0 - after conv1: {ttnn.to_torch(x1).min():.6f} to {ttnn.to_torch(x1).max():.6f}")
-        
         x1 = self.cv2_0_2(x1)
-        print(f"🔍 Debug cv2_0 - final output: {ttnn.to_torch(x1).min():.6f} to {ttnn.to_torch(x1).max():.6f}")
         
         x2 = self.cv2_1_0(device, y2)
         x2 = self.cv2_1_1(device, x2)
@@ -245,10 +238,6 @@ class TtnnOBB:
         yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
         angle_pred = ttnn.to_layout(angle_pred, layout=ttnn.ROW_MAJOR_LAYOUT)
         
-        # Debug tensor shapes before concatenation
-        print(f"Debug - z shape: {z.shape}")
-        print(f"Debug - yb shape: {yb.shape}")  
-        print(f"Debug - angle_pred shape: {angle_pred.shape}")
         
         # Final output: [box_coords(4), class_preds(15), angle_pred(1)] = 20 channels total
         out = ttnn.concat((z, yb, angle_pred), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)

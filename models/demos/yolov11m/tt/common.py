@@ -64,7 +64,7 @@ class Yolov11Conv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        if "bias" in conv_pth and conv_pth.bias is not None:
+        if "bias" in conv_pth:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
         else:
@@ -113,8 +113,10 @@ class Yolov11Conv2D:
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            x = x[:, :, :hw, :]
+            x_sharded = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x)
+            x = x_sharded[:, :, :hw, :]
+            ttnn.deallocate(x_sharded)
         return x
 
 
