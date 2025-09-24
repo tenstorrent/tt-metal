@@ -69,7 +69,7 @@ class Yolov11Conv2D:
             # Ensure bias is properly prepared for device operations
             self.bias = conv_pth["bias"]
             # Ensure bias is on device and in correct layout
-            if not self.bias.is_on_device():
+            if self.bias.storage_type() != ttnn.StorageType.DEVICE:
                 self.bias = ttnn.to_device(self.bias, device)
         else:
             self.bias = None
@@ -77,7 +77,7 @@ class Yolov11Conv2D:
         # Ensure weight is properly prepared for device operations
         self.weight = conv_pth["weight"]
         # Ensure weight is on device and in correct layout
-        if not self.weight.is_on_device():
+        if self.weight.storage_type() != ttnn.StorageType.DEVICE:
             self.weight = ttnn.to_device(self.weight, device)
 
     def __call__(self, x):
