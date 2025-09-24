@@ -66,7 +66,7 @@ class TTMetaliumConan(ConanFile):
 
     def set_version(self):
         _version = subprocess.check_output("git describe --abbrev=0 --tags", shell=True).decode().strip()
-        m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+)(?:-rc(\d+))?", _version)
+        m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+)(?:-(?:rc|dev)(\d+))?", _version)
         if not m:
             raise ValueError(f"error: unsupported version format: {m!r}")
 
