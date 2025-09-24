@@ -105,4 +105,3 @@ Tests:
     (optional) bw_calc_func: "MyCustomBWFunc" # Not used
     # on_missing_param_policy targets the following parameters in all tests: [ftype, ntype, size, num_packets]. If any of the following parameters is missing from a test, the framework randomizes it. If not provided, the framework provides sane defaults.
     (optional) on_missing_param_policy: "randomize" 
-    

@@ -894,12 +894,12 @@ private:
                 for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
                     RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
                     uint32_t config_link_id = config.link_id.value_or(0);
-                    
+
                     // Create cache key: device_id + direction + link_id
                     std::string cache_key = std::to_string(device_id.chip_id) + "_" + 
                                             std::to_string(static_cast<int>(config_direction)) + "_" + 
                                             std::to_string(config_link_id);
-                    
+
                     config_cache[cache_key] = std::make_tuple(
                         config.parameters.payload_size_bytes,
                         config.parameters.num_packets,
@@ -924,7 +924,7 @@ private:
                 } else if (topology == Topology::Mesh) {
                     num_devices = mesh_shape[0] * mesh_shape[1];
                 }
-                
+
                 for (const auto& [link_id, cycles] : link_map) {
                     if (cycles == 0) {
                         continue;  // Skip to avoid division by zero
@@ -998,18 +998,11 @@ private:
         double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
         double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
 
-        std::cout << "TEST NAME: " << config.parametrized_name << std::endl;
         // Case 1: This test is the first iteration of a new test, or is a single iteration test
         // Generate a new entry for the test, grouping multi-iteration tests into the same entry
         if (config.parametrized_name.find("_iter_0") != std::string::npos || config.parametrized_name.find("_iter_") == std::string::npos) {
             // Use base name for test name, rather than name with _iter_0 suffix
             std::string test_name = config.name;
-            // if (config.parametrized_name.find("_iter_0") != std::string::npos) {
-            //     test_name = config.parametrized_name.substr(0, config.parametrized_name.find("_iter_0"));
-            // }
-            // else {
-            //     test_name = config.parametrized_name;
-            // }
             // Find test parameters based on the test's first test pattern
             std::string ftype_str = "None";
             std::string ntype_str = "None";
@@ -1472,8 +1465,6 @@ private:
              || test_result.num_links != golden_result.num_links
              || test_result.packet_size != golden_result.packet_size) {
                 log_error(tt::LogTest, "Test result {} and golden result {} do not match, has order been changed?", test_result.test_name, golden_result.test_name);
-                std::cout << golden_result.test_name << " " << golden_result.ftype << " " << golden_result.ntype << " " << golden_result.topology << " " << golden_result.num_devices << " " << golden_result.num_links << " " << golden_result.packet_size << std::endl;
-                std::cout << test_result.test_name << " " << test_result.ftype << " " << test_result.ntype << " " << test_result.topology << " " << num_devices_str << " " << test_result.num_links << " " << test_result.packet_size << std::endl;
                 return;
             }
 
@@ -1616,7 +1607,7 @@ private:
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
-    
+
     // Device frequency cache to avoid repeated calculations
     std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
     double measured_bw_min_ = 0.0;
