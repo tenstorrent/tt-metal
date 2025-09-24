@@ -9,6 +9,11 @@
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
 // either the input or padding respectively
+// For example, if we are padding (2, 2, 32, 32) -> (4, 4, 64, 64), then we condense the inner dims to tiles:
+// (2, 2, 1, 1) -> (4, 4, 2, 2) and as incrementing through writing the output, [0:2, 0:2, 0:1, 0:1] will be
+// tiles read from input, and the rest will be padding. So for this writer kernel, if we are within
+// [0:2, 0:2, 0:1, 0:1] we wait for the reader to send us the correct tile, and then write it, otherwise we
+// write padding.
 void kernel_main() {
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
