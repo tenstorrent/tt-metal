@@ -1,21 +1,15 @@
 #include "sampling_op.hpp"
 
-#include "autograd/auto_context.hpp"
-#include "autograd/graph.hpp"
-#include "autograd/graph_utils.hpp"
-
 namespace ttml::ops {
 
-autograd::TensorPtr ttml::ops::sample_op(
-    autograd::TensorPtr& t, float temperature, uint32_t seed, std::optional<autograd::TensorPtr&> logits_padding_mask) {
-    tt::tt_metal::Tensor sampled_tensor;
-
-    if (logits_padding_mask.has_value()) {
-        sampled_tensor =
-            ttnn_fixed::sample(t->get_value(), temperature, seed, logits_padding_mask.value()->get_value());
-    } else {
-        sampled_tensor = ttnn_fixed::sample(t->get_value(), temperature, seed);
-    }
+autograd::TensorPtr sample_op(
+    autograd::TensorPtr& t, float temperature, uint32_t seed, const autograd::TensorPtr& logits_padding_mask) {
+    auto sampled_tensor = ttnn_fixed::sample(
+        t->get_value(),
+        temperature,
+        seed,
+        logits_padding_mask == nullptr ? std::nullopt
+                                       : std::optional<tt::tt_metal::Tensor>(logits_padding_mask->get_value()));
 
     auto out = autograd::create_tensor();
     out->set_value(sampled_tensor);
