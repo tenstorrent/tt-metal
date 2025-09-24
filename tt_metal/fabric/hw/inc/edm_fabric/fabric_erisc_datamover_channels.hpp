@@ -47,8 +47,6 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
 // at router initialization, and persistent for the lifetime of the router.
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 class StaticSizedSenderEthChannel : public SenderEthChannelInterface<
-                                        HEADER_TYPE,
-                                        NUM_BUFFERS,
                                         StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>> {
 public:
     explicit StaticSizedSenderEthChannel() = default;
@@ -70,7 +68,7 @@ public:
     }
 
     StaticSizedSenderEthChannel(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) :
-        SenderEthChannelInterface<HEADER_TYPE, NUM_BUFFERS, StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>>() {
+        SenderEthChannelInterface<StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>>() {
         this->init(channel_base_address, buffer_size_bytes, header_size_bytes);
     }
 
