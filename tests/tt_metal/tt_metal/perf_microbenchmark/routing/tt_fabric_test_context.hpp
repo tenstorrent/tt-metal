@@ -1056,7 +1056,7 @@ private:
             test_result.num_iterations++;
         }
     }
-    
+
     void calculate_cycles_mean() {
         // Push statistics name into results summary csv header
         stat_names_.push_back("Avg Cycles");
