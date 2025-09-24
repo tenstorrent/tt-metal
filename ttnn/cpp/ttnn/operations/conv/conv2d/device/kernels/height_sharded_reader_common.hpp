@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "dataflow_api.h"
+
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
 FORCE_INLINE void zero_out_tiles() {
@@ -48,8 +49,6 @@ FORCE_INLINE void read_sticks(
         if constexpr (dilation_w == 1) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
-                // DPRINT << "READREAD: noc_async_read_one_packet_with_state, act_l1_offset: " << act_l1_offset
-                //        << " l1_write_addr_act: " << l1_write_addr_act << ENDL();
                 noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                 l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
             }

@@ -333,14 +333,6 @@ void allocate_cbs(
             // Skip circular buffers with zero pages
             continue;
         }
-        log_info(
-            tt::LogOp,
-            "Allocating circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
-            enchantum::to_string(cb.name),
-            cb.index,
-            cb.num_pages,
-            cb.page_size,
-            cb.is_globally_allocated);
 
         // cbs for sharded tensors.
         Buffer* buffer = nullptr;

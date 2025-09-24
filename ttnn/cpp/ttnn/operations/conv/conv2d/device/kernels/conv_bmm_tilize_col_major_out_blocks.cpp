@@ -3,19 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+
 #include "mod_div_lib.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 #include "compute_kernel_api/untilize.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
 #endif
-#include "debug/dprint_pages.h"
+
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+
+#define DEBUG_PRINT 0
+
 #ifdef SPLIT_READER
 template <bool init_tilize = true, bool uninit_tilize = true>
 __attribute__((noinline)) void tilize_in(
@@ -325,11 +329,9 @@ void MAIN {
                         pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                         pack_reconfig_l1_acc(0);
 #endif
-                        DPRINT << "TILIZE IN: " << in0_block_w * in0_num_subblocks_read << ENDL();
                         tilize_in<true, !split_reader>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 #ifdef SPLIT_READER
-                        DPRINT << "TILIZE IN SECOND READER: " << in0_block_w * in0_num_subblocks_read_last << ENDL();
                         tilize_in<false, true>(
                             in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
 #endif
@@ -397,9 +399,9 @@ void MAIN {
                         out_subblock_h,
                         in0_block_w);
                 }
-                // DPRINT << "WAIT ACT START" << ENDL();
+
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
-                // DPRINT << "WAIT ACT END" << ENDL();
+
                 uint32_t in0_index_subblock_offset = 0;
                 if constexpr (check_skip_compute) {
                     if (skip_compute) {
@@ -407,11 +409,9 @@ void MAIN {
                         continue;
                     }
                 }
-                // DPRINT << "WAIT WEIGHTS START" << ENDL();
+
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
-                DPRINT << "MATMUL " << in0_block_num_tiles << " " << in1_block_num_tiles << ENDL();
-                // DPRINT << "WAIT WEIGHTS END" << ENDL();
-                // DPRINT << "BEFORE MATMUL" << ENDL();
+
                 if (last_out) {
 #if defined PACK_RELU and not defined FUSE_BIAS
                     // if last block we pack the final result with relu enabled
@@ -571,8 +571,6 @@ void MAIN {
 #endif
                 }
 #endif
-
-                // DPRINT << "AFTER MATMUL" << ENDL();
 
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);

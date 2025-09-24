@@ -184,9 +184,9 @@ void kernel_main() {
     constexpr uint32_t tiles_per_full_block =
         num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer_in * weight_block_width_ntiles;
     constexpr uint32_t height_stride_factor = weight_block_height_ntiles * weight_stride_h;
-    DPRINT << " LOOP sizes" << out_num_blocks_w << " " << out_num_blocks_h << " " << num_blocks_weight_h << " "
-           << weight_block_height_ntiles << ENDL();
-    DPRINT << " skip_work: " << (skip_work ? "true" : "false") << ENDL();
+
+    // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
+    // Write out col major blocks in row major layout to output
     uint32_t weight_start_tile_id = out_start_tile_id_w;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
