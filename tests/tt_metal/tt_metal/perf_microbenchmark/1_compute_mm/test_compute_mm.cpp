@@ -636,7 +636,7 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::Finish(device->mesh_command_queue());
                 auto t_end = std::chrono::high_resolution_clock::now();
                 log_debug(LogTest, "EnqueueMeshWorkload done");
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end =
