@@ -89,8 +89,6 @@ tt::tt_metal::operation::Hash SliceReshardAsync::compute_program_hash(const std:
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->final_semaphore.address();
-    uint32_t barrier_semaphore_address = this->barrier_semaphore.address();
     return tt::tt_metal::operation::hash_operation<SliceReshardAsync>(
         this->dim,
         this->output_dim_offset,
