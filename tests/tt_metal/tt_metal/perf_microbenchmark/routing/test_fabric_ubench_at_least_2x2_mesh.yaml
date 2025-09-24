@@ -76,7 +76,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 3
+        iterations: 10
 
   - name: "FullRingMcast_links1_unicast_write_4096"
     benchmark_mode: true
@@ -93,7 +93,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 50
+        iterations: 30
 
   - name: "FullRingMcast_links1_fused_atomic_inc_2048"
     benchmark_mode: true
@@ -144,7 +144,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 3
+        iterations: 30
 
   - name: "FullRingMcast_links1_unicast_scatter_write_4096"
     benchmark_mode: true
@@ -161,7 +161,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 3
+        iterations: 10
 
   - name: "FullRingMcast_links2_unicast_write_2048"
     benchmark_mode: true
@@ -280,7 +280,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 40
+        iterations: 30
 
   - name: "FullRingMcast_links3_unicast_write_4096"
     benchmark_mode: true
@@ -382,7 +382,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 20
+        iterations: 30
 
   - name: "FullRingMcast_links4_unicast_write_4096"
     benchmark_mode: true
@@ -501,7 +501,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 20
+        iterations: 30
 
   - name: "FullRingUcast_links1_fused_atomic_inc_2048"
     benchmark_mode: true
@@ -535,7 +535,7 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
   - name: "FullRingUcast_links1_unicast_scatter_write_2048"
     benchmark_mode: true
