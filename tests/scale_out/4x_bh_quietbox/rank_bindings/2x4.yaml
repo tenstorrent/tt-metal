@@ -1,0 +1,22 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_NW_CHIP_PHYSICAL_ID: "0"
+      #TT_NW_CHIP_PHYSICAL_IDS: "0,2,3,1"
+
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+    env_overrides:
+      TT_NW_CHIP_PHYSICAL_ID: "3"
+      #TT_NW_CHIP_PHYSICAL_IDS: "0,3,1,2"
+
+global_env:
+  TT_METAL_INSPECTOR: "0"
+  TT_METAL_INSPECTOR_RPC: "0"
+  TT_LOGGER_LEVEL: "Debug"
+  TT_LOGGER_TYPES: "OpFabricDistributedTestTTNN"
+
+mesh_graph_desc_path: "tests/scale_out/4x_bh_quietbox/config/2x4_bh_mesh_graph_descriptor.yaml"

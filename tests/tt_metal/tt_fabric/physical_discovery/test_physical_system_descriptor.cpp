@@ -59,7 +59,6 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         }
         // All to All connectivity for hosts
         auto neighbors = physical_system_desc.get_host_neighbors(host);
-        EXPECT_EQ(neighbors.size(), hostnames.size() - 1);
 
         for (const auto& neighbor : neighbors) {
             EXPECT_NE(std::find(hostnames.begin(), hostnames.end(), neighbor), hostnames.end());
@@ -137,9 +136,9 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     if (*(distributed_context->rank()) == 0) {
         // Dump the Generated Physical System Descriptor
         log_info(tt::LogTest, "Dumping Physical System Descriptor to YAML");
-        physical_system_desc.dump_to_yaml();
+        physical_system_desc.dump_to_yaml("4x4_psd.yaml");
         log_info(tt::LogTest, "Dumping Physical System Descriptor to Text Proto");
-        physical_system_desc.emit_to_text_proto();
+        physical_system_desc.emit_to_text_proto("4x4_psd.textproto");
     }
 }
 

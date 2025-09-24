@@ -50,6 +50,9 @@
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 
+#include <unistd.h>
+#include <cstdio>
+
 namespace tt::tt_fabric {
 
 namespace {
@@ -596,6 +599,20 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 
 std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
     const std::string& mesh_graph_desc_file) {
+// Add this where you want to debug
+#ifdef MULTIHOST_DEBUG
+    {
+        volatile int i = 0;
+        char hostname[256];
+        gethostname(hostname, sizeof(hostname));
+        printf("PID %d on %s ready for attach\n", getpid(), hostname);
+        fflush(stdout);
+        while (0 == i) {
+            sleep(10);
+        }
+    }
+#endif
+
     std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping;
 
     std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
@@ -643,6 +660,12 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
 
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
+            const char* env_nw_chip_id = std::getenv("TT_NW_CHIP_PHYSICAL_ID");
+            if (env_nw_chip_id != nullptr) {
+                nw_chip_physical_id = static_cast<chip_id_t>(std::stoi(env_nw_chip_id));
+                log_info(tt::LogFabric, "NW chip physical ID set from environment: {}", nw_chip_physical_id);
+            }
+
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             // TODO: remove once we use global physical graph to map logical big mesh to physical chips
             // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
@@ -675,7 +698,44 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                         min_coord.second);
             }
 
-            const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
+            auto physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
+            const char* env_nw_chip_ids = std::getenv("TT_NW_CHIP_PHYSICAL_IDS");
+            if (env_nw_chip_ids != nullptr) {
+                std::vector<chip_id_t> env_nw_chip_ids_vec;
+                std::string ids_str(env_nw_chip_ids);
+                std::stringstream ss(ids_str);
+                std::string id;
+                while (std::getline(ss, id, ',')) {
+                    try {
+                        // Remove leading/trailing whitespace
+                        id.erase(0, id.find_first_not_of(" \t\n\r"));
+                        id.erase(id.find_last_not_of(" \t\n\r") + 1);
+                        if (!id.empty()) {
+                            int parsed_id = std::stoi(id);
+                            if (parsed_id < 0) {
+                                throw std::invalid_argument("Negative chip_id_t not allowed");
+                            }
+                            env_nw_chip_ids_vec.push_back(static_cast<chip_id_t>(parsed_id));
+                        }
+                    } catch (const std::exception& e) {
+                        fprintf(
+                            stderr,
+                            "Warning: Invalid chip id '%s' in TT_NW_CHIP_PHYSICAL_IDS: %s\n",
+                            id.c_str(),
+                            e.what());
+                    }
+                }
+                if (!env_nw_chip_ids_vec.empty()) {
+                    log_info(
+                        tt::LogFabric, "Previous NW chip physical IDs set from environment: {}", physical_chip_ids);
+                    log_info(tt::LogFabric, "NW chip physical IDs set from environment: {}", env_nw_chip_ids_vec);
+                    physical_chip_ids = env_nw_chip_ids_vec;
+                }
+            }
+
+            for (const auto& physical_chip_id : physical_chip_ids) {
+                printf("Physical chip ID: %d\n", physical_chip_id);
+            }
             std::uint32_t i = 0;
             for (const auto& [_, fabric_chip_id] : mesh_container) {
                 logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(

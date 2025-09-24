@@ -43,8 +43,13 @@ target_sources(
         ${GENERATED_PROTO_SRCS}
 )
 
-target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(
+    scaleout_tools
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:include>
+)
+target_include_directories(scaleout_tools SYSTEM PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
 
 target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 
@@ -53,11 +58,11 @@ target_link_libraries(
     PUBLIC
         TT::STL
         umd::device
+        $<BUILD_INTERFACE:protobuf::libprotobuf>
     PRIVATE
         enchantum::enchantum
         tt-logger::tt-logger
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
-        $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
 target_link_libraries(

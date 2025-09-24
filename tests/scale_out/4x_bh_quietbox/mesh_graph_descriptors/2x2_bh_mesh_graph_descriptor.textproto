@@ -1,0 +1,13 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# 2x2 Blackhole Mesh (single-quietbox configuration)
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
