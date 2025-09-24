@@ -44,37 +44,16 @@ class TtnnDWConv:
         # We need to flatten it to: conv_pt_flat.weight, conv_pt_flat.bias
         class FlattenedParams:
             def __init__(self, dwconv_params):
-                self.weight = dwconv_params.conv.weight
+                # Access weight using dictionary syntax
+                self.weight = dwconv_params["conv"]["weight"]
                 self.bias = None
 
                 # For DWConv, bias comes from BatchNorm if it exists
-                if "bn" in dwconv_params and "bias" in dwconv_params.bn:
-                    self.bias = self._reshape_bias_for_ttnn(dwconv_params.bn.bias)
-                # If no bias in bn, check conv layer
-                elif "bias" in dwconv_params.conv and dwconv_params.conv.bias is not None:
-                    self.bias = self._reshape_bias_for_ttnn(dwconv_params.conv.bias)
-            
-            def _reshape_bias_for_ttnn(self, bias_tensor):
-                """
-                Reshape bias tensor from [channels] to [1, 1, 1, channels] format for TTNN conv2d.
-                
-                Args:
-                    bias_tensor: Input bias tensor (TTNN or torch tensor)
-                    
-                Returns:
-                    Reshaped bias tensor in TTNN format
-                """
-                # Convert to torch tensor if it's not already
-                if hasattr(bias_tensor, 'to_torch'):
-                    bias_torch = ttnn.to_torch(bias_tensor)
-                else:
-                    bias_torch = bias_tensor
-                
-                # Reshape from [channels] to [1, 1, 1, channels]
-                bias_reshaped = bias_torch.reshape((1, 1, 1, -1))
-                
-                # Convert back to TTNN tensor with original properties
-                return ttnn.from_torch(bias_reshaped, dtype=bias_tensor.dtype, layout=bias_tensor.layout)
+                if "bn" in dwconv_params and "bias" in dwconv_params["bn"]:
+                    self.bias = dwconv_params["bn"]["bias"]
+                # If no bias in bn, check conv layer  
+                elif "bias" in dwconv_params["conv"] and dwconv_params["conv"]["bias"] is not None:
+                    self.bias = dwconv_params["conv"]["bias"]
             
             def __contains__(self, key):
                 """Support 'key in object' syntax like TTNN parameter containers"""
