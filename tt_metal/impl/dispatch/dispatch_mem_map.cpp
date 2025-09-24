@@ -55,13 +55,13 @@ uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
 }
 
 uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
-    uint32_t index = ttsl::underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
+    uint32_t index = ttsl::as_underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
     TT_ASSERT(index < this->device_cq_addrs_.size());
     return device_cq_addrs_[index];
 }
 
 uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const {
-    return ttsl::underlying_type<CommandQueueHostAddrType>(host_addr) *
+    return ttsl::as_underlying_type<CommandQueueHostAddrType>(host_addr) *
            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
 }
 
@@ -158,7 +158,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     }
 
     uint32_t prefetch_dispatch_unreserved_base =
-    device_cq_addrs_[ttsl::underlying_type<CommandQueueDeviceAddrType>(
+    device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(
         CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);

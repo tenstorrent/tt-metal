@@ -8,8 +8,9 @@
 
 namespace ttsl {
 
-template <typename E, std::enable_if_t<std::is_enum<E>::value, bool> = true>
-auto underlying_type(const E& e) {
+template <typename E>
+    requires std::is_enum_v<E>
+constexpr auto as_underlying_type(E e) {
     return static_cast<typename std::underlying_type<E>::type>(e);
 }
 

@@ -178,13 +178,13 @@ public:
 };
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
-    uint32_t index = ttsl::underlying_type<HalL1MemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_bases_.size());
     return this->mem_map_bases_[index];
 }
 
 inline uint32_t HalCoreInfoType::get_dev_size(HalL1MemAddrType addr_type) const {
-    uint32_t index = ttsl::underlying_type<HalL1MemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_sizes_.size());
     return this->mem_map_sizes_[index];
 }
@@ -490,7 +490,7 @@ inline uint32_t Hal::get_processor_types_count(
     uint32_t index = std::visit(
         ttsl::overloaded{
             [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
-                return ttsl::underlying_type(core_type_specifier);
+                return ttsl::as_underlying_type(core_type_specifier);
             },
             [](uint32_t core_type_specifier) { return core_type_specifier; },
         },
@@ -506,7 +506,7 @@ inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_typ
 inline CoreType Hal::get_core_type(uint32_t core_type_index) const { return core_info_[core_type_index].core_type_; }
 
 inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
-    uint32_t index = ttsl::underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     TT_FATAL(
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
@@ -515,7 +515,7 @@ inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_ty
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
-    uint32_t index = ttsl::underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     TT_FATAL(
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
@@ -527,37 +527,37 @@ inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type
 }
 
 inline DeviceAddr Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
-    uint32_t index = ttsl::underlying_type<HalDramMemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_bases_.size());
     return this->dram_bases_[index];
 }
 
 inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
-    uint32_t index = ttsl::underlying_type<HalDramMemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_sizes_.size());
     return this->dram_sizes_[index];
 }
 
 inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
-    uint32_t index = ttsl::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_.size());
     return this->mem_alignments_[index];
 }
 
 inline uint32_t Hal::get_read_alignment(HalMemType memory_type) const {
-    uint32_t index = ttsl::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_read_alignments_.size());
     return this->mem_read_alignments_[index];
 }
 
 inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
-    uint32_t index = ttsl::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_write_alignments_.size());
     return this->mem_write_alignments_[index];
 }
 
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
-    uint32_t index = ttsl::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
     return this->mem_alignments_with_pcie_[index];
 }
@@ -572,11 +572,11 @@ inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_ty
 
 inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
     const uint32_t num_processor_classes =
-        this->core_info_[ttsl::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+        this->core_info_[ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type)]
             .get_processor_classes_count();
     uint32_t num_riscs = 0;
     for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
-        num_riscs += this->core_info_[ttsl::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+        num_riscs += this->core_info_[ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type)]
                          .get_processor_types_count(processor_class_idx);
     }
     TT_ASSERT(num_riscs <= max_processors_per_core_);
@@ -609,9 +609,9 @@ inline bool Hal::get_supports_eth_fw_mailbox() const {
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
-    const auto index = ttsl::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
-    return this->core_info_[index].eth_fw_mailbox_msgs_[ttsl::underlying_type<FWMailboxMsg>(msg)];
+    return this->core_info_[index].eth_fw_mailbox_msgs_[ttsl::as_underlying_type<FWMailboxMsg>(msg)];
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
@@ -619,14 +619,14 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
-    const auto index = ttsl::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     // -1 for the message
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
-    const auto index = ttsl::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     // Index 0 is the offset of the mailbox message
     return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);

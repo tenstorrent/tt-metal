@@ -457,7 +457,7 @@ KernelGroup::KernelGroup(
         if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
             // The code below sets the brisc_noc_id for use by the device firmware
             // Use 0 if neither brisc nor ncrisc specify a noc
-            if (class_id == ttsl::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+            if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use brisc's noc if brisc specifies a noc
                 kernel_config.brisc_noc_id() = std::get<DataMovementConfig>(kernel->config()).noc;
@@ -465,7 +465,7 @@ KernelGroup::KernelGroup(
                 if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                     kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                 }
-            } else if (class_id == ttsl::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+            } else if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                 // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
