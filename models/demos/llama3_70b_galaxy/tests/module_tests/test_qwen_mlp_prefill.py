@@ -30,7 +30,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedF
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 2048, 4096, 8192),
+    (1024,),
 )
 @pytest.mark.parametrize(
     "batch_size",

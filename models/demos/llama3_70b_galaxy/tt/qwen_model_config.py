@@ -536,6 +536,22 @@ class TtQwenModelArgs(TtModelArgs):
                         fused_activation=None,
                         fuse_batch=False,
                     )
+                elif seq_len % 1024 == 0:
+                    per_core_M = 10 * seq_len // 1024
+
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=10,
+                        out_block_w=16,
+                        per_core_M=per_core_M,
+                        per_core_N=16,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=False,
+                    )
                 else:
                     raise NotImplementedError(
                         f"W1 Program config generation for sequence length {seq_len} not implemented"
