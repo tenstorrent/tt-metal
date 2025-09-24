@@ -21,6 +21,10 @@ namespace tt::umd {
 class Cluster;
 }
 
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
@@ -127,8 +131,12 @@ class PSD {
 public:
     PSD(const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        bool run_discovery = true,
-        bool use_mock_cluster_desc = false);
+        const tt::llrt::RunTimeOptions& rtoptions,
+        bool run_discovery = true);
+    PSD(const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+        bool using_mock_cluster_descriptor,
+        bool run_discovery);
     void run_discovery(bool run_global_discovery = true);
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
@@ -159,6 +167,7 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
+    bool is_using_mock_cluster() const { return using_mock_cluster_desc_; }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }

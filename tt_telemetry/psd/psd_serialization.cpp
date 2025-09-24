@@ -1,8 +1,3 @@
-// TODO: should using_mock_cluster_desc always be set to false since we are deserializing? Would we ever deserialize
-// something generated w/ a mock cluster?
-// TODO: should we pass in rtoptions instead of arch AND using_mock_cluster_desc separately?
-// TODO: we don't support multi-architecture clusters so perhaps it would be possible to add an arch() method to
-// tt::umd:Cluster that just checks the first chip arch?
 //  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 //  SPDX-License-Identifier: Apache-2.0
@@ -194,16 +189,18 @@ void physical_system_descriptor_to_proto(const PSD& descriptor, tt::fabric::prot
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Set mock cluster flag
+    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
 }
 
 // Convert protobuf to PSD
 std::unique_ptr<PSD> proto_to_physical_system_descriptor(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const tt::fabric::proto::PSD& proto_desc,
-    bool using_mock_cluster_desc) {
+    const tt::fabric::proto::PSD& proto_desc) {
     auto descriptor =
-        std::make_unique<PSD>(cluster, distributed_context, false, using_mock_cluster_desc);  // Don't run discovery
+        std::make_unique<PSD>(cluster, distributed_context, proto_desc.mock_cluster(), false);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -300,15 +297,13 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PSD& de
 PSD deserialize_physical_system_descriptor_from_bytes(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const std::vector<uint8_t>& data,
-    bool using_mock_cluster_desc) {
+    const std::vector<uint8_t>& data) {
     tt::fabric::proto::PSD proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PSD from protobuf binary format");
     }
 
-    return std::move(
-        *proto_to_physical_system_descriptor(cluster, distributed_context, proto_desc, using_mock_cluster_desc));
+    return std::move(*proto_to_physical_system_descriptor(cluster, distributed_context, proto_desc));
 }
 
 }  // namespace tt::tt_metal
