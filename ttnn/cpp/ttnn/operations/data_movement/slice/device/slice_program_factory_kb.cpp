@@ -36,22 +36,23 @@ inline uint32_t get_element_size_kb(const DataType& dtype) {
 
 /**
  * Calculate total output rows based on tensor rank - this is what we distribute across cores.
- * Translated from Python get_multicore_slice_descriptor method.
+ * Generalized for N-dimensional tensors. For rank R, rows = product(dims[0:R-1])
+ * The last dimension is always processed as contiguous width data.
  */
 inline uint32_t calculate_total_output_rows_kb(const ttnn::Shape& output_shape) {
     auto rank = output_shape.rank();
 
     if (rank == 1) {
-        return 1;
-    } else if (rank == 2) {
-        return output_shape[-2];  // output_h
-    } else if (rank == 3) {
-        return output_shape[-3] * output_shape[-2];  // output_d * output_h
-    } else if (rank == 4) {
-        return output_shape[-4] * output_shape[-3] * output_shape[-2];  // output_n * output_d * output_h
-    } else {
-        TT_THROW("KB slice operation supports only 1D-4D tensors");
+        return 1;  // 1D has only 1 "row" to process
     }
+
+    // For N-dimensional tensors, calculate product of all dimensions except the last
+    uint32_t total_rows = 1;
+    for (int32_t i = 0; i < rank - 1; ++i) {
+        total_rows *= output_shape[i];
+    }
+
+    return total_rows;
 }
 
 /**
@@ -109,36 +110,50 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto output_shape = output_tensor.padded_shape();
     uint32_t element_size = get_element_size_kb(input_tensor.dtype());
 
-    // Extract dimensions with proper defaults for lower-rank tensors
+    // Extract dimensions for N-dimensional tensors
     uint32_t tensor_rank = input_shape.rank();
 
-    // Input dimensions (padded to 4D)
-    uint32_t input_n = (tensor_rank >= 4) ? input_shape[-4] : 1;
-    uint32_t input_d = (tensor_rank >= 3) ? input_shape[-3] : 1;
-    uint32_t input_h = (tensor_rank >= 2) ? input_shape[-2] : 1;
-    uint32_t input_w = input_shape[-1];
+    // Create vectors for all dimensions
+    std::vector<uint32_t> input_dims(tensor_rank);
+    std::vector<uint32_t> output_dims(tensor_rank);
+    std::vector<uint32_t> slice_starts(tensor_rank);
+    std::vector<uint32_t> slice_ends(tensor_rank);
+    std::vector<uint32_t> slice_steps(tensor_rank);
 
-    // Output dimensions (padded to 4D)
-    uint32_t output_n = (tensor_rank >= 4) ? output_shape[-4] : 1;
-    uint32_t output_d = (tensor_rank >= 3) ? output_shape[-3] : 1;
-    uint32_t output_h = (tensor_rank >= 2) ? output_shape[-2] : 1;
-    uint32_t output_w = output_shape[-1];
+    // Fill dimension vectors
+    for (uint32_t i = 0; i < tensor_rank; ++i) {
+        input_dims[i] = input_shape[i];
+        output_dims[i] = output_shape[i];
+        slice_starts[i] = slice_start[i];
+        slice_ends[i] = slice_end[i];
+        slice_steps[i] = slice_step[i];
+    }
 
-    // Slice parameters (padded to 4D)
-    uint32_t start_n = (tensor_rank >= 4) ? slice_start[-4] : 0;
-    uint32_t start_d = (tensor_rank >= 3) ? slice_start[-3] : 0;
-    uint32_t start_h = (tensor_rank >= 2) ? slice_start[-2] : 0;
-    uint32_t start_w = slice_start[-1];
+    // For backward compatibility, extract specific 4D dimensions if needed
+    uint32_t input_n = (tensor_rank >= 4) ? input_dims[tensor_rank - 4] : 1;
+    uint32_t input_d = (tensor_rank >= 3) ? input_dims[tensor_rank - 3] : 1;
+    uint32_t input_h = (tensor_rank >= 2) ? input_dims[tensor_rank - 2] : 1;
+    uint32_t input_w = input_dims[tensor_rank - 1];
 
-    uint32_t end_n = (tensor_rank >= 4) ? slice_end[-4] : 1;
-    uint32_t end_d = (tensor_rank >= 3) ? slice_end[-3] : 1;
-    uint32_t end_h = (tensor_rank >= 2) ? slice_end[-2] : 1;
-    uint32_t end_w = slice_end[-1];
+    uint32_t output_n = (tensor_rank >= 4) ? output_dims[tensor_rank - 4] : 1;
+    uint32_t output_d = (tensor_rank >= 3) ? output_dims[tensor_rank - 3] : 1;
+    uint32_t output_h = (tensor_rank >= 2) ? output_dims[tensor_rank - 2] : 1;
+    uint32_t output_w = output_dims[tensor_rank - 1];
 
-    uint32_t step_n = (tensor_rank >= 4) ? slice_step[-4] : 1;
-    uint32_t step_d = (tensor_rank >= 3) ? slice_step[-3] : 1;
-    uint32_t step_h = (tensor_rank >= 2) ? slice_step[-2] : 1;
-    uint32_t step_w = slice_step[-1];
+    uint32_t start_n = (tensor_rank >= 4) ? slice_starts[tensor_rank - 4] : 0;
+    uint32_t start_d = (tensor_rank >= 3) ? slice_starts[tensor_rank - 3] : 0;
+    uint32_t start_h = (tensor_rank >= 2) ? slice_starts[tensor_rank - 2] : 0;
+    uint32_t start_w = slice_starts[tensor_rank - 1];
+
+    uint32_t end_n = (tensor_rank >= 4) ? slice_ends[tensor_rank - 4] : 1;
+    uint32_t end_d = (tensor_rank >= 3) ? slice_ends[tensor_rank - 3] : 1;
+    uint32_t end_h = (tensor_rank >= 2) ? slice_ends[tensor_rank - 2] : 1;
+    uint32_t end_w = slice_ends[tensor_rank - 1];
+
+    uint32_t step_n = (tensor_rank >= 4) ? slice_steps[tensor_rank - 4] : 1;
+    uint32_t step_d = (tensor_rank >= 3) ? slice_steps[tensor_rank - 3] : 1;
+    uint32_t step_h = (tensor_rank >= 2) ? slice_steps[tensor_rank - 2] : 1;
+    uint32_t step_w = slice_steps[tensor_rank - 1];
 
     // WORK DISTRIBUTION ALGORITHM:
     // Distribute rows as evenly as possible across cores
@@ -207,32 +222,32 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 row_start_id                        // 8: start_row - starting row for this core
             };
         } else {
-            // Original 2D multicore kernels for backward compatibility
+            // N-dimensional kernels for 5D+ tensors
+            // Reader arguments: src_addr, tensor_rank, element_size, num_rows, start_row, then dimension arrays
             reader_args = {
                 input_tensor.buffer()->address(),  // 0: src_addr - input tensor memory address
-                input_h,                           // 1: input_h - input height in elements
-                input_w,                           // 2: input_w - input width in elements
-                output_h,                          // 3: output_h - output height in elements
-                output_w,                          // 4: output_w - output width in elements
-                start_h,                           // 5: slice_start_h - start index for height
-                end_h,                             // 6: slice_end_h - end index for height
-                step_h,                            // 7: slice_step_h - step size for height
-                start_w,                           // 8: slice_start_w - start index for width
-                end_w,                             // 9: slice_end_w - end index for width
-                step_w,                            // 10: slice_step_w - step size for width
-                element_size,                      // 11: element_size - bytes per element
-                rows_for_this_core,                // 12: num_rows - rows for this core
-                row_start_id                       // 13: start_row - starting row for this core
+                tensor_rank,                       // 1: tensor_rank - tensor dimensionality
+                element_size,                      // 2: element_size - bytes per element
+                rows_for_this_core,                // 3: num_rows - rows for this core
+                row_start_id                       // 4: start_row - starting row for this core
             };
+            // Append dimension arrays: input_dims, output_dims, slice_starts, slice_ends, slice_steps
+            reader_args.insert(reader_args.end(), input_dims.begin(), input_dims.end());
+            reader_args.insert(reader_args.end(), output_dims.begin(), output_dims.end());
+            reader_args.insert(reader_args.end(), slice_starts.begin(), slice_starts.end());
+            reader_args.insert(reader_args.end(), slice_ends.begin(), slice_ends.end());
+            reader_args.insert(reader_args.end(), slice_steps.begin(), slice_steps.end());
 
+            // Writer arguments: dst_addr, tensor_rank, element_size, num_rows, start_row, then output_dims
             writer_args = {
                 output_tensor.buffer()->address(),  // 0: dst_addr - output tensor memory address
-                output_h,                           // 1: output_h - output height in elements
-                output_w,                           // 2: output_w - output width in elements
-                element_size,                       // 3: element_size - bytes per element
-                rows_for_this_core,                 // 4: num_rows - rows for this core
-                row_start_id                        // 5: start_row - starting row for this core
+                tensor_rank,                        // 1: tensor_rank - tensor dimensionality
+                element_size,                       // 2: element_size - bytes per element
+                rows_for_this_core,                 // 3: num_rows - rows for this core
+                row_start_id                        // 4: start_row - starting row for this core
             };
+            // Append output dimensions
+            writer_args.insert(writer_args.end(), output_dims.begin(), output_dims.end());
         }
 
         ret_val[core_idx] = {reader_args, writer_args};
@@ -284,11 +299,21 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
     CoreRange full_grid_range(start_core, end_core);
     CoreRangeSet core_grid({full_grid_range});
 
-    // Use KB 4D kernels
-    std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_reader_multicore_slice_4d.cpp";
-    std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_writer_multicore_slice_4d.cpp";
+    // Select kernels based on tensor rank for optimal performance
+    std::string reader_kernel_path, writer_kernel_path;
+    if (input_shape.rank() <= 4) {
+        // Use optimized 4D kernels for 1D-4D tensors
+        reader_kernel_path =
+            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_reader_multicore_slice_4d.cpp";
+        writer_kernel_path =
+            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_writer_multicore_slice_4d.cpp";
+    } else {
+        // Use generic N-dimensional kernels for 5D+ tensors
+        reader_kernel_path =
+            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_reader_multicore_slice_nd.cpp";
+        writer_kernel_path =
+            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/tt_writer_multicore_slice_nd.cpp";
+    }
 
     // Circular buffer configuration - same as single-core but for multiple cores
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
