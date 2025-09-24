@@ -34,4 +34,5 @@ runs:
         run_args: |
           set +e
           ${{ inputs.commands }}
+          false && true
           env python3 models/perf/merge_perf_results.py REPORT
