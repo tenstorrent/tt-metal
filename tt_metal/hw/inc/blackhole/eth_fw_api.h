@@ -219,28 +219,36 @@ struct boot_results_t {
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "dev_msgs.h"
 
-FORCE_INLINE uint64_t eth_read_ptp_clock() {
+uint64_t eth_read_ptp_clock() {
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     uint32_t ptp_timer_lo = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR);
     uint32_t ptp_timer_hi = eth_reg_read(ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR);
     return (((uint64_t)ptp_timer_hi) << 32) | ptp_timer_lo;
+#else
+    return 0;
+#endif
 }
 
-FORCE_INLINE uint64_t get_next_link_status_check_timestamp() {
+uint64_t get_next_link_status_check_timestamp() {
     return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
 }
 
-FORCE_INLINE void update_next_link_status_check_timestamp() {
+void update_next_link_status_check_timestamp() {
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     uint64_t timestamp = eth_read_ptp_clock() + (ETH_PTP_CYCLES_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
+#endif
 }
 
-FORCE_INLINE void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
+void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
         ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
     *reg_ptr = mode_val;
+#endif
 }
 
-FORCE_INLINE void disable_interrupts() {
+void disable_interrupts() {
     for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
         eth_set_interrupt_mode(i, 0);
     }
@@ -297,11 +305,14 @@ FORCE_INLINE bool is_port_up() {
 }
 
 FORCE_INLINE void service_eth_msg() {
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     invalidate_l1_cache();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+#endif
 }
 
-FORCE_INLINE void update_boot_results_eth_link_status_check() {
+void update_boot_results_eth_link_status_check() {
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     uint64_t curr_timestamp = eth_read_ptp_clock();
     // Debounce to only be called at every interval
     if (curr_timestamp > get_next_link_status_check_timestamp()) {
@@ -311,6 +322,7 @@ FORCE_INLINE void update_boot_results_eth_link_status_check() {
 
         update_next_link_status_check_timestamp();
     }
+#endif
 }
 
 #endif
