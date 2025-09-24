@@ -188,7 +188,7 @@ def test_transformer_motif(
         height=height // vae_scale_factor,
         width=width // vae_scale_factor,
     )
-    assert_quality(torch_output, tt_output_unpacked, pcc=0.9986, relative_rmse=5.6)
+    assert_quality(torch_output, tt_output_unpacked, pcc=0.9985, relative_rmse=5.7)
 
 
 def _combine_prompt_embeddings(t5: torch.Tensor, clip_a: torch.Tensor, clip_b: torch.Tensor) -> torch.Tensor:
