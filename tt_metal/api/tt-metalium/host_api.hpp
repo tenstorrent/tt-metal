@@ -589,20 +589,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
 
 // clang-format off
 /**
- * Blocks until all previously dispatched commands on the device have completed
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
- */
-// clang-format on
-void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-// clang-format off
-/**
  * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
  * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
  * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.

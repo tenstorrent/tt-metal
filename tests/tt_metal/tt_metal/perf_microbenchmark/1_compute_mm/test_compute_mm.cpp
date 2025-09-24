@@ -65,7 +65,7 @@ using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
 // This benchmark measures the compute performance of matmul. When in the slow
 // dispatch mode, it uses LaunchProgram API and measures performance via device
-// profiler. In the fast dispatch mode, it uses EnqueueProgram API and measures
+// profiler. In the fast dispatch mode, it uses EnqueueMeshWorkload API and measures
 // the execution time. Regarding kernels, the compute kernel used
 // “bmm_large_block_zm_fused_bias_activation.cpp” as is and the data movement
 // kernels were implemented with reference to kernels of
