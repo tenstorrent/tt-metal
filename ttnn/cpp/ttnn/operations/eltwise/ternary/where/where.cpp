@@ -66,6 +66,18 @@ inline bool typecast_predicate(const Tensor& predicate, const Tensor& b) {
     return !is_floating_point(predicate.dtype()) && is_floating_point(b.dtype());
 }
 
+// Helper function to determine output dtype
+inline std::optional<DataType> determine_output_dtype(
+    const std::optional<Tensor>& output, const std::optional<DataType>& default_dtype) {
+    return output.has_value() ? std::optional<DataType>(output->dtype()) : default_dtype;
+}
+
+// Helper function to determine memory config
+inline MemoryConfig determine_memory_config(
+    const std::optional<MemoryConfig>& memory_config, const MemoryConfig& default_config) {
+    return memory_config.value_or(default_config);
+}
+
 }  // namespace ternary_utils
 
 // Helper function to check if sharding is present
@@ -196,10 +208,14 @@ Tensor WhereOperation::invoke(
         // TTT case: tensor-tensor-tensor
         const auto& t_true = std::get<Tensor>(value_true);
         const auto& t_false = std::get<Tensor>(value_false);
-        std::optional<DataType> output_dtype =
-            output.has_value() ? std::optional<DataType>(output->dtype()) : std::optional<DataType>(t_true.dtype());
+        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
         Tensor result = handle_ttt_case(
-            condition, t_true, t_false, output_dtype, memory_config.value_or(t_true.memory_config()), output);
+            condition,
+            t_true,
+            t_false,
+            output_dtype,
+            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+            output);
         if (result.is_allocated()) {
             return result;
         }
@@ -207,10 +223,14 @@ Tensor WhereOperation::invoke(
         // TTS case: tensor-tensor-scalar
         const auto& t_true = std::get<Tensor>(value_true);
         float scalar_false = std::get<float>(value_false);
-        std::optional<DataType> output_dtype =
-            output.has_value() ? std::optional<DataType>(output->dtype()) : std::optional<DataType>(t_true.dtype());
+        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
         Tensor result = handle_tts_case(
-            condition, t_true, scalar_false, output_dtype, memory_config.value_or(t_true.memory_config()), output);
+            condition,
+            t_true,
+            scalar_false,
+            output_dtype,
+            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+            output);
         if (result.is_allocated()) {
             return result;
         }
@@ -218,10 +238,14 @@ Tensor WhereOperation::invoke(
         // TST case: tensor-scalar-tensor
         float scalar_true = std::get<float>(value_true);
         const auto& t_false = std::get<Tensor>(value_false);
-        std::optional<DataType> output_dtype =
-            output.has_value() ? std::optional<DataType>(output->dtype()) : std::optional<DataType>(t_false.dtype());
+        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
         Tensor result = handle_tst_case(
-            condition, scalar_true, t_false, output_dtype, memory_config.value_or(t_false.memory_config()), output);
+            condition,
+            scalar_true,
+            t_false,
+            output_dtype,
+            ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
+            output);
         if (result.is_allocated()) {
             return result;
         }

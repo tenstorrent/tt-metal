@@ -12,6 +12,55 @@
 #include <cmath>
 
 namespace {
+// Helper function to add sharding defines for binary_ng style kernels
+void add_binary_ng_sharding_defines(
+    std::map<std::string, std::string>& defines,
+    bool predicate_sharded,
+    bool value_true_sharded,
+    bool value_false_sharded = false) {
+    defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
+    defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
+    defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
+}
+
+// Helper function to add sharding defines for ternary kernels (A, B, C format)
+void add_ternary_sharding_defines(
+    std::map<std::string, std::string>& defines,
+    bool predicate_sharded,
+    bool value_true_sharded,
+    bool value_false_sharded = false) {
+    defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";    // CB0 sharding
+    defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
+    defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
+}
+
+// Helper function to add binary-style broadcast defines
+void add_binary_broadcast_defines(
+    std::map<std::string, std::string>& defines, bool pred_is_bcast, bool true_is_bcast, bool false_is_bcast = false) {
+    defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
+    defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+    defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+}
+
+// Helper function to add ternary-style broadcast defines
+void add_ternary_broadcast_defines(
+    std::map<std::string, std::string>& defines, bool pred_is_bcast, bool true_is_bcast, bool false_is_bcast = false) {
+    defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
+    defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
+    defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
+}
+
+// Helper function to add scalar broadcast defines based on broadcast type
+void add_scalar_broadcast_defines(
+    std::map<std::string, std::string>& defines, ttnn::operations::ternary::WhereBroadcastType broadcast_type) {
+    defines["SRC_BCAST_A"] = (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_A_BCAST)
+                                 ? "1"
+                                 : "0";  // First tensor (CB0)
+    defines["SRC_BCAST_B"] = (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_B_BCAST)
+                                 ? "1"
+                                 : "0";  // Second tensor (CB1)
+}
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
@@ -788,14 +837,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
         bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
+        add_binary_ng_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, value_false_sharded);
 
         // Set broadcast defines based on actual detection
-        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+        add_binary_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false_is_bcast);
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
@@ -809,15 +854,11 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
         bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";    // CB0 sharding
-        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
-        reader_defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
+        add_ternary_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, value_false_sharded);
 
         // Set broadcast defines to match ternary reader kernel expectations
         // CB0 = predicate, CB1 = true tensor, CB2 = false tensor
-        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
-        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
-        reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
+        add_ternary_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false_is_bcast);
 
         reader_defines["BCAST_LLK"] = "0";
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::ROW_BCAST) {
@@ -830,14 +871,11 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add basic sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";  // Predicate (CB0)
-        reader_defines["SRC_SHARDED_B"] = true_sharded ? "1" : "0";       // True tensor (CB1)
-        reader_defines["SRC_SHARDED_C"] = "0";                            // False is scalar for TTS
+        add_ternary_sharding_defines(reader_defines, predicate_sharded, true_sharded, false);
 
         // Set broadcast defines for TTS row broadcast
         // CB0 = predicate, CB1 = true tensor (false is scalar for TTS)
-        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";  // First tensor (CB0)
-        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";  // Second tensor (CB1)
+        add_ternary_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false);
 
     } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::ROW_BCAST) {
         // TST row broadcast
@@ -849,14 +887,11 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add basic sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";  // Predicate (CB0)
-        reader_defines["SRC_SHARDED_B"] = false_sharded ? "1" : "0";      // False tensor (CB1)
-        reader_defines["SRC_SHARDED_C"] = "0";                            // True is scalar for TST
+        add_ternary_sharding_defines(reader_defines, predicate_sharded, false_sharded, false);
 
         // Set broadcast defines for TST row broadcast
         // CB0 = predicate, CB1 = false tensor (true is scalar for TST)
-        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
-        reader_defines["SRC_BCAST_B"] = false_is_bcast ? "1" : "0";  // Second tensor (CB1)
+        add_ternary_broadcast_defines(reader_defines, pred_is_bcast, false_is_bcast, false);
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::COL_BCAST) {
         // TTS column broadcast
         reader_defines = make_dataflow_defines(
@@ -867,14 +902,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add basic sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_TRUE"] = true_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_FALSE"] = "0";  // False is scalar for TTS
+        add_binary_ng_sharding_defines(reader_defines, predicate_sharded, true_sharded, false);
 
         // Set broadcast defines for TTS column broadcast
-        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 uses true tensor
-        reader_defines["SRC_BCAST_FALSE"] = "0";                       // False is scalar
+        add_binary_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false);
 
         // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";
@@ -888,14 +919,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add basic sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_TRUE"] = "0";  // True is scalar for TST
-        reader_defines["SRC_SHARDED_FALSE"] = false_sharded ? "1" : "0";
+        add_binary_ng_sharding_defines(reader_defines, predicate_sharded, false, false_sharded);
 
         // Set broadcast defines for TST column broadcast
-        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_TRUE"] = "0";                          // True is scalar
-        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";  // CB1 uses false tensor
+        add_binary_broadcast_defines(reader_defines, pred_is_bcast, false, false_is_bcast);
 
         // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";
@@ -914,15 +941,13 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // TODO: Use the sharding config from the tensor args when sharding support is added
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";
+        add_ternary_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, false);
     }
     if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::OUTER_BCAST) {
         // TODO: Use the sharding config from the tensor args when sharding support is added
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_B"] = value_false_sharded ? "1" : "0";
+        add_ternary_sharding_defines(reader_defines, predicate_sharded, value_false_sharded, false);
     }
     if (variant == WhereVariant::TTS && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
                                          broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
@@ -931,12 +956,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";
-        reader_defines["SRC_BCAST_A"] =
-            (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";  // First tensor (CB0)
-        reader_defines["SRC_BCAST_B"] =
-            (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";  // Second tensor (CB1)
+        add_ternary_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, false);
+        add_scalar_broadcast_defines(reader_defines, broadcast_type);
     }
     if (variant == WhereVariant::TST && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
                                          broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
@@ -945,12 +966,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_B"] = value_false_sharded ? "1" : "0";
-        reader_defines["SRC_BCAST_A"] =
-            (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";  // First tensor (CB0)
-        reader_defines["SRC_BCAST_B"] =
-            (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";  // Second tensor (CB1)
+        add_ternary_sharding_defines(reader_defines, predicate_sharded, value_false_sharded, false);
+        add_scalar_broadcast_defines(reader_defines, broadcast_type);
     }
 
     tt_metal::ReaderDataMovementConfig reader_config;
