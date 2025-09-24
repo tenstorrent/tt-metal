@@ -50,7 +50,7 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::UINT32: return tt::DataFormat::UInt32;
         case tt::tt_metal::DataType::UINT16: return tt::DataFormat::UInt16;
         case tt::tt_metal::DataType::UINT8: return tt::DataFormat::UInt8;
-        default: TT_THROW("Unsupported DataType");
+        default: TT_THROW("Unsupported DataType"); return tt::DataFormat::Float16_b;  // for clang-tidy
     }
 }
 
@@ -64,7 +64,7 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
         case tt::DataFormat::UInt32: return tt::tt_metal::DataType::UINT32;
         case tt::DataFormat::UInt16: return tt::tt_metal::DataType::UINT16;
         case tt::DataFormat::UInt8: return tt::tt_metal::DataType::UINT8;
-        default: TT_THROW("Unsupported DataFormat");
+        default: TT_THROW("Unsupported DataFormat"); return tt::tt_metal::DataType::BFLOAT16;  // for clang-tidy
     }
 }
 
