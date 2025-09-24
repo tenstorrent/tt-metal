@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: panoptic-deeplab, owner_id: U08ARDXARPF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py }, # Ilija Anastasijevic
+            { model: panoptic-deeplab, owner_id: U08ARDXARPF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Ilija Anastasijevic
           ]
     name: Nightly 20 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
