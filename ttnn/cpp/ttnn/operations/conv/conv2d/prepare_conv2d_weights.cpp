@@ -1160,6 +1160,9 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                 orig_stride,
                 padding_n4);
         }
+        if (!dram_slice_config_.has_value()) {
+            TT_THROW("Prepare weights must have slice_config set for DRAM conv");
+        }
         Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
         uint32_t slice_rounding_value = 1;
         if (conv_config.output_layout == tt_metal::Layout::TILE &&

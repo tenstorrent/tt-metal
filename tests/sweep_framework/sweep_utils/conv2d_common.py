@@ -259,6 +259,8 @@ def run_conv2d_short_sweep(
     tt_bias_tensor = None
     conv_config = ttnn.Conv2dConfig()
     conv_output_dtype = ttnn.bfloat16
+    if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 14 and pad_h == 0 and pad_w == 0:
+        conv_config.enable_kernel_stride_folding = True
     if is_forge_suite:
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)
@@ -272,8 +274,7 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
         output_layout = ttnn.Layout(output_layout)
         output_dtype = ttnn.DataType(output_dtype)
-        if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 16 and pad_h == 0 and pad_w == 0:
-            conv_config.enable_kernel_stride_folding = True
+
         conv_output_dtype = output_dtype
         conv_config.weights_dtype = weights_dtype
         conv_config.output_layout = output_layout
@@ -283,7 +284,7 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
-
+    print("Conv config = ", conv_config)
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
