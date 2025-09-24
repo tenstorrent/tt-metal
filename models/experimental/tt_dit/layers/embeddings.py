@@ -432,17 +432,17 @@ class WanPatchEmbed:
             packer_l1_acc=False,
         )
 
-    def to_cached_state_dict(self, path_prefix):
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
 
         # Cache proj_weight
-        proj_weight_path = path_prefix + "weight"
+        proj_weight_path = path_prefix + "weight" + path_suffix
         ttnn.dump_tensor(proj_weight_path, self.proj_weight)
         cache_dict["weight"] = proj_weight_path
 
         # Cache proj_bias if it exists
         if self.proj_bias is not None:
-            proj_bias_path = path_prefix + "bias"
+            proj_bias_path = path_prefix + "bias" + path_suffix
             ttnn.dump_tensor(proj_bias_path, self.proj_bias)
             cache_dict["bias"] = proj_bias_path
 

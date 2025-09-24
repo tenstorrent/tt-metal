@@ -388,12 +388,14 @@ def test_wan_transformer_model(
     ],
     indirect=["mesh_device"],
 )
+@pytest.mark.parametrize("subfolder", ["transformer", "transformer_2"], ids=["transformer_1", "transformer_2"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_transformer_model_caching(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
     num_links: int,
+    subfolder: str,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -419,7 +421,7 @@ def test_wan_transformer_model_caching(
     MIN_RMSE = 0.15
 
     torch_model = TorchWanTransformer3DModel.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
+        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder=subfolder, torch_dtype=torch_dtype, trust_remote_code=True
     )
     torch_model.eval()
 
@@ -437,8 +439,8 @@ def test_wan_transformer_model_caching(
     )
 
     cache_path = get_and_create_cache_path(
-        model_name="wan2.2-t2v-a14b",
-        subfolder="transformer",
+        model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        subfolder=subfolder,
         parallel_config=parallel_config,
         dtype="bf16",
     )

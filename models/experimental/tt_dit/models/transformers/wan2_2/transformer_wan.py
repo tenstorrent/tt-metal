@@ -29,7 +29,6 @@ class WanTransformerBlock:
         cross_attention_norm: bool = True,
         eps: float = 1e-6,
         mesh_device=None,
-        init=False,
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=False,
@@ -53,7 +52,6 @@ class WanTransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.attn1 = WanAttention(
@@ -61,7 +59,6 @@ class WanTransformerBlock:
             num_heads=num_heads,
             eps=eps,
             mesh_device=mesh_device,
-            init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
@@ -72,7 +69,6 @@ class WanTransformerBlock:
             num_heads=num_heads,
             eps=eps,
             mesh_device=mesh_device,
-            init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
@@ -86,7 +82,6 @@ class WanTransformerBlock:
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
-                init=init,
             )
             if cross_attention_norm
             else None
@@ -100,7 +95,6 @@ class WanTransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
@@ -111,7 +105,6 @@ class WanTransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=init,
         )
 
         self.scale_shift_table = None
@@ -123,7 +116,6 @@ class WanTransformerBlock:
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -147,7 +139,7 @@ class WanTransformerBlock:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def to_cached_state_dict(self, path_prefix):
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
 
         # Cache linear layers
@@ -158,7 +150,7 @@ class WanTransformerBlock:
         ff_cache = self.ff.to_cached_state_dict(path_prefix + "ff.")
         norm3_cache = self.norm3.to_cached_state_dict(path_prefix + "norm3.")
         shard_spatial_on_tp_cache = self.shard_spatial_on_tp.to_cached_state_dict(path_prefix + "shard_spatial_on_tp.")
-        ttnn.dump_tensor(path_prefix + "scale_shift_table", self.scale_shift_table)
+        ttnn.dump_tensor(path_prefix + "scale_shift_table" + path_suffix, self.scale_shift_table)
 
         # Add prefixes for linear layers
         for key, value in norm1_cache.items():
@@ -175,7 +167,7 @@ class WanTransformerBlock:
             cache_dict[f"norm3.{key}"] = value
         for key, value in shard_spatial_on_tp_cache.items():
             cache_dict[f"shard_spatial_on_tp.{key}"] = value
-        cache_dict["scale_shift_table"] = path_prefix + "scale_shift_table"
+        cache_dict["scale_shift_table"] = path_prefix + "scale_shift_table" + path_suffix
 
         return cache_dict
 
@@ -375,7 +367,6 @@ class WanTransformer3DModel:
         eps: float = 1e-6,
         rope_max_seq_len: int = 1024,
         mesh_device=None,
-        init=False,
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=True,
@@ -403,7 +394,6 @@ class WanTransformer3DModel:
             in_channels=in_channels,
             embed_dim=dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         # NOTE: Torch fallback until we support WanCombinedTimestepCaptionEmbedding
@@ -424,7 +414,6 @@ class WanTransformer3DModel:
                 cross_attention_norm=cross_attn_norm,
                 eps=eps,
                 mesh_device=mesh_device,
-                init=init,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
@@ -439,7 +428,6 @@ class WanTransformer3DModel:
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         self.norm_out = DistributedLayerNorm(
@@ -449,7 +437,6 @@ class WanTransformer3DModel:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=False,
         )
 
         self.proj_out = Linear(
@@ -457,7 +444,6 @@ class WanTransformer3DModel:
             patch_size[0] * patch_size[1] * patch_size[2] * self.out_channels,
             bias=True,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.scale_shift_table = None
@@ -473,7 +459,7 @@ class WanTransformer3DModel:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def to_cached_state_dict(self, path_prefix):
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
         cache_dict = {}
 
         # Cache patch embedding
@@ -501,8 +487,8 @@ class WanTransformer3DModel:
         for key, value in proj_out_cache.items():
             cache_dict[f"proj_out.{key}"] = value
 
-        ttnn.dump_tensor(path_prefix + "scale_shift_table", self.scale_shift_table)
-        cache_dict["scale_shift_table"] = path_prefix + "scale_shift_table"
+        ttnn.dump_tensor(path_prefix + "scale_shift_table" + path_suffix, self.scale_shift_table)
+        cache_dict["scale_shift_table"] = path_prefix + "scale_shift_table" + path_suffix
 
         # Torch fallbacks
         torch.save(self.rope.state_dict(), path_prefix + "rope.pt")
