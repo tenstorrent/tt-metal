@@ -17,6 +17,7 @@ class MeshWorkloadImpl;
 
 namespace inspector {
 class Data;
+class RpcServer;
 }
 
 class Inspector {
@@ -24,6 +25,7 @@ public:
     static bool is_enabled();
 
     static std::unique_ptr<inspector::Data> initialize();
+    static void serialize_rpc();
 
     static void program_created(
         const detail::ProgramImpl* program) noexcept;
@@ -71,6 +73,8 @@ public:
         const distributed::MeshWorkloadImpl* mesh_workload,
         std::size_t mesh_id,
         ProgramBinaryStatus status) noexcept;
+
+    static inspector::RpcServer& get_rpc_server();
 
 };
 
