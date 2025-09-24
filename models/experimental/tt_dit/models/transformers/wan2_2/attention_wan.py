@@ -18,7 +18,6 @@ class WanAttention:
         qk_norm=True,
         eps=1e-5,
         mesh_device=None,
-        init=False,
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=False,
@@ -44,7 +43,6 @@ class WanAttention:
             "norm_elementwise_affine": True,
             "bias": False,
             "mesh_device": mesh_device,
-            "init": init,
         }
 
         self.norm_q = RMSNorm(**rms_kwargs)
@@ -57,7 +55,6 @@ class WanAttention:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -67,7 +64,6 @@ class WanAttention:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -77,7 +73,6 @@ class WanAttention:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -88,7 +83,6 @@ class WanAttention:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -101,7 +95,6 @@ class WanAttention:
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
