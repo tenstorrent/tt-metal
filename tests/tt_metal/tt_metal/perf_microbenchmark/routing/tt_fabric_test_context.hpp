@@ -998,17 +998,18 @@ private:
         double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
         double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
 
+        std::cout << "TEST NAME: " << config.parametrized_name << std::endl;
         // Case 1: This test is the first iteration of a new test, or is a single iteration test
         // Generate a new entry for the test, grouping multi-iteration tests into the same entry
-        if (config.name.find("_iter_0") != std::string::npos || config.name.find("_iter_") == std::string::npos) {
-            // Strip off the "_iter_0" suffix if it exists
-            std::string test_name;
-            if (config.name.find("_iter_0") != std::string::npos) {
-                test_name = config.name.substr(0, config.name.find("_iter_0"));
-            }
-            else {
-                test_name = config.name;
-            }
+        if (config.parametrized_name.find("_iter_0") != std::string::npos || config.parametrized_name.find("_iter_") == std::string::npos) {
+            // Use base name for test name, rather than name with _iter_0 suffix
+            std::string test_name = config.name;
+            // if (config.parametrized_name.find("_iter_0") != std::string::npos) {
+            //     test_name = config.parametrized_name.substr(0, config.parametrized_name.find("_iter_0"));
+            // }
+            // else {
+            //     test_name = config.parametrized_name;
+            // }
             // Find test parameters based on the test's first test pattern
             std::string ftype_str = "None";
             std::string ntype_str = "None";
