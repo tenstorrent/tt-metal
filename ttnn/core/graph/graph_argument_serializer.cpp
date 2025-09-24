@@ -166,14 +166,14 @@ void GraphArgumentSerializer::register_small_vector() {
         std::ostringstream oss;
         auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<T, N>>>(value);
         const auto& vec = referenced_value.get();
-        oss << "[";
+        oss << "SmallVector([";
         for (size_t i = 0; i < vec.size(); ++i) {
             serialize_value(oss, vec[i]);
             if (i < vec.size() - 1) {
                 oss << ", ";
             }
         }
-        oss << "]";
+        oss << "])";
         return oss.str();
     };
 
@@ -208,14 +208,14 @@ void GraphArgumentSerializer::register_vector() {
         auto referenced_value = std::any_cast<std::reference_wrapper<std::vector<T, std::allocator<T>>>>(value);
         const auto& vec = referenced_value.get();
         std::ostringstream oss;
-        oss << "[";
+        oss << "std::vector([";
         for (size_t i = 0; i < vec.size(); ++i) {
             serialize_value(oss, vec[i]);
             if (i < vec.size() - 1) {
                 oss << ", ";
             }
         }
-        oss << "]";
+        oss << "])";
         return oss.str();
     };
 }
