@@ -65,11 +65,10 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
 static void test_psd() {
     auto rtoptions = tt::llrt::RunTimeOptions();
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
-    tt::ARCH arch = tt::tt_metal::get_platform_architecture(rtoptions);
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context =
         tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
-    tt::tt_metal::PSD psd = tt::tt_metal::PSD(cluster, distributed_context, arch);
+    tt::tt_metal::PSD psd = tt::tt_metal::PSD(cluster, distributed_context);
 
     std::cout << "All host names:" << std::endl;
     for (auto hostname : psd.get_all_hostnames()) {
