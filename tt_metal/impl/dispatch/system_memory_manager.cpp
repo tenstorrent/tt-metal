@@ -102,16 +102,16 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
                 CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
                 core_type);
 
-        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::tt_metal::MetalContext::instance()
-                                                                                 .get_cluster()
-                                                                                 .get_tlb_data(tt_cxy_pair(
-                                                                                     completion_queue_writer_core.chip,
-                                                                                     completion_queue_writer_virtual.x,
-                                                                                     completion_queue_writer_virtual.y))
-                                                                                 .value();
-        auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
+        // const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::tt_metal::MetalContext::instance()
+        //                                                                          .get_cluster()
+        //                                                                          .get_tlb_data(tt_cxy_pair(
+        //                                                                              completion_queue_writer_core.chip,
+        //                                                                              completion_queue_writer_virtual.x,
+        //                                                                              completion_queue_writer_virtual.y))
+        //                                                                          .value();
+        // auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
 
-        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
+        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % (1 << 20);
         this->completion_q_writers.emplace_back(
             tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(tt_cxy_pair(
                 completion_queue_writer_core.chip,
