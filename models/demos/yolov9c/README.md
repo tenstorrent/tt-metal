@@ -89,12 +89,12 @@ Note: To test the demo with your own images, replace images with `models/demos/y
   ```
 
 #### Multi Device (DP=2, n300):
-- For `640x640` - `Segmentation`, end-2-end perf is `92` FPS.
+- For `640x640` - `Segmentation`, end-2-end perf is `151` FPS.
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant_dp
   ```
 
-- For `640x640` - `Detection`, end-2-end perf is `131` FPS.
+- For `640x640` - `Detection`, end-2-end perf is `171` FPS.
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant_dp
   ```
