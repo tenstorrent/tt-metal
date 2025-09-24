@@ -83,6 +83,7 @@ struct ReduceConfig {
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
+    bool use_pattern_data = false;
 };
 
 float get_scaler(const ReduceConfig& test_config) {
@@ -439,20 +440,23 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     // Generate test data - switch between pattern and random data
     vector<uint32_t> src_vec;
-#ifdef USE_PATTERN_DATA
-    if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
-        // Generate specific test pattern: 0.5 everywhere except second column (1-32)
-        src_vec = create_max_reduce_test_data(dram_buffer_size, num_tensor_tiles, tile_H, tile_W);
+    if (test_config.use_pattern_data) {
+        if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
+            // Generate specific test pattern: 0.5 everywhere except second column (1-32)
+            src_vec = create_max_reduce_test_data(dram_buffer_size, num_tensor_tiles, tile_H, tile_W);
+        } else {
+            // Use random data for other test cases
+            src_vec = create_random_vector_of_bfloat16(
+                dram_buffer_size,
+                test_config.data_gen_rand_max,
+                test_config.data_gen_seed,
+                test_config.data_gen_offset);
+        }
     } else {
-        // Use random data for other test cases
+        // Default: always use random data
         src_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
     }
-#else
-    // Default: always use random data
-    src_vec = create_random_vector_of_bfloat16(
-        dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
-#endif
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
@@ -495,24 +499,24 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);  // result is uint16_t untilized
 
     // Debug output for MAX row reduction with custom test data
-#ifdef USE_PATTERN_DATA
-    if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
-        log_info(LogTest, "=== MAX Row Reduction Test Debug Info ===");
-        log_info(LogTest, "Input pattern: 0.5 everywhere except column 1 (values 1-32)");
-        log_info(LogTest, "Expected output: Each row should reduce to its row number (1-32)");
+    if (test_config.use_pattern_data) {
+        if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
+            log_info(LogTest, "=== MAX Row Reduction Test Debug Info ===");
+            log_info(LogTest, "Input pattern: 0.5 everywhere except column 1 (values 1-32)");
+            log_info(LogTest, "Expected output: Each row should reduce to its row number (1-32)");
 
-        // Print first few expected results
-        log_info(LogTest, "Expected results (first 10 rows):");
-        for (int i = 0; i < std::min(10, (int)gold_reduced.size()); i++) {
-            // Convert uint16 raw bits to bfloat16 and then to float
-            bfloat16 bf16_val;
-            std::memcpy(&bf16_val, &gold_reduced[i], sizeof(uint16_t));
-            float expected_val = bf16_val.to_float();
-            log_info(LogTest, "  Row {}: {}", i, expected_val);
+            // Print first few expected results
+            log_info(LogTest, "Expected results (first 10 rows):");
+            for (int i = 0; i < std::min(10, (int)gold_reduced.size()); i++) {
+                // Convert uint16 raw bits to bfloat16 and then to float
+                bfloat16 bf16_val;
+                std::memcpy(&bf16_val, &gold_reduced[i], sizeof(uint16_t));
+                float expected_val = bf16_val.to_float();
+                log_info(LogTest, "  Row {}: {}", i, expected_val);
+            }
+            log_info(LogTest, "==========================================");
         }
-        log_info(LogTest, "==========================================");
     }
-#endif
 
     // Tilize from row major and convert to pairs (uint32_t)
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
@@ -523,21 +527,21 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         PhysicalSize{tile_H, tile_W}));
 
     // Debug output for actual kernel results
-#ifdef USE_PATTERN_DATA
-    if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
-        log_info(LogTest, "=== Actual Kernel Results ===");
-        auto result_u16 = u16_from_u32_vector(result_vec);
-        log_info(LogTest, "Actual results (first 10 rows):");
-        for (int i = 0; i < std::min(10, (int)result_u16.size()); i++) {
-            // Convert uint16 raw bits to bfloat16 and then to float
-            bfloat16 bf16_val;
-            std::memcpy(&bf16_val, &result_u16[i], sizeof(uint16_t));
-            float actual_val = bf16_val.to_float();
-            log_info(LogTest, "  Row {}: {}", i, actual_val);
+    if (test_config.use_pattern_data) {
+        if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
+            log_info(LogTest, "=== Actual Kernel Results ===");
+            auto result_u16 = u16_from_u32_vector(result_vec);
+            log_info(LogTest, "Actual results (first 10 rows):");
+            for (int i = 0; i < std::min(10, (int)result_u16.size()); i++) {
+                // Convert uint16 raw bits to bfloat16 and then to float
+                bfloat16 bf16_val;
+                std::memcpy(&bf16_val, &result_u16[i], sizeof(uint16_t));
+                float actual_val = bf16_val.to_float();
+                log_info(LogTest, "  Row {}: {}", i, actual_val);
+            }
+            log_info(LogTest, "=============================");
         }
-        log_info(LogTest, "=============================");
     }
-#endif
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
     if (!pass) {
@@ -598,7 +602,7 @@ TEST_F(DeviceFixture, TensixComputeReduceH) {
 }
 
 TEST_F(DeviceFixture, TensixComputeReduceW) {
-    std::vector<uint32_t> shape = {1, 1, 1 * TILE_HEIGHT, 1 * TILE_WIDTH};
+    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::HiFi4); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
