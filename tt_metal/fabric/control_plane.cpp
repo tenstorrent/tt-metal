@@ -49,6 +49,9 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
+
+#include <unistd.h>
+#include <cstdio>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
 namespace tt::tt_fabric {
@@ -597,6 +600,20 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 
 std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
     const std::string& mesh_graph_desc_file) {
+// Add this where you want to debug
+#ifdef MULTIHOST_DEBUG
+    {
+        volatile int i = 0;
+        char hostname[256];
+        gethostname(hostname, sizeof(hostname));
+        printf("PID %d on %s ready for attach\n", getpid(), hostname);
+        fflush(stdout);
+        while (0 == i) {
+            sleep(10);
+        }
+    }
+#endif
+
     std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping;
 
     std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
@@ -644,6 +661,12 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
 
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
+            const char* env_nw_chip_id = std::getenv("TT_NW_CHIP_PHYSICAL_ID");
+            if (env_nw_chip_id != nullptr) {
+                nw_chip_physical_id = static_cast<chip_id_t>(std::stoi(env_nw_chip_id));
+                log_info(tt::LogFabric, "NW chip physical ID set from environment: {}", nw_chip_physical_id);
+            }
+
             std::optional<chip_id_t> ne_chip_physical_id = std::nullopt;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             // TODO: remove once we use global physical graph to map logical big mesh to physical chips
@@ -683,8 +706,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                         ne_chip_coord);
             }
 
-            const auto& physical_chip_ids =
-                this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id, ne_chip_physical_id);
+            const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id, ne_chip_physical_id);
             std::uint32_t i = 0;
             for (const auto& [_, fabric_chip_id] : mesh_container) {
                 logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(

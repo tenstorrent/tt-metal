@@ -292,8 +292,23 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         }
     }
 
+    log_info(tt::LogMetal, "=== Processing cross-host connections for host {} ===", hostname);
+    log_info(tt::LogMetal, "Number of chips with cross-host connections: {}", cross_host_eth_connections.size());
+
     for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
         auto local_unique_id = AsicID{chip_unique_ids.at(local_chip_id)};
+        log_info(
+            tt::LogMetal,
+            "Local chip {} (unique_id={}) has {} cross-host links",
+            local_chip_id,
+            local_unique_id,
+            eth_link_info.size());
+
+        // This ASIC has no local ethernet connections, but is connected to this host
+        // and to a remote host. Add it to the ASIC Descriptor List.
+        if (asic_descriptors_.find(local_unique_id) == asic_descriptors_.end()) {
+            add_local_asic_descriptor(local_unique_id, local_chip_id);
+        }
         // This ASIC has no local ethernet connections, but is connected to this host
         // and to a remote host. Add it to the ASIC Descriptor List.
         if (asic_descriptors_.find(local_unique_id) == asic_descriptors_.end()) {
@@ -303,6 +318,24 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
             auto dst_chan = std::get<1>(remote_info);
+
+            // Find destination host name (may not be available yet during local discovery)
+            std::string dst_host = "unknown";
+            if (asic_descriptors_.find(dst_unique_id) != asic_descriptors_.end()) {
+                dst_host = asic_descriptors_.at(dst_unique_id).host_name;
+            }
+
+            log_info(
+                tt::LogMetal,
+                "{} reports: ({}) ASIC {}[ch {}] <-> ({}) ASIC {}[ch {}]",
+                hostname,
+                hostname,
+                *local_unique_id,
+                eth_chan,
+                dst_host,
+                *dst_unique_id,
+                dst_chan);
+
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
                 asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
@@ -316,6 +349,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
+    log_info(tt::LogMetal, "=== End cross-host connections for host {} ===", hostname);
     this->generate_local_ethernet_metrics();
     system_graph_.host_connectivity_graph[hostname] = {};
 }
@@ -327,6 +361,27 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     this->exchange_metadata(true);
     if (my_rank == controller_rank) {
         this->remove_unresolved_nodes();
+
+        // Debug: Print all cross-host connections after metadata exchange
+        log_info(tt::LogMetal, "=== All Cross-Host Connections After Metadata Exchange ===");
+        for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
+            for (const auto& exit_node : exit_nodes) {
+                const auto& src_host = asic_descriptors_.at(exit_node.src_exit_node).host_name;
+                const auto& dst_host = asic_descriptors_.at(exit_node.dst_exit_node).host_name;
+                log_info(
+                    tt::LogMetal,
+                    "{} reports: ({}) ASIC {}[ch {}] <-> ({}) ASIC {}[ch {}]",
+                    host,
+                    src_host,
+                    *exit_node.src_exit_node,
+                    exit_node.eth_conn.src_chan,
+                    dst_host,
+                    *exit_node.dst_exit_node,
+                    exit_node.eth_conn.dst_chan);
+            }
+        }
+        log_info(tt::LogMetal, "=== End All Cross-Host Connections ===");
+
         this->generate_cross_host_connections();
         this->validate_graphs();
     }
@@ -456,6 +511,21 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
 }
 
 void PhysicalSystemDescriptor::generate_cross_host_connections() {
+    log_info(tt::LogMetal, "=== Exit Node Connection Table ===");
+    for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
+        log_info(tt::LogMetal, "Host: {} ({} exit nodes)", host, exit_nodes.size());
+        for (const auto& exit_node : exit_nodes) {
+            log_info(
+                tt::LogMetal,
+                "  src_exit_node={}, dst_exit_node={}, src_chan={}, dst_chan={}",
+                exit_node.src_exit_node,
+                exit_node.dst_exit_node,
+                exit_node.eth_conn.src_chan,
+                exit_node.eth_conn.dst_chan);
+        }
+    }
+    log_info(tt::LogMetal, "=== End Exit Node Connection Table ===");
+
     for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
         std::unordered_map<std::string, size_t> visited_hosts;
         for (const auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
@@ -468,6 +538,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                         candidate_node.src_exit_node == exit_node.dst_exit_node &&
                         exit_node.eth_conn.src_chan == candidate_node.eth_conn.dst_chan &&
                         exit_node.eth_conn.dst_chan == candidate_node.eth_conn.src_chan) {
+                        log_info(tt::LogMetal, "Found matching connection: {} -> {}", host, candidate_host);
                         if (visited_hosts.find(candidate_host) == visited_hosts.end()) {
                             system_graph_.host_connectivity_graph[host].push_back({candidate_host, {exit_node}});
                             visited_hosts[candidate_host] = system_graph_.host_connectivity_graph[host].size() - 1;
@@ -585,6 +656,46 @@ void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::strin
 
 void PhysicalSystemDescriptor::validate_graphs() {
     // Validate that the representation of the system is internally consistent.
+
+    // Debug: Print ASIC connectivity graph with host info
+    log_info(tt::LogMetal, "=== ASIC Connectivity Graph (Global Connections Only) ===");
+    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        for (const auto& [src_asic, edges] : asic_group) {
+            for (const auto& [dst_asic, eth_conns] : edges) {
+                bool has_global = false;
+                for (const auto& eth_conn : eth_conns) {
+                    if (!eth_conn.is_local) {
+                        has_global = true;
+                        break;
+                    }
+                }
+                if (has_global) {
+                    const auto& src_host = asic_descriptors_.at(src_asic).host_name;
+                    const auto& dst_host = asic_descriptors_.at(dst_asic).host_name;
+                    log_info(
+                        tt::LogMetal,
+                        "ASIC {} (host {}) -> ASIC {} (host {}) - {} connections",
+                        src_asic,
+                        src_host,
+                        dst_asic,
+                        dst_host,
+                        eth_conns.size());
+                }
+            }
+        }
+    }
+    log_info(tt::LogMetal, "=== End ASIC Connectivity Graph ===");
+
+    // Debug: Print host connectivity graph
+    log_info(tt::LogMetal, "=== Host Connectivity Graph ===");
+    for (const auto& [host, edges] : system_graph_.host_connectivity_graph) {
+        log_info(tt::LogMetal, "Host: {}", host);
+        for (const auto& [dst_host, exit_conns] : edges) {
+            log_info(tt::LogMetal, "  -> {} ({} connections)", dst_host, exit_conns.size());
+        }
+    }
+    log_info(tt::LogMetal, "=== End Host Connectivity Graph ===");
+
     for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         for (const auto& [src_asic, edges] : asic_group) {
             const auto& src_host = asic_descriptors_.at(src_asic).host_name;
@@ -625,6 +736,18 @@ void PhysicalSystemDescriptor::validate_graphs() {
                 // Validate each global ethernet connection.
                 for (const auto& eth_conn : eth_conns) {
                     // Look for a host edge matching dst_host.
+                    log_info(
+                        tt::LogMetal,
+                        "Looking for connection from {} to {} (src_asic={}, dst_asic={})",
+                        src_host,
+                        dst_host,
+                        src_asic,
+                        dst_asic);
+                    log_info(tt::LogMetal, "Available edges from {}:", src_host);
+                    for (const auto& edge : src_host_edges) {
+                        log_info(tt::LogMetal, "  - {}", edge.first);
+                    }
+
                     auto host_edge_it =
                         std::find_if(src_host_edges.begin(), src_host_edges.end(), [&](const auto& host_edge) {
                             return host_edge.first == dst_host;
