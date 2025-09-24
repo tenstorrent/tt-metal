@@ -168,3 +168,129 @@ def test_flux1_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((2, 4), id="2x4")],
+    indirect=True,
+)
+def test_flux1_pipeline_fixed_params(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    model_location_generator,
+) -> None:
+    """Test with fixed parameters as specified."""
+    # Fixed parameters
+    no_prompt = False
+    model_variant = "schnell"
+    width = 1024
+    height = 1024
+    num_inference_steps = 4
+    sp = (2, 0)
+    tp = (4, 1)
+    topology = ttnn.Topology.Linear
+    num_links = 1
+    mesh_test_id = "2x4sp0tp1"
+    enable_t5_text_encoder = True
+    use_torch_t5_text_encoder = False
+    use_torch_clip_text_encoder = False
+    traced = True
+
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
+
+    if tp_factor < 4:
+        pytest.skip("triggers OOM during VAE pass")
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    logger.info(f"Mesh device shape: {mesh_device.shape}")
+    logger.info(f"Parallel config: {parallel_config}")
+    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+
+    timing_collector = TimingCollector()
+
+    pipeline = Flux1Pipeline(
+        checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
+        mesh_device=mesh_device,
+        enable_t5_text_encoder=enable_t5_text_encoder,
+        use_torch_t5_text_encoder=use_torch_t5_text_encoder,
+        use_torch_clip_text_encoder=use_torch_clip_text_encoder,
+        parallel_config=parallel_config,
+        topology=topology,
+        num_links=num_links,
+    )
+
+    pipeline.timing_collector = timing_collector
+
+    prompts = [
+        "A luxury sports car.",
+        # "Neon-lit cyberpunk alley, rain-soaked, cinematic wide shot",
+        # "Golden retriever astronaut drifting in sunlit space",
+        # "Minimalist Scandinavian kitchen, morning light, ultra clean",
+        # "Ancient desert temple at dawn, soft fog, wide angle",
+        # "Steampunk airship over Victorian city, dramatic clouds",
+        # "Macro dewdrops on fern, shallow depth of field",
+        # "Luxury wristwatch on marble, studio lighting, hyper-detail",
+        # "Stormy coastline lighthouse, crashing waves, long exposure",
+        # "Futuristic Tokyo street market, vibrant signage, motion blur",
+    ]
+
+    filename_prefix = f"flux_{model_variant}_{width}_{height}_{mesh_test_id}"
+    if enable_t5_text_encoder:
+        if use_torch_t5_text_encoder:
+            filename_prefix += "_t5cpu"
+    else:
+        filename_prefix += "_t5off"
+    if use_torch_clip_text_encoder:
+        filename_prefix += "_clipcpu"
+    if not traced:
+        filename_prefix += "_untraced"
+
+    def run(*, prompt: str, number: int, seed: int) -> None:
+        images = pipeline(
+            width=width,
+            height=height,
+            prompt_1=[prompt],
+            prompt_2=[prompt],
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            traced=traced,
+        )
+
+        output_filename = f"{filename_prefix}_{number}.png"
+        images[0].save(output_filename)
+        logger.info(f"Image saved as {output_filename}")
+
+        timing_data = timing_collector.get_timing_data()
+        logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
+        logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
+        logger.info(f"Total encoding time: {timing_data.total_encoding_time:.2f}s")
+        logger.info(f"VAE decoding time: {timing_data.vae_decoding_time:.2f}s")
+        logger.info(f"Total pipeline time: {timing_data.total_time:.2f}s")
+        if timing_data.denoising_step_times:
+            avg_step_time = sum(timing_data.denoising_step_times) / len(timing_data.denoising_step_times)
+            logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
+
+    if no_prompt:
+        for i, prompt in enumerate(prompts):
+            run(prompt=prompt, number=i, seed=0)
+    else:
+        prompt = prompts[0]
+        for i in itertools.count():
+            new_prompt = input("Enter the input prompt, or q to exit: ")
+            if new_prompt:
+                prompt = new_prompt
+            if prompt[0] == "q":
+                break
+            run(prompt=prompt, number=i, seed=i)
