@@ -82,7 +82,7 @@ def draw_oriented_bbox(image, center_x, center_y, width, height, angle, color=(0
     return image
 
 
-def process_obb_predictions(output, confidence_threshold=0.1, original_size=(320, 320), target_size=(320, 320)):
+def process_obb_predictions(output, confidence_threshold=0.1, original_size=(320, 320), target_size=(320, 320), debug=False):
     """
     Process OBB model output to extract detections
     Args:
@@ -90,21 +90,46 @@ def process_obb_predictions(output, confidence_threshold=0.1, original_size=(320
         confidence_threshold: Minimum confidence for detection
         original_size: Original image size (width, height)  
         target_size: Model input size (width, height)
+        debug: Whether to print debug information
     Returns:
         List of detections: [(x, y, w, h, angle, confidence, class_id), ...]
     """
+    if debug:
+        print(f"🔍 process_obb_predictions debug:")
+        print(f"   Input shape: {output.shape}")
+        print(f"   Confidence threshold: {confidence_threshold}")
+        print(f"   Original size: {original_size}, Target size: {target_size}")
+    
     # Extract components
     box_coords = output[0, :4, :]      # [4, 8400] - x, y, w, h
     class_preds = output[0, 4:19, :]   # [15, 8400] - class probabilities
     angle_preds = output[0, 19, :]     # [8400] - angles
     
+    if debug:
+        print(f"   Box coords shape: {box_coords.shape}, range: [{box_coords.min():.6f}, {box_coords.max():.6f}]")
+        print(f"   Class preds shape: {class_preds.shape}, range: [{class_preds.min():.6f}, {class_preds.max():.6f}]")
+        print(f"   Angle preds shape: {angle_preds.shape}, range: [{angle_preds.min():.6f}, {angle_preds.max():.6f}]")
+    
     # Get max class confidence and class index for each detection
     max_class_conf, class_indices = torch.max(class_preds, dim=0)  # [8400]
+    
+    if debug:
+        print(f"   Max class conf shape: {max_class_conf.shape}")
+        print(f"   Max class conf range: [{max_class_conf.min():.6f}, {max_class_conf.max():.6f}]")
+        print(f"   Max class conf stats: mean={max_class_conf.mean():.6f}, std={max_class_conf.std():.6f}")
+        print(f"   Detections > threshold {confidence_threshold}: {(max_class_conf > confidence_threshold).sum()}")
+        
+        # Show top 10 highest confidence values
+        top_conf_values, top_conf_indices = torch.topk(max_class_conf, k=min(10, len(max_class_conf)))
+        print(f"   Top 10 confidence values: {top_conf_values.tolist()}")
+        print(f"   Top 10 confidence indices: {top_conf_indices.tolist()}")
     
     # Filter by confidence threshold
     high_conf_mask = max_class_conf > confidence_threshold
     
     if not high_conf_mask.any():
+        if debug:
+            print(f"   ❌ No detections above threshold {confidence_threshold}")
         return []
     
     # Extract high-confidence detections
@@ -155,7 +180,8 @@ def visualize_obb_predictions(image_path, output, confidence_threshold=0.05, sav
             output, 
             confidence_threshold=confidence_threshold,
             original_size=original_size,
-            target_size=(320, 320)
+            target_size=(320, 320),
+            debug=True
         )
         
         print(f"🎯 Found {len(detections)} detections (conf > {confidence_threshold})")
@@ -308,6 +334,58 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             assert torch_output.shape == ttnn_output_torch.shape, \
                 f"Shape mismatch: PyTorch {torch_output.shape} vs TTNN {ttnn_output_torch.shape}"
             
+            # Debug: Compare raw tensor statistics
+            print(f"🔍 Debug - Raw tensor comparison:")
+            print(f"   PyTorch - shape: {torch_output.shape}, dtype: {torch_output.dtype}")
+            print(f"   PyTorch - min: {torch_output.min():.6f}, max: {torch_output.max():.6f}, mean: {torch_output.mean():.6f}")
+            print(f"   TTNN    - shape: {ttnn_output_torch.shape}, dtype: {ttnn_output_torch.dtype}")
+            print(f"   TTNN    - min: {ttnn_output_torch.min():.6f}, max: {ttnn_output_torch.max():.6f}, mean: {ttnn_output_torch.mean():.6f}")
+            
+            # Debug: Compare each component separately
+            torch_box_coords = torch_output[:, :4, :]      # Box coordinates
+            torch_class_preds = torch_output[:, 4:19, :]   # Class predictions  
+            torch_angle_preds = torch_output[:, 19:20, :]  # Angle predictions
+            
+            ttnn_box_coords = ttnn_output_torch[:, :4, :]      # Box coordinates
+            ttnn_class_preds = ttnn_output_torch[:, 4:19, :]   # Class predictions
+            ttnn_angle_preds = ttnn_output_torch[:, 19:20, :]  # Angle predictions
+            
+            print(f"🔍 Debug - Component comparison:")
+            print(f"   Box coords - PyTorch: [{torch_box_coords.min():.6f}, {torch_box_coords.max():.6f}]")
+            print(f"   Box coords - TTNN:    [{ttnn_box_coords.min():.6f}, {ttnn_box_coords.max():.6f}]")
+            print(f"   Class preds - PyTorch: [{torch_class_preds.min():.6f}, {torch_class_preds.max():.6f}]")
+            print(f"   Class preds - TTNN:    [{ttnn_class_preds.min():.6f}, {ttnn_class_preds.max():.6f}]")
+            print(f"   Angle preds - PyTorch: [{torch_angle_preds.min():.6f}, {torch_angle_preds.max():.6f}]")
+            print(f"   Angle preds - TTNN:    [{ttnn_angle_preds.min():.6f}, {ttnn_angle_preds.max():.6f}]")
+            
+            # Debug: Check max confidence values specifically
+            torch_max_conf_per_detection = torch_class_preds.max(dim=1)[0]  # [1, 8400]
+            ttnn_max_conf_per_detection = ttnn_class_preds.max(dim=1)[0]    # [1, 8400]
+            
+            print(f"🔍 Debug - Confidence analysis:")
+            print(f"   PyTorch max conf: {torch_max_conf_per_detection.max():.6f}, count > 0.02: {(torch_max_conf_per_detection > 0.02).sum()}")
+            print(f"   TTNN max conf:    {ttnn_max_conf_per_detection.max():.6f}, count > 0.02: {(ttnn_max_conf_per_detection > 0.02).sum()}")
+            print(f"   PyTorch conf > 0.1: {(torch_max_conf_per_detection > 0.1).sum()}")
+            print(f"   TTNN conf > 0.1:    {(ttnn_max_conf_per_detection > 0.1).sum()}")
+            
+            # Debug: Show first few high confidence detections for comparison
+            torch_high_conf_mask = torch_max_conf_per_detection[0] > 0.02  # Remove batch dim
+            ttnn_high_conf_mask = ttnn_max_conf_per_detection[0] > 0.02    # Remove batch dim
+            
+            print(f"🔍 Debug - High confidence detection indices:")
+            torch_high_indices = torch.where(torch_high_conf_mask)[0][:10]  # First 10
+            ttnn_high_indices = torch.where(ttnn_high_conf_mask)[0][:10]    # First 10
+            print(f"   PyTorch high conf indices (first 10): {torch_high_indices.tolist()}")
+            print(f"   TTNN high conf indices (first 10):    {ttnn_high_indices.tolist()}")
+            
+            if len(torch_high_indices) > 0:
+                idx = torch_high_indices[0].item()
+                print(f"🔍 Debug - Detection #{idx} comparison:")
+                print(f"   PyTorch conf: {torch_max_conf_per_detection[0, idx]:.6f}")
+                print(f"   TTNN conf:    {ttnn_max_conf_per_detection[0, idx]:.6f}")
+                print(f"   PyTorch class probs: {torch_class_preds[0, :, idx][:5].tolist()}")  # First 5 classes
+                print(f"   TTNN class probs:    {ttnn_class_preds[0, :, idx][:5].tolist()}")   # First 5 classes
+            
             # Calculate PCC (Pearson Correlation Coefficient) for comparison
             # Flatten tensors for correlation calculation
             torch_flat = torch_output.flatten()
@@ -327,12 +405,14 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             image_name = os.path.splitext(os.path.basename(image_path))[0]
             
             # Visualize PyTorch predictions
+            print(f"\n🔍 Debug - Processing PyTorch predictions:")
             torch_save_path = os.path.join(output_dir_torch, f"{image_name}_pytorch_obb.jpg")
             viz_torch, detections_torch = visualize_obb_predictions(
                 image_path, torch_output, confidence_threshold=0.02, save_path=torch_save_path
             )
             
-            # Visualize TTNN predictions
+            # Visualize TTNN predictions  
+            print(f"\n🔍 Debug - Processing TTNN predictions:")
             ttnn_save_path = os.path.join(output_dir_ttnn, f"{image_name}_ttnn_obb.jpg")
             viz_ttnn, detections_ttnn = visualize_obb_predictions(
                 image_path, ttnn_output_torch, confidence_threshold=0.02, save_path=ttnn_save_path
@@ -378,6 +458,30 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             print(f"   PyTorch detections: {len(detections_torch)}")
             print(f"   TTNN detections: {len(detections_ttnn)}")
             print(f"   Correlation (PCC): {pcc:.6f}")
+            
+            # Additional debug: If TTNN has 0 detections but PyTorch has many, investigate
+            if len(detections_torch) > 0 and len(detections_ttnn) == 0:
+                print(f"\n🚨 Debug - Detection mismatch detected!")
+                print(f"   PyTorch found {len(detections_torch)} detections, TTNN found 0")
+                print(f"   Re-running detection processing with lower threshold to investigate...")
+                
+                # Try with very low threshold for TTNN to see if any detections exist
+                debug_detections_ttnn = process_obb_predictions(
+                    ttnn_output_torch, 
+                    confidence_threshold=0.001,  # Very low threshold
+                    original_size=original_size,
+                    target_size=(320, 320),
+                    debug=True
+                )
+                print(f"   TTNN detections with threshold 0.001: {len(debug_detections_ttnn)}")
+                
+                if len(debug_detections_ttnn) > 0:
+                    # Show the highest confidence TTNN detection
+                    debug_conf_values = [det[5] for det in debug_detections_ttnn]  # confidence is index 5
+                    max_ttnn_conf = max(debug_conf_values)
+                    print(f"   Highest TTNN confidence found: {max_ttnn_conf:.6f}")
+                else:
+                    print(f"   ❌ Still no TTNN detections even with threshold 0.001")
         
         # Summary
         if results:
@@ -424,11 +528,11 @@ if __name__ == "__main__":
     # Also try some backup images from other YOLO demos if available
     # Test images - use existing demo images
     test_images = [
-        "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
+        # "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
+        # "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
+        # "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
+        # "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
+        # "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
         "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
     ]
 
