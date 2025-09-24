@@ -6,9 +6,9 @@
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 from loguru import logger
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 
 def test_eltwise_unary_chain(device):

@@ -8,12 +8,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer as refTransformer
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py
 
