@@ -58,9 +58,6 @@ void kernel_main() {
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
 
-    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
-
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
         if (is_first_chip) {
