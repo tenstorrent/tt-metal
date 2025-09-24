@@ -26,10 +26,16 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
     return tt::stl::hash::hash_objects_with_default_seed(p.first, p.second);
 }
 
-namespace {
-constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
+namespace tt::tt_fabric {
+FabricType operator|(FabricType lhs, FabricType rhs) {
+    return static_cast<FabricType>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
+}
 
-using namespace tt::tt_fabric;
+FabricType operator&(FabricType lhs, FabricType rhs) {
+    return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
+}
+
+constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
 RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
     switch (routing_direction) {
@@ -106,16 +112,6 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
             });
-}  // namespace
-
-namespace tt::tt_fabric {
-FabricType operator|(FabricType lhs, FabricType rhs) {
-    return static_cast<FabricType>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
-}
-
-FabricType operator&(FabricType lhs, FabricType rhs) {
-    return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
-}
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 

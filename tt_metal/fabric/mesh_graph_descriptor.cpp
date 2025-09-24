@@ -875,7 +875,7 @@ void MeshGraphDescriptor::populate_intra_mesh_connections(GlobalNodeId mesh_id) 
 
     auto & instance = instances_.at(mesh_id);
 
-    const auto mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
 
     TT_FATAL(mesh_desc->device_topology().dims_size() == 2, "MGD currently only supports 2D meshes");
 
@@ -899,7 +899,7 @@ void MeshGraphDescriptor::populate_intra_mesh_connections(GlobalNodeId mesh_id) 
 
 void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId mesh_id) {
     auto & instance = instances_.at(mesh_id);
-    const auto mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
     for (const auto& express_connection : mesh_desc->express_connections()) {
         const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.src());
         const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.dst());
