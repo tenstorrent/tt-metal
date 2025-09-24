@@ -801,18 +801,20 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
                     device_id, logical_core.coord, logical_core.type);
             auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
             uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+            const auto& enabled_processors =
+                MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
             for (int risc_id = 0; risc_id < num_processors; risc_id++) {
-                if (RiscEnabled(programmable_core_type, risc_id)) {
+                if (enabled_processors.contains(programmable_core_type, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
                     if (!CheckInitMagicCleared(device_id, virtual_core, risc_id)) {
                         continue;
                     }
 
                     // Check if rpos < wpos, indicating unprocessed prints.
-                    constexpr int eightbytes = 8;
-                    uint32_t base_addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
-                    auto from_dev =
-                        MetalContext::instance().get_cluster().read_core(chip_id, virtual_core, base_addr, eightbytes);
+                    uint32_t base_addr = GetDprintBufAddr(programmable_core_type, risc_id);
+                    uint32_t from_dev[2];
+                    MetalContext::instance().get_cluster().read_core(
+                        from_dev, sizeof from_dev, {chip_id, virtual_core}, base_addr);
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
