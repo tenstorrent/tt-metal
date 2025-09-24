@@ -174,6 +174,56 @@ TEST_F(MeshDevice2x4Test, OverlappedSubmeshes) {
     EXPECT_EQ(submeshes[0]->shape(), (MeshShape{2, 2}));
     EXPECT_EQ(submeshes[1]->shape(), (MeshShape{2, 2}));
     EXPECT_EQ(submeshes[2]->shape(), (MeshShape{1, 4}));
+
+    // Test buffer allocation behavior with overlapped submeshes
+    // Submesh dependencies: submesh1 and submesh2 don't overlap directly but both overlap with submesh3
+    // Expected: submesh1 and submesh2 should have independent allocations, but submesh3 should respect both
+
+    // Create buffer configuration for testing
+    const DeviceAddr buffer_size = 4096;  // 4KB buffer
+    const DeviceAddr page_size = 1024;    // 1KB page size
+    using namespace tt::tt_metal::distributed;
+
+    // Buffer configuration for testing
+    ReplicatedBufferConfig replicated_config{buffer_size};
+    DeviceLocalBufferConfig device_config{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = std::nullopt, .bottom_up = true};
+
+    // Allocate a buffer in submesh1
+    auto buffer1 = MeshBuffer::create(replicated_config, device_config, submeshes[0].get());
+    EXPECT_TRUE(buffer1->is_allocated());
+    DeviceAddr addr1 = buffer1->address();
+    std::cout << "Buffer1 address: " << addr1 << std::endl;
+
+    // Allocate a buffer in submesh2 and check that address is same as submesh1
+    // NOTE: This should be the same because they don't overlap and should use independent allocators
+    auto buffer2 = MeshBuffer::create(replicated_config, device_config, submeshes[1].get());
+    EXPECT_TRUE(buffer2->is_allocated());
+    DeviceAddr addr2 = buffer2->address();
+    std::cout << "Buffer2 address: " << addr2 << std::endl;
+
+    // Since submesh1 and submesh2 don't overlap, they should have independent allocations
+    // and should get the same starting address (both start from beginning of their allocators)
+    EXPECT_EQ(addr2, addr1) << "Submesh1 and submesh2 should have same starting address (independent allocators)";
+
+    // Allocate another buffer in submesh2 and check that it continues after the previous buffer
+    auto buffer2_next = MeshBuffer::create(replicated_config, device_config, submeshes[1].get());
+    ASSERT_NE(buffer2_next, nullptr);
+    EXPECT_TRUE(buffer2_next->is_allocated());
+    DeviceAddr addr2_next = buffer2_next->address();
+    EXPECT_EQ(addr2_next, addr2 + buffer_size) << "Second buffer in submesh2 should continue after first buffer";
+
+    // Allocate a buffer in submesh3 and check that it's in the same address as after allocations in submesh2
+    // Submesh3 overlaps with both submesh1 and submesh2, so it should respect both allocators
+    auto buffer3 = MeshBuffer::create(replicated_config, device_config, submeshes[2].get());
+    EXPECT_TRUE(buffer3->is_allocated());
+    DeviceAddr addr3 = buffer3->address();
+    std::cout << "Buffer3 address: " << addr3 << std::endl;
+
+    // Submesh3 should respect both submesh1 and submesh2 allocations
+    // Since both submesh1 and submesh2 have allocated buffers, submesh3 should start after the maximum
+    DeviceAddr expected_addr3 = std::max(addr1 + buffer_size, addr2_next + buffer_size);
+    EXPECT_EQ(addr3, expected_addr3) << "Submesh3 should respect both submesh1 and submesh2 allocations";
 }
 
 }  // namespace

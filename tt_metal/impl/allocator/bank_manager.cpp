@@ -477,6 +477,7 @@ uint64_t BankManager::allocate_buffer(
         chosen.value(),
         alignment_bytes_);
 
+    std::cout << "allocator_id: " << allocator_id.get() << std::endl;
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
