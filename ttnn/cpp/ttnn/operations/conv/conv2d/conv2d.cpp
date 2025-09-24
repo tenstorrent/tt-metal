@@ -382,7 +382,8 @@ Result conv2d_DRAM(
             const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
             dram_slice_config.num_slices = std::min(dram_slice_config.num_slices, max_slices);
         }
-        TT_FATAL(
+        // assert because the L1 size estimation is not exact, and may overestimate L1 usage.
+        TT_ASSERT(
             current_num_slices <= output_sliced_dim,
             "Could not find a suitable number of slices for Conv2D DRAM Slicing. "
             "Either increase the number of slices or reduce the output dimension being sliced.");
@@ -395,7 +396,7 @@ Result conv2d_DRAM(
     if (output_sliced_dim == 1) {
         dram_slice_config.num_slices = 1;
     } else {
-        TT_FATAL(
+        TT_ASSERT(
             dram_slice_config.num_slices < output_sliced_dim,
             " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
             dram_slice_config.num_slices,
