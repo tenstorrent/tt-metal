@@ -397,11 +397,9 @@ def test_compare_ttnn_and_pytorch_obb_simple():
     try:
         # Initialize TTNN device with proper configuration
         device = ttnn.CreateDevice(
-            device_id=0,
-            num_command_queues=2,
-            l1_small_size=YOLOV11_L1_SMALL_SIZE, 
-            trace_region_size=23887872
+            0, l1_small_size=YOLOV11_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
         )
+        device.enable_program_cache()
         print("✅ TTNN device opened successfully")
         
         # Load PyTorch OBB model
@@ -478,11 +476,9 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
     try:
         # Initialize TTNN device with proper configuration
         device = ttnn.CreateDevice(
-            device_id=0,
-            num_command_queues=2,
-            l1_small_size=YOLOV11_L1_SMALL_SIZE, 
-            trace_region_size=23887872
+            0, l1_small_size=YOLOV11_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
         )
+        device.enable_program_cache()
         print("✅ TTNN device opened successfully")
         
         # Load PyTorch OBB model
