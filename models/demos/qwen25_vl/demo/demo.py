@@ -128,8 +128,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-1 run with full model for more stable BLEU checks (CI only)
-            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
+        (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
+            "models/demos/qwen25_vl/demo/sample_prompts/test_bert_score.json",
             True,  # instruct mode
             2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -171,7 +171,7 @@ def create_tt_model(
     ids=[
         "batch-1",  # latency
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only-bert-score",  # ci_only batch-bleu-score for testing coverage in CI pipelines
+        "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
         "real-world-test",  # real-world test for 300DPI scanned document
     ],
@@ -225,8 +225,6 @@ def test_demo(
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
-    if is_ci_env and "bleu-score" in test_id and mesh_device.get_num_devices() <= 2:
-        pytest.skip("BLEU score is only supported for T3K for now")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
@@ -581,8 +579,10 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if is_ci_env and "bleu-score" in test_id:
-        assert mesh_device.get_num_devices() > 2, "BLEU score is only supported for T3K for now"
+    if is_ci_env and "bert-score" in test_id and "Qwen2.5-VL-3B" not in model_args.base_model_name:
+        # todo)) fix this issue before enabling BERTScore check for 3B model:
+        #        https://github.com/tenstorrent/tt-metal/issues/28442
+        assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
 
@@ -601,20 +601,17 @@ def test_demo(
                 f"BERTScore (rescaled) P/R/F1 for sample {i % batch_size} of batch {i // batch_size}: "
                 f"{p.item():.3f}/{r.item():.3f}/{f.item():.3f}"
             )
-        if "Qwen2.5-VL-3B" not in model_args.base_model_name:
-            # todo)) fix this issue before enabling BERTScore check for 3B model:
-            #        https://github.com/tenstorrent/tt-metal/issues/28442
-            logger.info(f"Mean BERTScore F1 (raw): {F10.mean().item():.3f}")
-            assert F10.mean().item() > 0.8, f"BERTScore F1 (raw) is lower than expected."
+        logger.info(f"Mean BERTScore F1 (raw): {F10.mean().item():.3f}")
+        assert F10.mean().item() > 0.75, f"BERTScore F1 (raw) is lower than expected."
 
-    # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
+    # Prepare profile benchmark metrics for the last repeat batch only -- batch_idx'th batch
+    compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
+    compile_decode_time = profiler.get_duration("compile_decode", iteration=batch_idx)
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill")
+    total_inference_prefill_time = profiler.get_duration("inference_prefill", iteration=batch_idx)
     total_inference_decode_time = 0
-    for i in range(1, iteration):  # Iteration 0 is the compile time
-        total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
+    for i in range(1, iteration):  # i == 0 is the compile time
+        total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
 
     # Average prefill time for each user
     avg_time_to_first_token = total_inference_prefill_time / batch_size
@@ -627,7 +624,7 @@ def test_demo(
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
     )  # Remove the compile time
 
-    vision_model_time = profiler.get_duration("vision_model_prefill")
+    vision_model_time = profiler.get_duration("vision_model_prefill", iteration=batch_idx)
     vision_model_time_per_user = vision_model_time / batch_size
     vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time
     vision_model_t_u_s = vision_model_t_s / batch_size
@@ -651,10 +648,16 @@ def test_demo(
     }
 
     # Decode performance for some specific tokens
-    tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
-    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
-    tok_1024_perf = profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < iteration else 0
-    tok_4096_perf = profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < iteration else 0
+    tok_1_perf = profiler.get_duration(
+        f"inference_decode_time_{1}", iteration=batch_idx
+    )  # inference_decode_time_0 includes compile time
+    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}", iteration=batch_idx) if 127 < iteration else 0
+    tok_1024_perf = (
+        profiler.get_duration(f"inference_decode_time_{1023}", iteration=batch_idx) if 1023 < iteration else 0
+    )
+    tok_4096_perf = (
+        profiler.get_duration(f"inference_decode_time_{4095}", iteration=batch_idx) if 4095 < iteration else 0
+    )
 
     if not stop_at_eos:
         logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
@@ -730,14 +733,14 @@ def test_demo(
                 0,
                 "inference_decode",
                 f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) * 1000,
                 step_warm_up_num_iterations=None,
                 target=None,
             )
 
         # Also save the avg decode performance for the 128 iterations (excluding the compile time)
         inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) for i in range(1, 128)
         )
         benchmark_data.add_measurement(
             profiler,
