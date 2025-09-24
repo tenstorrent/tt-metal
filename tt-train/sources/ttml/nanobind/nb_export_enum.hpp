@@ -15,7 +15,6 @@ inline nanobind::enum_<E> export_enum(const nanobind::handle& scope, const std::
     for (const auto [value, name] : enchantum::entries_generator<E>) {
         enum_type.value(name.data(), value);
     }
-    enum_type.export_values();
 
     return enum_type;
 }
