@@ -11,8 +11,11 @@
 #include "compile_time_args.h"
 #include <cstring>
 
-// Forward declared from dataflow_api.h
-[[maybe_unused]] static inline uint32_t get_common_arg_addr(int arg_idx);
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "dataflow_api.h"
+#else
+[[maybe_unused]] static inline uint32_t get_common_arg_addr(int /*arg_idx*/) { return 0U; }
+#endif
 
 namespace tensor_accessor {
 
