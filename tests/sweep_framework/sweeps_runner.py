@@ -112,18 +112,6 @@ def create_config_from_args(args) -> SweepsConfig:
         exit(1)
     config.arch_name = arch_env
 
-    # Validate and set ARCH_NAME
-    allowed_arch = {"blackhole", "wormhole_b0"}
-    arch_env = os.getenv("ARCH_NAME")
-    if not arch_env:
-        logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
-        exit(1)
-    arch_env = arch_env.strip()
-    if arch_env not in allowed_arch:
-        logger.error(f"Invalid ARCH_NAME '{arch_env}'. Must be one of ['blackhole', 'wormhole_b0']")
-        exit(1)
-    config.arch_name = arch_env
-
     return config
 
 
@@ -375,7 +363,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = not config.dry_run and not config.vector_id and not config.debug
+    child_mode = not (config.dry_run and not config.vector_id and not config.main - proc - verbose)
     timeout_before_rejoin = 5
 
     if child_mode:
@@ -900,10 +888,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--debug",
+        "--main-proc-verbose",
         action="store_true",
         required=False,
-        help="Run tests on main process and log test exceptions",
+        help="Run tests on main process and print test exceptions to stdout",
     )
 
     args = parser.parse_args(sys.argv[1:])
