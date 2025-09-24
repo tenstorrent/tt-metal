@@ -58,6 +58,25 @@ def get_panoptic_deeplab_weights_path(model_location_generator=None, test_file_p
     return complete_weights_path
 
 
+def get_panoptic_deeplab_config():
+    """
+    Get the standard configuration for Panoptic DeepLab model.
+
+    Returns:
+        dict: Dictionary containing model configuration parameters
+    """
+    return {
+        "batch_size": 1,
+        "num_classes": 19,
+        "project_channels": [32, 64],
+        "decoder_channels": [256, 256, 256],
+        "sem_seg_head_channels": 256,
+        "ins_embed_head_channels": 32,
+        "common_stride": 4,
+        "train_size": (512, 1024),
+    }
+
+
 def from_torch_fast(
     t: torch.Tensor,
     *,

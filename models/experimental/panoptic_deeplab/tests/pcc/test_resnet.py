@@ -17,7 +17,11 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
-from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE, get_panoptic_deeplab_weights_path
+from models.experimental.panoptic_deeplab.tt.common import (
+    PDL_L1_SMALL_SIZE,
+    get_panoptic_deeplab_weights_path,
+    get_panoptic_deeplab_config,
+)
 
 
 def create_panoptic_models(device, weights_path):
@@ -27,14 +31,15 @@ def create_panoptic_models(device, weights_path):
         device: TTNN device for model creation
         weights_path: Path to the model weights file
     """
-    # Model configuration
-    num_classes = 19
-    project_channels = [32, 64]
-    decoder_channels = [256, 256, 256]
-    sem_seg_head_channels = 256
-    ins_embed_head_channels = 32
-    common_stride = 4
-    train_size = (512, 1024)
+    # Get model configuration
+    config = get_panoptic_deeplab_config()
+    num_classes = config["num_classes"]
+    project_channels = config["project_channels"]
+    decoder_channels = config["decoder_channels"]
+    sem_seg_head_channels = config["sem_seg_head_channels"]
+    ins_embed_head_channels = config["ins_embed_head_channels"]
+    common_stride = config["common_stride"]
+    train_size = config["train_size"]
 
     # Load PyTorch model with real weights
     pytorch_model = PytorchPanopticDeepLab(
