@@ -94,7 +94,6 @@ memory_config_list = [
 ]
 
 
-@skip_for_blackhole("Fails on BH. Issue #20576")
 @pytest.mark.parametrize(
     "shape",
     [
