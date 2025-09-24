@@ -9,8 +9,53 @@ This module provides functions used across the Panoptic DeepLab model.
 
 import torch
 import ttnn
+import os
 
 PDL_L1_SMALL_SIZE = 37 * 1024  # Minimum L1 small size for Panoptic DeepLab
+
+
+def get_panoptic_deeplab_weights_path(model_location_generator=None, test_file_path=None):
+    """
+    Get the complete path to the Panoptic DeepLab model weights file.
+
+    Args:
+        model_location_generator: Optional model location generator function for CI environments
+        test_file_path: Optional path to the test file (used for local path determination)
+
+    Returns:
+        str: Complete path to the model weights file
+    """
+    # Determine weights path based on environment
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
+        # Use local path
+        if test_file_path is not None:
+            current_dir = os.path.dirname(os.path.abspath(test_file_path))
+            # Navigate up from tests/pcc/ to models/experimental/panoptic_deeplab/
+            while not current_dir.endswith("panoptic_deeplab"):
+                parent_dir = os.path.dirname(current_dir)
+                if parent_dir == current_dir:  # Reached root directory
+                    break
+                current_dir = parent_dir
+        else:
+            # Fallback to current working directory approach
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # Navigate up from tt/ to models/experimental/panoptic_deeplab/
+            current_dir = os.path.dirname(current_dir)
+        complete_weights_path = os.path.join(current_dir, "weights", "model_final_bd324a.pkl")
+    else:
+        # Check if weights already exist in CI v2 cache first
+        cached_weights_path = (
+            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
+        )
+        if os.path.exists(cached_weights_path):
+            complete_weights_path = cached_weights_path
+        else:
+            # Use CI v2 model location generator to download
+            complete_weights_path = (
+                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
+                / "model_final_bd324a.pkl"
+            )
+    return complete_weights_path
 
 
 def from_torch_fast(

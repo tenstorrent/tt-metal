@@ -4,7 +4,6 @@
 import pytest
 import torch
 import ttnn
-import os
 from typing import Dict
 from loguru import logger
 
@@ -15,7 +14,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
+from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE, get_panoptic_deeplab_weights_path
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -28,24 +27,8 @@ def test_ttnn_insemb(device, model_location_generator):
 
     torch.manual_seed(0)
 
-    # Determine weights path based on environment
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
-    else:
-        # Check if weights already exist in CI v2 cache first
-        cached_weights_path = (
-            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
-        )
-        if os.path.exists(cached_weights_path):
-            complete_weights_path = cached_weights_path
-        else:
-            # Use CI v2 model location generator to download
-            complete_weights_path = (
-                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-                / "model_final_bd324a.pkl"
-            )
+    # Get the weights path using the common utility function
+    complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
 
     # Model configuration
     batch_size = 1
