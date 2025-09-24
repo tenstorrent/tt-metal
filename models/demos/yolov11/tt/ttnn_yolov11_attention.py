@@ -29,7 +29,7 @@ class TtnnAttention:
         q_permuted = ttnn.permute(q, (0, 1, 3, 2))
         attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.multiply(attn, self.scale)
-        attn = ttnn.softmax(attn, dim=-1)
+        attn = ttnn.softmax_in_place(attn, dim=-1, numeric_stable=False)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
         x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
