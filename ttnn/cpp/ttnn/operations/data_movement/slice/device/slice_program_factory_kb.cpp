@@ -317,14 +317,12 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
             .set_page_size(in_cb, cb_page_size_aligned);
     tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_src0_config);
 
-    // Prepare kernel compilation arguments
-    uint32_t is_dram_input = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t is_dram_output = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    // Prepare kernel compilation arguments using TensorAccessor
+    std::vector<uint32_t> reader_compile_time_args = {in_cb, element_size};
+    TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
-    // Reader kernel compile-time args: DRAM flag, CB index, element size
-    std::vector<uint32_t> reader_compile_time_args = {is_dram_input, in_cb, element_size};
-    // Writer kernel compile-time args: CB index, DRAM flag, element size
-    std::vector<uint32_t> writer_compile_time_args = {in_cb, is_dram_output, element_size};
+    std::vector<uint32_t> writer_compile_time_args = {in_cb, element_size};
+    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Create kernels
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

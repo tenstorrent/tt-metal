@@ -89,19 +89,16 @@ void kernel_main() {
     DPRINT << "start_row_for_this_core: " << start_row_for_this_core << ENDL();
 
     // Compile-time arguments
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
+    constexpr auto src_args = TensorAccessorArgs<2>();
 
     // Calculate sizes - working with rows, not tiles
     uint32_t input_bytes_per_row = input_w * element_size;  // Dynamic element size
     uint32_t output_bytes_per_row = output_w * element_size;
 
-    // Set up InterleavedAddrGenFast for input data - use row size as page size
-    const InterleavedAddrGen<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = input_bytes_per_row,  // Each page is one input row
-    };
+    // Set up TensorAccessor for input data - use row size as page size
+    const auto s0 = TensorAccessor(src_args, src_addr, input_bytes_per_row);
 
     // Multi-core work distribution: this core processes rows [start_row_for_this_core, start_row_for_this_core +
     // num_rows_for_this_core) We need to map these logical output row indices back to the corresponding (n,d,h)
@@ -164,7 +161,7 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_id_out);
 
                 // Read the full input row first
-                uint64_t input_row_noc_addr = get_noc_addr(input_row_idx, s);
+                uint64_t input_row_noc_addr = get_noc_addr(input_row_idx, s0);
                 noc_async_read(input_row_noc_addr, l1_write_addr, input_bytes_per_row);
                 noc_async_read_barrier();
 

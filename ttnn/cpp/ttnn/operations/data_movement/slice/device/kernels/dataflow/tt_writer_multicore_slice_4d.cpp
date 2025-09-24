@@ -59,17 +59,14 @@ void kernel_main() {
 
     // Compile-time arguments
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(2);
+    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     // Calculate sizes - working with rows, not tiles
     uint32_t output_bytes_per_row = output_w * element_size;  // Dynamic element size
 
-    // Set up InterleavedAddrGenFast for output data - use row size as page size
-    const InterleavedAddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-        .page_size = output_bytes_per_row,  // Each page is one output row
-    };
+    // Set up TensorAccessor for output data - use row size as page size
+    const auto s0 = TensorAccessor(dst_args, dst_addr, output_bytes_per_row);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position
@@ -81,7 +78,7 @@ void kernel_main() {
         uint32_t global_output_row = start_row_for_this_core + local_row;
 
         // Calculate output address for this row
-        uint64_t output_row_noc_addr = get_noc_addr(global_output_row, s);
+        uint64_t output_row_noc_addr = get_noc_addr(global_output_row, s0);
 
         // Write the complete row to output tensor
         noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
