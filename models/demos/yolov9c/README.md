@@ -78,7 +78,7 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640` - `Segmentation`, end-2-end perf is `51` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- For `640x640` - `Segmentation`, end-2-end perf is `87` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant
   ```

@@ -1080,6 +1080,7 @@ class YoloV9:
 
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.concat([x, x4], dim=-1, memory_config=output_sharded_memory_config)  # 14
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(x4)
 
         # x = interleaved_to_sharded(x)
