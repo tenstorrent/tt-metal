@@ -14,7 +14,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
 from tt_lib.utils import (
     _nearest_y,
 )
