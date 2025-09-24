@@ -293,6 +293,11 @@ void PSD::merge(PSD&& other) {
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
     }
+
+    // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported
+    TT_ASSERT(
+        is_using_mock_cluster() == other.is_using_mock_cluster(),
+        "Cannot merge physical and mock cluster physical system descriptors.");
 }
 
 void PSD::remove_unresolved_nodes() {
