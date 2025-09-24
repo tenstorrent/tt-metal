@@ -338,6 +338,9 @@ class Generator:
         is_page_table_sharded=False,
         return_logits=False,
     ):
+        if return_logits:
+            assert reset_inputs, "reset_inputs must be True when return_logits is True"
+            assert not read_from_device, "read_from_device must be False when return_logits is True"
         if self.prev_page_table is None:
             self.prev_page_table = page_table
         if torch.any(self.prev_page_table != page_table).item():
