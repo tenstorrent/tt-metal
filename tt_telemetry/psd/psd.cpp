@@ -104,13 +104,9 @@ struct EthEndpoint {
 PSD::PSD(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    ARCH arch,
     bool run_discovery,
     bool using_mock_cluster_desc) :
-    cluster_(cluster),
-    distributed_context_(distributed_context),
-    arch_(arch),
-    using_mock_cluster_desc_(using_mock_cluster_desc) {
+    cluster_(cluster), distributed_context_(distributed_context), using_mock_cluster_desc_(using_mock_cluster_desc) {
     if (run_discovery) {
         this->run_discovery();
     }
@@ -212,7 +208,7 @@ void PSD::run_local_discovery() {
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
-        auto [tray_id, asic_location] = get_asic_position(cluster_, arch_, src, using_mock_cluster_desc_);
+        auto [tray_id, asic_location] = get_asic_position(cluster_, get_arch(cluster_), src, using_mock_cluster_desc_);
         asic_descriptors_[src_unique_id] =
             ASICDescriptor{TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
@@ -362,7 +358,7 @@ void PSD::exchange_metadata(bool issue_gather) {
                 Rank{rank},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(
-                cluster_, distributed_context_, arch_, serialized_peer_desc, using_mock_cluster_desc_);
+                cluster_, distributed_context_, serialized_peer_desc, using_mock_cluster_desc_);
             this->merge(std::move(peer_desc));
         }
     }

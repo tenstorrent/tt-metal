@@ -127,7 +127,6 @@ class PSD {
 public:
     PSD(const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        tt::ARCH arch,
         bool run_discovery = true,
         bool use_mock_cluster_desc = false);
     void run_discovery(bool run_global_discovery = true);
@@ -183,7 +182,6 @@ private:
     void validate_graphs();
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
-    const ARCH arch_;
     const bool using_mock_cluster_desc_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;

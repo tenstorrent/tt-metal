@@ -32,5 +32,7 @@ static inline const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmi
     return cluster_descriptor->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
 }
 
+tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster);
+
 std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_mmio_device(
     const std::unique_ptr<tt::umd::Cluster>& cluster);

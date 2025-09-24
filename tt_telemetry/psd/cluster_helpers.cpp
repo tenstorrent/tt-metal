@@ -1,5 +1,29 @@
 #include <psd/cluster_helpers.hpp>
 
+tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
+    // Pick a chip and query its architecture
+    auto cluster_descriptor = cluster->get_cluster_description();
+    const std::unordered_set<chip_id_t>& chips = cluster_descriptor->get_all_chips();
+    TT_FATAL(chips.size() > 0, "Unable to determine architecture because UMD driver detected no chips.");
+    tt::ARCH arch = cluster_descriptor->get_arch(*chips.begin());
+    TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
+
+    // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
+    for (auto other_chip_id : chips) {
+        tt::ARCH other_arch = cluster_descriptor->get_arch(other_chip_id);
+        TT_FATAL(
+            other_arch == arch,
+            "Chips with differing architectures detected (chip {} has architecture {} but chip {} is {}). This is "
+            "unsupported.",
+            other_chip_id,
+            tt::arch_to_str(other_arch),
+            *chips.begin(),
+            tt::arch_to_str(arch));
+    }
+
+    return arch;
+}
+
 // TODO: replace tt::llrt::Cluster::set_tunnels_from_mmio_device() with this?
 #define MAX_TUNNEL_DEPTH 4
 std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_mmio_device(
