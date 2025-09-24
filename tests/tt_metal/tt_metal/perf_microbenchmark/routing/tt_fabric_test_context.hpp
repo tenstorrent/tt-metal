@@ -1291,10 +1291,14 @@ private:
                 num_devices_str += std::to_string(result.num_devices[i]);
             }
             num_devices_str += "]";
-            summary_csv_stream << result.test_name << "," 
-            << result.ftype << "," << result.ntype << "," 
-            << result.topology << ",\"" << num_devices_str << "\"," 
-            << result.num_links << "," << result.packet_size << "," << result.num_iterations;
+            summary_csv_stream
+                << result.test_name << ","
+                << result.ftype << ","
+                << result.ntype << ","
+                << result.topology << ",\"" << num_devices_str << "\","
+                << result.num_links << ","
+                << result.packet_size << ","
+                << result.num_iterations;
             for (double stat : result.statistics_vector) {
                 summary_csv_stream << "," << std::fixed << std::setprecision(6) << stat;
             }
