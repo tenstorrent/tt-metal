@@ -35,17 +35,17 @@ void NeighborPadAsync::validate_with_output_tensors(
 
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
     if (this->dim > 0) {
-        uint32_t num_sticks_per_halo_dim = 1;
-        for (int d = this->dim + 1; d < input_tensor_shape.size() - 1; d++) {
-            num_sticks_per_halo_dim *= input_tensor_shape[d];
-        }
-        TT_FATAL(num_sticks_per_halo_dim >= this->num_links, "Not enough work to split among links, reduce num links");
-    } else {
         uint32_t outer_dim_size = 1;
         for (int d = 0; d < this->dim; d++) {
             outer_dim_size *= input_tensor_shape[d];
         }
         TT_FATAL(outer_dim_size >= this->num_links, "Not enough work to split among links, reduce num links");
+    } else {
+        uint32_t num_sticks_per_halo_dim = 1;
+        for (int d = this->dim + 1; d < input_tensor_shape.size() - 1; d++) {
+            num_sticks_per_halo_dim *= input_tensor_shape[d];
+        }
+        TT_FATAL(num_sticks_per_halo_dim >= this->num_links, "Not enough work to split among links, reduce num links");
     }
 
     if (secondary_cluster_axis.has_value()) {
@@ -182,7 +182,7 @@ Tensor neighbor_pad_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::ccl::Topology> topology,
     const std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>> secondary_mesh_shape) {
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "neighbor_pad_async op is only supported for Fast Dispatch");
@@ -235,7 +235,7 @@ Tensor neighbor_pad_async(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::ccl::Topology> topology,
     const std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>> secondary_mesh_shape) {
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     return neighbor_pad_async_impl(

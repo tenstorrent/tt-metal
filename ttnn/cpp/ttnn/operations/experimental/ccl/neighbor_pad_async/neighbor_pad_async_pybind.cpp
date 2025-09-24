@@ -40,7 +40,7 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                const std::optional<uint32_t> secondary_cluster_axis,
-               const std::optional<std::vector<uint32_t>> secondary_mesh_shape) -> ttnn::Tensor {
+               const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -87,8 +87,8 @@ void py_bind_neighbor_pad_async(pybind11::module& module) {
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
             dim (int): Dimension to pad on.
-            padding (uint): How much to pad to the left (top).
-            padding (uint): How much to pad to the right (bottom).
+            padding_left (uint): How much to pad to the left (top).
+            padding_right (uint): How much to pad to the right (bottom).
             padding_mode (string): replicate, constant, reflect.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the neighbor_pad operation on.
 
