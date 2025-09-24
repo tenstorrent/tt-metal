@@ -429,7 +429,7 @@ void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* dev
     // Create the mux kernel using the fabric mux kernel file
     auto mux_kernel = tt::tt_metal::CreateKernel(
         program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_extension.cpp",
         my_core_logical_,
         tt::tt_metal::DataMovementConfig{
             .processor = processor, .noc = noc, .compile_args = get_compile_time_args(device), .defines = {}});
