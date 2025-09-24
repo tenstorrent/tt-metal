@@ -6,14 +6,14 @@
 #include <cstdint>
 #include <vector>
 
-#include "fabric_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_fabric::bench {
 
-using HelpersFixture = ::tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
+using HelpersFixture = ::tt::tt_metal::MeshDeviceFixtureBase;
 
 // ---- Reusable defaults -------
 inline constexpr uint32_t kDefaultMeshId = 0;
@@ -23,6 +23,7 @@ inline constexpr bool kDefaultUseDramDst = false;
 inline constexpr uint32_t kDefaultTensorBytes = 1u << 20;  // 1 MiB
 inline constexpr uint32_t kDefaultPageSize = 4096;         // 4 KiB
 inline constexpr tt::tt_metal::CoreCoord kDefaultCore = {0, 0};
+inline constexpr uint32_t kDefaultTraceIters = 100;
 
 // ---- Shared data types ----
 struct PerfPoint {
@@ -41,6 +42,7 @@ struct PerfParams {
     uint32_t page_size = kDefaultPageSize;
     tt::tt_metal::CoreCoord sender_core = kDefaultCore;
     tt::tt_metal::CoreCoord receiver_core = kDefaultCore;
+    uint32_t trace_iters = kDefaultTraceIters;  // number of enqueues captured per trace
 };
 
 struct PerfStats {

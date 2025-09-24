@@ -12,18 +12,18 @@
 
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-// We reuse the existing test fixture infra to bring devices up.
-struct Fixture : public ::tt::tt_fabric::fabric_router_tests::Fabric2DFixture {
+// Single MeshDevice-based fixture with Fabric set to 2D.
+struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
+    Fixture() :
+        ::tt::tt_metal::MeshDeviceFixtureBase(Config{
+            .num_cqs = 1,
+            .trace_region_size = 1u << 20,  // enable mesh trace capture (e.g., 1 MiB)
+            .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}) {}
     void TestBody() override {}
     void setup() { this->SetUp(); }
     void teardown() { this->TearDown(); }
-
-    static void suite_setup() {
-        ::tt::tt_fabric::fabric_router_tests::BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_2D);
-    }
-    static void suite_teardown() { ::tt::tt_fabric::fabric_router_tests::BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
 // Shorthands
@@ -37,6 +37,7 @@ namespace {
 struct RunOptions {
     int iters = 100;
     int warmup = 1;
+    int trace_iters = 1;
     bool no_trace = false;     // reserved
     bool enable_sync = false;  // reserved
     std::string csv_path;      // if non-empty, append one row
@@ -51,7 +52,7 @@ static void usage(const char* argv0) {
   {} --src-dev <mesh:chip|chip> --dst-dev <mesh:chip|chip> --size <bytes>
          [--page <bytes>] [--src-type <l1|dram|single_bank>] [--dst-type <l1|dram|single_bank>]
          [--send-core x,y] [--recv-core x,y]
-         [--iters N] [--warmup N]
+         [--iters N] [--warmup N] [--trace-iters N]
          [--no-trace] [--enable-sync]
          [--csv <path>]
 
@@ -95,7 +96,7 @@ static bool parse_cli_or_usage(
     p.tensor_bytes = 128 * p.page_size;
     p.use_dram_dst = false;
     p.sender_core = {0, 0};
-    p.receiver_core = {0, 0};
+    p.trace_iters = 1;
 
     std::string src_type = "dram";  // reserved
     std::string dst_type = "l1";    // reserved
@@ -142,6 +143,8 @@ static bool parse_cli_or_usage(
             run.iters = std::stoi(argv[++i]);
         } else if (a == "--warmup" && need(i, 1)) {
             run.warmup = std::stoi(argv[++i]);
+        } else if (a == "--trace-iters" && need(i, 1)) {
+            run.trace_iters = std::stoi(argv[++i]);
         } else if (a == "--no-trace") {
             run.no_trace = true;
         } else if (a == "--enable-sync") {
@@ -229,7 +232,6 @@ int main(int argc, char** argv) {
         run.warmup);
 
     // Bring up the fixture env and run
-    Fixture::suite_setup();
     Fixture fixture;
     fixture.setup();
 
@@ -237,7 +239,6 @@ int main(int argc, char** argv) {
     auto stats = run_repeated(&fixture, p, /*warmup_iters=*/0, /*iters=*/run.iters);
 
     fixture.teardown();
-    Fixture::suite_teardown();
 
     // Human-readable result
     log_info(

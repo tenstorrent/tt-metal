@@ -42,6 +42,12 @@ def main():
     ap.add_argument("--min-p50-GB-s", type=float, default=None)  # simple single floor
     ap.add_argument("--p50-targets", type=str, default="")  # per-size: "4096:0.04,32768:0.28,1048576:2.45"
     ap.add_argument("--tolerance-pct", type=float, default=5.0)
+    ap.add_argument(
+        "--trace-iters",
+        type=int,
+        default=1,
+        help="number of enqueues captured per trace (batch size for replay timing)",
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -73,6 +79,8 @@ def main():
             str(args.warmup),
             "--csv",
             str(csv_path),
+            "--trace-iters",
+            str(args.trace_iters),
         ]
         print(">>", " ".join(cmd))
         subprocess.run(cmd, check=True)

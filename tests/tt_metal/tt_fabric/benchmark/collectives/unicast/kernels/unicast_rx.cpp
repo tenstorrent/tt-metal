@@ -26,4 +26,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
     noc_semaphore_wait(sem_ptr, expected_value);
+
+    // Reset for next iteration so we always observe a fresh 0→1 transition.
+    // (Prevents the next run from passing the wait immediately on a stale '1'.)
+    noc_semaphore_set(sem_ptr, 0);
 }
