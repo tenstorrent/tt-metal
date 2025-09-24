@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <numeric>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -428,6 +429,38 @@ auto get_mesh_tensor_write_test_params() {
         params.push_back(param);
     }
     return params;
+}
+
+TEST_F(MeshTensorTest, CopyToDeviceTransfersTensorTopology) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec tensor_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    std::vector<float> source_data(shape.volume());
+    std::iota(source_data.begin(), source_data.end(), 1.0f);
+    Tensor source_host_tensor = Tensor::from_vector(source_data, tensor_spec);
+    auto replicated_mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor source_distributed_tensor = distribute_tensor(source_host_tensor, *replicated_mapper);
+
+    std::vector<float> target_data(shape.volume());
+    std::iota(target_data.begin(), target_data.end(), 2000.0f);
+    Tensor target_host_tensor = Tensor::from_vector(target_data, tensor_spec);
+    Tensor target_distributed_tensor = distribute_tensor(target_host_tensor, *replicated_mapper);
+    Tensor target_device_tensor = target_distributed_tensor.to_device(mesh_device_.get());
+
+    const auto source_topology = source_distributed_tensor.tensor_topology();
+    const auto initial_target_topology = target_device_tensor.tensor_topology();
+
+    EXPECT_TRUE(std::holds_alternative<MeshMapperConfig::Replicate>(source_topology.placements()[0]));
+    EXPECT_TRUE(std::holds_alternative<MeshMapperConfig::Replicate>(initial_target_topology.placements()[0]));
+
+    tensor_impl::copy_to_device_wrapper(source_distributed_tensor, target_device_tensor);
+
+    const auto final_target_topology = target_device_tensor.tensor_topology();
+    EXPECT_EQ(final_target_topology.distribution_shape(), source_topology.distribution_shape());
+    EXPECT_EQ(final_target_topology.placements(), source_topology.placements());
+    EXPECT_EQ(final_target_topology.mesh_coords(), source_topology.mesh_coords());
+    EXPECT_TRUE(std::holds_alternative<MeshMapperConfig::Replicate>(final_target_topology.placements()[0]));
 }
 
 INSTANTIATE_TEST_SUITE_P(

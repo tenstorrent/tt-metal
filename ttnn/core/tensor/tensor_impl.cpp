@@ -626,24 +626,24 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     std::optional<ttnn::QueueId> cq_id) {
     return std::visit(
         tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &tensor_topology](const HostStorage& storage) {
+            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &tensor_topology](
+                const HostStorage& storage) -> std::pair<DeviceStorage, TensorTopology> {
                 const auto& host_storage_shape = storage.buffer().shape();
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();
                 if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
                     host_storage_shape == distributed::MeshShape(1, 1)) {
                     // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
                     const auto device_buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
-                    return std::pair<DeviceStorage, TensorTopology>(
+                    return {
                         replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
-                        TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape));
+                        TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
                 } else {
                     TT_FATAL(
                         host_storage_shape == mesh_device_shape,
                         "Distributed host buffer has different shape {} than the mesh device {}",
                         host_storage_shape,
                         mesh_device_shape);
-                    return std::pair<DeviceStorage, TensorTopology>(
-                        write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology);
+                    return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
                 }
             },
             [](const auto& s) -> std::pair<DeviceStorage, TensorTopology> {
@@ -762,7 +762,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     device_tensor = Tensor(
         std::move(mesh_storage),
         host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        tensor_topology);  // TODO (#25340): Add test for this
+        tensor_topology);  // Tensor topology preservation tested in test_mesh_tensor.cpp
 }
 
 template Tensor to_device<bfloat16>(
