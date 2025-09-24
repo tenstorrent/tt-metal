@@ -18,20 +18,20 @@ namespace tt::tt_metal {
 namespace {
 
 // Helper function to convert BoardType enum to protobuf value
-static uint32_t board_type_to_proto(BoardType board_type) { return static_cast<uint32_t>(board_type); }
+uint32_t board_type_to_proto(BoardType board_type) { return static_cast<uint32_t>(board_type); }
 
 // Helper function to convert protobuf value to BoardType enum
-static BoardType proto_to_board_type(uint32_t proto_value) { return static_cast<BoardType>(proto_value); }
+BoardType proto_to_board_type(uint32_t proto_value) { return static_cast<BoardType>(proto_value); }
 
 // Convert EthConnection to protobuf
-static void eth_connection_to_proto(const EthConnection& eth_conn, tt::fabric::proto::EthConnection* proto_conn) {
+void eth_connection_to_proto(const EthConnection& eth_conn, tt::fabric::proto::EthConnection* proto_conn) {
     proto_conn->set_src_chan(eth_conn.src_chan);
     proto_conn->set_dst_chan(eth_conn.dst_chan);
     proto_conn->set_is_local(eth_conn.is_local);
 }
 
 // Convert protobuf to EthConnection
-static EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnection& proto_conn) {
+EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnection& proto_conn) {
     EthConnection eth_conn;
     eth_conn.src_chan = proto_conn.src_chan();
     eth_conn.dst_chan = proto_conn.dst_chan();
@@ -40,7 +40,7 @@ static EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnect
 }
 
 // Convert ExitNodeConnection to protobuf
-static void exit_node_connection_to_proto(
+void exit_node_connection_to_proto(
     const ExitNodeConnection& exit_conn, tt::fabric::proto::ExitNodeConnection* proto_conn) {
     proto_conn->set_src_exit_node(*exit_conn.src_exit_node);
     proto_conn->set_dst_exit_node(*exit_conn.dst_exit_node);
@@ -48,7 +48,7 @@ static void exit_node_connection_to_proto(
 }
 
 // Convert protobuf to ExitNodeConnection
-static ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNodeConnection& proto_conn) {
+ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNodeConnection& proto_conn) {
     ExitNodeConnection exit_conn;
     exit_conn.src_exit_node = AsicID{proto_conn.src_exit_node()};
     exit_conn.dst_exit_node = AsicID{proto_conn.dst_exit_node()};
@@ -57,8 +57,7 @@ static ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto:
 }
 
 // Convert AsicTopology to protobuf
-static void asic_topology_to_proto(
-    const AsicTopology& topology, tt::fabric::proto::HostAsicConnectivity* host_asic_conn) {
+void asic_topology_to_proto(const AsicTopology& topology, tt::fabric::proto::HostAsicConnectivity* host_asic_conn) {
     for (const auto& [asic_id, connections] : topology) {
         auto* asic_graph = host_asic_conn->add_asic_topologies();
         asic_graph->set_asic_id(*asic_id);
@@ -76,7 +75,7 @@ static void asic_topology_to_proto(
 }
 
 // Convert protobuf to AsicTopology
-static AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConnectivity& host_asic_conn) {
+AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConnectivity& host_asic_conn) {
     AsicTopology topology;
 
     for (const auto& asic_graph : host_asic_conn.asic_topologies()) {
@@ -99,7 +98,7 @@ static AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConn
 }
 
 // Convert HostTopology to protobuf
-static void host_topology_to_proto(const HostTopology& topology, tt::fabric::proto::PhysicalConnectivityGraph* graph) {
+void host_topology_to_proto(const HostTopology& topology, tt::fabric::proto::PhysicalConnectivityGraph* graph) {
     for (const auto& [src_host, connections] : topology) {
         auto* host_conn = graph->add_host_connectivity_graph();
         host_conn->set_src_host_name(src_host);
@@ -116,7 +115,7 @@ static void host_topology_to_proto(const HostTopology& topology, tt::fabric::pro
 }
 
 // Convert protobuf to HostTopology
-static HostTopology proto_to_host_topology(const tt::fabric::proto::PhysicalConnectivityGraph& graph) {
+HostTopology proto_to_host_topology(const tt::fabric::proto::PhysicalConnectivityGraph& graph) {
     HostTopology topology;
 
     for (const auto& host_conn : graph.host_connectivity_graph()) {
