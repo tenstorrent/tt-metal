@@ -96,6 +96,11 @@ public:
         return this->cluster_desc_;
     }
 
+    const std::unique_ptr<tt::umd::Cluster>& get_driver() const {
+        TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+        return driver_;
+    }
+
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
