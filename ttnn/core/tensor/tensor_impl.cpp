@@ -755,7 +755,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         mesh_buffer,
         device_tensor.tensor_spec(),
         *host_tensor.tensor_attributes,
-        device_tensor.tensor_topology(),
+        host_tensor.tensor_topology(),
         cq_id);
     auto tensor_topology = mesh_storage_and_topology.second;
     auto mesh_storage = mesh_storage_and_topology.first;
