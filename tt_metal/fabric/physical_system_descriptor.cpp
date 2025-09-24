@@ -21,12 +21,12 @@ namespace tt::tt_metal {
 namespace {
 
 // This reimplements tt::Cluster::get_bus_id() and should be moved to tt::umd::Cluster
-static inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip) {
+inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip) {
     return cluster->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
 }
 
 // This reimplements tt::Cluster::get_arch() and should be moved to tt::umd::Cluster
-static tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
+tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     // Pick a chip and query its architecture
     auto cluster_descriptor = cluster->get_cluster_description();
     const std::unordered_set<chip_id_t>& chips = cluster_descriptor->get_all_chips();
@@ -50,13 +50,13 @@ static tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     return arch;
 }
 
-static std::string get_host_name() {
+std::string get_host_name() {
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
     return std::string(hostname);
 }
 
-static std::string get_mobo_name() {
+std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
     std::string motherboard;
 
@@ -68,7 +68,7 @@ static std::string get_mobo_name() {
     return motherboard;
 }
 
-static TrayID get_tray_id_for_chip(
+TrayID get_tray_id_for_chip(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     chip_id_t chip_id,
     const std::string& mobo_name,
@@ -89,7 +89,7 @@ static TrayID get_tray_id_for_chip(
     return TrayID{tray_id};
 }
 
-static std::pair<TrayID, ASICLocation> get_asic_position(
+std::pair<TrayID, ASICLocation> get_asic_position(
     const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, chip_id_t chip_id, bool using_mock_cluster_desc) {
     auto cluster_desc = cluster->get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
