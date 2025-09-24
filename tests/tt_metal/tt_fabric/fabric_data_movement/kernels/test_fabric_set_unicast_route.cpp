@@ -34,9 +34,9 @@ void kernel_main() {
         uint32_t dst_fabric_dev_id = get_arg_val<uint32_t>(5 + dst_idx * 2 + 1);
 
         bool routing_success = false;
-        for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
-            actual_route_buffer[i] = 0;
-            expected_route_buffer[i] = 0;
+        for (uint32_t i = 0; i < PACKET_HEADER_MAX_SIZE; i++) {
+            reinterpret_cast<volatile uint8_t*>(actual_packet_header)[i] = 0;
+            reinterpret_cast<volatile uint8_t*>(expected_packet_header)[i] = 0;
         }
 
         if (src_mesh_id == dst_mesh_id) {

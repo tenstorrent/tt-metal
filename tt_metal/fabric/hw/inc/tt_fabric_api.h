@@ -267,6 +267,9 @@ bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatency
         } else {
             packet_header->routing_fields.branch_west_offset = 1;  // West only: branch at hop 1
         }
+    } else if (ns_hops == 0 && ew_hops == 0) {
+        // NOTE: this is not needed from functionality perspective, but just to follow original behavior
+        packet_header->routing_fields.branch_west_offset = 1;
     }
 
     return ok;
