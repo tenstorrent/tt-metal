@@ -478,7 +478,6 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
         device = ttnn.CreateDevice(
             0, l1_small_size=YOLOV11_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
         )
-        device.enable_program_cache()
         print("✅ TTNN device opened successfully")
         
         # Load PyTorch OBB model
@@ -516,31 +515,15 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
                 torch_output = torch_model(input_tensor)
             print(f"📤 PyTorch output shape: {torch_output.shape}")
             
-            # Convert input to TTNN format using proper memory configuration
-            from models.demos.yolov11m.tt.common import get_mesh_mappers
-            inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
-            
-            n, c, h, w = input_tensor.shape
-            
-            # Pad channels from 3 to 16 for TTNN
-            if c == 3:
-                padded_input = torch.nn.functional.pad(input_tensor, (0, 0, 0, 0, 0, 13), value=0)  # Pad channels
-                c = 16
-            else:
-                padded_input = input_tensor
-            
-            input_mem_config = ttnn.create_sharded_memory_config(
-                [n, c, h, w],
-                ttnn.CoreGrid(x=8, y=8),
-                ttnn.ShardStrategy.HEIGHT,
-            )
-            ttnn_input = ttnn.from_torch(
-                padded_input,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=input_mem_config,
-                mesh_mapper=inputs_mesh_mapper,
+            from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_input_tensors
+
+            torch_input, ttnn_input = create_yolov11_input_tensors(
+                device,
+                batch=input_tensor.shape[0],
+                input_channels=input_tensor.shape[1], 
+                input_height=input_tensor.shape[2],
+                input_width=input_tensor.shape[3],
+                is_sub_module=False,
             )
             
             # Run TTNN inference
