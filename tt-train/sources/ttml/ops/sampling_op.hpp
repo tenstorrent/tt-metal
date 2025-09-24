@@ -13,6 +13,6 @@ autograd::TensorPtr sample_op(
     autograd::TensorPtr& t,
     float temperature,
     uint32_t seed,
-    std::optional<tt::tt_metal::Tensor> logits_padding_mask = std::nullopt);
+    std::optional<autograd::TensorPtr&> logits_padding_mask = std::nullopt);
 
 }  // namespace ttml::ops
