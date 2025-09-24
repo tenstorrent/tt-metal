@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 import math
 import numpy as np
 
@@ -491,7 +491,6 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -538,7 +537,6 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
         )
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -570,7 +568,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -1051,7 +1048,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     assert out_pass
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
     [
@@ -1112,7 +1108,6 @@ def test_sdpa_decode_paged_attention(
     assert device.num_program_cache_entries() == 4
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -1144,7 +1139,6 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -1212,7 +1206,6 @@ def test_sdpa_decode_sharded_on_subcoregrids(
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.skip("Skipping Perf Test in CI")
 def test_sdpa_decode_perf(device):
     dtype = ttnn.bfloat8_b
@@ -1266,7 +1259,6 @@ def test_sdpa_decode_perf(device):
         )
 
 
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b, ttnn.bfloat16],
@@ -1486,7 +1478,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 
 @pytest.mark.timeout(600)
 @pytest.mark.skip("Skipping due to causing 45 minutes timeout on tt eager unit tests")
-@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
