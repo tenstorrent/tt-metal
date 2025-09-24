@@ -953,7 +953,7 @@ bool is_valid_device_conv_bias(
     return true;
 }
 
-static OptimizedConvBlockConfig get_opt_block_config(
+static Conv2dBlockConfig get_opt_block_config(
     bool mm_conv,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -1051,7 +1051,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
     ParallelConfig largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
                                                  ? output_parallel_config
                                                  : parallel_config;
-    OptimizedConvParallelizationConfig opt_conv_op_parallel_config =
+    Conv2dParallelizationConfig opt_conv_op_parallel_config =
         determine_conv_op_parallel_config_from_conv_output_mem_config(
             conv_out_memory_config,
             get_num_cores_nhw_from_parallel_config(parallel_config),
