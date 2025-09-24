@@ -98,9 +98,9 @@ class Experts:
         )  # unsqueeze a dim for expert broadcast
         hidden_states_repeated = ttnn.repeat(hidden_states, repeat_dims=(1, self.num_experts, 1, 1))
         # hidden_states.deallocate(True)
-        print("num_experts", self.num_experts)
-        print("hidden_states_repeated", hidden_states_repeated.shape)
-        print("self.gate_proj", self.gate_proj.shape)
+        # print("num_experts", self.num_experts)
+        # print("hidden_states_repeated", hidden_states_repeated.shape)
+        # print("self.gate_proj", self.gate_proj.shape)
 
         gate_unclamped = ttnn.matmul(hidden_states_repeated, self.gate_proj)  # , dtype=ttnn.bfloat8_b)
         gate_unclamped = ttnn.add(gate_unclamped, self.gate_proj_bias, output_tensor=gate_unclamped)
@@ -165,10 +165,10 @@ class Experts:
         output_tile = ttnn.Tile([32, 32])
         # routing_weights_rm = ttnn.transpose(routing_weights_rm, 1, 3)
         # hidden_states_4D = ttnn.transpose(hidden_states_4D, 1, 2)
-        print("hidden_states_4D", hidden_states_4D.shape)
-        print("self.gate_proj", self.gate_proj.shape)
-        print("routing_weights_rm", routing_weights_rm.shape)
-        print("self.num_experts_per_tok", self.num_experts_per_tok)
+        # print("hidden_states_4D", hidden_states_4D.shape)
+        # print("self.gate_proj", self.gate_proj.shape)
+        # print("routing_weights_rm", routing_weights_rm.shape)
+        # print("self.num_experts_per_tok", self.num_experts_per_tok)
 
         # >>> # Sparse matmul for 64 batch, 128 sequence, 512 hidden dimensions, 8 experts
         # >>> tokens = ttnn.ones([1, 64, 128, 512]) [1, 1, 1024, 2880]
@@ -186,7 +186,7 @@ class Experts:
             output_tile=output_tile,
         )
         # ttnn.synchronize_device(self.mesh_device)
-        print("done sparse matmul")
+        # ("done sparse matmul")
         gate = ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
         gate = ttnn.add(gate, self.gate_proj_bias, output_tensor=gate)
         gate = ttnn.clamp(gate, min=None, max=self.limit)
@@ -262,10 +262,10 @@ class Experts:
 
     def __call__(self, hidden_states, routing_weights):
         # If decode mode, we use sparse experts for better performance else use dense experts
-        # if hidden_states.shape[-2] == 1:
-        #     return self.run_sparse_experts(hidden_states, routing_weights)
-        # else:
-        #     return self.run_dense_experts(hidden_states, routing_weights)
+        if hidden_states.shape[-2] == 1:
+            return self.run_sparse_experts(hidden_states, routing_weights)
+        else:
+            return self.run_dense_experts(hidden_states, routing_weights)
         return self.run_dense_experts(hidden_states, routing_weights)
 
 

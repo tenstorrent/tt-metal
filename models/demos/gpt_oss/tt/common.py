@@ -27,7 +27,6 @@ def create_tt_model(
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
-    # NOTE: num_layers override removed - was causing model to only use 1 layer!
     # Create GPT-OSS ModelArgs
     gpt_oss_model_args = ModelArgs(
         mesh_device,
@@ -36,11 +35,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    # REMOVED: Don't override the model's actual layer count!
-    # This was causing the model to only use 1 layer instead of the full model
-    # if num_layers is not None:
-    #     gpt_oss_model_args.n_layers = num_layers
-    #     gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
+    # Note: num_layers parameter is intentionally not used to preserve full model architecture
 
     # Avoid loading state_dict for every DP model
     if not state_dict:

@@ -221,7 +221,7 @@ class Attention:
             packer_l1_acc=False,
         )
 
-    def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None, page_table=None):
+    def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None, page_table=None, kv_cache=None):
         batch_size, seq_len, hidden_size = x.shape
 
         tt_q = ttnn.matmul(x, self.q_proj)
@@ -244,11 +244,12 @@ class Attention:
         tt_k_rope = apply_rope(tt_k, tt_cos, tt_sin)
         tt_k.deallocate(True)
         tt_k = tt_k_rope
-        # print("batch_size", batch_size)
-        # print("seq_len", seq_len)
         if batch_size * seq_len == 1:
-            # Update cache
-            k_cache, v_cache = self.kv_cache
+            # Use external kv_cache if provided (like tt-transformers), otherwise use internal cache
+            if kv_cache:
+                k_cache, v_cache = kv_cache[0], kv_cache[1]
+            else:
+                k_cache, v_cache = self.kv_cache
 
             tt_k = ttnn.to_memory_config(tt_k, self.kv_mem_cfg)
             tt_v = ttnn.to_memory_config(tt_v, self.kv_mem_cfg)
@@ -271,7 +272,6 @@ class Attention:
 
             # Use paged SDPA when page_table is available (like tt-transformers)
             if page_table is not None:
-                print("paged sdpa", k_cache.shape, v_cache.shape)
                 tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                     tt_q,
                     k_cache,
@@ -301,17 +301,21 @@ class Attention:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             tt_q.deallocate(True)
-            print("tt_sdpa_tensor", tt_sdpa_tensor.shape)
+
             tt_sdpa_tensor = ttnn.transpose(tt_sdpa_tensor, 1, 2)
             tt_sdpa_out = ttnn.experimental.nlp_concat_heads(
                 tt_sdpa_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )  # [1, 1, num_tokens, dim * nh]
             tt_sdpa_tensor.deallocate(True)
         else:
-            # Fill cache
+            # Fill cache (prefill mode)
             assert batch_size == 1, f"Only batch 1 supported, but got {batch_size=}"
 
-            k_cache, v_cache = self.kv_cache
+            # Use external kv_cache if provided (like tt-transformers), otherwise use internal cache
+            if kv_cache:
+                k_cache, v_cache = kv_cache[0], kv_cache[1]
+            else:
+                k_cache, v_cache = self.kv_cache
 
             # FIXME: Should eventually remove
             tt_k = ttnn.transpose(tt_k, 1, 2)
@@ -330,7 +334,6 @@ class Attention:
                 tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
                 tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
 
-                print("paged fill cache", k_cache.shape, tt_k.shape)
                 ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=0)
                 ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=0)
             else:

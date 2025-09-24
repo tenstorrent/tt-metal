@@ -12,8 +12,6 @@ Integrates GPT-OSS with tt_transformers infrastructure for:
 - Multi-user batch generation capability
 """
 
-import math
-
 import pytest
 import torch
 from loguru import logger
@@ -23,6 +21,7 @@ import ttnn
 # Import GPT-OSS create_tt_model
 from models.demos.gpt_oss.tt.common import create_tt_model
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 
 # Import specific utilities from tt_transformers
@@ -76,9 +75,16 @@ def prepare_gpt_oss_generator_args(
         model.append(model_i)
         tt_kv_cache.append(tt_kv_cache_i)
 
-    # NOTE: We'll create the page table later when we know the actual sequence length
-    # This is because the page table should be sized for the actual sequence, not max possible
-    page_table = None
+    # Page table will be created using tt-transformers infrastructure after input preprocessing
+    page_table = (
+        create_tt_page_table(
+            global_batch_size,
+            data_parallel,
+            paged_attention_config,
+        )
+        if paged_attention
+        else None
+    )
 
     # Host code, safe to reuse tokenizer from the 1st model
     tokenizer = model_args[0].tokenizer
@@ -93,21 +99,29 @@ def prepare_gpt_oss_generator_args(
 )
 def test_gpt_oss_demo(mesh_device):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
-    data_parallel = 1
+
+    # Data parallel configuration (can be adjusted for testing)
+    data_parallel = 4  # Set to > 1 to test data parallel (e.g., 2, 4, 8)
+    batch_size = 1  # Batch size per data parallel group
+    repeat_batches = 2  # Number of consecutive batches to run
     paged_attention = True
-    global_batch_size = 1
+    global_batch_size = batch_size * data_parallel  # Total batch across all devices
+
+    # Validate data parallel configuration (like tt-transformers)
+    if data_parallel > num_devices or num_devices % data_parallel != 0:
+        raise ValueError(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
     max_seq_len = 1024
     max_generated_tokens = 200  # Reasonable limit for testing
     instruct = True
     enable_trace = True  # Start with trace disabled
 
     page_params = {
-        "page_block_size": 64,  # User says block_size should be 64
-        "page_max_num_blocks_per_dp": 1024 // 64,
+        "page_block_size": 64,
+        "page_max_num_blocks_per_dp": 1024 // 64,  # Total blocks available per data parallel unit
     }
 
     sampling_params = {
@@ -119,6 +133,7 @@ def test_gpt_oss_demo(mesh_device):
 
     # Setup profiler like tt_transformers
     profiler = BenchmarkProfiler()
+    profiler.start("run")
     batch_idx = 0
 
     # Use performance optimizations
@@ -146,147 +161,196 @@ def test_gpt_oss_demo(mesh_device):
         paged_attention=paged_attention,
     )
 
-    # Create generator
-    generator = Generator(model=model, model_args=model_args, mesh_device=mesh_device)
+    # Create generator (match tt-transformers pattern)
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     profiler.end(f"generator_setup", iteration=batch_idx)
 
-    # Prepare input like tt_transformers does
+    # Prepare input prompts like tt_transformers does
     input_prompts = ["How many r's in the word 'strawberry'?"]
+    if len(input_prompts) == 1:  # Manual input - repeat for global batch size
+        input_prompts = input_prompts * global_batch_size
 
-    # Preprocess inputs (reusing tt_transformers function)
-    profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
-    (
-        input_tokens_prefill_pt,
-        encoded_prompts,
-        decoding_pos,
-        prefill_lens,
-    ) = preprocess_inputs_prefill(
-        input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
-    )
+    # Create repeat batches (like tt-transformers)
+    repeat_batch_prompts = []
+    for i in range(repeat_batches):
+        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    logger.info(
-        f"Input tokens prefill pt: {encoded_prompts}, {decoding_pos}, {prefill_lens}, {input_tokens_prefill_pt}"
-    )
-    print(tokenizer.decode(encoded_prompts[0]))
-    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
-    profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
+    num_tokens_generated_decode = []
 
-    logger.info(f"Input prompt: {input_prompts[0]}")
-    logger.info(f"Encoded length: {prefill_lens[0]} tokens")
+    logger.info("Starting inference...")
+    logger.info(f"Page table: {page_table}")
 
-    # Create page table sized for actual sequence length
-    if paged_attention:
-        actual_seq_len = prefill_lens[0]
-        expected_blocks = math.ceil(actual_seq_len / page_params["page_block_size"])
-        # Create page table with exactly the right number of blocks
-        # Use first 'expected_blocks' from a permutation of available blocks
-        permutation = torch.arange(paged_attention_config.max_num_blocks)
-        reverse_permutation = torch.argsort(permutation)
+    # Main inference loop for repeat batches (like tt-transformers)
+    for batch_idx, input_prompts_batch in enumerate(repeat_batch_prompts):
+        logger.info(f"Processing batch {batch_idx}")
 
-        # Take only the blocks we need for this sequence
-        blocks_needed = expected_blocks
-        page_table = reverse_permutation[:].unsqueeze(0)  # Shape: [1, blocks_needed]
-
-        print(
-            f"✅ Created page table: shape={page_table.shape}, blocks_needed={blocks_needed} for seq_len={actual_seq_len}"
+        # Preprocess inputs (reusing tt_transformers function)
+        profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
+        (
+            input_tokens_prefill_pt,
+            encoded_prompts,
+            decoding_pos,
+            prefill_lens,
+        ) = preprocess_inputs_prefill(
+            input_prompts_batch, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
 
-    else:
-        page_table = None
-    print("page_table", page_table)
+        input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
+        profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-    # Prefill phase (matching tt_transformers)
-    logger.info("Starting prefill warmup...")
-    profiler.start(f"compile_prefill", iteration=batch_idx)
-    logits = generator.prefill_forward_text(
-        input_tokens_prefill_pt,
-        page_table=page_table,  # [:, :expected_blocks],
-        kv_cache=tt_kv_cache,
-        prompt_lens=decoding_pos,
-    )
-    profiler.end(f"compile_prefill", iteration=batch_idx)
-    logger.info("Finished prefill warmup")
+        logger.info(f"Input prompt: {input_prompts_batch[0]}")
+        logger.info(f"Encoded length: {prefill_lens[0]} tokens")
 
-    logger.info(f"Starting prefill...")
-    profiler.start(f"inference_prefill", iteration=batch_idx)
-    logits = generator.prefill_forward_text(
-        input_tokens_prefill_pt,
-        page_table=page_table,  # [:, :expected_blocks],
-        kv_cache=tt_kv_cache,
-        prompt_lens=decoding_pos,
-    )
-    print("logits", logits)
-    prefilled_token = torch.argmax(logits, dim=-1)
-    profiler.end(f"inference_prefill", iteration=batch_idx)
-    logger.info(f"Prefill finished")
-    print(tokenizer.decode(prefilled_token[0]))
-    # return True
+        # Clear KV caches for repeat batches (like tt-transformers)
+        if batch_idx != 0:
+            for i in range(len(model)):
+                for layer in model[i].layers:
+                    k_cache, v_cache = layer.self_attn.layer_past
+                    k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                    v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
-    # Initialize generation state like tt_transformers
-    all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
-    for user in range(global_batch_size):
-        user_tok = int(prefilled_token[user].item())
-        all_outputs[user].append(user_tok)
-
-    user_done = [False] * global_batch_size
-    current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
-    out_tok = prefilled_token
-
-    # Generation loop (matching tt_transformers structure)
-    logger.info(f"Starting decode loop...")
-    iteration = 0
-    users_decoding = True
-
-    profiler.start(f"inference_decode", iteration=batch_idx)
-    while users_decoding and iteration < max_generated_tokens:
-        if iteration == 0:
-            profiler.start(f"compile_decode", iteration=batch_idx)
-
-        # Decode forward (matching tt_transformers call)
-        logits = generator.decode_forward_text(
-            out_tok,
-            current_pos,
-            enable_trace=enable_trace,
+        # Prefill phase (matching tt_transformers)
+        logger.info("Starting prefill warmup...")
+        profiler.start(f"compile_prefill", iteration=batch_idx)
+        logits = generator.prefill_forward_text(
+            input_tokens_prefill_pt,
             page_table=page_table,
             kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
         )
+        profiler.end(f"compile_prefill", iteration=batch_idx)
+        logger.info("Finished prefill warmup")
 
-        # Sample next token (reusing tt_transformers sampling)
-        _, out_tok = sample_host(
-            logits,
-            temperature=sampling_params["temperature"],
-            top_p=sampling_params["top_p"],
-            on_host=True,
+        logger.info(f"Starting prefill...")
+        profiler.start(f"inference_prefill", iteration=batch_idx)
+        logits = generator.prefill_forward_text(
+            input_tokens_prefill_pt,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
         )
+        prefilled_token = torch.argmax(logits, dim=-1)
+        profiler.end(f"inference_prefill", iteration=batch_idx)
+        logger.info(f"Prefill finished")
+        logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
-        if iteration == 0:
-            profiler.end(f"compile_decode", iteration=batch_idx)
-
-        current_pos += 1
-
-        # Save output token
+        # Initialize generation state like tt_transformers
+        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
         for user in range(global_batch_size):
-            user_tok = out_tok[user].item()
-            if user_tok not in tokenizer.stop_tokens and user_done[user] == False:
-                all_outputs[user].append(user_tok)
+            user_tok = int(prefilled_token[user].item())
+            all_outputs[user].append(user_tok)
+
+        user_done = [False] * global_batch_size
+        current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
+        out_tok = prefilled_token
+
+        # Generation loop (matching tt_transformers structure)
+        logger.info(f"Starting decode loop...")
+        iteration = 0
+        users_decoding = True
+
+        profiler.start(f"inference_decode", iteration=batch_idx)
+        while users_decoding and iteration < max_generated_tokens:
+            if iteration == 0:
+                profiler.start(f"compile_decode", iteration=batch_idx)
             else:
-                user_done[user] = True
-                logger.info(f"User {user} finished decoding at iteration {iteration}")
-                if all(user_done):
-                    users_decoding = False
+                profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-        iteration += 1
+            # Decode forward (matching tt_transformers call)
+            logits = generator.decode_forward_text(
+                out_tok,
+                current_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+            )
 
-    profiler.end(f"inference_decode", iteration=batch_idx)
+            # Sample next token (reusing tt_transformers sampling)
+            _, out_tok = sample_host(
+                logits,
+                temperature=sampling_params["temperature"],
+                top_p=sampling_params["top_p"],
+                on_host=True,
+            )
 
-    # Final output (like tt_transformers)
-    logger.info("Finished decoding, printing the final outputs...\n")
-    for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-        text = tokenizer.decode(output)
-        logger.info(f"User {i}:")
-        logger.info(f"  Input: {prompt}")
-        logger.info(f"  Output: {text}")
-        logger.info("")
+            if iteration == 0:
+                profiler.end(f"compile_decode", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
+            else:
+                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-    logger.info("✅ GPT-OSS demo completed successfully!")
+            # Print perf after every iteration
+            tokens_per_second_per_user = 1 / decode_iteration_time
+            logger.debug(
+                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
+
+            current_pos += 1
+
+            # Save output token
+            for user in range(global_batch_size):
+                user_tok = out_tok[user].item()
+                if user_tok not in tokenizer.stop_tokens and user_done[user] == False:
+                    all_outputs[user].append(user_tok)
+                else:
+                    user_done[user] = True
+                    logger.debug(f"User {user} finished decoding at iteration {iteration}")
+                    if all(user_done):
+                        users_decoding = False
+
+            iteration += 1
+
+        profiler.end(f"inference_decode", iteration=batch_idx)
+
+        # Final output for this batch (like tt_transformers)
+        logger.info("Finished decoding, printing the final outputs...\n")
+        for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts_batch)):
+            text = tokenizer.decode(output)
+            prompt_including_assistant_tags = tokenizer.decode(model_args[0].encode_prompt(prompt, instruct=instruct))
+            text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+            short_prompt = (
+                (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
+                if len(prompt) > 200
+                else prompt
+            )
+            logger.info(
+                f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+            )
+
+        num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
+
+    # Performance metrics calculation (like tt-transformers)
+    profiler.end("run")
+
+    # Calculate performance metrics for the first batch only
+    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_decode_time = profiler.get_duration("compile_decode")
+
+    total_inference_prefill_time = profiler.get_duration("inference_prefill")
+    total_inference_decode_time = 0
+    for i in range(1, num_tokens_generated_decode[0]):  # Iteration 0 is the compile time
+        total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
+
+    # Calculate TTFT and t/s/u metrics (like tt-transformers)
+    avg_time_to_first_token = total_inference_prefill_time / global_batch_size  # TTFT per user
+    avg_decode_iteration_time = total_inference_decode_time / (num_tokens_generated_decode[0] - 1)
+
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
+    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # t/s/u
+    decode_tok_s = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size  # total t/s
+
+    # Performance logging (like tt-transformers)
+    logger.info("")
+    logger.info(f"=== Performance metrics ===")
+    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+    logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
+    logger.info("")
+    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
+    logger.info(
+        f"Average decode speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
+    )
+    logger.info(f"Data parallel: {data_parallel}, Global batch size: {global_batch_size}")
+
+    logger.info("GPT-OSS demo completed successfully!")

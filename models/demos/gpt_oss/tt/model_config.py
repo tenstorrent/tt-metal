@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
@@ -41,7 +42,7 @@ class ModelArgs:
         # Check for available GPT-OSS models in HuggingFace cache
         hf_cache_dir = "/home/models-team/.cache/huggingface/hub"
         available_models = [
-            f"{hf_cache_dir}/models--unsloth--gpt-oss-20b-BF16",
+            # f"{hf_cache_dir}/models--unsloth--gpt-oss-20b-BF16",
             f"{hf_cache_dir}/models--unsloth--gpt-oss-120b-BF16/snapshots/e7523373bc44b42296b43202e265a1eebf2ee16f",
         ]
 
@@ -58,11 +59,11 @@ class ModelArgs:
         self.model_path = os.getenv("GPT_OSS_MODEL_PATH", default_path)
         self.weights_path = os.getenv("GPT_OSS_WEIGHTS_PATH", self.model_path)
 
-        print(f"Using GPT-OSS model from: {self.model_path}")
+        logger.info(f"Using GPT-OSS model from: {self.model_path}")
 
         # Load HF config to get model parameters
         self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-        print(f"HF config: {self.hf_config}")
+        logger.debug(f"HF config: {self.hf_config}")
 
         # Set key attributes that tt_transformers expects
         self.vocab_size = self.hf_config.vocab_size

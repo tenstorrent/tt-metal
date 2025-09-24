@@ -60,26 +60,23 @@ class DecoderLayer:
         position_embeddings=None,
         position_idx=None,
         page_table=None,
+        kv_cache=None,
     ):
-        # ttnn.synchronize_device(self.mesh_device)
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
-        # ttnn.synchronize_device(self.mesh_device)
         hidden_states = self.self_attn(
             x=hidden_states_post_norm,
             mask=attention_mask,
             rope_stuff=position_embeddings,
             position_idx=position_idx,
             page_table=page_table,
+            kv_cache=kv_cache,
         )
-        # ttnn.synchronize_device(self.mesh_device)
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         # residual.deallocate(True)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
-        # ttnn.synchronize_device(self.mesh_device)
         hidden_states, _ = self.mlp(hidden_states_post_norm)  # diff with llama: router scores
-        # ttnn.synchronize_device(self.mesh_device)
         # hidden_states_post_norm.deallocate(True)
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         # residual.deallocate(True)

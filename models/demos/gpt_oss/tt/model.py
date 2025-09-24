@@ -230,12 +230,16 @@ class Model:
             # Each layer picks its appropriate attention mask based on layer type
             layer_mask = attention_masks[decoder_layer.attention_type]
 
+            # Get layer-specific kv_cache if provided (like tt-transformers)
+            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+
             hidden_states = decoder_layer(
                 hidden_states,
                 attention_mask=layer_mask,
                 position_embeddings=rope_stuff,
                 position_idx=current_pos,
                 page_table=page_table,
+                kv_cache=layer_kv_cache,
             )
 
         hidden_states = self.norm(hidden_states)
@@ -289,15 +293,20 @@ class Model:
         )
         attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_sliding_mask}
 
-        for decoder_layer in self.layers:
+        for i, decoder_layer in enumerate(self.layers):
             # Each layer picks its appropriate attention mask based on layer type
             layer_mask = attention_masks[decoder_layer.attention_type]
+
+            # Get layer-specific kv_cache if provided (like tt-transformers)
+            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+
             hidden_states = decoder_layer(
                 hidden_states,
                 attention_mask=layer_mask,
                 position_embeddings=rope_stuff,
                 position_idx=None,
                 page_table=page_table,
+                kv_cache=layer_kv_cache,
             )
 
         # If get_last_token is specified, slice before norm and lm_head for efficiency
@@ -391,8 +400,6 @@ class Model:
         sliding_mask = sliding_mask.repeat(
             1, self.hf_config.num_attention_heads // self.mesh_device.shape[1], 1, 1
         ).transpose(1, 2)
-
-        # Debug print the mask shape before padding
 
         # Pad to tile alignment (TTNN TILE_LAYOUT requires dimensions to be multiples of 32)
         # current_h = sliding_mask.shape[2]  # heads_per_device
@@ -501,7 +508,6 @@ class Model:
 
     def process_output_prefill(self, tt_out, last_token_idx):
         # last_token_idx = 92
-        print("last_token_idx", last_token_idx)
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         Matches original test_demo.py pattern exactly:
@@ -515,9 +521,6 @@ class Model:
 
         # Step 2: Convert to torch (original test does this directly without cpu())
         torch_output = ttnn.to_torch(tt_output_tensor)
-        print(f"Output tensor shape: {torch_output.shape}")
-
-        # Show what tokens we have at different positions for debugging
 
         # Step 3: Extract token at last_token_idx (original: [:, decode_start_pos - 1, :])
         result = torch_output[:, last_token_idx, : self.vocab_size]
