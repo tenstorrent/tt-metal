@@ -315,8 +315,8 @@ class TtnnRepncspelan4:
         conv_pt,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         use_1d_systolic_array=True,
-        shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        shard_layout_last_layer=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout_k4=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout_c4=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         conv_parameter.cv1.conv["out_channels"] //= 2
         self.cv1_a = TtYOLOv9cConv2D(
@@ -352,7 +352,7 @@ class TtnnRepncspelan4:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv3.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            shard_layout=shard_layout_last_layer_k4,
+            shard_layout=shard_layout_k4,
         )
         self.cv4 = TtYOLOv9cConv2D(
             device=device,
@@ -360,7 +360,7 @@ class TtnnRepncspelan4:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv4",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            shard_layout=shard_layout_last_layer,
+            shard_layout=shard_layout_c4,
         )
 
     def __call__(self, x):
@@ -983,8 +983,8 @@ class YoloV9:
             parameters.conv_args[6],
             parameters,
             "model.6",
-            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 6
         self.adown_3 = TtnnADown(device, parameters.conv_args[7], parameters, "model.7")  # 7
         self.repncspelan4_4 = TtnnRepncspelan4(
@@ -992,8 +992,8 @@ class YoloV9:
             parameters.conv_args[8],
             parameters,
             "model.8",
-            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 8
         self.ttnn_sppelan = TtnnSPPELAN(device, parameters.conv_args[9], parameters, "model.9")  # 9
         self.repncspelan4_5 = TtnnRepncspelan4(
@@ -1001,8 +1001,8 @@ class YoloV9:
             parameters.conv_args[12],
             parameters,
             "model.12",
-            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 12
         self.repncspelan4_6 = TtnnRepncspelan4(device, parameters.conv_args[15], parameters, "model.15")  # 15
         self.adown_6 = TtnnADown(device, parameters.conv_args[16], parameters, "model.16")  # 16
@@ -1011,8 +1011,8 @@ class YoloV9:
             parameters.conv_args[18],
             parameters,
             "model.18",
-            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 18
         self.adown_7 = TtnnADown(device, parameters.conv_args[19], parameters, "model.19")  # 19
         self.repncspelan4_8 = TtnnRepncspelan4(
@@ -1020,8 +1020,8 @@ class YoloV9:
             parameters.conv_args[21],
             parameters,
             "model.21",
-            shard_layout_last_layer_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            shard_layout_last_layer=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )  # 21
         if enable_segment:
             self.segment_detect = TtnnSegment(device, parameters.model_args.model[22], parameters, "model.22")  # 22
@@ -1083,7 +1083,6 @@ class YoloV9:
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(x4)
 
-        # x = interleaved_to_sharded(x)
         x = self.repncspelan4_6(x)  # 15
         x16 = x
         x = self.adown_6(x)  # 16
