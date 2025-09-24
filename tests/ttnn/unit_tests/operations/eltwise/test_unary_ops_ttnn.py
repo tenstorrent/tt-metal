@@ -1160,7 +1160,7 @@ def test_unary_fill_uint32_edge_cases(input_shapes, low_a, high_a, scalar, devic
 )
 @pytest.mark.parametrize(
     "param",
-    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, float("inf"), float("-inf"), float("nan")},
+    (-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, float("inf"), float("-inf"), float("nan")),
 )
 def test_unary_celu(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)

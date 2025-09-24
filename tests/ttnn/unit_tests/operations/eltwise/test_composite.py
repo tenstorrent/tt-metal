@@ -440,7 +440,7 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {-1e4, -98.5, -43.7, -8.5, 0.0, 0.45, 1.0, 7.7, 58.4, 89.9, 1e5},
+    (-1e4, -98.5, -43.7, -8.5, 0.0, 0.45, 1.0, 7.7, 58.4, 89.9, 1e5),
 )
 def test_unary_logit(input_shapes, param, device):
     in_data = torch.Tensor(size=input_shapes).uniform_(-100, 100).to(torch.bfloat16)
@@ -456,7 +456,7 @@ def test_unary_logit(input_shapes, param, device):
 
 @pytest.mark.parametrize(
     "param",
-    {-1.5, 1.7, 0.0},
+    (-1.5, 1.7, 0.0),
 )
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 def test_unary_rdiv_inf_nan_check(param, round_mode, device):
@@ -491,7 +491,7 @@ def test_unary_rdiv_inf_nan_check(param, round_mode, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
+    (-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9),
 )
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 def test_unary_rdiv(input_shapes, param, round_mode, device):
