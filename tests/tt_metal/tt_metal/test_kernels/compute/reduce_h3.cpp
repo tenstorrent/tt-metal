@@ -140,7 +140,7 @@ void MAIN {
 
         pack_tile(reduce_dst_idx, cb_out0);
 
-        PACK(for (uint32_t i = 0; i < 32; ++i) { TTI_NOP; });
+        PACK(for (uint32_t i = 0; i < 32; ++i) { TTI_NOP; });  // stall the packer bcs of the dprint
 
         DPRINT_PACK({  // - does not hang, prints out garbage data
             DPRINT << "Output tile in cb_out0:" << ENDL();
