@@ -305,6 +305,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const bool enable_split_reader =
         is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
         force_split_reader.value_or(is_split_reader_viable(
+            a.memory_config().memory_layout(),
             act_block_h_ntiles,
             input_channels_padded,
             filter_w,
