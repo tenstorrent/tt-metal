@@ -641,8 +641,8 @@ private:
             allocation_policies_.receiver_config.max_configs_per_core);
 
         // Create memory maps directly using constructors
-        sender_memory_map_ = tt::tt_fabric::fabric_tests::SenderMemoryMap(
-            l1_unreserved_base, l1_unreserved_size, l1_alignment, max_configs_per_core);
+        sender_memory_map_ =
+            tt::tt_fabric::fabric_tests::SenderMemoryMap(l1_unreserved_base, l1_unreserved_size, l1_alignment);
 
         receiver_memory_map_ = tt::tt_fabric::fabric_tests::ReceiverMemoryMap(
             l1_unreserved_base, l1_unreserved_size, l1_alignment, default_payload_chunk_size, max_configs_per_core);
