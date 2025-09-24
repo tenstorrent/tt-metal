@@ -334,7 +334,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
         input_tensor_mesh = ttnn.to_device(ttnn_tensor, mesh_device)
 
         # Run the op
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         for i in range(num_iters):
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
@@ -350,7 +349,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
                 subdevice_id=worker_sub_device_id,
             )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        captured_graph = ttnn.graph.end_graph_capture()
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     except Exception as e:
         raise e
@@ -367,6 +365,8 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = ttnn.to_torch(t)
+        tensor_unpadded_shape = list(golden_canonical_out_tensor.shape)
+        tt_output_tensor = tt_output_tensor[:, :, : tensor_unpadded_shape[2], : tensor_unpadded_shape[3]]
 
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
@@ -385,9 +385,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
         else:
             logger.info(f"output match for tensor {i}")
     assert not mismatch, f"{i} FAILED: {output}"
-    df = process_allocations(captured_graph)
-    peak_buffer = df["total_buffer"].max()
-    print(f"Peak buffer memory usage: {peak_buffer} bytes")
 
 
 # Enumerate the post-commit cases explicitly
@@ -397,7 +394,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
     [
         (4, 2, [1, 4, 32, 2304], ttnn.TILE_LAYOUT),
         (4, 2, [4, 1, 64, 1024], ttnn.TILE_LAYOUT),
-        (4, 2, [3, 2, 90, 2048], ttnn.TILE_LAYOUT),
+        (4, 2, [3, 2, 90, 2040], ttnn.TILE_LAYOUT),
         (4, 2, [16, 1, 16, 512], ttnn.ROW_MAJOR_LAYOUT),
         (4, 2, [1, 1, 250, 2048], ttnn.ROW_MAJOR_LAYOUT),
         (4, 2, [2, 2, 350, 350], ttnn.ROW_MAJOR_LAYOUT),
