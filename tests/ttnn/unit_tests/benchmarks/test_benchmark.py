@@ -47,7 +47,7 @@ import csv
 import pytest
 import torch
 import ttnn
-from models.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
 from pathlib import Path
 import os
 import numpy as np
