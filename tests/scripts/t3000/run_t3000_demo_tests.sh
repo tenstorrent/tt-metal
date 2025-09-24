@@ -353,50 +353,50 @@ run_t3000_gemma3_tests() {
 }
 
 run_t3000_tests() {
-  # # Run llama3 load checkpoints tests
-  # run_t3000_llama3_load_checkpoints_tests
+  # Run llama3 load checkpoints tests
+  run_t3000_llama3_load_checkpoints_tests
 
-  # # Run llama3 smaller tests (1B, 3B, 8B, 11B)
-  # run_t3000_llama3_tests
+  # Run llama3 smaller tests (1B, 3B, 8B, 11B)
+  run_t3000_llama3_tests
 
-  # # Run llama3 vision tests
-  # run_t3000_llama3_vision_tests
+  # Run llama3 vision tests
+  run_t3000_llama3_vision_tests
 
-  # # Run llama3_90b vision tests
-  # run_t3000_llama3_90b_vision_tests
+  # Run llama3_90b vision tests
+  run_t3000_llama3_90b_vision_tests
 
-  # # Run llama3_70b tests
-  # run_t3000_llama3_70b_tests
+  # Run llama3_70b tests
+  run_t3000_llama3_70b_tests
 
-  # # Run falcon40b tests
-  # run_t3000_falcon40b_tests
+  # Run falcon40b tests
+  run_t3000_falcon40b_tests
 
-  # # Run falcon7b tests
-  # run_t3000_falcon7b_tests
+  # Run falcon7b tests
+  run_t3000_falcon7b_tests
 
-  # # Run mistral tests
-  # run_t3000_mistral_tests
+  # Run mistral tests
+  run_t3000_mistral_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests
 
-  # # Run resnet50 tests
-  # run_t3000_resnet50_tests
+  # Run resnet50 tests
+  run_t3000_resnet50_tests
 
-  # # Run sentence bert tests
-  # run_t3000_sentence_bert_tests
+  # Run sentence bert tests
+  run_t3000_sentence_bert_tests
 
-  # # Run qwen25 tests
-  # run_t3000_qwen25_tests
+  # Run qwen25 tests
+  run_t3000_qwen25_tests
 
-  # # Run qwen3 tests
-  # run_t3000_qwen3_tests
+  # Run qwen3 tests
+  run_t3000_qwen3_tests
 
-  # # Run sd35_large tests
-  # run_t3000_sd35large_tests
+  # Run sd35_large tests
+  run_t3000_sd35large_tests
 
-  # # Run gemma3 tests
-  # run_t3000_gemma3_tests
+  # Run gemma3 tests
+  run_t3000_gemma3_tests
 }
 
 fail=0
