@@ -83,7 +83,7 @@ void TestContext::read_telemetry() {
                 LowResolutionBandwidthTelemetryResult tel{};
                 if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) == 0) {
                     constexpr size_t NUM_ELEMENTS = tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
-                    const std::array<uint32_t, NUM_ELEMENTS>& data_array = 
+                    const std::array<uint32_t, NUM_ELEMENTS>& data_array =
                         *reinterpret_cast<const std::array<uint32_t, NUM_ELEMENTS>*>(core_data.data());
                     tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(data_array);
                 } else {
