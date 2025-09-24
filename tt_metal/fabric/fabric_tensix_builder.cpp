@@ -486,10 +486,6 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
     fabric_mux_config_->set_fabric_endpoint_status_address(fabric_router_config.edm_status_address);
     auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);
 
-    // Add number of upstream routers and sync address
-    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
-
     // Get topology-specific fabric router stream IDs based on topology
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
@@ -544,21 +540,9 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
 }
 
 std::vector<uint32_t> FabricTensixDatamoverBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
-    std::vector<uint32_t> runtime_args;
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
-
-    // Get base runtime args from the underlying mux config
-    auto mux_runtime_args = fabric_mux_config_->get_fabric_mux_run_time_args(
+    // Get runtime args from the underlying mux config
+    return fabric_mux_config_->get_fabric_mux_run_time_args(
         local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, {my_core_logical_});
-
-    runtime_args.insert(runtime_args.end(), mux_runtime_args.begin(), mux_runtime_args.end());
-    return runtime_args;
-}
-
-void FabricTensixDatamoverBuilder::append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y) {
-    upstream_routers_noc_x_.push_back(noc_x);
-    upstream_routers_noc_y_.push_back(noc_y);
 }
 
 }  // namespace tt::tt_fabric

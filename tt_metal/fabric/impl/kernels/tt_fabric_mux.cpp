@@ -38,10 +38,8 @@ constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15
 
 constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
 constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
-constexpr size_t num_upstream_routers = get_compile_time_arg_val(18);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(19);
 
-constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 20;
+constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 18;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
@@ -144,17 +142,6 @@ void forward_data(
 void kernel_main() {
     size_t rt_args_idx = 0;
 
-    std::array<uint8_t, num_upstream_routers> upstream_noc_x;
-    std::array<uint8_t, num_upstream_routers> upstream_noc_y;
-    if constexpr (num_upstream_routers > 0) {
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            upstream_noc_x[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
-        }
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            upstream_noc_y[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
-        }
-    }
-
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
@@ -228,14 +215,6 @@ void kernel_main() {
 
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
-
-    // signal the upstream routers the mux is ready
-    if constexpr (num_upstream_routers > 0) {
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            auto noc_addr = get_noc_addr(upstream_noc_x[i], upstream_noc_y[i], fabric_router_sync_address);
-            noc_semaphore_inc(noc_addr, 1);
-        }
-    }
 
     // wait for fabric router to be ready before setting up the connection
     if constexpr (wait_for_fabric_endpoint) {

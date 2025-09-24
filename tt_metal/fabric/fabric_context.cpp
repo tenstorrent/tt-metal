@@ -304,7 +304,7 @@ chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const 
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
-    return {this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
+    return {this->router_config_->edm_local_sync_address};
 }
 
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status() const {
