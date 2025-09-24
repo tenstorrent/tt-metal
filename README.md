@@ -161,7 +161,7 @@ pip install ttnn-visualizer
 ```
 
 #### [TT-Exalens](https://github.com/tenstorrent/tt-exalens)
-The TT-Exalens repository describes TT-Lensium, a low level debugging tool for Tenstorrent hardware. It allows developers to access and communicate with Wormhole and Blackhole devices.
+The TT-Exalens repository describes TT-Lensium, a low-level debugging tool for Tenstorrent hardware. It allows developers to access and communicate with Wormhole and Blackhole devices.
 
 #### [Model Explorer](https://github.com/tenstorrent/model-explorer)
 The Model Explorer is an intuitive and hierarchical visualization tool using model graphs. It organizes model operations into nested layers and provides features for model exploration and debugging.
