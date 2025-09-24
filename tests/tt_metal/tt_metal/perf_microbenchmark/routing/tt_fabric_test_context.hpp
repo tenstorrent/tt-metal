@@ -944,7 +944,13 @@ private:
                                           std::to_string(static_cast<int>(direction)) + "_" +
                                           std::to_string(link_id);
                     
-                    TT_FATAL(config_cache.contains(cache_key), "Config not found in cache for device {} direction {} link {}", device_id.chip_id, static_cast<int>(direction), link_id);
+                    TT_FATAL(
+                        config_cache.contains(cache_key),
+                        "Config not found in cache for device {} direction {} link {}",
+                        device_id.chip_id,
+                        static_cast<int>(direction),
+                        link_id
+                    );
                     auto [payload_size_bytes, num_packets_val, packet_size_val] = config_cache.at(cache_key);
                     num_packets = num_packets_val;
                     packet_size = packet_size_val;
