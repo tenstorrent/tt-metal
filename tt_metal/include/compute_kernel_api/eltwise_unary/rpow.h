@@ -5,13 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common_globals.h"
-#ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_rpow.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
-#endif
 
 namespace ckernel {
 
@@ -22,6 +16,7 @@ ALWI void rpow_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rpow_init<APPROX>
 // clang-format off
 /**
  * Performs element-wise computation of the rpow on each element of a tile
+ * where rpow(exponent, scalar_base) = pow(scalar_base, exponent)
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
