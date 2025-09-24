@@ -253,8 +253,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& slice_step) {
-    std::cout << "LLONG slice_rm_multi_core_kb" << std::endl;
-
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::IDevice* device = input_tensor.device();

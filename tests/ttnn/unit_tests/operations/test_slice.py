@@ -425,7 +425,6 @@ def slice_test(
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
-    print(f"LLONG in test_slice_test input_layout = {tt_input_tensor.layout}")
 
     tt_output_tensor = ttnn.slice(
         tt_input_tensor,
@@ -462,9 +461,8 @@ def test_slice_rm_program_cache_collison(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16,),
-    # (ttnn.bfloat16, ttnn.float32),
-    # ids=["bfloat16", "float"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
@@ -480,13 +478,13 @@ def test_slice_rm_program_cache_collison(device):
     "input_tensor_shape_0, output_tensor_start_0, output_tensor_end_0",
     (
         ((4, 3, 64, 64), (0, 0, 0, 0), (4, 3, 32, 32)),
-        # ((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64)),
-        # ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
-        # ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
-        # ((1, 3, 32, 32), (0, 1, 0, 0), (1, 2, 32, 32)),
-        # ((1, 6, 32, 32), (0, 2, 0, 0), (1, 4, 32, 32)),
-        # ((1, 6, 128, 64), (0, 2, 64, 32), (1, 4, 96, 64)),
-        # ((4, 6, 128, 64), (1, 2, 64, 32), (2, 4, 96, 64)),
+        ((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64)),
+        ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
+        ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
+        ((1, 3, 32, 32), (0, 1, 0, 0), (1, 2, 32, 32)),
+        ((1, 6, 32, 32), (0, 2, 0, 0), (1, 4, 32, 32)),
+        ((1, 6, 128, 64), (0, 2, 64, 32), (1, 4, 96, 64)),
+        ((4, 6, 128, 64), (1, 2, 64, 32), (2, 4, 96, 64)),
     ),
 )
 @pytest.mark.parametrize(
@@ -495,7 +493,7 @@ def test_slice_rm_program_cache_collison(device):
 )
 @pytest.mark.parametrize(
     "slice_step",
-    ((2, 2, 2, 2),),
+    ((1, 1, 1, 1),),
 )
 def test_run_slice_test(
     input_tensor_shape_0,
@@ -558,7 +556,7 @@ def test_run_slice_test(
         slice_step,
     )
     # change from RM to TILE
-    assert num_cache_entries == 4
+    assert num_cache_entries == 3
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -575,7 +573,7 @@ def test_run_slice_test(
         slice_step,
     )
     # CACHE HIT
-    assert num_cache_entries == 6
+    assert num_cache_entries == 4
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -584,8 +582,6 @@ def test_run_slice_test(
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
-    # (ttnn.bfloat16, ttnn.float32),
-    # ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
@@ -599,7 +595,17 @@ def test_run_slice_test(
 )
 @pytest.mark.parametrize(
     "input_tensor_shape, output_tensor_start, output_tensor_end",
-    (((4, 3, 640, 640), (0, 0, 0, 0), (4, 3, 320, 320)),),
+    (
+        ((4, 3, 640, 640), (0, 0, 0, 0), (4, 3, 320, 320)),
+        ((4, 3, 64, 64), (0, 0, 0, 0), (4, 3, 32, 32)),
+        ((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64)),
+        ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
+        ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
+        ((1, 3, 32, 32), (0, 1, 0, 0), (1, 2, 32, 32)),
+        ((1, 6, 32, 32), (0, 2, 0, 0), (1, 4, 32, 32)),
+        ((1, 6, 128, 64), (0, 2, 64, 32), (1, 4, 96, 64)),
+        ((4, 6, 128, 64), (1, 2, 64, 32), (2, 4, 96, 64)),
+    ),
 )
 @pytest.mark.parametrize(
     "slice_step",
