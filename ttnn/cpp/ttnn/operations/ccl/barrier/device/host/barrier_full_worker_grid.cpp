@@ -45,11 +45,11 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle> schedule_kernel_comp
 
 static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<uint32_t, 5>> get_rt_args(
     tt::tt_metal::Program& program,
-    const IDevice* device,
+    IDevice* device,
     bool is_starting_core,
-    const CoreCoord& eth_sender_core,
-    const CoreCoord& eth_receiver_core,
-    const CoreCoord& sem_init_core) {
+    CoreCoord const& eth_sender_core,
+    CoreCoord const& eth_receiver_core,
+    CoreCoord const& sem_init_core) {
     const uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     const uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     uint32_t start_semaphore_address = hal::get_erisc_l1_unreserved_base() + EriscDatamoverConfig::eth_word_size_bytes;
@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const bool is_starting_core,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    const IDevice* target_device,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology) {
@@ -106,7 +106,8 @@ operation::ProgramWithCallbacks barrier_with_workers(
     [[maybe_unused]] const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
 
     // Get the device from the tensor
-    const auto& device = input_tensor.device() ? target_device : input_tensor.device();
+    const auto& device =
+        input_tensor.device() ? input_tensor.device()->get_device(target_device_id) : input_tensor.device();
     // Get a representation of the topology
 
     // Create the program

@@ -46,7 +46,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
         /*is_starting_core*/ (config.device_index == 0),
         devices_to_use.size(),
         config.device_index,
-        target_device,
+        target_device->id(),
         config.receiver_device_id,
         config.sender_device_id,
         this->topology);
