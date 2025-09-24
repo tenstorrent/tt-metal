@@ -98,7 +98,6 @@ class TtPanopticDeepLab:
         self.semantic_head = TtPanopticDeepLabSemSegHead(
             parameters=semantic_params,
             device=device,
-            # Prosljeđujemo sve potrebne konfiguracione parametre
             input_shape=self.input_shape,
             head_channels=sem_seg_head_channels,
             num_classes=num_classes,
