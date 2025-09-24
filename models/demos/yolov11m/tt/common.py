@@ -38,6 +38,7 @@ class Yolov11Conv2D:
         self.groups = conv.groups
         self.reshard = reshard
         self.deallocate_activation = deallocate_activation
+        self.layer_name = layer_name
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -68,19 +69,38 @@ class Yolov11Conv2D:
         if "bias" in conv_pth and conv_pth["bias"] is not None:
             # Ensure bias is properly prepared for device operations
             self.bias = conv_pth["bias"]
+            print(f"[DEBUG {layer_name}] Bias storage type before: {self.bias.storage_type()}")
+            print(f"[DEBUG {layer_name}] Bias shape: {self.bias.shape}")
+            print(f"[DEBUG {layer_name}] Bias dtype: {self.bias.dtype}")
             # Ensure bias is on device and in correct layout
             if self.bias.storage_type() != ttnn.StorageType.DEVICE:
+                print(f"[DEBUG {layer_name}] Moving bias to device...")
                 self.bias = ttnn.to_device(self.bias, device)
+                print(f"[DEBUG {layer_name}] Bias storage type after to_device: {self.bias.storage_type()}")
+            else:
+                print(f"[DEBUG {layer_name}] Bias already on device")
         else:
             self.bias = None
+            print(f"[DEBUG {layer_name}] No bias tensor")
 
         # Ensure weight is properly prepared for device operations
         self.weight = conv_pth["weight"]
+        print(f"[DEBUG {layer_name}] Weight storage type before: {self.weight.storage_type()}")
+        print(f"[DEBUG {layer_name}] Weight shape: {self.weight.shape}")
+        print(f"[DEBUG {layer_name}] Weight dtype: {self.weight.dtype}")
         # Ensure weight is on device and in correct layout
         if self.weight.storage_type() != ttnn.StorageType.DEVICE:
+            print(f"[DEBUG {layer_name}] Moving weight to device...")
             self.weight = ttnn.to_device(self.weight, device)
+            print(f"[DEBUG {layer_name}] Weight storage type after to_device: {self.weight.storage_type()}")
+        else:
+            print(f"[DEBUG {layer_name}] Weight already on device")
 
     def __call__(self, x):
+        print(f"[DEBUG {self.layer_name}] Conv2D call started")
+        print(f"[DEBUG {self.layer_name}] Input tensor shape: {x.shape}")
+        print(f"[DEBUG {self.layer_name}] Input tensor storage type: {x.storage_type()}")
+        
         if self.is_detect:
             input_height = int(math.sqrt(x.shape[2]))
             input_width = int(math.sqrt(x.shape[2]))
@@ -94,10 +114,21 @@ class Yolov11Conv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
+        print(f"[DEBUG {self.layer_name}] Conv params: in_ch={self.in_channels}, out_ch={self.out_channels}, kernel={self.kernel_size}, stride={self.stride}, padding={self.padding}")
+        print(f"[DEBUG {self.layer_name}] Input dims: batch={batch_size}, height={input_height}, width={input_width}")
+        
+        # Check tensor states before conv2d
+        print(f"[DEBUG {self.layer_name}] Weight storage type before conv2d: {self.weight.storage_type()}")
+        if self.bias is not None:
+            print(f"[DEBUG {self.layer_name}] Bias storage type before conv2d: {self.bias.storage_type()}")
+        else:
+            print(f"[DEBUG {self.layer_name}] No bias for this layer")
+
         kernel_size = [self.kernel_size[0], self.kernel_size[1]]
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
 
+        print(f"[DEBUG {self.layer_name}] Calling ttnn.conv2d...")
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -118,6 +149,13 @@ class Yolov11Conv2D:
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
         )
+        print(f"[DEBUG {self.layer_name}] Conv2D completed")
+        print(f"[DEBUG {self.layer_name}] Output shape: {x.shape}")
+        print(f"[DEBUG {self.layer_name}] Output dims: height={output_height}, width={output_width}")
+        print(f"[DEBUG {self.layer_name}] Weight storage type after conv2d: {self.weight.storage_type()}")
+        if self.bias is not None:
+            print(f"[DEBUG {self.layer_name}] Bias storage type after conv2d: {self.bias.storage_type()}")
+        
         hw = output_height * output_width
         if x.shape[2] != hw:
             x_sharded = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
@@ -227,6 +265,7 @@ class TtnnConv:
         self.enable_act = enable_act
         if self.enable_act:
             activation = "silu"
+        print(f"[DEBUG] Creating TtnnConv layer: {layer_name}")
         self.conv = Yolov11Conv2D(
             parameter.conv,
             conv_pt.conv,
@@ -239,7 +278,9 @@ class TtnnConv:
         )
 
     def __call__(self, device, x):
+        print(f"[DEBUG] TtnnConv call - passing to Yolov11Conv2D")
         x = self.conv(x)
+        print(f"[DEBUG] TtnnConv call completed")
         return x
 
 
