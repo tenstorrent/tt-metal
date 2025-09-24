@@ -43,22 +43,11 @@
 #include <umd/device/types/xy_pair.hpp>
 
 using std::cout;
-using std::endl;
-using std::flush;
-using std::int32_t;
 using std::ofstream;
 using std::ostream;
 using std::ostringstream;
-using std::set;
 using std::setw;
 using std::string;
-using std::to_string;
-using std::tuple;
-using std::uint32_t;
-
-using namespace tt;
-
-#define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
 namespace {
 
@@ -1021,7 +1010,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
                     AssertSize(sz, 1);
                     break;
                 case DPrintSETW: {
-                    char val = CAST_U8P(ptr)[0];
+                    unsigned char val = ptr[0];
                     *intermediate_stream << setw(val);
                     most_recent_setw = val;
                     AssertSize(sz, 1);
@@ -1294,7 +1283,7 @@ void DPrintServer::Impl::transfer_stream_to_output(const RiscKey& risc_key, ostr
         *output_stream << intermediate_str;
     }
 
-    *output_stream << flush;
+    *output_stream << std::flush;
     intermediate_stream->str("");
     intermediate_stream->clear();
 }  // transfer_stream_to_output
