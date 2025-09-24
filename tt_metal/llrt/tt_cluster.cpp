@@ -168,6 +168,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             cluster_type = tt::tt_metal::ClusterType::P300;
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
+        } else if (board_type == BoardType::UBB_BLACKHOLE) {
+            cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
         }
     }
     return cluster_type;
@@ -226,6 +228,11 @@ void Cluster::detect_arch_and_target() {
 
 // TODO: remove this when we deprecate TG
 bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
+
+bool Cluster::is_ubb_galaxy() const {
+    return this->cluster_type_ == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
+           this->cluster_type_ == tt::tt_metal::ClusterType::GALAXY;
+}
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
@@ -373,7 +380,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
 void Cluster::start_driver(tt_device_params &device_params) const {
     device_params.init_device = true;
 
-    TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
+    TT_FATAL(!this->sdesc_per_chip_.empty(), "Descriptor must be loaded. Try open_driver()");
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
@@ -910,7 +917,7 @@ void Cluster::set_tunnels_from_mmio_device() {
         auto device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
         device_ids.erase(mmio_chip_id);
 
-        if (device_ids.size() == 0) {
+        if (device_ids.empty()) {
             this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
             continue;
         }
@@ -966,7 +973,7 @@ void Cluster::set_tunnels_from_mmio_device() {
                 "tt-topology.");
         }
 
-        TT_ASSERT(tunnels_from_mmio.size() != 0, "Must have at least 1 tunnel from MMIO Device.");
+        TT_ASSERT(!tunnels_from_mmio.empty(), "Must have at least 1 tunnel from MMIO Device.");
         uint32_t tunnel_depth = tunnels_from_mmio[0].size();
         log_debug(tt::LogMetal, "Each FD Tunnel is {} deep.", tunnel_depth);
 
@@ -1311,7 +1318,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     // we do not always context switch to base FW
     std::vector<chip_id_t> non_mmio_devices;
     std::vector<chip_id_t> mmio_devices = target_mmio_devices;
-    if (mmio_devices.size() == 0) {
+    if (mmio_devices.empty()) {
         mmio_devices.reserve(this->number_of_pci_devices());
         for (auto chip_id : this->driver_->get_target_mmio_device_ids()) {
             mmio_devices.emplace_back(chip_id);

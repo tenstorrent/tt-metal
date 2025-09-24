@@ -254,7 +254,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
         with:
-          commands: pytest -n auto models/experimental/yolov5x/tests/perf/ -m models_performance_bare_metal
+          commands: pytest -n auto models/demos/yolov5x/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run vovnet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -296,7 +296,7 @@ jobs:
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
       #  with:
-      #    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      #    slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       - name: Check perf report exists
         id: check-perf-report
         if: ${{ !cancelled() }}

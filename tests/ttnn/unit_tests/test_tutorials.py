@@ -5,7 +5,7 @@
 import subprocess
 from pathlib import Path
 
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 import nbformat
 import pytest
 from nbconvert.preprocessors import ExecutePreprocessor

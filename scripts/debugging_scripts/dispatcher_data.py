@@ -46,15 +46,20 @@ class DispatcherCoreData:
     subdevice: int = triage_field("Subdevice")
     go_message: str = triage_field("Go Message")
     preload: bool = triage_field("Preload")
+    waypoint: str = triage_field("Waypoint")
 
 
 class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache):
         self.inspector_data = inspector_data
-        if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
+        self.programs = inspector_data.getPrograms().programs
+        if self.programs is None or len(self.programs) == 0:
+            raise TTTriageError("No programs found in inspector data.")
+        self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
+        self.use_rpc_kernel_find = True
+        if len(self.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
-
-        self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
+        self._a_kernel_path = next(iter(self.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
         idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
 
@@ -109,6 +114,19 @@ class DispatcherData:
         except:
             pass
 
+    def find_kernel(self, watcher_kernel_id):
+        # Try to get kernel from RPC inspector data first, then fallback to cached kernels
+        # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
+        if self.use_rpc_kernel_find:
+            try:
+                return self.inspector_data.getKernel(watcher_kernel_id).kernel
+            except:
+                pass
+        if watcher_kernel_id in self.kernels:
+            self.use_rpc_kernel_find = False
+            return self.kernels[watcher_kernel_id]
+        raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
+
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         loc_mem_reader = ELF.get_mem_reader(location)
         if location._device.get_block_type(location) == "functional_workers":
@@ -158,6 +176,7 @@ class DispatcherData:
         go_message_index = -1
         go_data = -1
         preload = False
+        waypoint = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
@@ -200,11 +219,11 @@ class DispatcherData:
         except:
             pass
         try:
-            kernel = self.inspector_data.kernels.get(watcher_kernel_id)
+            kernel = self.find_kernel(watcher_kernel_id)
         except:
             pass
         try:
-            previous_kernel = self.inspector_data.kernels.get(watcher_previous_kernel_id)
+            previous_kernel = self.find_kernel(watcher_previous_kernel_id)
         except:
             pass
         try:
@@ -219,6 +238,11 @@ class DispatcherData:
                 ]
                 != 0
             )
+        except:
+            pass
+        try:
+            waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
+            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
             pass
 
@@ -262,6 +286,7 @@ class DispatcherData:
             subdevice=go_message_index,
             go_message=go_data_state,
             preload=preload,
+            waypoint=waypoint,
         )
 
     @staticmethod

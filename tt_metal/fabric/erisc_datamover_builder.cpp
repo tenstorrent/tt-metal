@@ -176,7 +176,7 @@ static void update_sender_channel_servicing(
 
 static size_t get_num_riscv_cores() {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
-        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         if (nriscs > 1) {
             log_warning(tt::LogFabric, "Launching fabric in experimental 2-erisc mode.");
@@ -231,6 +231,11 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_);
 }
 
+static bool requires_forced_assignment_to_noc1() {
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
+           get_num_riscv_cores() == 1;
+}
+
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     uint32_t num_sender_channels = get_sender_channel_count(is_2D_routing);
@@ -250,32 +255,42 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
 
+    // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        this->receiver_txq_id = 1;
-    }
+    // if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    //     this->receiver_txq_id = 1;
+    // }
     this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
     }
+    // temporary work-around for BH until 2-erisc is enabled. We are required to switch entirely to noc1 for
+    // routers when only using a single erisc because erisc0 will be used by base FW and may periodically use
+    // noc0 for link health related functionality.
+    if (requires_forced_assignment_to_noc1()) {
+        for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+            this->risc_configs[risc_id].set_configured_noc(tt::tt_metal::NOC::NOC_1);
+        }
+    }
 
     if (this->sender_txq_id != this->receiver_txq_id) {
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            this->to_sender_channel_remote_ack_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            this->to_sender_channel_remote_completion_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            this->receiver_channel_remote_ack_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            this->receiver_channel_remote_completion_counter_addrs[i] = next_l1_addr;
-            next_l1_addr += field_size;
-        }
+        // counters are packed contiguously in memory, This can lead to resends of values but
+        // this is safe for free running counters, which are enabled in this mode.
+        size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
+
+        next_l1_addr = tt::align(next_l1_addr, field_size);
+
+        this->to_sender_channel_remote_ack_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
+
+        this->to_sender_channel_remote_completion_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
+
+        this->receiver_channel_remote_ack_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
+
+        this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
+        next_l1_addr += num_words_consumed_per_counter;
     }
 
     this->edm_channel_ack_addr = next_l1_addr;
@@ -283,7 +298,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
     this->edm_local_sync_address = termination_signal_address + field_size;
-    this->edm_status_address = edm_local_sync_address + field_size;
+    this->edm_local_tensix_sync_address = edm_local_sync_address + field_size;
+    this->edm_status_address = edm_local_tensix_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
 
@@ -690,9 +706,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
-    this->sender_txq_id = 0;
-    this->receiver_txq_id = 0;
-
     // Update sender channel servicing based on fabric tensix configuration
     if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
         // Use default direction (EAST) for the constructor case since direction isn't available here
@@ -930,10 +943,22 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
         this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
         this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+
+        if (requires_forced_assignment_to_noc1()) {
+            this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
+            this->receiver_channel_local_write_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        }
     }
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
+
+        if (requires_forced_assignment_to_noc1()) {
+            this->sender_channel_ack_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
+        }
     }
     this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
 }
@@ -1126,6 +1151,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     termination_signal_ptr(config.termination_signal_address),
     edm_local_sync_ptr(config.edm_local_sync_address),
+    edm_local_tensix_sync_ptr(config.edm_local_tensix_sync_address),
     edm_status_ptr(config.edm_status_address),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     fabric_edm_type(fabric_edm_type),
@@ -1231,6 +1257,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
+    // add the downstream tensix connection arg here, num_downstream_tensix_connections
+    ct_args.push_back(this->num_downstream_tensix_connections);
+
     // when have dateline vc (vc1) and with tensix exntension enabled, need to send vc1 to downstream fabric router
     // instead of downstream tensix exntension.
     bool vc1_has_different_downstream_dest =
@@ -1247,7 +1276,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction),
         this->dateline_connection,
-        control_plane.is_intermesh_eth_link(local_physical_chip_id, this->my_eth_core_logical),
+        control_plane.is_cross_host_eth_link(local_physical_chip_id, this->my_eth_channel),
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
@@ -1281,6 +1310,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,
+        this->edm_local_tensix_sync_ptr,
         this->edm_status_ptr,
 
         // fabric counters
@@ -1341,6 +1371,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         update_pkt_hdr_on_rx_ch,
 
+        requires_forced_assignment_to_noc1(),
+
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
@@ -1348,8 +1380,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     ct_args.insert(ct_args.end(), main_args.begin(), main_args.end());
 
     // insert the sender channel num buffers
-    // Index updated to account for 23 stream ID arguments + 1 marker at the beginning
-    const size_t sender_channel_num_buffers_idx = 38;  // 14 + 23 + 1
+    // Index updated to account for 23 stream ID arguments + 1 marker + 1 downstream tensix connections
+    const size_t sender_channel_num_buffers_idx = 39;  // 14 + 23 + 1 + 1
     ct_args.insert(
         ct_args.begin() + sender_channel_num_buffers_idx,
         this->sender_channels_num_buffers.begin(),
@@ -1422,18 +1454,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
     if (multi_txq_enabled) {
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            ct_args.push_back(config.to_sender_channel_remote_ack_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_sender_channels; i++) {
-            ct_args.push_back(config.to_sender_channel_remote_completion_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            ct_args.push_back(config.receiver_channel_remote_ack_counter_addrs[i]);
-        }
-        for (size_t i = 0; i < num_receiver_channels; i++) {
-            ct_args.push_back(config.receiver_channel_remote_completion_counter_addrs[i]);
-        }
+        ct_args.push_back(config.to_sender_channel_remote_ack_counters_base_addr);
+        ct_args.push_back(config.to_sender_channel_remote_completion_counters_base_addr);
+        ct_args.push_back(config.receiver_channel_remote_ack_counters_base_addr);
+        ct_args.push_back(config.receiver_channel_remote_completion_counters_base_addr);
     }
 
     ct_args.push_back(0x30c0ffee);
@@ -1735,6 +1759,11 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     eth_chan_directions ds_dir = downstream_builder.get_direction();
 
     auto adapter_spec = downstream_builder.build_connection_to_fabric_channel(channel_id);
+
+    if constexpr (std::is_same_v<BuilderType, FabricTensixDatamoverBuilder>) {
+        this->num_downstream_tensix_connections++;
+        downstream_builder.append_upstream_routers_noc_xy(this->my_noc_x, this->my_noc_y);
+    }
 
     if (is_2D_routing) {
         // TODO: unify vc0 and vc1?

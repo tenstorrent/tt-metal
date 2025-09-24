@@ -341,6 +341,11 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->nan_ = NAN_WHB0;
     this->inf_ = INF_WHB0;
 
+    // PCIe address range for Wormhole. Includes the mapping through the outbound iATU. See
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/PCIExpressTile for more details.
+    this->pcie_addr_lower_bound_ = 0x8'0000'0000ULL;
+    this->pcie_addr_upper_bound_ = 0x8'FFFE'0000ULL - 1ULL;
+
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),
@@ -354,6 +359,18 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>();
+
+    this->set_iram_text_size_func_ = [](dev_msgs::launch_msg_t::View launch_msg,
+                                        HalProgrammableCoreType programmable_core_type,
+                                        HalProcessorClassType processor_class,
+                                        uint32_t processor_type_idx,
+                                        uint32_t iram_text_size) {
+        // Only NCRISC on Wormhole needs to set the field ncrisc_kernel_size16 in launch message.
+        if (programmable_core_type == HalProgrammableCoreType::TENSIX && processor_class == HalProcessorClassType::DM &&
+            processor_type_idx == 1) {
+            launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
+        }
+    };
 }
 
 }  // namespace tt_metal

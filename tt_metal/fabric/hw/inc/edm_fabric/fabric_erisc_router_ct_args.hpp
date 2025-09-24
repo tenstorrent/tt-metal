@@ -64,8 +64,12 @@ static_assert(
     "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
-// Main configuration arguments (after stream IDs and marker)
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+// Downstream tensix connections argument (after stream IDs and marker)
+constexpr size_t NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+constexpr uint32_t num_downstream_tensix_connections = get_compile_time_arg_val(NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX);
+
+// Main configuration arguments (after stream IDs, marker, and downstream tensix connections)
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
@@ -85,12 +89,14 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 27, "wait_for_host_signal_IDX must be 27 (23 stream IDs + 1 marker + 3 config args)");
+    wait_for_host_signal_IDX == 28,
+    "wait_for_host_signal_IDX must be 28 (23 stream IDs + 1 marker + 1 tensix connections + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 28, "MAIN_CT_ARGS_START_IDX must be 28 (23 stream IDs + 1 marker + 4 config args)");
+    MAIN_CT_ARGS_START_IDX == 29,
+    "MAIN_CT_ARGS_START_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -184,10 +190,11 @@ constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 19;
 constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2);
 constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
-constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
+constexpr uint32_t edm_local_tensix_sync_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
+constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
 
 // Per-channel counters
-constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 3;
+constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 4;
 constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
 constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
 constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);
@@ -262,7 +269,9 @@ static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NU
 // channel updates the packet header before sending it over Ethernet.
 constexpr bool UPDATE_PKT_HDR_ON_RX_CH = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 17) != 0;
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 18;
+constexpr bool FORCE_ALL_PATHS_TO_USE_SAME_NOC = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 18) != 0;
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 19;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -324,53 +333,32 @@ static_assert(
 
 constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
-    conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
+constexpr size_t to_sender_remote_ack_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX>();
 
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_completion_counter_addrs =
-    conditional_get_next_n_args<
-        multi_txq_enabled,
-        size_t,
-        TO_SENDER_CREDIT_COUNTERS_START_IDX + NUM_SENDER_CHANNELS,
-        NUM_SENDER_CHANNELS>();
+constexpr size_t to_sender_remote_completion_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 1>();
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_ack_counter_ptrs = conditional_get_next_n_args<
-    multi_txq_enabled,
-    size_t,
-    TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS,
-    NUM_RECEIVER_CHANNELS>();
+constexpr size_t local_receiver_ack_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 2>();
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_completion_counter_ptrs =
-    conditional_get_next_n_args<
-        multi_txq_enabled,
-        size_t,
-        TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS,
-        NUM_RECEIVER_CHANNELS>();
+constexpr size_t local_receiver_completion_counters_base_address =
+    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 3>();
 
-template <typename T>
-constexpr bool counter_credit_addresses_are_valid(const T& counter_addresses) {
-    for (size_t i = 0; i < counter_addresses.size(); i++) {
-        if (counter_addresses[i] == 0) {
-            return false;
-        }
-    }
-    return true;
-}
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_ack_counter_addrs),
-    "to_sender_remote_ack_counter_addrs must be valid");
+    !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
+    "to_sender_remote_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(to_sender_remote_completion_counter_addrs),
-    "to_sender_remote_completion_counter_addrs must be valid");
+    !multi_txq_enabled || to_sender_remote_completion_counters_base_address != 0,
+    "to_sender_remote_completion_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_ack_counter_ptrs),
-    "local_receiver_ack_counter_ptrs must be valid");
+    !multi_txq_enabled || local_receiver_ack_counters_base_address != 0,
+    "local_receiver_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_completion_counter_ptrs),
-    "local_receiver_completion_counter_ptrs must be valid");
+    !multi_txq_enabled || local_receiver_completion_counters_base_address != 0,
+    "local_receiver_completion_counters_base_address must be valid");
 
-constexpr size_t SPECIAL_MARKER_3_IDX =
-    TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
+constexpr size_t SPECIAL_MARKER_3_IDX = TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 4 : 0);
 constexpr size_t SPECIAL_MARKER_3 = 0x30c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_3_IDX) == SPECIAL_MARKER_3,

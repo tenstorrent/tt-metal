@@ -165,7 +165,7 @@ BufferDistributionSpec::BufferDistributionSpec(
         CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
     if (tensor_shape_in_pages_.volume() != 0) {
-        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
+        TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
     }
 
     init_precomputed_data();
@@ -178,7 +178,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
     if (tensor_shape_in_pages_.volume() != 0) {
-        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
+        TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
     }
 
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
@@ -230,7 +230,7 @@ size_t BufferDistributionSpec::num_shards() const { return num_shards_; }
 size_t BufferDistributionSpec::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
 
 size_t BufferDistributionSpec::max_num_shards_per_core() const {
-    if (cores_.size() == 0) {
+    if (cores_.empty()) {
         return 0;
     }
     return (num_shards() + cores_.size() - 1) / cores_.size();
