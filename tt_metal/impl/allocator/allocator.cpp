@@ -117,6 +117,7 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer, uint32_t allocator_state_i
     }
     switch (buffer_type) {
         case BufferType::DRAM:
+            std::cout << "Allocating buffer for DRAM" << std::endl;
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
             break;
         case BufferType::L1:

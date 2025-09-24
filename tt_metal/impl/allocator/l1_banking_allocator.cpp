@@ -209,7 +209,17 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         }
         bm_deps = tt::tt_metal::BankManager::AllocatorDependencies(deps_map);
     }
+    for (size_t i = 0; i < bm_deps.dependencies.size(); ++i) {
+        std::cout << "L1 bank Dependency " << i << ": " << bm_deps.dependencies[i] << std::endl;
+    }
 
+    std::cout << "Creating L1 bank manager with stats: " << "bank_id_to_bank_offset: " << bank_id_to_bank_offset.size()
+              << ", " << "allocatable_l1_size: " << allocatable_l1_size << ", "
+              << "interleaved_address_limit: " << interleaved_address_limit << ", "
+              << "config_.l1_alignment: " << config_.l1_alignment << ", "
+              << "config_.l1_unreserved_base: " << config_.l1_unreserved_base << ", "
+              << "config_.disable_interleaved: " << config_.disable_interleaved << ", "
+              << "bm_deps: " << bm_deps.dependencies.size() << std::endl;
     l1_manager_ = std::make_unique<BankManager>(
         BufferType::L1,
         bank_id_to_bank_offset,

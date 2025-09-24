@@ -485,6 +485,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_overlapped_submeshes
 
         // Use the pre-created submesh state
         auto submesh_state = submesh_states[i];
+        std::cout << "Submesh state id: " << submesh_state->id() << std::endl;
 
         // Create mesh device view for the submesh.
         std::vector<MaybeRemote<IDevice*>> submesh_devices;

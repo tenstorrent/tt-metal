@@ -40,6 +40,9 @@ public:
 
     DeviceAddr max_size_bytes() const { return max_size_bytes_; }
 
+    // Expose the allocator's base offset for conversions between internal and absolute addresses
+    DeviceAddr offset_bytes() const { return offset_bytes_; }
+
     std::optional<DeviceAddr> lowest_occupied_address() const {
         if (not this->lowest_occupied_address_.has_value()) {
             return this->lowest_occupied_address_;

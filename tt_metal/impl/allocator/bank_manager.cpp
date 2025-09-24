@@ -157,6 +157,11 @@ BankManager::BankManager(
 
     // Initialize all allocators; sets up allocator-dependent members
     this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+
+    std::cout << "Finished initializing bank manager 1" << std::endl;
+    for (size_t i = 0; i < allocator_dependencies_.dependencies.size(); ++i) {
+        std::cout << "- Dependency " << i << ": " << allocator_dependencies_.dependencies[i] << std::endl;
+    }
 }
 
 BankManager::BankManager(
@@ -177,6 +182,11 @@ BankManager::BankManager(
 
     // Initialize all allocators; sets up allocator-dependent members
     this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+
+    std::cout << "Finished initializing bank manager 2" << std::endl;
+    for (size_t i = 0; i < allocator_dependencies_.dependencies.size(); ++i) {
+        std::cout << "-- Dependency " << i << ": " << allocator_dependencies_.dependencies[i] << std::endl;
+    }
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
@@ -280,8 +290,8 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
-    // Helper for clamping ranges in-place according to address_limit
-    // This is needed because the allocator's available_addresses method does not clamp to address_limit
+    // Helper for clamping ranges in-place according to address_limit (now absolute)
+    // Allocator available_addresses returns absolute ranges; clamp directly.
     auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>>& ranges) {
         if (address_limit == 0) {
             return;
@@ -302,6 +312,11 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
 
     // Current allocator's available ranges (clamped if needed)
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges = alloc->available_addresses(size_per_bank);
+    std::cout << "Available ranges: " << available_ranges.size() << std::endl;
+    std::cout << "Available ranges: ";
+    for (const auto& r : available_ranges) {
+        std::cout << "(" << r.first << ", " << r.second << ") ";
+    }
     clamp_ranges(available_ranges);
     std::sort(available_ranges.begin(), available_ranges.end(), [](const auto& a, const auto& b) {
         return a.first < b.first;
@@ -392,6 +407,8 @@ uint64_t BankManager::allocate_buffer(
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
     BankManager::AllocatorDependencies::AllocatorID allocator_id) {
+    std::cout << "Calling allocate_buffer for allocator_id: " << allocator_id.get() << std::endl;
+    std::cout << "allocator_dependencies.num_allocators(): " << allocator_dependencies_.num_allocators() << std::endl;
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -440,9 +457,13 @@ uint64_t BankManager::allocate_buffer(
     // The pair represents (start, end) of the available address range(s)
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
         this->compute_available_addresses(allocator_id, size_per_bank, address_limit);
+    std::cout << "Computed Available ranges: ";
+    for (const auto& r : available_ranges) {
+        std::cout << "(" << r.first << ", " << r.second << ") ";
+    }
+    std::cout << std::endl;
 
-    // Choose an address from the allowed ranges respecting alignment and direction
-    // Addresses should already be aligned to alignment_bytes_
+    // Choose an address from the allowed ranges respecting alignment and direction (absolute addresses)
     std::optional<DeviceAddr> chosen;
     if (bottom_up) {
         for (const auto& r : available_ranges) {
@@ -478,6 +499,7 @@ uint64_t BankManager::allocate_buffer(
         alignment_bytes_);
 
     std::cout << "allocator_id: " << allocator_id.get() << std::endl;
+    // Ranges are absolute; request placement at the chosen absolute address
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());

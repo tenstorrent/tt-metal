@@ -94,6 +94,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
         // The address provided to the backing buffer is used as the address for the MeshBuffer object.
         uint32_t allocator_state_id = mesh_device->submesh_allocator_state_id();
+        std::cout << "Allocator state id: " << allocator_state_id << std::endl;
         std::shared_ptr<Buffer> backing_buffer = Buffer::create(
             mesh_device,
             device_local_size,

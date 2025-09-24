@@ -1096,3 +1096,43 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
         AllocatorID{0});
     EXPECT_EQ(alloc0_addr0_realloc, address_limit);  // Should still start at 256KB
 }
+
+TEST(OverlappedAllocators, Temp) {
+    // 2 independent allocators, no overlaps
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
+
+    // Create the L1 BankManager using the same constructor call as L1BankingAllocator (lines 216-224)
+    const auto bank_id_to_bank_offset = std::unordered_map<uint32_t, int64_t>{{0, 0}, {1, 0}};
+    const auto allocatable_l1_size = 1398720;
+    const auto interleaved_address_limit = 100432;
+    const auto l1_alignment = 16;
+    const auto l1_unreserved_base = 100416;
+    const auto disable_interleaved = false;
+    const auto bm_deps = BankManager::AllocatorDependencies{{{AllocatorID{0}, {AllocatorID{1}}}}};
+    auto l1_manager = std::make_unique<BankManager>(
+        BufferType::L1,
+        bank_id_to_bank_offset,
+        allocatable_l1_size,
+        interleaved_address_limit,
+        l1_alignment,
+        l1_unreserved_base,
+        disable_interleaved,
+        bm_deps);
+
+    const uint32_t alloc_size_4K = 4096;
+    l1_manager->allocate_buffer(
+        alloc_size_4K,
+        alloc_size_4K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+
+    l1_manager->allocate_buffer(
+        alloc_size_4K,
+        alloc_size_4K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+}

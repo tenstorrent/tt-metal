@@ -181,13 +181,17 @@ TEST_F(MeshDevice2x4Test, OverlappedSubmeshes) {
 
     // Create buffer configuration for testing
     const DeviceAddr buffer_size = 4096;  // 4KB buffer
-    const DeviceAddr page_size = 1024;    // 1KB page size
+    const DeviceAddr page_size = 4096;    // 1KB page size
     using namespace tt::tt_metal::distributed;
 
     // Buffer configuration for testing
     ReplicatedBufferConfig replicated_config{buffer_size};
+    // DRAM issues:
+    // - BankManager doesn't take in Alloc Deps
+    // - APIs don't take in Alloc id
+    // - Everything is using default, so everything independent
     DeviceLocalBufferConfig device_config{
-        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = std::nullopt, .bottom_up = true};
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = std::nullopt, .bottom_up = false};
 
     // Allocate a buffer in submesh1
     auto buffer1 = MeshBuffer::create(replicated_config, device_config, submeshes[0].get());
@@ -207,10 +211,11 @@ TEST_F(MeshDevice2x4Test, OverlappedSubmeshes) {
     EXPECT_EQ(addr2, addr1) << "Submesh1 and submesh2 should have same starting address (independent allocators)";
 
     // Allocate another buffer in submesh2 and check that it continues after the previous buffer
+    std::cout << "Problem code here" << std::endl;
     auto buffer2_next = MeshBuffer::create(replicated_config, device_config, submeshes[1].get());
-    ASSERT_NE(buffer2_next, nullptr);
     EXPECT_TRUE(buffer2_next->is_allocated());
     DeviceAddr addr2_next = buffer2_next->address();
+    std::cout << "Buffer2_next address: " << addr2_next << std::endl;
     EXPECT_EQ(addr2_next, addr2 + buffer_size) << "Second buffer in submesh2 should continue after first buffer";
 
     // Allocate a buffer in submesh3 and check that it's in the same address as after allocations in submesh2
