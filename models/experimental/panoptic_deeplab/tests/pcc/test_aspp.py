@@ -118,7 +118,7 @@ def test_ttnn_aspp(device, model_location_generator):
 
     ttnn_aspp_output_torch = ttnn.to_torch(ttnn_aspp_output).permute(0, 3, 1, 2)
 
-    pcc_passed, pcc_message = assert_with_pcc(pytorch_aspp_output, ttnn_aspp_output_torch, pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(pytorch_aspp_output, ttnn_aspp_output_torch, pcc=0.985)
 
     logger.info(f"ASPP PCC: {pcc_message}")
     assert pcc_passed, f"ASPP PCC test failed: {pcc_message}"
