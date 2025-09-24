@@ -62,7 +62,7 @@ using namespace tt;
 
 namespace {
 
-string logfile_path = "generated/dprint/";
+std::string logfile_path = "generated/dprint/";
 
 inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
@@ -71,7 +71,7 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
-string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
+std::string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (risc_id) {
             case 0: return abbreviated ? "ER" : "ERISC";
@@ -114,12 +114,6 @@ void AssertSize(uint8_t sz, uint8_t expected_sz) {
         expected_sz);
 }
 
-inline bool RiscEnabled(tt_metal::HalProgrammableCoreType core_type, int risc_index) {
-    const auto& processors =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
-    return processors.contains(core_type, risc_index);
-}
-
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
@@ -154,11 +148,6 @@ struct RiscKeyComparator {
         return x_risc_id < y_risc_id;
     }
 };
-
-void ResetStream(ostringstream* stream) {
-    stream->str("");
-    stream->clear();
-}  // ResetStream
 
 bool StreamEndsWithNewlineChar(const ostringstream* stream) {
     const string stream_str = stream->str();
@@ -496,9 +485,6 @@ private:
     // Transfers the given intermediate stream to the output stream and flushes it.
     void transfer_stream_to_output(const RiscKey& risc_key, ostringstream* intermediate_stream);
 
-    // Returns the formatted output data from a dprint stream
-    string get_formatted_output_data(const RiscKey& risc_key, const ostringstream* stream);
-
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
     ostream* get_output_stream(const RiscKey& risc_key);
@@ -739,13 +725,13 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
         }
     }
 
+    const auto& enabled_processors = rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
     // Write print enable magic for the cores the user specified.
     for (auto& logical_core : print_cores_sanitized) {
         CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             device_id, logical_core.coord, logical_core.type);
         auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
         uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
-        const auto& enabled_processors = rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
         for (int risc_index = 0; risc_index < num_processors; risc_index++) {
             if (enabled_processors.contains(programmable_core_type, risc_index)) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
@@ -787,7 +773,8 @@ void DPrintServer::Impl::detach_devices() {
 
 void DPrintServer::Impl::detach_device(chip_id_t device_id) {
     // When we detach a device, we should poll to make sure there's no outstanding prints.
-    chip_id_t chip_id = device_id;
+    const auto& enabled_processors =
+        MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
     bool outstanding_prints = true;
     while (outstanding_prints && !server_killed_due_to_hang_) {
         // Polling interval of 1ms
@@ -801,8 +788,6 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
                     device_id, logical_core.coord, logical_core.type);
             auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
             uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
-            const auto& enabled_processors =
-                MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
             for (int risc_id = 0; risc_id < num_processors; risc_id++) {
                 if (enabled_processors.contains(programmable_core_type, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
@@ -814,7 +799,7 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
                     uint32_t base_addr = GetDprintBufAddr(programmable_core_type, risc_id);
                     uint32_t from_dev[2];
                     MetalContext::instance().get_cluster().read_core(
-                        from_dev, sizeof from_dev, {chip_id, virtual_core}, base_addr);
+                        from_dev, sizeof from_dev, {device_id, virtual_core}, base_addr);
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
@@ -898,15 +883,14 @@ void DPrintServer::Impl::clear_signals() {
 bool DPrintServer::Impl::peek_one_risc_non_blocking(
     chip_id_t device_id, const CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
-    CoreCoord virtual_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
+    CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        device_id, logical_core.coord, logical_core.type);
     if (!CheckInitMagicCleared(device_id, virtual_core, risc_id)) {
         return false;
     }
 
     // compute the buffer address for the requested risc
-    uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
+    uint32_t base_addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
     chip_id_t chip_id = device_id;
     RiscKey risc_key{chip_id, logical_core, risc_id};
 
@@ -1211,6 +1195,7 @@ void DPrintServer::Impl::poll_print_data() {
     // Main print loop, go through all chips/cores/riscs on the device and poll for any print data
     // written.
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& enabled_processors = rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
     while (true) {
         if (stop_print_server_) {
             // If the stop signal was received, exit the print server thread, but wait for any
@@ -1245,7 +1230,7 @@ void DPrintServer::Impl::poll_print_data() {
                 auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
                 uint32_t risc_count = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
                 for (int risc_index = 0; risc_index < risc_count; risc_index++) {
-                    if (RiscEnabled(programmable_core_type, risc_index)) {
+                    if (enabled_processors.contains(programmable_core_type, risc_index)) {
                         try {
                             new_data_this_iter |=
                                 peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter);
@@ -1293,48 +1278,37 @@ void DPrintServer::Impl::transfer_all_streams_to_output(chip_id_t device_id) {
 }  // transfer_all_streams_to_output
 
 void DPrintServer::Impl::transfer_stream_to_output(const RiscKey& risc_key, ostringstream* intermediate_stream) {
-    const string& output_data = get_formatted_output_data(risc_key, intermediate_stream);
     ostream* output_stream = get_output_stream(risc_key);
-    *output_stream << output_data << flush;
-    ResetStream(intermediate_stream);
+    std::string intermediate_str = intermediate_stream->str();
+
+    if (!intermediate_str.empty()) {
+        const bool prepend_device_core_risc =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
+                tt::llrt::RunTimeDebugFeatureDprint);
+        if (prepend_device_core_risc) {
+            const auto& [device_id, core_desc, risc_id] = risc_key;
+            std::string core_coord_str = core_desc.coord.str();
+            std::string risc_name = GetRiscName(core_desc.type, risc_id, true);
+            fmt::print(*output_stream, "{}:{}:{}: ", device_id, core_coord_str, risc_name);
+        }
+        *output_stream << intermediate_str;
+    }
+
+    *output_stream << flush;
+    intermediate_stream->str("");
+    intermediate_stream->clear();
 }  // transfer_stream_to_output
-
-string DPrintServer::Impl::get_formatted_output_data(const RiscKey& risc_key, const ostringstream* stream) {
-    string output;
-    const bool prepend_device_core_risc =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
-            tt::llrt::RunTimeDebugFeatureDprint);
-    if (prepend_device_core_risc) {
-        const chip_id_t device_id = get<0>(risc_key);
-        const CoreDescriptor& core_desc = get<1>(risc_key);
-        const uint32_t risc_id = get<2>(risc_key);
-
-        const string& device_id_str = to_string(device_id);
-        const string& core_coord_str = core_desc.coord.str();
-        const string& risc_name = GetRiscName(core_desc.type, risc_id, true);
-        output += fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
-    }
-
-    if (stream->str().empty()) {
-        output = "";
-    } else {
-        output += stream->str();
-    }
-
-    return output;
-}
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     if (rtoptions.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[risc_key]) {
-            const chip_id_t chip_id = get<0>(risc_key);
-            const CoreDescriptor& logical_core = get<1>(risc_key);
-            const int risc_id = get<2>(risc_key);
-            string filename = rtoptions.get_root_dir() + logfile_path;
-            filename += fmt::format(
-                "device-{}_{}-core-{}-{}_{}.txt",
+            const auto& [chip_id, logical_core, risc_id] = risc_key;
+            std::string filename = fmt::format(
+                "{}{}device-{}_{}-core-{}-{}_{}.txt",
+                rtoptions.get_root_dir(),
+                logfile_path,
                 chip_id,
                 tt::tt_metal::get_core_type_name(logical_core.type),
                 logical_core.coord.x,
