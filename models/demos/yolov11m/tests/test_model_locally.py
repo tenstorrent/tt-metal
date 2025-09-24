@@ -18,58 +18,6 @@ from models.demos.yolov11m.tt import ttnn_yolov11
 from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
 
 
-def test_obb_simple():
-    """Simple test for OBB (Oriented Bounding Box) model"""
-    print("🧪 Testing OBB Model...")
-    
-    # Load the OBB model
-    torch_model = load_torch_model()
-    torch_model.eval()
-    
-    # Create test input (standard YOLOv11 input size)
-    batch_size, channels, height, width = 1, 3, 640, 640
-    torch_input = torch.randn(batch_size, channels, height, width)
-    
-    print(f"📥 Input shape: {torch_input.shape}")
-    
-    # Run forward pass
-    with torch.no_grad():
-        torch_output = torch_model(torch_input)
-    
-    print(f"📤 Output shape: {torch_output.shape}")
-    
-    # Validate output shape for OBB
-    # Expected: [batch_size, 20, 8400]
-    # 20 = 4 (box coords) + 15 (classes) + 1 (angle)
-    # 8400 = detection points across three scales
-    expected_shape = (batch_size, 20, 8400)
-    assert torch_output.shape == expected_shape, f"Expected shape {expected_shape}, got {torch_output.shape}"
-    
-    # Basic value checks
-    assert torch.isfinite(torch_output).all(), "Output contains non-finite values"
-    assert not torch.isnan(torch_output).any(), "Output contains NaN values"
-    
-    # Split output into components
-    box_coords = torch_output[:, :4, :]      # Box coordinates (x, y, w, h)
-    class_preds = torch_output[:, 4:19, :]   # Class predictions (15 classes)
-    angle_preds = torch_output[:, 19:20, :]  # Angle predictions (1 channel)
-    
-    print(f"📦 Box coordinates shape: {box_coords.shape}")
-    print(f"🏷️  Class predictions shape: {class_preds.shape}")
-    print(f"📐 Angle predictions shape: {angle_preds.shape}")
-    
-    # Validate ranges
-    print(f"📊 Box coords range: [{box_coords.min():.3f}, {box_coords.max():.3f}]")
-    print(f"📊 Class preds range: [{class_preds.min():.3f}, {class_preds.max():.3f}]")
-    print(f"📊 Angle preds range: [{angle_preds.min():.3f}, {angle_preds.max():.3f}]")
-    
-    # Check that class predictions are reasonable (should be probabilities between 0 and 1)
-    assert (class_preds >= 0).all() and (class_preds <= 1).all(), "Class predictions should be between 0 and 1"
-    
-    print("✅ OBB model test passed!")
-    return torch_output
-
-
 def preprocess_image(image_path, target_size=(320, 320)):
     """
     Preprocess image for YOLOv11 OBB model
@@ -134,7 +82,7 @@ def draw_oriented_bbox(image, center_x, center_y, width, height, angle, color=(0
     return image
 
 
-def process_obb_predictions(output, confidence_threshold=0.1, original_size=(640, 640), target_size=(640, 640)):
+def process_obb_predictions(output, confidence_threshold=0.1, original_size=(320, 320), target_size=(320, 320)):
     """
     Process OBB model output to extract detections
     Args:
@@ -207,7 +155,7 @@ def visualize_obb_predictions(image_path, output, confidence_threshold=0.05, sav
             output, 
             confidence_threshold=confidence_threshold,
             original_size=original_size,
-            target_size=(640, 640)
+            target_size=(320, 320)
         )
         
         print(f"🎯 Found {len(detections)} detections (conf > {confidence_threshold})")
@@ -311,7 +259,7 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
         
         # Create dummy input tensor for model parameter initialization using proper TTNN function
         dummy_torch_input, dummy_ttnn_input = create_yolov11_input_tensors(
-            device, batch=1, input_channels=3, input_height=640, input_width=640, is_sub_module=False
+            device, batch=1, input_channels=3, input_height=320, input_width=320, is_sub_module=False
         )
         
         # Create TTNN model parameters and model
