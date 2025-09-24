@@ -546,8 +546,6 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     return {input_padded_shape, input_tensor_sharded_memory_config};
 };
 
-namespace {
-
 std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
     MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
@@ -691,8 +689,6 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         return {input_tensor.logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
     }
 }
-
-}  // namespace
 
 ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape) {
     TT_FATAL(input_shape.size() == 4, "Expected 4D shape");

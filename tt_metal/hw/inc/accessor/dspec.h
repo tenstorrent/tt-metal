@@ -12,7 +12,7 @@
 #include <cstring>
 
 // Forward declared from dataflow_api.h
-static inline uint32_t get_common_arg_addr(int arg_idx);
+[[maybe_unused]] static inline uint32_t get_common_arg_addr(int arg_idx);
 
 namespace tensor_accessor {
 
