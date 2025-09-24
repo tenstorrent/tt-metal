@@ -125,11 +125,7 @@ runs:
         run: |
           set -eu
 
-          # Fix ownership of workspace files if needed
-          if [ "$(stat -c '%u' .)" != "$(id -u)" ]; then
-            echo "Fixing ownership of workspace files..."
-            sudo chown -R $(id -u):$(id -g) .
-          fi
+          source $PYTHON_ENV_DIR/bin/activate
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
