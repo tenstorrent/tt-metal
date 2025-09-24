@@ -353,6 +353,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         buffer_address += field_size;
     }
 
+    // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
+    // the hang is root caused for multiprocess test.
     this->edm_local_tensix_sync_address = buffer_address;
     buffer_address += field_size;
 
