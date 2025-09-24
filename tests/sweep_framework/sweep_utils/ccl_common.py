@@ -12,6 +12,9 @@ from tests.scripts.common import get_updated_device_params
 
 
 def mesh_shape_iterator(num_devices, limit=None):
+    if num_devices == 1:
+        return []
+
     assert num_devices % 2 == 0
     for r in takewhile(lambda x: x <= num_devices, (2**i for i in (range(limit) if limit else count()))):
         yield (num_devices // r, r)
