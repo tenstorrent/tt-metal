@@ -105,7 +105,7 @@ runs:
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
           -e HOME=${{ github.workspace }}
-          -e PIP_CACHE_DIR=/home/$(whoami)/.cache/pip
+          -e PIP_CACHE_DIR=${{ github.workspace }}/.cache/pip
           -e GITHUB_ACTIONS=true
           -e CI=true
           -e GITHUB_REPOSITORY=${{ github.repository }}
@@ -124,6 +124,12 @@ runs:
           -w ${{ github.workspace }}
         run: |
           set -eu
+
+          # Fix ownership of workspace files if needed
+          if [ "$(stat -c '%u' .)" != "$(id -u)" ]; then
+            echo "Fixing ownership of workspace files..."
+            sudo chown -R $(id -u):$(id -g) .
+          fi
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
