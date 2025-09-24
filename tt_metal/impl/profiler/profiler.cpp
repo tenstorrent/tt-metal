@@ -1142,6 +1142,8 @@ void DeviceProfiler::readRiscProfilerResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
     ZoneScoped;
 
+    log_info(tt::LogMetal, "readRiscProfilerResults data_source: {}", data_source);
+
     if (data_source == ProfilerDataBufferSource::DRAM_AND_L1) {
         readRiscProfilerResults(device, worker_core, ProfilerDataBufferSource::DRAM, metadata);
         readRiscProfilerResults(device, worker_core, ProfilerDataBufferSource::L1, metadata);

@@ -37,6 +37,7 @@ def test_with_ops(device):
 
     for i in range(5):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        ttnn.ReadDeviceProfiler(device)
     ttnn.release_trace(device, tid)
 
 
@@ -68,4 +69,5 @@ def test_with_ops_single_core(device):
 
     for i in range(5):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        ttnn.ReadDeviceProfiler(device)
     ttnn.release_trace(device, tid)
