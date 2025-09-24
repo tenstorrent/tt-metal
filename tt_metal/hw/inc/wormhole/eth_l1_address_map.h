@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "noc/noc_parameters.h"
+#include "dev_mem_map.h"
 
 namespace eth_iram_mem {
 struct address_map {
@@ -90,16 +91,14 @@ struct address_map {
 
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = 0;
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = 512;
-    static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = 16;
+    static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = 64;
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_2D = FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D;
     static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE = FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE;
     static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_1D = FABRIC_ROUTING_PATH_BASE;
     static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_2D =
         FABRIC_ROUTING_PATH_BASE + FABRIC_ROUTING_PATH_SIZE_1D;
-    static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_1D =
-        35792;  // MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D;
-    static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_2D =
-        35856;  // MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D;
+    static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_1D = MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D;
+    static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_2D = MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D;
     static constexpr std::int32_t FABRIC_ROUTING_PATH_SIZE = FABRIC_ROUTING_PATH_SIZE_1D + FABRIC_ROUTING_PATH_SIZE_2D;
 
     static constexpr std::int32_t ERISC_BARRIER_BASE = (FABRIC_ROUTING_PATH_BASE + FABRIC_ROUTING_PATH_SIZE + 31) & ~31;

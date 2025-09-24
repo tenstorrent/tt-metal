@@ -1824,6 +1824,42 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
             }
             tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
         }
+
+        // Also write to IDLE_ETH cores' L1 for completeness
+        const auto& cluster_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc();
+        std::set<uint32_t> idle_eth_channels = cluster_desc->get_idle_eth_channels(physical_chip_id);
+        if (!idle_eth_channels.empty()) {
+            TT_FATAL(
+                sizeof(routing_path) == tt_metal::MetalContext::instance().hal().get_dev_size(
+                                            tt_metal::HalProgrammableCoreType::IDLE_ETH,
+                                            tt_metal::HalL1MemAddrType::FABRIC_ROUTING_PATH_1D),
+                "ControlPlane: Idle ETH core data size mismatch expected {} but got {}",
+                tt_metal::MetalContext::instance().hal().get_dev_size(
+                    tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTING_PATH_1D),
+                sizeof(routing_path));
+
+            for (const uint32_t& idle_eth_chan : idle_eth_channels) {
+                CoreCoord virtual_idle_eth_core =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                        physical_chip_id, idle_eth_chan);
+                // print channel, and core's x,y
+                fprintf(
+                    stderr,
+                    "Writing 1D routing path to IDLE_ETH core on chip %d, channel %d, core (%zu,%zu)\n",
+                    physical_chip_id,
+                    idle_eth_chan,
+                    virtual_idle_eth_core.x,
+                    virtual_idle_eth_core.y);
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    (void*)&routing_path,
+                    sizeof(routing_path),
+                    tt_cxy_pair(physical_chip_id, virtual_idle_eth_core),
+                    tt_metal::MetalContext::instance().hal().get_dev_addr(
+                        tt_metal::HalProgrammableCoreType::IDLE_ETH,
+                        tt_metal::HalL1MemAddrType::FABRIC_ROUTING_PATH_1D));
+            }
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
+        }
     }
 }
 
@@ -1884,6 +1920,34 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
                             tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
                             tt_metal::HalL1MemAddrType::FABRIC_ROUTING_PATH_2D));
                 }
+            }
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
+        }
+
+        // Also write to IDLE_ETH cores' L1 for completeness
+        const auto& cluster_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc();
+        std::set<uint32_t> idle_eth_channels = cluster_desc->get_idle_eth_channels(physical_chip_id);
+        if (!idle_eth_channels.empty()) {
+            TT_FATAL(
+                sizeof(routing_path) == tt_metal::MetalContext::instance().hal().get_dev_size(
+                                            tt_metal::HalProgrammableCoreType::IDLE_ETH,
+                                            tt_metal::HalL1MemAddrType::FABRIC_ROUTING_PATH_2D),
+                "ControlPlane: Idle ETH core data size mismatch expected {} but got {}",
+                tt_metal::MetalContext::instance().hal().get_dev_size(
+                    tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTING_PATH_2D),
+                sizeof(routing_path));
+
+            for (const uint32_t& idle_eth_chan : idle_eth_channels) {
+                CoreCoord virtual_idle_eth_core =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                        physical_chip_id, idle_eth_chan);
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    (void*)&routing_path,
+                    sizeof(routing_path),
+                    tt_cxy_pair(physical_chip_id, virtual_idle_eth_core),
+                    tt_metal::MetalContext::instance().hal().get_dev_addr(
+                        tt_metal::HalProgrammableCoreType::IDLE_ETH,
+                        tt_metal::HalL1MemAddrType::FABRIC_ROUTING_PATH_2D));
             }
             tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
         }

@@ -233,11 +233,11 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 
 // Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
 bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
-    tt_l1_ptr routing_path_t<2, true>* routing_info =
-#if defined(ACTIVE_ETH)
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(AERISC_FABRIC_ROUTING_PATH_BASE_2D);
-#elif defined(IDLE_ETH)
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(IERISC_FABRIC_ROUTING_PATH_BASE_2D);
+    auto* routing_info =
+#if defined(COMPILE_FOR_ERISC)
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D);
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D);
 #else
         reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
 #endif
@@ -254,10 +254,18 @@ bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatency
     uint8_t turn_point = compressed_route.get_turn_point();
 
     if (ns_hops > 0 && ew_hops > 0) {
+        // 2D routing: turn from NS to EW at turn_point
         if (ew_direction) {
             packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
         } else {
             packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
+        }
+    } else if (ns_hops == 0 && ew_hops > 0) {
+        // East/West only routing: branch offset is set at position 1 (start_hop + 1)
+        if (ew_direction) {
+            packet_header->routing_fields.branch_east_offset = 1;  // East only: branch at hop 1
+        } else {
+            packet_header->routing_fields.branch_west_offset = 1;  // West only: branch at hop 1
         }
     }
 
@@ -275,11 +283,11 @@ bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatency
             return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
         }
     } else {
-        tt_l1_ptr routing_path_t<1, compressed>* routing_info =
-#if defined(ACTIVE_ETH)
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(AERISC_FABRIC_ROUTING_PATH_BASE_1D);
-#elif defined(IDLE_ETH)
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(IERISC_FABRIC_ROUTING_PATH_BASE_1D);
+        auto* routing_info =
+#if defined(COMPILE_FOR_ERISC)
+            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D);
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D);
 #else
             reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
 #endif
@@ -295,5 +303,4 @@ bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatency
         }
     }
 }
-
 }  // namespace tt::tt_fabric
