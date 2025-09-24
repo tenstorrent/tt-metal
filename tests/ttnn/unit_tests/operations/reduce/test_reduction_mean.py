@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, construct_pcc_assert_message
-from models.utility_functions import torch_random, comp_allclose
+from models.common.utility_functions import torch_random, comp_allclose
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
