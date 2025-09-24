@@ -28,6 +28,30 @@
 #include <server/collection_endpoint.hpp>
 
 /**************************************************************************************************
+ PSD/FSD Testing
+**************************************************************************************************/
+
+#include <psd/psd.hpp>
+
+#include <llrt/rtoptions.hpp>
+#include <llrt/get_platform_architecture.hpp>
+#include <tt-metalium/distributed_context.hpp>
+
+static void test_psd() {
+    auto rtoptions = tt::llrt::RunTimeOptions();
+    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context =
+        tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
+    tt::tt_metal::PSD psd = tt::tt_metal::PSD(cluster, distributed_context, rtoptions);
+
+    std::cout << "All host names:" << std::endl;
+    for (auto hostname : psd.get_all_hostnames()) {
+        std::cout << "  " << hostname << std::endl;
+    }
+}
+
+/**************************************************************************************************
  Utility Functions
 **************************************************************************************************/
 
@@ -52,28 +76,6 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
     }
 
     return result;
-
-/**************************************************************************************************
- PSD/FSD Testing
-**************************************************************************************************/
-
-#include <psd/psd.hpp>
-
-#include <llrt/get_platform_architecture.hpp>
-#include <tt-metalium/distributed_context.hpp>
-
-static void test_psd() {
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
-    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context =
-        tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-
-    tt::tt_metal::PSD psd = tt::tt_metal::PSD(cluster, distributed_context);
-
-    std::cout << "All host names:" << std::endl;
-    for (auto hostname : psd.get_all_hostnames()) {
-        std::cout << "  " << hostname << std::endl;
-    }
 }
 
 /**************************************************************************************************
