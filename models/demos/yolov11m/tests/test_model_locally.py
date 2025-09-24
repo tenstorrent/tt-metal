@@ -334,57 +334,23 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             assert torch_output.shape == ttnn_output_torch.shape, \
                 f"Shape mismatch: PyTorch {torch_output.shape} vs TTNN {ttnn_output_torch.shape}"
             
-            # Debug: Compare raw tensor statistics
-            print(f"🔍 Debug - Raw tensor comparison:")
-            print(f"   PyTorch - shape: {torch_output.shape}, dtype: {torch_output.dtype}")
-            print(f"   PyTorch - min: {torch_output.min():.6f}, max: {torch_output.max():.6f}, mean: {torch_output.mean():.6f}")
-            print(f"   TTNN    - shape: {ttnn_output_torch.shape}, dtype: {ttnn_output_torch.dtype}")
-            print(f"   TTNN    - min: {ttnn_output_torch.min():.6f}, max: {ttnn_output_torch.max():.6f}, mean: {ttnn_output_torch.mean():.6f}")
-            
-            # Debug: Compare each component separately
-            torch_box_coords = torch_output[:, :4, :]      # Box coordinates
-            torch_class_preds = torch_output[:, 4:19, :]   # Class predictions  
-            torch_angle_preds = torch_output[:, 19:20, :]  # Angle predictions
-            
-            ttnn_box_coords = ttnn_output_torch[:, :4, :]      # Box coordinates
-            ttnn_class_preds = ttnn_output_torch[:, 4:19, :]   # Class predictions
-            ttnn_angle_preds = ttnn_output_torch[:, 19:20, :]  # Angle predictions
-            
-            print(f"🔍 Debug - Component comparison:")
-            print(f"   Box coords - PyTorch: [{torch_box_coords.min():.6f}, {torch_box_coords.max():.6f}]")
-            print(f"   Box coords - TTNN:    [{ttnn_box_coords.min():.6f}, {ttnn_box_coords.max():.6f}]")
-            print(f"   Class preds - PyTorch: [{torch_class_preds.min():.6f}, {torch_class_preds.max():.6f}]")
-            print(f"   Class preds - TTNN:    [{ttnn_class_preds.min():.6f}, {ttnn_class_preds.max():.6f}]")
-            print(f"   Angle preds - PyTorch: [{torch_angle_preds.min():.6f}, {torch_angle_preds.max():.6f}]")
-            print(f"   Angle preds - TTNN:    [{ttnn_angle_preds.min():.6f}, {ttnn_angle_preds.max():.6f}]")
-            
-            # Debug: Check max confidence values specifically
-            torch_max_conf_per_detection = torch_class_preds.max(dim=1)[0]  # [1, 8400]
-            ttnn_max_conf_per_detection = ttnn_class_preds.max(dim=1)[0]    # [1, 8400]
-            
-            print(f"🔍 Debug - Confidence analysis:")
-            print(f"   PyTorch max conf: {torch_max_conf_per_detection.max():.6f}, count > 0.02: {(torch_max_conf_per_detection > 0.02).sum()}")
-            print(f"   TTNN max conf:    {ttnn_max_conf_per_detection.max():.6f}, count > 0.02: {(ttnn_max_conf_per_detection > 0.02).sum()}")
-            print(f"   PyTorch conf > 0.1: {(torch_max_conf_per_detection > 0.1).sum()}")
-            print(f"   TTNN conf > 0.1:    {(ttnn_max_conf_per_detection > 0.1).sum()}")
-            
-            # Debug: Show first few high confidence detections for comparison
-            torch_high_conf_mask = torch_max_conf_per_detection[0] > 0.02  # Remove batch dim
-            ttnn_high_conf_mask = ttnn_max_conf_per_detection[0] > 0.02    # Remove batch dim
-            
-            print(f"🔍 Debug - High confidence detection indices:")
-            torch_high_indices = torch.where(torch_high_conf_mask)[0][:10]  # First 10
-            ttnn_high_indices = torch.where(ttnn_high_conf_mask)[0][:10]    # First 10
-            print(f"   PyTorch high conf indices (first 10): {torch_high_indices.tolist()}")
-            print(f"   TTNN high conf indices (first 10):    {ttnn_high_indices.tolist()}")
-            
-            if len(torch_high_indices) > 0:
-                idx = torch_high_indices[0].item()
-                print(f"🔍 Debug - Detection #{idx} comparison:")
-                print(f"   PyTorch conf: {torch_max_conf_per_detection[0, idx]:.6f}")
-                print(f"   TTNN conf:    {ttnn_max_conf_per_detection[0, idx]:.6f}")
-                print(f"   PyTorch class probs: {torch_class_preds[0, :, idx][:5].tolist()}")  # First 5 classes
-                print(f"   TTNN class probs:    {ttnn_class_preds[0, :, idx][:5].tolist()}")   # First 5 classes
+        # Check if PyTorch has any pre-sigmoid raw values that are also negative
+        print(f"🔍 RAW OUTPUT COMPARISON:")
+        print(f"   PyTorch class preds: [{torch_output[:, 4:19, :].min():.6f}, {torch_output[:, 4:19, :].max():.6f}]")
+        print(f"   TTNN class preds:    [{ttnn_output_torch[:, 4:19, :].min():.6f}, {ttnn_output_torch[:, 4:19, :].max():.6f}]")
+        
+        # Check if PyTorch raw output contains any negative values (before sigmoid)
+        pytorch_class_raw = torch_output[:, 4:19, :]
+        ttnn_class_raw = ttnn_output_torch[:, 4:19, :]
+        
+        print(f"🔍 NEGATIVE VALUES CHECK:")
+        print(f"   PyTorch negative values: {(pytorch_class_raw < 0).sum().item()}/{pytorch_class_raw.numel()}")
+        print(f"   TTNN negative values:    {(ttnn_class_raw < 0).sum().item()}/{ttnn_class_raw.numel()}")
+        
+        if (pytorch_class_raw < 0).sum() > 0:
+            print(f"   PyTorch most negative: {pytorch_class_raw.min():.6f}")
+        if (ttnn_class_raw < 0).sum() > 0:
+            print(f"   TTNN most negative:    {ttnn_class_raw.min():.6f}")
             
             # Calculate PCC (Pearson Correlation Coefficient) for comparison
             # Flatten tensors for correlation calculation
