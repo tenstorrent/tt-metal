@@ -25,9 +25,9 @@ from models.experimental.oft.tests.common import (
     W_PADDED,
     Y_OFFSET,
     load_checkpoint,
+    visualize_tensor_distributions,
 )
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters, create_decoder_model_parameters
-from models.experimental.oft.tt.utils import visualize_tensor_distributions
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_encoder import TTObjectEncoder
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
