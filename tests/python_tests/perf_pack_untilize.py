@@ -3,7 +3,6 @@
 
 import pytest
 
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.param_config import (
     input_output_formats,
@@ -12,7 +11,6 @@ from helpers.param_config import (
 from helpers.perf import PerfRunType, perf_benchmark, update_report
 
 
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     test_name="pack_untilize_perf",
