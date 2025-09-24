@@ -353,7 +353,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         buffer_address += field_size;
     }
 
-    this->edm_local_tensix_sync_address = buffer_address + field_size;
+    this->edm_local_tensix_sync_address = buffer_address;
     buffer_address += field_size;
 
     // Channel Allocations
