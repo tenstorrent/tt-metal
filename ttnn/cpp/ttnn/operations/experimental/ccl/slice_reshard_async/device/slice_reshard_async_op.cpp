@@ -15,6 +15,22 @@ namespace ttnn {
 void SliceReshardAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(this->dim == 0, "Error, neighbor pad currently only supports sharding dim 0, provided {}", this->dim);
+    TT_FATAL(
+        input_tensors[0].layout() == Layout::ROW_MAJOR,
+        "Unsupported input tensor layout {}.",
+        input_tensors[0].layout());
+
+    TT_FATAL(
+        !(this->output_dim_shape % this->ring_size),
+        "Output dim shape must be divisible by num devices on cluster axis");
+    TT_FATAL(
+        (input_tensors[0].padded_shape()[this->dim] * this->ring_size) - this->output_dim_offset >=
+            this->output_dim_shape,
+        "Output dim shape is smaller than the input data + output_dim_offset, data will be lost.");
+
+    TT_FATAL(this->cluster_axis == 0 || this->cluster_axis == 1, "Unsupported cluster axis {}.", this->cluster_axis);
+
+    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
 }
 
 std::vector<ttnn::TensorSpec> SliceReshardAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

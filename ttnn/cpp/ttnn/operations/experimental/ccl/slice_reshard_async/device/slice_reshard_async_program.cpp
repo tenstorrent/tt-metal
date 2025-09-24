@@ -167,7 +167,6 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
 
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),                            // input_tensor_address
-                output_tensor.buffer()->address(),                           // output_tensor_address
                 stick_start_id,                                              // stick_start_id
                 num_sticks_to_read,                                          // num_sticks_to_read
                 input_outer_dim_size,                                        // input_outer_dim_size
@@ -272,7 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                     auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                     worker_reader_runtime_args[0] = input.buffer()->address();
                     worker_reader_runtime_args[1] = output.buffer()->address();
-                    worker_reader_runtime_args[10] = out_ready_semaphore.address();
+                    worker_reader_runtime_args[9] = out_ready_semaphore.address();
                     // writer
                     auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                     worker_writer_runtime_args[0] = input.buffer()->address();
