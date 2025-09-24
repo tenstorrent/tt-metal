@@ -1,30 +1,23 @@
-#include <psd/cluster_helpers.hpp>
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
-tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
-    // Pick a chip and query its architecture
-    auto cluster_descriptor = cluster->get_cluster_description();
-    const std::unordered_set<chip_id_t>& chips = cluster_descriptor->get_all_chips();
-    TT_FATAL(chips.size() > 0, "Unable to determine architecture because UMD driver detected no chips.");
-    tt::ARCH arch = cluster_descriptor->get_arch(*chips.begin());
-    TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
+#include "tunnels_from_mmio_device.hpp"
 
-    // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
-    for (auto other_chip_id : chips) {
-        tt::ARCH other_arch = cluster_descriptor->get_arch(other_chip_id);
-        TT_FATAL(
-            other_arch == arch,
-            "Chips with differing architectures detected (chip {} has architecture {} but chip {} is {}). This is "
-            "unsupported.",
-            other_chip_id,
-            tt::arch_to_str(other_arch),
-            *chips.begin(),
-            tt::arch_to_str(arch));
-    }
+#include <tt-metalium/assert.hpp>
 
-    return arch;
+namespace tt::llrt {
+
+const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t mmio_device_id) {
+    const auto& cluster_descriptor = cluster->get_cluster_description();
+    TT_ASSERT(
+        cluster_descriptor->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
+        "Expected device {} to be an MMIO device!",
+        mmio_device_id);
+    return cluster_descriptor->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
 }
 
-// TODO: replace tt::llrt::Cluster::set_tunnels_from_mmio_device() with this?
 #define MAX_TUNNEL_DEPTH 4
 std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_mmio_device(
     const std::unique_ptr<tt::umd::Cluster>& cluster) {
@@ -121,3 +114,5 @@ std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_m
 
     return tunnels_from_mmio_device;
 }
+
+}  // namespace tt::llrt

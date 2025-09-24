@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
-// SPDX-License-Identifier: Apache-2.0
+//  SPDX-License-Identifier: Apache-2.0
 
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
+
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -16,20 +18,20 @@ namespace tt::tt_metal {
 namespace {
 
 // Helper function to convert BoardType enum to protobuf value
-uint32_t board_type_to_proto(BoardType board_type) { return static_cast<uint32_t>(board_type); }
+static uint32_t board_type_to_proto(BoardType board_type) { return static_cast<uint32_t>(board_type); }
 
 // Helper function to convert protobuf value to BoardType enum
-BoardType proto_to_board_type(uint32_t proto_value) { return static_cast<BoardType>(proto_value); }
+static BoardType proto_to_board_type(uint32_t proto_value) { return static_cast<BoardType>(proto_value); }
 
 // Convert EthConnection to protobuf
-void eth_connection_to_proto(const EthConnection& eth_conn, tt::fabric::proto::EthConnection* proto_conn) {
+static void eth_connection_to_proto(const EthConnection& eth_conn, tt::fabric::proto::EthConnection* proto_conn) {
     proto_conn->set_src_chan(eth_conn.src_chan);
     proto_conn->set_dst_chan(eth_conn.dst_chan);
     proto_conn->set_is_local(eth_conn.is_local);
 }
 
 // Convert protobuf to EthConnection
-EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnection& proto_conn) {
+static EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnection& proto_conn) {
     EthConnection eth_conn;
     eth_conn.src_chan = proto_conn.src_chan();
     eth_conn.dst_chan = proto_conn.dst_chan();
@@ -38,7 +40,7 @@ EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnection& pr
 }
 
 // Convert ExitNodeConnection to protobuf
-void exit_node_connection_to_proto(
+static void exit_node_connection_to_proto(
     const ExitNodeConnection& exit_conn, tt::fabric::proto::ExitNodeConnection* proto_conn) {
     proto_conn->set_src_exit_node(*exit_conn.src_exit_node);
     proto_conn->set_dst_exit_node(*exit_conn.dst_exit_node);
@@ -46,7 +48,7 @@ void exit_node_connection_to_proto(
 }
 
 // Convert protobuf to ExitNodeConnection
-ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNodeConnection& proto_conn) {
+static ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNodeConnection& proto_conn) {
     ExitNodeConnection exit_conn;
     exit_conn.src_exit_node = AsicID{proto_conn.src_exit_node()};
     exit_conn.dst_exit_node = AsicID{proto_conn.dst_exit_node()};
@@ -55,7 +57,8 @@ ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNo
 }
 
 // Convert AsicTopology to protobuf
-void asic_topology_to_proto(const AsicTopology& topology, tt::fabric::proto::HostAsicConnectivity* host_asic_conn) {
+static void asic_topology_to_proto(
+    const AsicTopology& topology, tt::fabric::proto::HostAsicConnectivity* host_asic_conn) {
     for (const auto& [asic_id, connections] : topology) {
         auto* asic_graph = host_asic_conn->add_asic_topologies();
         asic_graph->set_asic_id(*asic_id);
@@ -73,7 +76,7 @@ void asic_topology_to_proto(const AsicTopology& topology, tt::fabric::proto::Hos
 }
 
 // Convert protobuf to AsicTopology
-AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConnectivity& host_asic_conn) {
+static AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConnectivity& host_asic_conn) {
     AsicTopology topology;
 
     for (const auto& asic_graph : host_asic_conn.asic_topologies()) {
@@ -96,7 +99,7 @@ AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConnectivit
 }
 
 // Convert HostTopology to protobuf
-void host_topology_to_proto(const HostTopology& topology, tt::fabric::proto::PhysicalConnectivityGraph* graph) {
+static void host_topology_to_proto(const HostTopology& topology, tt::fabric::proto::PhysicalConnectivityGraph* graph) {
     for (const auto& [src_host, connections] : topology) {
         auto* host_conn = graph->add_host_connectivity_graph();
         host_conn->set_src_host_name(src_host);
@@ -113,7 +116,7 @@ void host_topology_to_proto(const HostTopology& topology, tt::fabric::proto::Phy
 }
 
 // Convert protobuf to HostTopology
-HostTopology proto_to_host_topology(const tt::fabric::proto::PhysicalConnectivityGraph& graph) {
+static HostTopology proto_to_host_topology(const tt::fabric::proto::PhysicalConnectivityGraph& graph) {
     HostTopology topology;
 
     for (const auto& host_conn : graph.host_connectivity_graph()) {
@@ -187,12 +190,18 @@ void physical_system_descriptor_to_proto(
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Set mock cluster flag
+    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(false);  // Don't run discovery
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
+        cluster, distributed_context, proto_desc.mock_cluster(), false);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -287,13 +296,16 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const Physica
     return result;
 }
 
-PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data) {
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    const std::vector<uint8_t>& data) {
     tt::fabric::proto::PhysicalSystemDescriptor proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return std::move(*proto_to_physical_system_descriptor(cluster, distributed_context, proto_desc));
 }
 
 }  // namespace tt::tt_metal

@@ -12,8 +12,20 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/strong_type.hpp>
+#include <tt_stl/reflection.hpp>
+
+namespace tt::umd {
+class Cluster;
+}
+
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
+namespace tt::tt_metal::distributed::multihost {
+class DistributedContext;
+}
 
 namespace tt::tt_metal {
 
@@ -92,7 +104,7 @@ struct hash<tt::tt_metal::ExitNodeConnection> {
         uint8_t min_chan = std::min(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
         uint8_t max_chan = std::max(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
 
-        return tt::stl::hash::hash_objects_with_default_seed(
+        return ttsl::hash::hash_objects_with_default_seed(
             min_node, max_node, min_chan, max_chan, conn.eth_conn.is_local);
     }
 };
@@ -119,7 +131,16 @@ struct PhysicalConnectivityGraph {
 
 class PhysicalSystemDescriptor {
 public:
-    PhysicalSystemDescriptor(bool run_discovery = true);
+    PhysicalSystemDescriptor(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+        const tt::llrt::RunTimeOptions& rtoptions,
+        bool run_discovery = true);
+    PhysicalSystemDescriptor(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+        bool using_mock_cluster_descriptor,
+        bool run_discovery);
     void run_discovery(bool run_global_discovery = true);
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
@@ -150,6 +171,7 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
+    bool is_using_mock_cluster() const { return using_mock_cluster_desc_; }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
@@ -171,6 +193,9 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
+    const std::unique_ptr<tt::umd::Cluster>& cluster_;
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    const bool using_mock_cluster_desc_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;

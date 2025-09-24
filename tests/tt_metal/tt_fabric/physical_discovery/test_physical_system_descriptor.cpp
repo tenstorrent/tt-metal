@@ -27,7 +27,8 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
+    auto physical_system_desc =
+        tt::tt_metal::PhysicalSystemDescriptor(cluster.get_driver(), distributed_context, false);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
     auto hostnames = physical_system_desc.get_all_hostnames();

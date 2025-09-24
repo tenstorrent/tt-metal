@@ -287,13 +287,7 @@ public:
     }
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
-    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
-        TT_ASSERT(
-            this->cluster_desc_->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
-            "Expected device {} to be an MMIO device!",
-            mmio_device_id);
-        return this->cluster_desc_->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
-    }
+    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const;
 
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
