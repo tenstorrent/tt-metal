@@ -116,7 +116,7 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
  *
  * | Argument    | Description    | Type                | Valid Range | Required |
  * |-------------|----------------|---------------------|-------------|----------|
- * | data_format | Format of data | tt::DataFormat enum |             | Yes      |
+ * | format      | Format of data | tt::DataFormat enum |             | Yes      |
  */
 constexpr static uint32_t tile_size(const DataFormat& format) {
     switch (format) {
