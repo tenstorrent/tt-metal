@@ -5,6 +5,7 @@
 import math
 
 import ttnn
+import torch
 from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors, sharded_concat, sharded_concat_2
 from models.demos.yolov11m.tt.ttnn_yolov11_c2psa import TtnnC2PSA
 from models.demos.yolov11m.tt.ttnn_yolov11_c3k2 import TtnnC3k2
@@ -108,17 +109,64 @@ class TtnnYoloV11:
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([x, x4], to_interleaved=False)
         ttnn.deallocate(x4)
+        # Debug: Before c3k2_6 (which produces x16 → y1)
+        x_pre_c3k2_6 = ttnn.to_torch(x)
+        x_pre_flat = x_pre_c3k2_6.flatten()
+        x_pre_unique = torch.unique(x_pre_flat)
+        print(f"🔍 [BACKBONE DEBUG] BEFORE c3k2_6: {len(x_pre_unique)} unique values out of {len(x_pre_flat)} total")
+        print(f"    Range: [{x_pre_flat.min()}, {x_pre_flat.max()}], Mean: {x_pre_flat.mean()}")
+        
         x = self.c3k2_6(self.device, x)
+        
+        # Debug: After c3k2_6 (x16 becomes y1)
+        x_post_c3k2_6 = ttnn.to_torch(x)
+        x_post_flat = x_post_c3k2_6.flatten()
+        x_post_unique = torch.unique(x_post_flat)
+        print(f"🔍 [BACKBONE DEBUG] AFTER c3k2_6 (x16→y1): {len(x_post_unique)} unique values out of {len(x_post_flat)} total")
+        print(f"    Range: [{x_post_flat.min()}, {x_post_flat.max()}], Mean: {x_post_flat.mean()}")
+        
         x16 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv7(self.device, x)
         x = sharded_concat_2(x, x13)
         ttnn.deallocate(x13)
+        
+        # Debug: Before c3k2_7 (which produces x19 → y2)
+        x_pre_c3k2_7 = ttnn.to_torch(x)
+        x_pre_flat_7 = x_pre_c3k2_7.flatten()
+        x_pre_unique_7 = torch.unique(x_pre_flat_7)
+        print(f"🔍 [BACKBONE DEBUG] BEFORE c3k2_7: {len(x_pre_unique_7)} unique values out of {len(x_pre_flat_7)} total")
+        print(f"    Range: [{x_pre_flat_7.min()}, {x_pre_flat_7.max()}], Mean: {x_pre_flat_7.mean()}")
+        
         x = self.c3k2_7(self.device, x)
+        
+        # Debug: After c3k2_7 (x19 becomes y2)
+        x_post_c3k2_7 = ttnn.to_torch(x)
+        x_post_flat_7 = x_post_c3k2_7.flatten()
+        x_post_unique_7 = torch.unique(x_post_flat_7)
+        print(f"🔍 [BACKBONE DEBUG] AFTER c3k2_7 (x19→y2): {len(x_post_unique_7)} unique values out of {len(x_post_flat_7)} total")
+        print(f"    Range: [{x_post_flat_7.min()}, {x_post_flat_7.max()}], Mean: {x_post_flat_7.mean()}")
+        
         x19 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv8(self.device, x)
         x = sharded_concat_2(x, x10)
         ttnn.deallocate(x10)
+        
+        # Debug: Before c3k2_8 (which produces x22 → y3)
+        x_pre_c3k2_8 = ttnn.to_torch(x)
+        x_pre_flat_8 = x_pre_c3k2_8.flatten()
+        x_pre_unique_8 = torch.unique(x_pre_flat_8)
+        print(f"🔍 [BACKBONE DEBUG] BEFORE c3k2_8: {len(x_pre_unique_8)} unique values out of {len(x_pre_flat_8)} total")
+        print(f"    Range: [{x_pre_flat_8.min()}, {x_pre_flat_8.max()}], Mean: {x_pre_flat_8.mean()}")
+        
         x = self.c3k2_8(self.device, x)
+        
+        # Debug: After c3k2_8 (x22 becomes y3)
+        x_post_c3k2_8 = ttnn.to_torch(x)
+        x_post_flat_8 = x_post_c3k2_8.flatten()
+        x_post_unique_8 = torch.unique(x_post_flat_8)
+        print(f"🔍 [BACKBONE DEBUG] AFTER c3k2_8 (x22→y3): {len(x_post_unique_8)} unique values out of {len(x_post_flat_8)} total")
+        print(f"    Range: [{x_post_flat_8.min()}, {x_post_flat_8.max()}], Mean: {x_post_flat_8.mean()}")
+        
         x22 = x
         x = self.obb(self.device, x16, x19, x22)
         deallocate_tensors(x16, x19, x22)
