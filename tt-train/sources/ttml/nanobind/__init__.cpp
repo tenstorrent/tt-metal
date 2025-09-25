@@ -14,7 +14,6 @@
 #include "nb_autograd.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_models.hpp"
-#include "nb_modules.hpp"
 #include "nb_ops.hpp"
 #include "nb_optimizers.hpp"
 #include "ttnn/api/ttnn/tensor/layout/layout.hpp"

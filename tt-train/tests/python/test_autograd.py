@@ -71,7 +71,12 @@ def do_test_numpy_autograd_conversion(
         assert (autograd_tensor.to_numpy() == numpy_tensor).all()
         assert (autograd_tensor.to_numpy(new_type=autograd_type) == numpy_tensor).all()
         for new_type in supported_autograd_types_except(autograd_type):
-            assert (autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor).all()
+            try:
+                assert (autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor).all()
+            except TypeError as e:
+                type_error = handle_error(e, expect_type_exception, type_error)
+            except RuntimeError as e:
+                runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
     # sanity check: the occurence of an exception implies we were expecting it
     assert type_error**expect_type_exception
     assert runtime_error**expect_runtime_exception
