@@ -242,18 +242,11 @@ class TtnnOBB:
             count = mask.sum()
             print(f"    [{low}, {high}): {count} values")
         
-        # Aggressive scaling for bfloat8_b quantization limits
-        # Current TTNN range: [-17.75, -12.625] with ~27 unique values
-        # Target: Map to sigmoid effective range [-4, +4]
-        
-        # Step 1: Shift center to ~0 (add +15 to get range [-2.75, +2.375])
-        bias_correction = 12.0  
+        # Conservative bias correction with improved math precision
+        # Now that we're using HiFi math + float32 accumulation, 
+        # we should have much better spatial features
+        bias_correction = 8.0  # Modest correction
         yb = ttnn.add(yb, bias_correction)
-        
-        # Step 2: Scale to spread the quantized values across sigmoid range
-        # With 27 unique values, we want to spread them from -4 to +4 (8 unit range)
-        scale_factor = 2.0  # This should spread the range better
-        yb = ttnn.multiply(yb, scale_factor)
 
         # Debug: Check values after bias correction
         yb_debug_after = ttnn.to_torch(yb)
