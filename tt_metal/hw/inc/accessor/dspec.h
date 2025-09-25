@@ -15,6 +15,9 @@
 // Forward declared from dataflow_api.h
 static uint32_t get_common_arg_addr(int arg_idx);
 #else
+// In non-kernel/non-firmware builds, get_common_arg_addr is a stub that always returns 0U.
+// This is safe because the function should not be called in these builds; if it is, 0U is an invalid address
+// and will likely cause a detectable error, making misuse obvious during development.
 [[maybe_unused]] static inline uint32_t get_common_arg_addr(int /*arg_idx*/) { return 0U; }
 #endif
 
