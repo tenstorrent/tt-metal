@@ -166,7 +166,7 @@ def test_transformer_motif(
     ]
     prompt = _combine_prompt_embeddings(*prompt_embeddings)
 
-    spatial = _pack_latents(latents, patch_size=patch_size)
+    spatial = MotifTransformer.pack_latents(latents.permute(0, 2, 3, 1), patch_size=patch_size)
 
     tt_spatial = bf16_tensor(spatial, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
     tt_prompt = bf16_tensor(prompt, device=submesh_device)
@@ -188,12 +188,12 @@ def test_transformer_motif(
     )
 
     tt_output_torch = to_torch(tt_output, device=submesh_device, mesh_mapping={sp_axis: 1})
-    tt_output_unpacked = _unpack_latents(
+    tt_output_unpacked = MotifTransformer.unpack_latents(
         tt_output_torch,
         patch_size=patch_size,
         height=height // vae_scale_factor,
         width=width // vae_scale_factor,
-    )
+    ).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_output_unpacked, pcc=0.9985, relative_rmse=5.7)
 
 
@@ -201,22 +201,3 @@ def _combine_prompt_embeddings(t5: torch.Tensor, clip_a: torch.Tensor, clip_b: t
     clip_emb = torch.cat([clip_a, clip_b], dim=-1)
     clip_emb = torch.nn.functional.pad(clip_emb, (0, t5.shape[-1] - clip_emb.shape[-1]))
     return torch.cat([clip_emb, t5], dim=-2)
-
-
-def _pack_latents(t: torch.Tensor, *, patch_size: int) -> torch.Tensor:
-    # N, C, H, W -> N, (H / P) * (W / P), P * P * C
-    batch_size, channels, height, width = t.shape
-
-    t = t.reshape(batch_size, channels, height // patch_size, patch_size, width // patch_size, patch_size)
-    t = t.permute(0, 2, 4, 3, 5, 1)
-    return t.reshape(batch_size, (height // patch_size) * (width // patch_size), patch_size * patch_size * channels)
-
-
-def _unpack_latents(t: torch.Tensor, *, height: int, width: int, patch_size: int) -> torch.Tensor:
-    # N, (H / P) * (W / P), P * P * C -> N, C, H, W
-    batch_size, sequence_len, _ = t.shape
-    assert sequence_len == (height // patch_size) * (width // patch_size)
-
-    t = t.reshape([batch_size, height // patch_size, width // patch_size, patch_size, patch_size, -1])
-    t = t.permute(0, 5, 1, 3, 2, 4)
-    return t.reshape([batch_size, -1, height, width])

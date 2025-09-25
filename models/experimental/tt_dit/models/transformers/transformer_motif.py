@@ -286,6 +286,23 @@ class MotifTransformer(Module):
         rename_substate(state, "norm_out.linear", "time_embed_out")  # chunks=2 if sharded
         rename_substate(state, "norm_out.norm", "norm_out")
 
+    @staticmethod
+    def pack_latents(t: torch.Tensor, *, patch_size: int) -> torch.Tensor:
+        # N, H, W, C -> N, (H / P) * (W / P), P * P * C
+        batch_size, height, width, channels = t.shape
+
+        t = t.reshape([batch_size, height // patch_size, patch_size, width // patch_size, patch_size, channels])
+        return t.transpose(2, 3).flatten(3, 5).flatten(1, 2)
+
+    @staticmethod
+    def unpack_latents(t: torch.Tensor, *, height: int, width: int, patch_size: int) -> torch.Tensor:
+        # N, (H / P) * (W / P), P * P * C -> N, H, W, C
+        batch_size, sequence_len, _ = t.shape
+        assert sequence_len == (height // patch_size) * (width // patch_size)
+
+        t = t.reshape([batch_size, height // patch_size, width // patch_size, patch_size, patch_size, -1])
+        return t.transpose(2, 3).flatten(3, 4).flatten(1, 2)
+
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
