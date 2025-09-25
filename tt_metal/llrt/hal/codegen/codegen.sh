@@ -53,8 +53,11 @@ if ! $PYTHON "${SCRIPT_PY}" \
     exit 1
 fi
 
-# some environment does not have a compatible clang-format, in which case we should
-# ignore the failure
-if clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}"; then
-    :
+if which clang-format > /dev/null; then
+    if ! clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}" 2>/dev/null; then
+        # Try with Google style as a minimal formatting if default fails
+        if ! clang-format -i --style=Google "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}" 2>/dev/null; then
+            echo "Warning: clang-format failed (might be a version compatibility issue)"
+        fi
+    fi
 fi
