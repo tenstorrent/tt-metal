@@ -4,10 +4,14 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include <cxxabi.h>
 #include <execinfo.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdexcept>
+#include <string>
 
 #include <iostream>
 #include <sstream>
@@ -30,6 +34,7 @@ namespace detail {
 // NOLINTBEGIN(cppcoreguidelines-no-malloc)
 inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     std::vector<std::string> bt;
+    bt.reserve(size - skip);
     void** array = (void**)malloc((sizeof(void*) * size));
     size_t s = ::backtrace(array, size);
     char** strings = backtrace_symbols(array, s);
@@ -56,8 +61,8 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
 inline std::string backtrace_to_string(int size = 64, int skip = 2, const std::string& prefix = "") {
     std::vector<std::string> bt = backtrace(size, skip);
     std::stringstream ss;
-    for (size_t i = 0; i < bt.size(); ++i) {
-        ss << prefix << bt[i] << std::endl;
+    for (const auto& line : bt) {
+        ss << prefix << line << '\n';
     }
     return ss.str();
 }
@@ -81,8 +86,8 @@ static std::string demangle(const char* str) {
 // NOLINTEND(cppcoreguidelines-no-malloc)
 
 template <typename... Args>
-[[noreturn]] inline void tt_throw_impl(
-    char const* file, int line, char const* assert_type, char const* condition_str, Args const&... args) {
+[[noreturn]] void tt_throw_impl(
+    const char* file, int line, const char* assert_type, const char* condition_str, const Args&... args) {
     if (std::getenv("TT_ASSERT_ABORT")) {
         if constexpr (sizeof...(args) > 0) {
             log_critical(tt::LogAlways, args...);
@@ -108,13 +113,13 @@ template <typename... Args>
 }
 
 template <typename... Args>
-[[noreturn]] inline void tt_throw(
-    char const* file,
+[[noreturn]] void tt_throw(
+    const char* file,
     int line,
-    char const* assert_type,
-    char const* condition_str,
-    fmt::format_string<Args const&...> fmt,
-    Args const&... args) {
+    const char* assert_type,
+    const char* condition_str,
+    fmt::format_string<const Args&...> fmt,
+    const Args&... args) {
     tt_throw_impl(file, line, assert_type, condition_str, fmt, args...);
 }
 
