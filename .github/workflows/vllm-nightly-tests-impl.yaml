@@ -139,6 +139,7 @@ jobs:
         PYTHONPATH: /work:/work/vllm
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
+        HF_HUB_OFFLINE: 1
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
@@ -268,6 +269,9 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
           pip list | grep datasets
+
+          unset HF_HUB_OFFLINE
+          echo "HF_HUB_OFFLINE: $HF_HUB_OFFLINE"
 
           python3 vllm/benchmarks/benchmark_serving.py \
             --backend openai-chat \
