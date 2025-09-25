@@ -10,6 +10,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "debug/dprint.h"
 #include "debug/dprint_tensix.h"
+#include "debug/dprint_pages.h"
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -40,18 +42,20 @@ void MAIN {
         // }
         // cb_pop_front(cb_in2, per_core_block_size);
 
+        tile_regs_acquire();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_acquire();
             sub_bcast_row_tile(cb_inp0, cb_inp1, 0, 0, i /*dst_index*/);
-            dprint_tensix_dest_reg<true>(0);
-            tile_regs_commit();
+            // dprint_tensix_dest_reg<true>(0);
         }
+        tile_regs_commit();
 
+        tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_wait();
             pack_tile(i, cb_out0);
-            tile_regs_release();
         }
+        tile_regs_release();
+
+        PACK((tt::compute::common::print_full_tile(cb_out0, 0)));
 
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
