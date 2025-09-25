@@ -14,7 +14,7 @@
 #include <variant>
 #include <atomic>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
