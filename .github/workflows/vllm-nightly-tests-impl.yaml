@@ -81,18 +81,18 @@ jobs:
           #   override-tt-config: "{\"data_parallel\": 8}",
           #   owner_id: U08GELBB1AP, # Ambrose Ling
           # },
-          # {
-          #   name: "[WH-GLX] Llama-3.3-70B-Instruct",
-          #   model: "meta-llama/Llama-3.3-70B-Instruct",
-          #   server-timeout: 40,
-          #   benchmark-timeout: 10,
-          #   runner-label: topology-6u,
-          #   mesh-device: TG,
-          #   tt-llama-text-ver: tt_transformers,
-          #   # override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
-          #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
-          #   co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          # },
+          {
+            name: "[WH-GLX] Llama-3.3-70B-Instruct",
+            model: "meta-llama/Llama-3.3-70B-Instruct",
+            server-timeout: 40,
+            benchmark-timeout: 10,
+            runner-label: topology-6u,
+            mesh-device: TG,
+            tt-llama-text-ver: llama3_70b_galaxy,
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
           {
             name: "[WH-GLX] Llama-8B DP=16",
             model: "meta-llama/Llama-3.1-8B-Instruct",
