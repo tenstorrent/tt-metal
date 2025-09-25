@@ -265,6 +265,8 @@ jobs:
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
+          pip list | grep datasets
+
           python3 vllm/benchmarks/benchmark_serving.py \
             --backend openai-chat \
             --endpoint /v1/chat/completions \
