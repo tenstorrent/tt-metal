@@ -21,4 +21,7 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const Physica
 // Deserialize from protobuf binary format to PhysicalSystemDescriptor (byte vector)
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data);
 
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
+    const std::string& text_proto_file);
+
 }  // namespace tt::tt_metal
