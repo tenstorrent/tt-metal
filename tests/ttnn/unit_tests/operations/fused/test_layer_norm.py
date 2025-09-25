@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, comp_pcc
 
 
 def skip_welford_blackhole(use_welford):
@@ -312,51 +312,40 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
 
-@pytest.mark.parametrize("h", [128])
-@pytest.mark.parametrize("w", [128])
-def test_layer_norm_sharded(device, h, w):
-    """
-    Test sharded layernorm with:
-    - Input tensor: 100x100 elements
-    - Shard grid: 2x2 (2 rows, 2 columns of shards)
-    - Block dimensions: block_ht=2, block_wt=1
-    - Core grid: 8x8 (8 rows, 8 columns of cores)
-    - Expected: Single-stage reduction (not two-stage)
-    """
-
+@pytest.mark.parametrize("use_welford", [True])
+def test_layer_norm_sharded(device, use_welford):
     # Test parameters
-    tensor_height = h
-    tensor_width = w
-    shard_grid_rows = 2
-    shard_grid_cols = 2
-    block_ht = 2
-    block_wt = 2
+    tensor_height = 1024
+    tensor_width = 1024
+    shard_grid_rows = 4
+    shard_grid_cols = 4
+    block_ht = 8
+    block_wt = 8
+    subblock_w = 4
 
     # Run torch layer norm
     torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=torch.bfloat16)
-    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[tensor_width])
 
     # Calculate expected values
     tile_height = 32
     tile_width = 32
 
     # Tensor dimensions in tiles (padded)
-    Mt = (tensor_height + tile_height - 1) // tile_height  # Should be 4
-    Kt = (tensor_width + tile_width - 1) // tile_width  # Should be 4
+    Mt = (tensor_height + tile_height - 1) // tile_height
+    Kt = (tensor_width + tile_width - 1) // tile_width
 
     # Block dimensions in elements
-    block_h = block_ht * tile_height  # Should be 64
-    block_w = block_wt * tile_width  # Should be 32
+    block_h = block_ht * tile_height
+    block_w = block_wt * tile_width
 
     # Check mcast_1d condition
-    mcast_1d = tensor_height == block_h  # Should be False (100 != 64)
+    mcast_1d = tensor_height == block_h
 
     # All-to-all worker calculations
-    num_blocks = shard_grid_cols  # For row-wise reduction
-    num_rows_per_all_to_all_worker = (block_ht + num_blocks - 1) // num_blocks  # Should be 1
-    num_cores_all_to_all = (
-        block_ht + num_rows_per_all_to_all_worker - 1
-    ) // num_rows_per_all_to_all_worker  # Should be 2
+    num_blocks = shard_grid_cols
+    num_rows_per_all_to_all_worker = (block_ht + num_blocks - 1) // num_blocks
+    num_cores_all_to_all = (block_ht + num_rows_per_all_to_all_worker - 1) // num_rows_per_all_to_all_worker
 
     print(f"Tensor dimensions: {tensor_height}x{tensor_width}")
     print(f"Shard grid: {shard_grid_rows}x{shard_grid_cols}")
@@ -364,9 +353,8 @@ def test_layer_norm_sharded(device, h, w):
     print(f"Mt={Mt}, Kt={Kt}")
     print(f"mcast_1d={mcast_1d}")
     print(f"num_cores_all_to_all={num_cores_all_to_all}")
-    print(f"Expected: Single-stage reduction")
 
-    # Create shard spec for 2x2 shard grid
+    # Create shard spec
     shard_height = tensor_height // shard_grid_rows
     shard_width = tensor_width // shard_grid_cols
 
@@ -407,11 +395,11 @@ def test_layer_norm_sharded(device, h, w):
         input_ttnn,
         memory_config=output_memory_config,
         program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),  # 8x8 core grid
-            subblock_w=1,
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            subblock_w=subblock_w,
             block_h=block_ht,
             block_w=block_wt,
-            use_welford=False,
+            use_welford=use_welford,
             inplace=False,
         ),
     )
@@ -419,4 +407,7 @@ def test_layer_norm_sharded(device, h, w):
     output_ttnn = ttnn.from_device(output_ttnn)
     output_ttnn = ttnn.to_torch(output_ttnn)
 
+    print(f"Torch output tensor: {torch_output_tensor}")
+    print(f"TTNN output tensor: {output_ttnn}")
+    print(f"PCC: {comp_pcc(torch_output_tensor, output_ttnn)[1]}")
     assert_with_pcc(torch_output_tensor, output_ttnn, 0.9998)
