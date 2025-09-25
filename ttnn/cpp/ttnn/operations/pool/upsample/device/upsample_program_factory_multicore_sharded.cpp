@@ -11,7 +11,12 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+<<<<<<< HEAD
 #include <tt-metalium/math.hpp>
+=======
+#include <tt-metalium/util.hpp>
+#include <tt_stl/math.hpp>
+>>>>>>> 23a8e7b541 (move math.hpp from api to ttsl)
 
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"

@@ -7,7 +7,7 @@
 #include <optional>
 #include <utility>
 #include "conv2d_op.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer.hpp>

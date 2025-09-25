@@ -5,7 +5,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"

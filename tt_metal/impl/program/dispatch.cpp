@@ -40,7 +40,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "mesh_device.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"

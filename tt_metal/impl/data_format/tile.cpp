@@ -9,7 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {

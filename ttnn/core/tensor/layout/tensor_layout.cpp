@@ -6,7 +6,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 namespace tt::tt_metal {
 

@@ -41,7 +41,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
 

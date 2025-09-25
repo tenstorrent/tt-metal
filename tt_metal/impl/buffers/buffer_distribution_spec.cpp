@@ -5,7 +5,7 @@
 #include "buffer_distribution_spec.hpp"
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 #include <algorithm>
 #include <utility>

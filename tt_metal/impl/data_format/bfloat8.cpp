@@ -15,7 +15,7 @@
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
