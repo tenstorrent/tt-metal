@@ -804,10 +804,10 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::RELU);
     } else if (name == "relu6") {
         return UnaryWithParam(UnaryOpType::RELU6);
-    } else if (name == "gelu_non_approx") {
-        return UnaryWithParam(UnaryOpType::GELU, {static_cast<float>(false)});
     } else if (name == "gelu") {
-        return UnaryWithParam(UnaryOpType::GELU, {static_cast<float>(true)});
+        return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(false));
+    } else if (name == "gelu_approx") {
+        return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
     } else if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
     } else if (name == "sigmoid") {
@@ -864,9 +864,9 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
         case UnaryOpType::RELU6: return "relu6";
         case UnaryOpType::GELU:
             if (unary_op.params.size() >= 1 && unary_op.params[0] == static_cast<float>(true)) {
-                return "gelu";
+                return "gelu_approx";
             }
-            return "gelu_non_approx";
+            return "gelu";
         case UnaryOpType::SILU: return "silu";
         case UnaryOpType::SIGMOID:
             if (unary_op.params.size() >= 2 && unary_op.params[1] == static_cast<float>(true)) {
