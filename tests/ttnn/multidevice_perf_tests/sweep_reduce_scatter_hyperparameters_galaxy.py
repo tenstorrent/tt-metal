@@ -142,19 +142,12 @@ def test_reduce_scatter_chunks_per_sync(
     num_outer_iters,
 ):
     submesh_device = mesh_device
-    mesh_mapper_config = None
     cluster_axis = 0
     if num_devices == 4:
         submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
         cluster_axis = 1
-        mesh_mapper_config = ttnn.MeshMapperConfig(
-            [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
-        )
     elif num_devices == 8:
         submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-        mesh_mapper_config = ttnn.MeshMapperConfig(
-            [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()], ttnn.MeshShape(num_devices, 1)
-        )
     elif num_devices == 2:
         if rs_topology == ttnn.Topology.Ring:
             pytest.skip("Ring topology is not supported for 2 devices")
@@ -183,5 +176,4 @@ def test_reduce_scatter_chunks_per_sync(
             num_buffers_per_channel=None,
             verify_output=False,
             use_persistent_buffers=False,
-            mesh_mapper_config=mesh_mapper_config,
         )

@@ -202,10 +202,6 @@ def test_rs_row_1s(
     if bh_2d_mesh_device.shape[0] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    mesh_mapper_config = ttnn.MeshMapperConfig(
-        [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()],
-        ttnn.MeshShape(bh_2d_mesh_device.get_num_devices(), 1),
-    )
     cluster_axis = 0
     run_reduce_scatter_impl(
         submesh_device,
@@ -224,6 +220,5 @@ def test_rs_row_1s(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
-        mesh_mapper_config=mesh_mapper_config,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
