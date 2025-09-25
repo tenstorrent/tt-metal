@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT="generated/profiler/.logs/unicast"
+OUT="${TT_METAL_HOME}/generated/test_reports/unicast"
 mkdir -p "$OUT"
 
 COMMON="--sizes 4096,32768,1048576 --iters 150 --page 4096 \
