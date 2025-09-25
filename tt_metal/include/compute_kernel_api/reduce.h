@@ -56,6 +56,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 /**
  * Specialized initialization for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
  * Provides optimized performance by using specialized unpack and math functions.
+ * Note: OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE!
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -64,10 +65,10 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-ALWI void reduce_init_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_row_max_init<BroadcastType::NONE>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE>()));
-    PACK((llk_pack_reduce_mask_config<false /*untilize*/, ReduceDim::REDUCE_ROW>()));
+ALWI void reduce_max_row_init() {
+    UNPACK((llk_unpack_AB_reduce_row_max_init()));
+    MATH((_llk_math_reduce_max_row_init_()));
+    PACK((llk_pack_reduce_max_row_mask_config()));
 }
 
 // clang-format off

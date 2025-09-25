@@ -115,33 +115,13 @@ inline void llk_unpack_AB_reduce_init(
     _llk_unpack_AB_mop_config_<BType>(transpose > 0, num_faces, narrow_tile);  // transpose of faces 0,2,1,3
 }
 
-// Specialized function for MAX row reduction
-template <BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
-inline void llk_unpack_AB_reduce_row_max_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t acc_to_dest = 0) {
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const bool narrow_tile =
-        get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
-
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
-
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+inline void llk_unpack_AB_reduce_row_max_init() {
     // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(!within_face_16x16_transpose);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
-    constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
-    config_unpacker_x_end<UNP_SEL>(face_r_dim);
+    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 
-    _llk_unpack_AB_reduce_row_max_mop_config_<BType>(
-        transpose > 0, num_faces, narrow_tile);  // Use specialized function
+    _llk_unpack_AB_reduce_row_max_mop_config_();  // Use specialized function
 }

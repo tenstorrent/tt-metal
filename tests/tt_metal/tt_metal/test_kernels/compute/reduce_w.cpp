@@ -13,7 +13,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
-    reduce_init_max_row(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    reduce_max_row_init();
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
