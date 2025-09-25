@@ -53,6 +53,7 @@ public:
     const Cluster& get_cluster() const;
     const llrt::RunTimeOptions& rtoptions() const;
     const Hal& hal() const;
+    const std::unique_ptr<Hal>& hal_ptr() const;
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
