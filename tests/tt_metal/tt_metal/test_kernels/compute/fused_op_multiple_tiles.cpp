@@ -38,44 +38,44 @@ void MAIN {
 
     // dprint_tensix_dest_reg(0); // - all of dest is filled with expected data
 
-    fused_eltwise_binary_reuse_dest_multiple_tiles(0);
-    fused_reduce_populate_ones();
+    // for(uint32_t i = 0; i < 8; ++i){
+    //     dprint_tensix_dest_reg(i);
+    // }
 
-    fused_reduce_init<REDUCE_OP, REDUCE_DIM>();
+    fused_eltwise_binary_reuse_dest_multiple_tiles(
+        0);  // move first tile to srcA as the first operand (actually moves a single face in a tile, but tha't ok since
+             // reduce currently works 4 times on the evry same face)
+    fused_reduce_populate_ones();  // populate the first tile in dest with ones, overwritting the data from the previous
+                                   // step (that's why we're doing it before the loop)
+    // after that move the ones from dest to srcB as the second operand (srcB stays the same until the very end)
 
-    int reduce_dst_idx = 0;
+    fused_reduce_init<REDUCE_OP, REDUCE_DIM>();  // initialize reduce operation, should also fill the first face(and the
+                                                 // second one) of the dest with zeros, since the result is accumulated
+                                                 // there
+    // but we put that under comment since it should make the results slightly incorrect (+3) but not x3!!!
+
+    int reduce_dst_idx = 0;  // we're accumulating the result in the first face of the dest
 
     for (uint32_t tile_idx = 0; tile_idx < tile_cnt; ++tile_idx) {
         // For tiles after the first one, we need to reuse the destination as input for that specific tile
         if (tile_idx != 0) {
-            fused_eltwise_binary_reuse_dest_multiple_tiles(tile_idx);
+            fused_eltwise_binary_reuse_dest_multiple_tiles(
+                tile_idx);  // move the current tile to srcA as the first operand, we don't do that for the first tile
+                            // since it's overwritten with ones
         }
-        // else{
-        //     dprint_tensix_dest_reg(0); // - prints out ones, except for the first row (16 datums)
-        // }
 
-        // if(tile_idx == 0){
-        //     while(true){} // for debugging srcA - tt-exalens - dr 0,0 srca
-        // }
+        dprint_tensix_dest_reg(0);  // print the result of the reduce operation, always in 0
 
         // Perform the reduce operation on the current tile
         fused_reduce_compute<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
-
-        // if(tile_idx == 0){
-        //     dprint_tensix_dest_reg(tile_idx);
-        // }
     }
-
-    // math hanga nakon compute-a
-
-    // dprint_tensix_dest_reg(0); // - does not hang
 
     fused_reduce_clear_dvalid_after_for_loop();
 
-    // dprint_tensix_dest_reg(0);    // does not hang
-
     tile_regs_commit();  // math thread commits the dst register
+    // dprint_tensix_dest_reg(0); - hangs
     tile_regs_wait();    // pack thread waits for the math thread to commit the dst register
+    // dprint_tensix_dest_reg(0); - hangs
 
     cb_pop_front(cb_inp0, tile_cnt);  // Done with first input
     cb_pop_front(cb_inp1, tile_cnt);  // Done with second input
@@ -85,27 +85,27 @@ void MAIN {
 
     PACK(for (uint32_t i = 0; i < 32; ++i) { TTI_NOP; });  // stall the packer bcs of the dprint
 
-    // DPRINT_PACK({ DPRINT << "After pack" << ENDL(); });
+    // // DPRINT_PACK({ DPRINT << "After pack" << ENDL(); });
 
-    DPRINT_PACK({
-        DPRINT << "Output tile in cb_out0:" << ENDL();
-        for (uint16_t r = 0; r < 32; ++r) {
-            DPRINT << (uint)r << " : "
-                   << TileSlice(
-                          cb_out0,
-                          0,
-                          SliceRange{
-                              .h0 = (uint8_t)r,
-                              .h1 = (uint8_t)(r + 1),
-                              .hs = (uint8_t)1,
-                              .w0 = (uint8_t)0,
-                              .w1 = (uint8_t)32,
-                              .ws = (uint8_t)1},
-                          true,
-                          false)
-                   << ENDL();
-        }
-    });
+    // DPRINT_PACK({
+    //     DPRINT << "Output tile in cb_out0:" << ENDL();
+    //     for (uint16_t r = 0; r < 32; ++r) {
+    //         DPRINT << (uint)r << " : "
+    //                << TileSlice(
+    //                       cb_out0,
+    //                       0,
+    //                       SliceRange{
+    //                           .h0 = (uint8_t)r,
+    //                           .h1 = (uint8_t)(r + 1),
+    //                           .hs = (uint8_t)1,
+    //                           .w0 = (uint8_t)0,
+    //                           .w1 = (uint8_t)32,
+    //                           .ws = (uint8_t)1},
+    //                       true,
+    //                       false)
+    //                << ENDL();
+    //     }
+    // });
 
     cb_push_back(cb_out0, 1);
 
