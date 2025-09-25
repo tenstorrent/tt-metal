@@ -12,8 +12,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 // Hardsigmoid
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid_init() {
