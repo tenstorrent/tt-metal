@@ -5,13 +5,63 @@
 #include "groupnorm_pybind.hpp"
 
 #include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
 #include "groupnorm.hpp"
+#include "groupnorm_input_mask.hpp"
 
 namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
+
+py::object create_group_norm_input_mask(int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
+    py::object torch = py::module_::import("torch");
+
+    int64_t out_num_groups, out_tile_height, out_mask_width;
+    std::vector<float> mask_vec = create_group_norm_input_mask_impl(
+        num_channel, num_groups, num_cores_across_channel,
+        out_num_groups, out_tile_height, out_mask_width);
+
+    auto total_size = out_num_groups * out_tile_height * out_mask_width;
+    if (mask_vec.size() != static_cast<size_t>(total_size)) {
+        throw std::runtime_error("Mask vector size mismatch.");
+    }
+
+    std::vector<int64_t> shape = {1, out_num_groups, out_tile_height, out_mask_width};
+
+    // create numpy array and fill it with data
+    py::array_t<float> arr(shape);
+    std::memcpy(arr.mutable_data(), mask_vec.data(), mask_vec.size() * sizeof(float));
+
+    // to torch tensor, zero copy and shared memory
+    py::object mask = torch.attr("from_numpy")(arr).attr("to")(torch.attr("bfloat16"));
+    return mask;
+}
+
+py::object create_group_norm_input_negative_mask(int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
+    py::object torch = py::module_::import("torch");
+
+    int64_t out_num_groups, out_tile_height, out_mask_width;
+    std::vector<float> mask_vec = create_group_norm_input_mask_impl(
+        num_channel, num_groups, num_cores_across_channel,
+        out_num_groups, out_tile_height, out_mask_width, true);
+
+    auto total_size = out_num_groups * out_tile_height * out_mask_width;
+    if (mask_vec.size() != static_cast<size_t>(total_size)) {
+        throw std::runtime_error("Mask vector size mismatch.");
+    }
+
+    std::vector<int64_t> shape = {1, out_num_groups, out_tile_height, out_mask_width};
+
+    // create numpy array and fill it with data
+    py::array_t<float> arr(shape);
+    std::memcpy(arr.mutable_data(), mask_vec.data(), mask_vec.size() * sizeof(float));
+
+    // to torch tensor, zero copy and shared memory
+    py::object mask = torch.attr("from_numpy")(arr).attr("to")(torch.attr("bfloat16"));
+    return mask;
+}
 
 void bind_normalization_group_norm_operation(pybind11::module& module) {
     ttnn::bind_registered_operation(
@@ -269,6 +319,34 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("negative_mask") = std::nullopt,
             py::arg("use_welford") = false});
+
+    auto ttnn_module = py::module_::import("ttnn");
+    ttnn_module.def(
+        "create_group_norm_input_mask",
+        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
+            return create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel);
+        },
+        py::arg("num_channel"),
+        py::arg("num_groups"),
+        py::arg("num_cores_across_channel"),
+        R"doc(
+            C++ implementation of create_group_norm_input_mask.
+            Returns a torch.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=torch.bfloat16.
+        )doc"
+    );
+    ttnn_module.def(
+        "create_group_norm_input_negative_mask",
+        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
+            return create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel);
+        },
+        py::arg("num_channel"),
+        py::arg("num_groups"),
+        py::arg("num_cores_across_channel"),
+        R"doc(
+            C++ implementation of create_group_norm_input_negative_mask.
+            Returns a torch.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=torch.bfloat16.
+        )doc"
+    );
 }
 void bind_normalization_group_norm(py::module& module) { bind_normalization_group_norm_operation(module); }
 
