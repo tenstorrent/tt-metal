@@ -19,8 +19,8 @@ pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::t
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-current Single Device FPS tested on N300 - 189 (to be checked on N150 soon, optimisation WIP)
-<!-- - For `640x640`, end-2-end perf is `179` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_ -->
+
+- For `640x640`, end-2-end perf is `234` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```
 pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```

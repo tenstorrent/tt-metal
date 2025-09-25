@@ -18,20 +18,6 @@ from models.demos.yolov11.tt.ttnn_yolov11_detect import TtnnDetect
 from models.demos.yolov11.tt.ttnn_yolov11_sppf import TtnnSPPF
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
-
-def p(x, a="x"):
-    print(f"{a}'s  shape: {x.shape,x.padded_shape}")
-    print(f"{a}'s  layout: {x.layout}")
-    print(f"{a}'s  dtype: {x.dtype}")
-    print(f"{a}'s config: {x.memory_config()}")
-
 
 class TtnnYoloV11:
     def __init__(self, device, parameters):
@@ -62,47 +48,19 @@ class TtnnYoloV11:
         ttnn.deallocate(input)
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
-        if use_signpost:
-            signpost(header="CONV1")
         x = self.conv1(self.device, x)
-        if use_signpost:
-            signpost(header="CONV2")
         x = self.conv2(self.device, x)
-        if use_signpost:
-            signpost(header="c3k2_1 wip")
         x = self.c3k2_1(self.device, x)
-        if use_signpost:
-            signpost(header="CONV3")
         x = self.conv3(self.device, x)
-        if use_signpost:
-            signpost(header="c3k2_2")
         x = self.c3k2_2(self.device, x)
         x4 = x
-        if use_signpost:
-            signpost(header="CONV5")
         x = self.conv5(self.device, x)
-        if use_signpost:
-            signpost(header="c3k2_3")
         x = self.c3k2_3(self.device, x)
         x6 = x
-        if use_signpost:
-            signpost(header="CONV6")
-        print("conv6 in", x.memory_config())
         x = self.conv6(self.device, x)
-        p(x, "conv6 out")
-        print("conv6 out", x.memory_config())
-        if use_signpost:
-            signpost(header="c3k2_4")
         x = self.c3k2_4(self.device, x)
-        if use_signpost:
-            signpost(header="SPPF")
         x = self.sppf(self.device, x)
-        if use_signpost:
-            signpost(header="C2PSA")
         x = self.c2psa(self.device, x)
-        p(x, "c2psa end")
-        if use_signpost:
-            signpost(header="C2PSA end")
         x10 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
@@ -120,12 +78,8 @@ class TtnnYoloV11:
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x = sharded_concat_2(x, x6)
         ttnn.deallocate(x6)
-        if use_signpost:
-            signpost(header="c3k2_5")
-        p(x, "before c3k2_5")
         x = reshard_if_possible(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        p(x, "before c3k2_5 after reshard")
         x = self.c3k2_5(self.device, x)
         x13 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -145,45 +99,24 @@ class TtnnYoloV11:
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([x, x4], to_interleaved=False)
         ttnn.deallocate(x4)
-        if use_signpost:
-            signpost(header="c3k2_6")
-        p(x, "before c3k2_6")
         x = reshard_if_possible(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        p(x, "before c3k2_6 after reshard")
         x = self.c3k2_6(self.device, x)
         x16 = x
-        if use_signpost:
-            signpost(header="conv7")
-        p(x, "conv7 input")
         x = self.conv7(self.device, x)
         x = sharded_concat_2(x, x13)
         ttnn.deallocate(x13)
-        if use_signpost:
-            signpost(header="c3k2_7")
-        p(x, "before c3k2_7")
         x = reshard_if_possible(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        p(x, "before c3k2_7 after reshard")
         x = self.c3k2_7(self.device, x)
         x19 = x
-        if use_signpost:
-            signpost(header="conv8")
-        p(x, "conv8 input")
         x = self.conv8(self.device, x)
-        p(x, "conv8 out")
         x = sharded_concat_2(x, x10)
         ttnn.deallocate(x10)
-        if use_signpost:
-            signpost(header="c3k2_8")
-        p(x, "before c3k2_8")
         x = reshard_if_possible(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        p(x, "before c3k2_8 after reshard")
         x = self.c3k2_8(self.device, x)
         x22 = x
-        if use_signpost:
-            signpost(header="detect")
         x = self.detect(self.device, x16, x19, x22)
         deallocate_tensors(x16, x19, x22)
 

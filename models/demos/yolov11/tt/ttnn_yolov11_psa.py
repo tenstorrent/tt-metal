@@ -6,20 +6,6 @@ import ttnn
 from models.demos.yolov11.tt.common import TtnnConv
 from models.demos.yolov11.tt.ttnn_yolov11_attention import TtnnAttention
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
-
-def p(x, a="x"):
-    print(f"{a}'s  shape: {x.shape,x.padded_shape}")
-    print(f"{a}'s  layout: {x.layout}")
-    print(f"{a}'s  dtype: {x.dtype}")
-    print(f"{a}'s config: {x.memory_config()}")
-
 
 class TtnnPSABlock:
     def __init__(self, device, parameter, conv_pt):
@@ -28,12 +14,7 @@ class TtnnPSABlock:
         self.ffn_conv2 = TtnnConv(device, parameter.ffn[1], conv_pt.ffn[1], enable_act=False)
 
     def __call__(self, device, x):
-        p(x, "before slice in psa")
-        # x = x[:,:,:400,:]
-        p(x, "after slice in psa")
         x1 = x
-        if use_signpost:
-            signpost(header="attn blckkk")
         x = self.attn(device, x)
         x = ttnn.add(x1, x, memory_config=x.memory_config())
         x1 = x
