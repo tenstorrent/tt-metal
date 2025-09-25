@@ -48,6 +48,7 @@ def convnet_mnist(
         "groups": 1,
         "device": device,
         "conv_config": conv_config,
+        "slice_config": ttnn.Conv2dL1FullSliceConfig,
     }
 
     if not ttnn.is_tensor_storage_on_device(tt_weight):
@@ -120,6 +121,7 @@ def convnet_mnist(
         "groups": 1,
         "device": device,
         "conv_config": conv_config,
+        "slice_config": ttnn.Conv2dL1FullSliceConfig,
     }
 
     if not ttnn.is_tensor_storage_on_device(tt_weight):
