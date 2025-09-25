@@ -49,9 +49,9 @@ class TTMetaliumConan(ConanFile):
             "third_party/**",
             ".clang-tidy",
             # exclude build artifacts
+            "!build*/**",
             "!**/*.o",
             "!**/*.out",
-            "!**/*.bin",
             "!**/*.obj",
             "!**/*.a",
             "!**/*.lib",
