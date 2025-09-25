@@ -1124,9 +1124,36 @@ class OBB(nn.Module):
         x1 = self.cv2[0](y1)
         x2 = self.cv2[1](y2)
         x3 = self.cv2[2](y3)
+        
+        # Debug: Check input to cv3[0] (y1)
+        y1_flat = y1.flatten()
+        y1_unique = torch.unique(y1_flat)
+        print(f"🔍 [PyTorch DEBUG] INPUT y1 to cv3[0]: {len(y1_unique)} unique values out of {len(y1_flat)} total")
+        print(f"    Range: [{y1_flat.min()}, {y1_flat.max()}], Mean: {y1_flat.mean()}")
+        
         x4 = self.cv3[0](y1)
+        
+        # Debug: Check cv3[0] output (x4) 
+        x4_flat = x4.flatten()
+        x4_unique = torch.unique(x4_flat)
+        print(f"🔍 [PyTorch DEBUG] cv3[0] output (x4): {len(x4_unique)} unique values out of {len(x4_flat)} total")
+        print(f"    Range: [{x4_flat.min()}, {x4_flat.max()}], Mean: {x4_flat.mean()}")
+        
         x5 = self.cv3[1](y2)
+        
+        # Debug: Check cv3[1] output (x5)
+        x5_flat = x5.flatten()
+        x5_unique = torch.unique(x5_flat)
+        print(f"🔍 [PyTorch DEBUG] cv3[1] output (x5): {len(x5_unique)} unique values out of {len(x5_flat)} total")
+        print(f"    Range: [{x5_flat.min()}, {x5_flat.max()}], Mean: {x5_flat.mean()}")
+        
         x6 = self.cv3[2](y3)
+        
+        # Debug: Check cv3[2] output (x6)
+        x6_flat = x6.flatten()
+        x6_unique = torch.unique(x6_flat)
+        print(f"🔍 [PyTorch DEBUG] cv3[2] output (x6): {len(x6_unique)} unique values out of {len(x6_flat)} total")
+        print(f"    Range: [{x6_flat.min()}, {x6_flat.max()}], Mean: {x6_flat.mean()}")
         x7 = self.cv4[0](y1)
         x8 = self.cv4[1](y2)
         x9 = self.cv4[2](y3)
@@ -1146,6 +1173,13 @@ class OBB(nn.Module):
 
         # Split into box and class predictions
         ya, yb = y_box_cls.split((self.out_channel[2], self.out_channel[13]), 1)
+        
+        # Debug: Check class predictions after split
+        yb_split_flat = yb.flatten()
+        yb_split_unique = torch.unique(yb_split_flat)
+        print(f"🔍 [PyTorch DEBUG] After split (yb only): {len(yb_split_unique)} unique values out of {len(yb_split_flat)} total")
+        print(f"    Range: [{yb_split_flat.min()}, {yb_split_flat.max()}], Mean: {yb_split_flat.mean()}")
+        print(f"    Shape: {yb.shape}")
 
         # Process box predictions through DFL
         ya = torch.reshape(ya, (ya.shape[0], int(ya.shape[1] / self.in_channel[33]), self.in_channel[33], ya.shape[2]))
