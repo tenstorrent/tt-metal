@@ -20,7 +20,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"

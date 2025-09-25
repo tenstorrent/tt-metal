@@ -11,7 +11,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt {

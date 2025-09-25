@@ -20,7 +20,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 namespace ttnn {
 namespace operations::pool {

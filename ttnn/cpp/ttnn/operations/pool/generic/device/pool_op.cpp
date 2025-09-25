@@ -4,7 +4,7 @@
 
 #include "pool_op.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <utility>
 
 /**

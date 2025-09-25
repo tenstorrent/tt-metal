@@ -5,7 +5,7 @@
 #include "conv3d_device_operation.hpp"
 #include <array>
 #include <cstdint>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "conv3d_program_factory.hpp"

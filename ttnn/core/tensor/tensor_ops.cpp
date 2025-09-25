@@ -18,7 +18,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/distributed/api.hpp"

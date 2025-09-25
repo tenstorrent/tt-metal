@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 

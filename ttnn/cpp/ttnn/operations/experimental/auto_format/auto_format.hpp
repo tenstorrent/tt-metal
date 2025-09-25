@@ -10,7 +10,7 @@
 
 #include <optional>
 
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 namespace ttnn::operations::experimental::auto_format {
 

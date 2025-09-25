@@ -5,7 +5,7 @@
 #pragma once
 
 #include <iterator>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <optional>

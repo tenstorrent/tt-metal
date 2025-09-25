@@ -26,7 +26,7 @@
 #include "device.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
