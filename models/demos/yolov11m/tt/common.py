@@ -39,7 +39,7 @@ class Yolov11Conv2D:
         self.deallocate_activation = deallocate_activation
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi,  # ✅ High precision math
+            math_fidelity=ttnn.MathFidelity.HiFi2,  # ✅ High precision math
             fp32_dest_acc_en=True,                 # ✅ Float32 accumulation
             packer_l1_acc=True,
             math_approx_mode=False,                # ✅ Exact math
