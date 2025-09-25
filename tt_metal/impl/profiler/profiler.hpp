@@ -166,6 +166,7 @@ private:
     void readDeviceMarkerData(
         std::set<tracy::TTDeviceMarker>& device_markers,
         uint32_t run_host_id,
+        uint32_t device_trace_counter,
         const std::string& op_name,
         chip_id_t device_id,
         const CoreCoord& physical_core,

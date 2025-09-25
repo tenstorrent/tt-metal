@@ -380,7 +380,7 @@ int main() {
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
                     if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                        // separate function for incrementing the trace count
+                        DeviceIncrementTraceCount();
                         DeviceTraceProfilerInit();
                     }
                     uint32_t go_message_index = mailboxes->go_message_index;
