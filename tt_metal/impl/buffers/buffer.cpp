@@ -517,7 +517,9 @@ DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const
     DeviceAddr num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     DeviceAddr pages_offset_within_bank = page_index / num_banks;
-    auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);
+    auto offset =
+        (ttsl::math::round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) *
+         pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 

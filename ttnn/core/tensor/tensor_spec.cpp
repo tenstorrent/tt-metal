@@ -195,7 +195,7 @@ TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment sh
                              : page_config().get_recommended_shard_shape_alignment(data_type());
         auto& shard_shape = nd_shard_spec.shard_shape;
         for (int dim = 1; dim <= alignment.size(); dim++) {
-            shard_shape[-dim] = round_up(shard_shape[-dim], alignment[-dim]);
+            shard_shape[-dim] = ttsl::math::round_up(shard_shape[-dim], alignment[-dim]);
         }
     }
     TensorLayout new_layout(
