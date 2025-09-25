@@ -9,7 +9,7 @@
 
 #include "nb_fwd.hpp"
 
-namespace ttml::nanobind {
+namespace ttml::nanobind::util {
 
 template <typename E, typename... Extra>
 inline nb::enum_<E> export_enum(const nb::handle& scope, const std::string& name = "", Extra&&... extra) {
@@ -22,4 +22,4 @@ inline nb::enum_<E> export_enum(const nb::handle& scope, const std::string& name
     return enum_type;
 }
 
-}  // namespace ttml::nanobind
+}  // namespace ttml::nanobind::util

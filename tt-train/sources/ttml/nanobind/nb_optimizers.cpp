@@ -15,7 +15,8 @@
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
 
-namespace ttml::optimizers {
+namespace ttml::nanobind::optimizers {
+using namespace ttml::optimizers;
 
 void py_module_types(nb::module_& m) {
     nb::class_<OptimizerBase>(m, "OptimizerBase");
@@ -86,4 +87,4 @@ void py_module(nb::module_& m) {
     }
 }
 
-}  // namespace ttml::optimizers
+}  // namespace ttml::nanobind::optimizers

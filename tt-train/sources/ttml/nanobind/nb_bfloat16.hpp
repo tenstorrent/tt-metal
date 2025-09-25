@@ -8,7 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
-#include <tt-metalium/bfloat16.hpp>
+#include "tt-metalium/bfloat16.hpp"
 
 namespace nanobind::detail {
 template <>

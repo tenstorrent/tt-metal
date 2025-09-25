@@ -22,10 +22,11 @@
 #include "ops/sampling_op.hpp"
 #include "ops/unary_ops.hpp"
 
-namespace ttml::ops {
+namespace ttml::nanobind::ops {
+using namespace ttml::ops;
 
 void py_module_types(nb::module_& m) {
-    ttml::nanobind::export_enum<ReduceType>(m);
+    ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
     m.def_submodule("dropout");
@@ -258,4 +259,4 @@ void py_module(nb::module_& m) {
     }
 }
 
-}  // namespace ttml::ops
+}  // namespace ttml::nanobind::ops

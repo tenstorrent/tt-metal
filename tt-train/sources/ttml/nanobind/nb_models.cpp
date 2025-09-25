@@ -22,18 +22,19 @@
 #include "nb_fwd.hpp"
 #include "nb_modules.hpp"
 
-namespace ttml::models {
+namespace ttml::nanobind::models {
+using namespace ttml::models;
 
 void py_module_types(nb::module_& m, nb::module_& m_modules) {
-    ttml::modules::py_module_types(m_modules);
+    ttml::nanobind::modules::py_module_types(m_modules);
 
-    ttml::nanobind::export_enum<models::common::transformer::RunnerType>(m);
-    ttml::nanobind::export_enum<models::common::transformer::WeightTyingType>(m);
+    ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m);
+    ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m);
 
-    nb::class_<models::BaseTransformer, modules::ModuleBase>(m, "BaseTransformer");
+    nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>(m, "BaseTransformer");
 
     auto py_gpt2_module = m.def_submodule("gpt2");
-    ttml::nanobind::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
+    ttml::nanobind::util::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
     nb::class_<models::gpt2::TransformerConfig::Experimental>(py_gpt2_module, "GPT2TransformerConfigExperimental");
     nb::class_<models::gpt2::TransformerConfig>(py_gpt2_module, "GPT2TransformerConfig");
     nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");
@@ -47,16 +48,16 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         "create_llama_model", [](const models::llama::LlamaConfig& config) { return models::llama::create(config); });
 
     auto py_mlp_module = m.def_submodule("mlp");
-    nb::class_<modules::MultiLayerPerceptronParameters>(py_mlp_module, "MultiLayerPerceptronParameters");
-    nb::class_<modules::MultiLayerPerceptron, modules::ModuleBase>(py_mlp_module, "MultiLayerPerceptron");
+    nb::class_<ttml::modules::MultiLayerPerceptronParameters>(py_mlp_module, "MultiLayerPerceptronParameters");
+    nb::class_<ttml::modules::MultiLayerPerceptron, ttml::modules::ModuleBase>(py_mlp_module, "MultiLayerPerceptron");
 }
 
 void py_module(nb::module_& m, nb::module_& m_modules) {
-    ttml::modules::py_module(m_modules);
+    ttml::nanobind::modules::py_module(m_modules);
 
     {
         auto py_base_transformer =
-            static_cast<nb::class_<models::BaseTransformer, modules::ModuleBase>>(m.attr("BaseTransformer"));
+            static_cast<nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>>(m.attr("BaseTransformer"));
         py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
     }
 
@@ -126,30 +127,30 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
     {
         auto py_mlp_module = static_cast<nb::module_>(m.attr("mlp"));
-        py_mlp_module.def("create_mlp_model", [](const modules::MultiLayerPerceptronParameters& config) {
+        py_mlp_module.def("create_mlp_model", [](const ttml::modules::MultiLayerPerceptronParameters& config) {
             return models::mlp::create(config);
         });
 
-        auto py_mlp_params = static_cast<nb::class_<modules::MultiLayerPerceptronParameters>>(
+        auto py_mlp_params = static_cast<nb::class_<ttml::modules::MultiLayerPerceptronParameters>>(
             py_mlp_module.attr("MultiLayerPerceptronParameters"));
         py_mlp_params.def(nb::init<>());
         py_mlp_params.def_static(
             "create",
             [](uint32_t input_features, const std::vector<uint32_t>& hidden_features, uint32_t output_features) {
-                return modules::MultiLayerPerceptronParameters{
+                return ttml::modules::MultiLayerPerceptronParameters{
                     .input_features = input_features,
                     .hidden_features = hidden_features,
                     .output_features = output_features};
             });
-        py_mlp_params.def_rw("input_features", &modules::MultiLayerPerceptronParameters::input_features);
-        py_mlp_params.def_rw("hidden_features", &modules::MultiLayerPerceptronParameters::hidden_features);
-        py_mlp_params.def_rw("output_features", &modules::MultiLayerPerceptronParameters::output_features);
+        py_mlp_params.def_rw("input_features", &ttml::modules::MultiLayerPerceptronParameters::input_features);
+        py_mlp_params.def_rw("hidden_features", &ttml::modules::MultiLayerPerceptronParameters::hidden_features);
+        py_mlp_params.def_rw("output_features", &ttml::modules::MultiLayerPerceptronParameters::output_features);
 
-        auto py_mlp = static_cast<nb::class_<modules::MultiLayerPerceptron, modules::ModuleBase>>(
+        auto py_mlp = static_cast<nb::class_<ttml::modules::MultiLayerPerceptron, ttml::modules::ModuleBase>>(
             py_mlp_module.attr("MultiLayerPerceptron"));
-        py_mlp.def(nb::init<const modules::MultiLayerPerceptronParameters&>());
-        py_mlp.def("__call__", &modules::MultiLayerPerceptron::operator());
+        py_mlp.def(nb::init<const ttml::modules::MultiLayerPerceptronParameters&>());
+        py_mlp.def("__call__", &ttml::modules::MultiLayerPerceptron::operator());
     }
 }
 
-}  // namespace ttml::models
+}  // namespace ttml::nanobind::models

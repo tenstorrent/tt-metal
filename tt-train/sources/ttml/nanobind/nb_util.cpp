@@ -13,7 +13,7 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttml::nanobind {
+namespace ttml::nanobind::util {
 
 namespace UnsupportedMessages {
 
@@ -371,4 +371,4 @@ tt::tt_metal::Tensor make_metal_tensor(
     NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
 }
 
-}  // namespace ttml::nanobind
+}  // namespace ttml::nanobind::util

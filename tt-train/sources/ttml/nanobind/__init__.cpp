@@ -18,8 +18,11 @@
 #include "nb_optimizers.hpp"
 #include "ttnn/api/ttnn/tensor/layout/layout.hpp"
 
+namespace ttml::nanobind {
+using namespace ::nanobind;
+
 NB_MODULE(_ttml, m) {
-    ttml::nanobind::export_enum<tt::tt_metal::Layout>(m);
+    ttml::nanobind::util::export_enum<tt::tt_metal::Layout>(m);
     auto m_autograd = m.def_submodule("autograd", "autograd");
     auto m_models = m.def_submodule("models", "models");
     auto m_modules = m.def_submodule("modules", "modules");
@@ -27,14 +30,16 @@ NB_MODULE(_ttml, m) {
     auto m_optimizers = m.def_submodule("optimizers", "optimizers");
 
     // TYPES
-    ttml::autograd::py_module_types(m_autograd);
-    ttml::models::py_module_types(m_models, m_modules);
-    ttml::ops::py_module_types(m_ops);
-    ttml::optimizers::py_module_types(m_optimizers);
+    ttml::nanobind::autograd::py_module_types(m_autograd);
+    ttml::nanobind::models::py_module_types(m_models, m_modules);
+    ttml::nanobind::ops::py_module_types(m_ops);
+    ttml::nanobind::optimizers::py_module_types(m_optimizers);
 
     // FUNCTIONS / OPERATIONS
-    ttml::autograd::py_module(m_autograd);
-    ttml::models::py_module(m_models, m_modules);
-    ttml::ops::py_module(m_ops);
-    ttml::optimizers::py_module(m_optimizers);
+    ttml::nanobind::autograd::py_module(m_autograd);
+    ttml::nanobind::models::py_module(m_models, m_modules);
+    ttml::nanobind::ops::py_module(m_ops);
+    ttml::nanobind::optimizers::py_module(m_optimizers);
 }
+
+}  // namespace ttml::nanobind

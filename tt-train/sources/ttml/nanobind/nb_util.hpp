@@ -9,7 +9,7 @@
 #include "nb_fwd.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttml::nanobind {
+namespace ttml::nanobind::util {
 
 nb::ndarray<nb::numpy> make_numpy_tensor(
     const tt::tt_metal::Tensor& tensor, std::optional<tt::tt_metal::DataType> new_type = std::nullopt);
@@ -34,11 +34,11 @@ consteval bool same_as_one_of() {
     auto condition_str,
     auto msg);
 
-}  // namespace ttml::nanobind
+}  // namespace ttml::nanobind::util
 
 #define NB_THROW(exception_type, message, ...)    \
     do {                                          \
-        ttml::nanobind::throw_exception(          \
+        ttml::nanobind::util::throw_exception(    \
             std::source_location::current(),      \
             exception_type,                       \
             #exception_type,                      \
@@ -49,7 +49,7 @@ consteval bool same_as_one_of() {
 #define NB_COND_THROW(condition, exception_type, message, ...) \
     do {                                                       \
         if (!condition) {                                      \
-            ttml::nanobind::throw_exception(                   \
+            ttml::nanobind::util::throw_exception(             \
                 std::source_location::current(),               \
                 exception_type,                                \
                 #exception_type,                               \

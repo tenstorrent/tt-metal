@@ -6,9 +6,9 @@
 
 #include "nb_fwd.hpp"
 
-namespace ttml::ops {
+namespace ttml::nanobind::ops {
 
 void py_module_types(nb::module_& m);
 void py_module(nb::module_& m);
 
-}  // namespace ttml::ops
+}  // namespace ttml::nanobind::ops
