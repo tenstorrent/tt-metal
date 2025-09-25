@@ -168,6 +168,9 @@ class TransfuserBackbone(nn.Module):
             in_channels=in_channels,
             out_features=self.config.perception_output_features,
         )
+        # print(self.image_encoder)
+        # print("#################################################################")
+        # print(self.lidar_encoder)
 
         self.transformer1 = GPT(
             n_embd=self.image_encoder.features.feature_info[1]["num_chs"],
@@ -287,6 +290,7 @@ class TransfuserBackbone(nn.Module):
         image_features = self.image_encoder.features.conv1(image_tensor)
         image_features = self.image_encoder.features.bn1(image_features)
         image_features = self.image_encoder.features.act1(image_features)
+        return image_features
         image_features = self.image_encoder.features.maxpool(image_features)
         lidar_features = self.lidar_encoder._model.conv1(lidar_tensor)
         lidar_features = self.lidar_encoder._model.bn1(lidar_features)
