@@ -13,3 +13,4 @@ CXX=g++-15
 
 [tool_requires]
 cmake/[>=3.25]
+ninja/[>=1.11.1]
