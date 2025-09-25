@@ -39,9 +39,9 @@ FORCE_INLINE void read_sticks(
     uint32_t reader_offset,
     uint32_t& l1_write_addr_act,
     uint32_t& reader_idx) {
-    uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+    uint16_t num_segments = packed_reader_indices_ptr[reader_idx] & 0xffff;
 
-    while (num_elems--) {
+    while (num_segments--) {
         reader_idx++;
         uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
         uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
@@ -77,12 +77,20 @@ FORCE_INLINE void read_kernel_w(uint32_t& l1_write_addr_act, uint32_t& act_l1_of
 #ifdef ACTIVATION_REUSE
 template <uint32_t cb_id_act, uint32_t act_cb_tiles, uint32_t window_reuse_offset>
 FORCE_INLINE void pass_to_the_next_image_width(
-    uint32_t& l1_write_addr_act, uint32_t cb_start_addr, uint32_t& pixel_row, uint32_t& pixel_column) {
+    uint32_t& l1_write_addr_act,
+    uint32_t cb_start_addr,
+    uint32_t& pixel_row,
+    uint32_t& pixel_column,
+    uint32_t& new_batch_image_rows_to_fill) {
     pixel_column = 0;
     pixel_row++;
     cb_reserve_back(cb_id_act, act_cb_tiles);
     l1_write_addr_act = cb_start_addr + pixel_row * window_reuse_offset;
     get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
+
+    if (new_batch_image_rows_to_fill > 0) {
+        new_batch_image_rows_to_fill--;
+    }
 }
 
 template <uint32_t cb_id_act, uint32_t act_cb_w_tiles>
@@ -135,6 +143,31 @@ FORCE_INLINE void read_image_row_window_with_reuse(uint32_t& l1_write_addr_act, 
     read_kernel_w<coalesced_read_bytes, stride_h_bytes>(l1_write_addr_act, act_l1_offset);
 }
 
+template <uint32_t window_inner, bool single_core_processes_multiple_batches>
+FORCE_INLINE void load_next_segment(
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
+    uint32_t& reader_idx,
+    uint16_t& start_ind,
+    uint16_t& end_ind,
+    uint32_t& new_batch_image_rows_to_fill) {
+    reader_idx++;
+    start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+    if constexpr (single_core_processes_multiple_batches) {
+        // Check if new batch is starting
+        // Feature currently works for stride and dilation h/w == 1, to be updated if the support is expanded
+        if (start_ind > end_ind + window_inner) {
+            // When we start a new batch, we need to 'restart' the optimization and fill in the whole output image width
+            // before the reuse starts; Since we might encounter new batch in the middle of the output image width
+            // where we have the reuse activated for the previous one, we need to:
+            // - finish the current width without the reuse
+            // - use the next width to 'restart optimization' and fill in the CB with new batch data
+            // - only then start reusing data
+            new_batch_image_rows_to_fill = 2;
+        }
+    }
+    end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+}
+
 template <
     uint32_t coalesced_read_bytes,
     uint32_t conv_act_c_read_bytes,
@@ -149,7 +182,8 @@ template <
     bool readers_process_full_image_widths,
     uint32_t image_width_tiles,
     uint32_t output_image_width,
-    uint32_t window_reuse_offset>
+    uint32_t window_reuse_offset,
+    bool single_core_processes_multiple_batches>
 FORCE_INLINE void read_sticks_activation_reuse(
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
     uint32_t reader_offset,
@@ -162,12 +196,13 @@ FORCE_INLINE void read_sticks_activation_reuse(
     constexpr uint32_t outer_coalesced_read_bytes = reuse_outer * coalesced_read_bytes;
     constexpr uint32_t outer_stride_h_bytes = reuse_outer * stride_h_bytes;
 
-    uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+    uint16_t num_segments = packed_reader_indices_ptr[reader_idx] & 0xffff;
     uint32_t pixel_row = 0, pixel_column = 0;
+    uint32_t new_batch_image_rows_to_fill = 0;
 
     cb_reserve_back(cb_id_act, act_cb_tiles);
 
-    if (num_elems == 0) {
+    if (num_segments == 0) {
         return;
     }
 
@@ -187,13 +222,12 @@ FORCE_INLINE void read_sticks_activation_reuse(
             act_block_w_extra_align_bytes>(l1_write_addr_act, reader_offset, ind, pixel_column);
     }
 
-    num_elems--;
-    reader_idx++;
-    start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-    end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+    num_segments--;
+    load_next_segment<window_inner, single_core_processes_multiple_batches>(
+        packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
 
     if constexpr (!readers_process_full_image_widths) {
-        if (num_elems) {
+        if (num_segments) {
             // The first image width might be split between two rows
             uint16_t leftover_row_width = image_width_padded_to_tile - pixel_column;
             uint16_t second_row_width = leftover_row_width, third_row_width = 0;
@@ -223,10 +257,9 @@ FORCE_INLINE void read_sticks_activation_reuse(
 
             if constexpr (!output_image_width_full_tile) {
                 if (third_row_width > 0) {
-                    num_elems--;
-                    reader_idx++;
-                    start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                    end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+                    num_segments--;
+                    load_next_segment<window_inner, single_core_processes_multiple_batches>(
+                        packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
 
                     for (uint16_t ind = start_ind; ind < start_ind + third_row_width; ind += stride_w) {
                         read_first_image_row_window<
@@ -246,13 +279,13 @@ FORCE_INLINE void read_sticks_activation_reuse(
     }
     // Move on to the next output image width
     pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
-        l1_write_addr_act, cb_start_addr, pixel_row, pixel_column);
+        l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
 
     // ------ HANDLE REMAINING INPUT, WHERE WE READ JUST THE LAST KERNEL WIDTH OF THE WINDOW ------
-    while (num_elems--) {
+    while (num_segments--) {
         for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
             uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
-            if constexpr (output_image_width_full_tile) {
+            if constexpr (output_image_width_full_tile && !single_core_processes_multiple_batches) {
                 // In this case, everything is reused after the first image width
                 read_image_row_window_with_reuse<
                     coalesced_read_bytes,
@@ -261,7 +294,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
                     outer_stride_h_bytes>(l1_write_addr_act, act_l1_offset);
             } else {
                 // In this case, we need to check if we are in the limits of image width since we pad it to tile size
-                if (pixel_column < output_image_width) {
+                if (pixel_column < output_image_width && new_batch_image_rows_to_fill == 0) {
                     read_image_row_window_with_reuse<
                         coalesced_read_bytes,
                         stride_h_bytes,
@@ -284,7 +317,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
                 if constexpr (!readers_process_full_image_widths) {
                     if (pixel_column == image_width_padded_to_tile) {
                         pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
-                            l1_write_addr_act, cb_start_addr, pixel_row, pixel_column);
+                            l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
                     }
                 }
             }
@@ -293,12 +326,11 @@ FORCE_INLINE void read_sticks_activation_reuse(
         if constexpr (readers_process_full_image_widths) {
             // Move on to the next output image width
             pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
-                l1_write_addr_act, cb_start_addr, pixel_row, pixel_column);
+                l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
         }
 
-        reader_idx++;
-        start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-        end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+        load_next_segment<window_inner, single_core_processes_multiple_batches>(
+            packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
     }
 }
 #endif
