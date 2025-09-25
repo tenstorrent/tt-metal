@@ -863,7 +863,7 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
         case UnaryOpType::RELU: return "relu";
         case UnaryOpType::RELU6: return "relu6";
         case UnaryOpType::GELU:
-            if (unary_op.params.size() >= 1 && unary_op.params[0] == static_cast<float>(true)) {
+            if (!unary_op.params.empty() && unary_op.params[0] == static_cast<float>(true)) {
                 return "gelu_approx";
             }
             return "gelu";
