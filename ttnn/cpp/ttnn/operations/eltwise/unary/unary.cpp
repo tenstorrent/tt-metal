@@ -228,6 +228,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RPOW>;
 
 // threshold(a,t,v) = (a <= t ? v : a)
 template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
