@@ -144,7 +144,7 @@ void benchmark_args_combinations_single_core(
         SetCommonRuntimeArgs(program, reader_kernel_id, accessor_args.get_common_runtime_args());
 
         // Launch program
-        auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_work_load = tt::tt_metal::distributed::MeshWorkload();
         AddProgramToMeshWorkload(
             mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
