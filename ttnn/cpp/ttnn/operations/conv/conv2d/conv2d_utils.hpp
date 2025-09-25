@@ -240,6 +240,7 @@ struct ConvDRAMParamters {
     DataType input_datatype;
     DataType output_datatype;
     Layout input_layout;
+    Layout output_layout;
     bool enable_bias;
     bool mm_conv;
 };
@@ -253,11 +254,8 @@ uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding);
 
-Conv2dSliceConfig::SliceType determine_conv_slice_type(
-    uint32_t input_height, uint32_t input_width, Layout output_layout);
-
-uint32_t calculate_conv_dram_slice_L1_usage(
-    const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
+Conv2dSliceConfig determine_conv2d_slice_config(
+    std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
 
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 }  // namespace operations::conv
