@@ -22,7 +22,7 @@ jobs:
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
     runs-on:
-      # A physical, multi-host WH 6U that's in service
+      - in-service
       - topology-6u
       - arch-wormhole_b0
       - bare-metal
