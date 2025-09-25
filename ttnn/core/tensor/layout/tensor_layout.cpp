@@ -257,14 +257,14 @@ size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
     } else if (const auto& shard_spec = memory_config_.shard_spec()) {
         Shape2D shard_shape = Shape2D(shard_spec->shape);
         num_pages_per_bank =
-            div_up(shard_shape.height(), page_shape.height()) * div_up(shard_shape.width(), page_shape.width());
+            ttsl::math::div_up(shard_shape.height(), page_shape.height()) * ttsl::math::div_up(shard_shape.width(), page_shape.width());
     } else {
         auto sharding_args = compute_buffer_sharding_args(shape);
         const auto& dist_spec = sharding_args.buffer_distribution_spec().value();
         num_pages_per_bank = dist_spec.max_num_dev_pages_per_core();
     }
 
-    const size_t aligned_page_size = round_up(compute_page_size_bytes(page_shape), page_alignment);
+    const size_t aligned_page_size = ttsl::math::round_up(compute_page_size_bytes(page_shape), page_alignment);
     return num_pages_per_bank * aligned_page_size;
 }
 

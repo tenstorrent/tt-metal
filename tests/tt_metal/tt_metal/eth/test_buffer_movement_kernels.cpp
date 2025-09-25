@@ -242,7 +242,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
     fixture->WriteBuffer(sender_mesh_device, input_buffer, input_packed);
 
-    const uint32_t max_buffer = round_down(max_transfer_size, cfg.page_size_bytes);
+    const uint32_t max_buffer = ttsl::math::round_down(max_transfer_size, cfg.page_size_bytes);
     uint32_t pages_per_loop = max_buffer / cfg.page_size_bytes;
     uint32_t num_loops = (uint32_t)(cfg.size_bytes / max_buffer);
     uint32_t remaining_bytes = (uint32_t)(cfg.size_bytes % max_buffer);

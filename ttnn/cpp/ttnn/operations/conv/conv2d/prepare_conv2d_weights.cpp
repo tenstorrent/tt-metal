@@ -1365,7 +1365,7 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
         // Inline the operations from conv_bias_layout_convert
         validate_host_conv_bias(bias_tensor_);
         ttnn::Shape bias_channels_padded_shape(
-            {1, 1, 32, round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
+            {1, 1, 32, ttsl::math::round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
         bias_tensor_ =
             ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
         bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
