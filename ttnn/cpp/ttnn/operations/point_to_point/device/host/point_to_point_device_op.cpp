@@ -24,17 +24,17 @@ AlignedPacketDims compute_aligned_packet_dims(
     const uint32_t max_packet_size_bytes =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
-    const uint32_t aligned_page_size_bytes = tt::round_up(page_size_bytes, alignment);
+    const uint32_t aligned_page_size_bytes = ttsl::math::round_up(page_size_bytes, alignment);
 
     uint32_t num_page_segments, max_num_pages_per_packet, packet_size_bytes, total_packets;
     if (aligned_page_size_bytes <= max_packet_size_bytes) {
         num_page_segments = 1;
         max_num_pages_per_packet = std::min(max_packet_size_bytes / aligned_page_size_bytes, num_pages);
         packet_size_bytes = aligned_page_size_bytes * max_num_pages_per_packet;
-        total_packets = tt::div_up(num_pages, max_num_pages_per_packet);
+        total_packets = ttsl::math::div_up(num_pages, max_num_pages_per_packet);
     } else {
         max_num_pages_per_packet = 1;
-        num_page_segments = tt::div_up(aligned_page_size_bytes, max_packet_size_bytes);
+        num_page_segments = ttsl::math::div_up(aligned_page_size_bytes, max_packet_size_bytes);
         packet_size_bytes = max_packet_size_bytes;
         total_packets = num_page_segments * num_pages;
     }

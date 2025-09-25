@@ -700,7 +700,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     for (const auto& core : local_cores) {
         uint32_t local_units_per_core = std::min(local_units_left, local_units_per_shard);
         local_units_left -= local_units_per_core;
-        uint32_t local_units_per_kernel = tt::div_up(local_units_per_core, kernels.size());
+        uint32_t local_units_per_kernel = ttsl::math::div_up(local_units_per_core, kernels.size());
         uint32_t local_start_offset = 0;
         for (const auto& kernel_id : kernels) {
             std::vector<uint32_t> kernel_args = {remote_address, 0, 0};
@@ -842,14 +842,14 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                 0,
                 input.buffer()->address(),
                 0,
-                tt::div_up(page_stride_vector.size(), 2));
+                ttsl::math::div_up(page_stride_vector.size(), 2));
             auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
             runtime_args_1 = get_runtime_args_for_given_ranges_diff_width(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
                 input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
+                ttsl::math::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         } else {
             auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
@@ -860,7 +860,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                 0,
                 input.buffer()->address(),
                 0,
-                tt::div_up(page_stride_vector.size(), 2));
+                ttsl::math::div_up(page_stride_vector.size(), 2));
             auto output_page_offset =
                 runtime_args_0[physical_core_coords.size() + 1];  // offset is equivalent to number of pages output in
                                                                   // previous risc core
@@ -869,7 +869,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                 page_stride_vector,
                 output_page_offset,
                 input.buffer()->address(),
-                tt::div_up(page_stride_vector.size(), 2),
+                ttsl::math::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         };
 

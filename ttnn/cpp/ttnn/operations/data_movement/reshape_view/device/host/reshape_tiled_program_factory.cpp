@@ -29,8 +29,8 @@ namespace detail {
 
 struct Dims {
     Dims(const Shape& shape, const std::array<uint32_t, 2>& tile_shape) :
-        w(tt::div_up(shape[-1], tile_shape[1])),
-        h(tt::div_up(shape[-2], tile_shape[0])),
+        w(ttsl::math::div_up(shape[-1], tile_shape[1])),
+        h(ttsl::math::div_up(shape[-2], tile_shape[0])),
         c(w * h),
         total(shape[-3] * c) {}
 
@@ -306,8 +306,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
-    const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+    const uint32_t num_input_pages = ttsl::math::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+    const uint32_t num_output_pages = ttsl::math::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
                                 num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)

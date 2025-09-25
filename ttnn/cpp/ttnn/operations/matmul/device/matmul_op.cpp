@@ -602,8 +602,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
             if (all_dram_interleaved) {
                 in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
                                                : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
-                per_core_M = !transpose_mcast ? tt::div_up(Mt, num_cores_y) : tt::div_up(Mt, num_cores_x);
-                per_core_N = !transpose_mcast ? tt::div_up(Nt, num_cores_x) : tt::div_up(Nt, num_cores_y);
+                per_core_M = !transpose_mcast ? ttsl::math::div_up(Mt, num_cores_y) : ttsl::math::div_up(Mt, num_cores_x);
+                per_core_N = !transpose_mcast ? ttsl::math::div_up(Nt, num_cores_x) : ttsl::math::div_up(Nt, num_cores_y);
 
                 auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
                     input_tensor_a,

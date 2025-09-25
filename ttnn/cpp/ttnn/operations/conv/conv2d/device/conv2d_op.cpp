@@ -51,7 +51,7 @@ Tensor conv2d(
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
-    auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+    auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], ttsl::math::round_up(ashape[3], 16)});
     experimental::auto_format::FormatParams input_a_format_params = {
         .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
     experimental::auto_format::FormatParams input_b_format_params = {
@@ -112,9 +112,9 @@ void Conv2d::validate(
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
             if (this->memory_config.shard_spec().value().orientation == ShardOrientation::COL_MAJOR) {
-                out_width_ntiles = tt::div_up(out_width_ntiles, this->parallelization_config.grid_size.y);
+                out_width_ntiles = ttsl::math::div_up(out_width_ntiles, this->parallelization_config.grid_size.y);
             } else {
-                out_width_ntiles = tt::div_up(out_width_ntiles, this->parallelization_config.grid_size.x);
+                out_width_ntiles = ttsl::math::div_up(out_width_ntiles, this->parallelization_config.grid_size.x);
             }
         }
         TT_FATAL(
@@ -137,7 +137,7 @@ std::vector<TensorSpec> Conv2d::compute_output_specs(const std::vector<Tensor>& 
     auto shape_c = output_channels;
     auto padded_shape_w = parallelization_config.num_cores_nhw *
                           parallelization_config.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
-    auto padded_shape_c = tt::round_up(this->output_channels, tt::constants::TILE_WIDTH);
+    auto padded_shape_c = ttsl::math::round_up(this->output_channels, tt::constants::TILE_WIDTH);
     ttnn::Shape output_shape({1, 1, shape_w, shape_c});
     ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
 

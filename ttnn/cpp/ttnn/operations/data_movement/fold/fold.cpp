@@ -44,8 +44,8 @@ std::vector<Tensor> fold_with_transpose_(
     auto padded_c = c + pad_c;  // end padding only
     auto padded_h = h + pad_h;  // end padding
     auto padded_w = w + pad_w;  // end padding
-    auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
-    auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
+    auto padded_h32 = ttsl::math::round_up(padded_h, TILE_HEIGHT);
+    auto padded_w32 = ttsl::math::round_up(padded_w, TILE_HEIGHT);
 
     log_info(tt::LogOp, "padded_c: {}", padded_c);
     log_info(tt::LogOp, "padded_h: {}", padded_h);
@@ -129,7 +129,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
 
     uint32_t tensor_height = tensor_shape[-2] * tensor_shape[-3] * tensor_shape[-4];
     uint32_t tensor_width = tensor_shape[-1];
-    uint32_t shard_height = tt::div_up(tensor_height, total_cores);
+    uint32_t shard_height = ttsl::math::div_up(tensor_height, total_cores);
     uint32_t shard_width = tensor_width;
 
     auto sharded_memory_config = ttnn::MemoryConfig{
@@ -168,8 +168,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto padded_c = c + pad_c;      // end padding only
     auto padded_h = h + pad_h * 2;  // front and end padding
     auto padded_w = w + pad_w * 2;  // front and end padding
-    auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
-    auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
+    auto padded_h32 = ttsl::math::round_up(padded_h, TILE_HEIGHT);
+    auto padded_w32 = ttsl::math::round_up(padded_w, TILE_HEIGHT);
     auto target_h = padded_h / stride_h;
     auto target_w = padded_w / stride_w;
     auto target_c = padded_c * stride_h * stride_w;

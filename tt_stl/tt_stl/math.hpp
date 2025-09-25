@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace tt {
+namespace ttsl::math {
 
 /**
  * @brief Computes the ceiling of a / b.
@@ -61,4 +61,4 @@ constexpr auto round_down(A a, B b) {
     return static_cast<T>(b) * (static_cast<T>(a) / static_cast<T>(b));
 }
 
-}  // namespace tt
+}  // namespace ttsl::math

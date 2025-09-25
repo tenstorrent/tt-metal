@@ -164,7 +164,7 @@ void RMSAllGather::validate(
                 TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
                 TT_FATAL(program_config.block_h == 1, "Minimal version assumes block_h is 1");
                 TT_FATAL(
-                    tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
+                    ttsl::math::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                     "block_w must equal to K / num_cores.");
                 TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
                 TT_FATAL(a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED, "Error");

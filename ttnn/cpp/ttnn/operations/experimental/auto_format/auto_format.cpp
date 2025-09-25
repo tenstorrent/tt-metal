@@ -303,11 +303,11 @@ ttnn::Shape AutoFormat::pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
         padded_shape_vec[i] = unpadded_shape[i];
     }
     if (rank >= 1) {
-        auto w = tt::round_up(unpadded_shape[rank - 1], TILE_WIDTH);
+        auto w = ttsl::math::round_up(unpadded_shape[rank - 1], TILE_WIDTH);
         padded_shape_vec[rank - 1] = w;
     }
     if (rank >= 2) {
-        auto h = tt::round_up(unpadded_shape[rank - 2], TILE_HEIGHT);
+        auto h = ttsl::math::round_up(unpadded_shape[rank - 2], TILE_HEIGHT);
         padded_shape_vec[rank - 2] = h;
     }
     return Shape(padded_shape_vec);

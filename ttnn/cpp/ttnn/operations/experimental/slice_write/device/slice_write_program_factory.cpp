@@ -106,7 +106,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    uint32_t input_row_size_bytes_offset = ttsl::math::round_up(input_row_size_bytes, src_buffer_alignment);
 
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address(),
@@ -266,7 +266,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    uint32_t input_row_size_bytes_offset = ttsl::math::round_up(input_row_size_bytes, src_buffer_alignment);
     TT_FATAL(
         output_tensor_start[-1] == 0,
         "slice_write expects output start for the last dimension to be 0. Got {}",
@@ -391,7 +391,7 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    uint32_t input_row_size_bytes_offset = ttsl::math::round_up(input_row_size_bytes, src_buffer_alignment);
 
     uint32_t max_read_size = 4096;
 
@@ -530,12 +530,12 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     std::vector<uint32_t> id_per_dim(num_dims);
     std::vector<uint32_t> size_till_end(num_dims);
 
-    num_input_tiles_per_dim[0] = tt::div_up(actual_input_shape[-1], (TILE_WIDTH * num_cores_channels));
-    num_input_tiles_per_dim[1] = tt::div_up(actual_input_shape[-2], TILE_HEIGHT);
+    num_input_tiles_per_dim[0] = ttsl::math::div_up(actual_input_shape[-1], (TILE_WIDTH * num_cores_channels));
+    num_input_tiles_per_dim[1] = ttsl::math::div_up(actual_input_shape[-2], TILE_HEIGHT);
 
-    num_output_tiles_per_dim[0] = tt::div_up(output_shape[-1], TILE_WIDTH) - num_input_tiles_per_dim[0];
-    num_output_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) - num_input_tiles_per_dim[1];
-    num_output_tiles_per_dim[1] *= tt::div_up(output_shape[-1], TILE_WIDTH);
+    num_output_tiles_per_dim[0] = ttsl::math::div_up(output_shape[-1], TILE_WIDTH) - num_input_tiles_per_dim[0];
+    num_output_tiles_per_dim[1] = ttsl::math::div_up(output_shape[-2], TILE_HEIGHT) - num_input_tiles_per_dim[1];
+    num_output_tiles_per_dim[1] *= ttsl::math::div_up(output_shape[-1], TILE_WIDTH);
 
     uint32_t num_tiles_per_channel = num_input_tiles_per_dim[0];
 
@@ -548,8 +548,8 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         input_shape,
         output_shape);
 
-    accumulated_total_tiles_per_dim[0] = tt::div_up(output_shape[-1], TILE_WIDTH);
-    accumulated_total_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
+    accumulated_total_tiles_per_dim[0] = ttsl::math::div_up(output_shape[-1], TILE_WIDTH);
+    accumulated_total_tiles_per_dim[1] = ttsl::math::div_up(output_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
     uint32_t output_channel_tiles = accumulated_total_tiles_per_dim[0];
     accumulated_input_total_tiles_per_dim[0] = num_input_tiles_per_dim[0];
@@ -860,14 +860,14 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;  // cb for reading in input
     const uint32_t dst0_cb_index = tt::CBIndex::c_1;  // cb for reading in output pages for last dim striding
-    uint32_t cb_page_size = tt::round_up(input_row_size_bytes, alignment);
+    uint32_t cb_page_size = ttsl::math::round_up(input_row_size_bytes, alignment);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
     uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_input_pages != 0) {
         // Round up num_input_pages so that it takes the max of both core groups.
-        auto num_input_pages_pad32 = tt::round_up(num_input_pages, 32);
+        auto num_input_pages_pad32 = ttsl::math::round_up(num_input_pages, 32);
         num_sticks_per_core_read =
             tt::tt_metal::merge_num_sticks_to_read(num_input_pages_pad32, cb_page_size, max_read_size);
         num_read_per_barrier = num_input_pages_pad32 / num_sticks_per_core_read;
@@ -881,7 +881,7 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     if (stride[-1] != 1) {
         writer_defines["LAST_DIM_STRIDED"] = "1";
         uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
-        cb_page_size = tt::round_up(output_row_size_bytes, alignment);
+        cb_page_size = ttsl::math::round_up(output_row_size_bytes, alignment);
         tt::tt_metal::CircularBufferConfig cb_dst0_config =
             tt::tt_metal::CircularBufferConfig(
                 num_read_per_barrier * 2 * cb_page_size,

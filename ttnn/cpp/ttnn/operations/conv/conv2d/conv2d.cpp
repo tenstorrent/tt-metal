@@ -271,9 +271,9 @@ Result conv2d_DRAM(
 
     bool first_run = true;
     const uint32_t min_output_slice_size =
-        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+        ttsl::math::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
     const uint32_t output_slice_rem =
-        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
+        ttsl::math::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
@@ -615,7 +615,7 @@ Result conv2d_L1(
         input_tensor.memory_config().buffer_type(),
         mm_conv,
         input_tensor_post_tm.memory_config());
-    const uint32_t in_channels_padded = tt::round_up(
+    const uint32_t in_channels_padded = ttsl::math::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(

@@ -49,7 +49,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
         // If there are two core groups, assign to cores0 and cores1
         // Otherwise, assign to cores0
         // Ensure red_dim is divided in blocks of min_red_dim_units_per_core
-        const uint32_t total_blocks = tt::div_up(red_dim_units, min_red_dim_units_per_core);
+        const uint32_t total_blocks = ttsl::math::div_up(red_dim_units, min_red_dim_units_per_core);
 
         if (all_cores.size() == 2) {
             cores0 = CoreRangeSet(all_cores.ranges().at(0));
@@ -57,7 +57,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
 
             // Ensure red_dim is divided in blocks of min_red_dim_units_per_core, equally to all cores
             const uint32_t total_cores = cores0.num_cores() + cores1.num_cores();
-            const uint32_t blocks_per_core = tt::div_up(total_blocks, total_cores);
+            const uint32_t blocks_per_core = ttsl::math::div_up(total_blocks, total_cores);
 
             red_dim_units0 = blocks_per_core * min_red_dim_units_per_core;
             red_dim_units1 = blocks_per_core * min_red_dim_units_per_core;
@@ -68,7 +68,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
             cores1 = CoreRangeSet();
 
             const auto total_cores = cores0.num_cores();
-            const uint32_t blocks_per_core = tt::div_up(total_blocks, total_cores);
+            const uint32_t blocks_per_core = ttsl::math::div_up(total_blocks, total_cores);
 
             red_dim_units0 = blocks_per_core * min_red_dim_units_per_core;
             red_dim_units1 = 0;
@@ -78,7 +78,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
         const auto core_grid = device->compute_with_storage_grid_size();
         uint32_t num_total_cores;
         std::tie(num_total_cores, all_cores, cores0, cores1, red_dim_units0, red_dim_units1) =
-            tt::tt_metal::split_work_to_cores(core_grid, tt::div_up(red_dim_units, min_red_dim_units_per_core));
+            tt::tt_metal::split_work_to_cores(core_grid, ttsl::math::div_up(red_dim_units, min_red_dim_units_per_core));
         red_dim_units0 *= min_red_dim_units_per_core;
         red_dim_units1 *= min_red_dim_units_per_core;
     }

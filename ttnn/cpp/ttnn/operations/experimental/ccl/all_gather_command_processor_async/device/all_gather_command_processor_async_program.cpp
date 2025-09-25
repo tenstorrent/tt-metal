@@ -176,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
         num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
-        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_forward = ttsl::math::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
         if (ring_index % 2 == 0) {
             std::swap(num_targets_forward, num_targets_backward);
