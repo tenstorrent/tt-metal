@@ -54,5 +54,10 @@ if ! $PYTHON "${SCRIPT_PY}" \
 fi
 
 if which clang-format > /dev/null; then
-    clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}"
+    if ! clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}" 2>/dev/null; then
+        # Try with Google style as a minimal formatting if default fails
+        if ! clang-format -i --style=Google "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}" 2>/dev/null; then
+            echo "Warning: clang-format failed (might be a version compatibility issue)"
+        fi
+    fi
 fi
