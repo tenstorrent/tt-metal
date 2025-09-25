@@ -187,6 +187,9 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
+          ls $HF_HUB_CACHE
+          ls $TT_CACHE_HOME
+
           if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
             export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
           else
