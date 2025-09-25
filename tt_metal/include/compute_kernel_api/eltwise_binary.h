@@ -254,10 +254,6 @@ ALWI void sub_bcast_row_tile_init() {
 }
 
 ALWI void sub_bcast_row_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint dst_index) {
-    UNPACK((llk_unpack_AB_sub_bcast_row<>(icb0, icb1, itile0, itile1)));
-    MATH((llk_math_eltwise_binary_sub_bcast_row<
-          EltwiseBinaryType::ELWSUB,
-          BroadcastType::NONE,
-          DstSync::SyncHalf,
-          DST_ACCUM_MODE>(dst_index)));
+    UNPACK((llk_unpack_AB_sub_bcast_row<>(icb0, icb1, 0, 0)));
+    MATH((llk_math_eltwise_binary_sub_bcast_row<>(dst_index)));
 }

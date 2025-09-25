@@ -101,10 +101,10 @@ inline void llk_math_eltwise_sub_bcast_row_init() {
 }
 
 template <
-    EltwiseBinaryType eltwise_binary_type,
-    BroadcastType src_b_bcast_type,
-    DstSync Dst,
-    bool is_fp32_dest_acc_en,
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWSUB,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    DstSync Dst = DstSync::SyncHalf,
+    bool is_fp32_dest_acc_en = false,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_sub_bcast_row(uint dst_index) {

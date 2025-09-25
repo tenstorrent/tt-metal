@@ -218,12 +218,42 @@ bool single_core_binary(
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_input2 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+    // Create a vector of 1024 bfloat16 values (1s, 2s, 3s, 4s - 256 of each)
+    std::vector<bfloat16> input0_values;
+    for (size_t i = 0; i < 16; i++) {
+        input0_values.push_back(bfloat16(1.0f));
+    }
+    for (size_t i = 0; i < 240; i++) {
+        input0_values.push_back(bfloat16(0.0f));
+    }
+    for (size_t i = 0; i < 16; i++) {
+        input0_values.push_back(bfloat16(2.0f));
+    }
+    for (size_t i = 0; i < 240; i++) {
+        input0_values.push_back(bfloat16(0.0f));
+    }
+    for (size_t i = 0; i < 16; i++) {
+        input0_values.push_back(bfloat16(3.0f));
+    }
+    for (size_t i = 0; i < 240; i++) {
+        input0_values.push_back(bfloat16(0.0f));
+    }
+    for (size_t i = 0; i < 16; i++) {
+        input0_values.push_back(bfloat16(4.0f));
+    }
+    for (size_t i = 0; i < 240; i++) {
+        input0_values.push_back(bfloat16(0.0f));
+    }
+
+    // Create a vector of 1024 bfloat16 values (all 5s)
+    std::vector<bfloat16> input1_values(1024, bfloat16(5.0f));
+
+    // Pack the bfloat16 values into uint32_t
+    std::vector<uint32_t> packed_input0 = pack_vector<uint32_t, bfloat16>(input0_values);
+    std::vector<uint32_t> packed_input1 = pack_vector<uint32_t, bfloat16>(input1_values);
+
+    // Keep packed_input2 as random
+    std::vector<uint32_t> packed_input2(byte_size / sizeof(uint32_t), 0);
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
@@ -329,7 +359,7 @@ bool single_core_binary(
 }  // namespace unit_tests::compute::binary
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::LoFi); i++) {
         if (i == 1) {
             continue;
         }

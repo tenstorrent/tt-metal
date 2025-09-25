@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
+#include "debug/dprint.h"
 
 /*************************************************************************
  * LLK UNPACK AB
@@ -161,6 +162,8 @@ inline void llk_unpack_AB_sub_bcast_row(
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b;  // + offset_address_b;
+
+    DPRINT << "Unpack A address: " << address_a << " Unpack B address: " << address_b << ENDL();
 
     WAYPOINT("UABW");
     _llk_unpack_AB_sub_bcast_row_<BType>(address_a, address_b);
