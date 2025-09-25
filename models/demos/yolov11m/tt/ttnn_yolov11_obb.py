@@ -119,11 +119,47 @@ class TtnnOBB:
         x3 = self.cv2_2_2(x3)
         
         # cv3: Class predictions with DWConv structure for all scales
+        # Debug: Check input to cv3_0 (y1)
+        y1_debug = ttnn.to_torch(y1)
+        y1_flat = y1_debug.flatten()
+        y1_unique, _ = torch.unique(y1_flat, return_counts=True)
+        print(f"🔍 [DEBUG] INPUT y1 to cv3_0: {len(y1_unique)} unique values out of {len(y1_flat)} total")
+        print(f"    Range: [{y1_flat.min()}, {y1_flat.max()}], Mean: {y1_flat.mean()}")
+        
         x4 = self.cv3_0_0_dw(device, y1)
+        # Debug: After first DWConv
+        x4_step1 = ttnn.to_torch(x4)
+        x4_step1_flat = x4_step1.flatten()
+        x4_step1_unique, _ = torch.unique(x4_step1_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After cv3_0_0_dw: {len(x4_step1_unique)} unique values out of {len(x4_step1_flat)} total")
+        
         x4 = self.cv3_0_0_conv(device, x4)
+        # Debug: After first Conv
+        x4_step2 = ttnn.to_torch(x4)
+        x4_step2_flat = x4_step2.flatten()
+        x4_step2_unique, _ = torch.unique(x4_step2_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After cv3_0_0_conv: {len(x4_step2_unique)} unique values out of {len(x4_step2_flat)} total")
+        
         x4 = self.cv3_0_1_dw(device, x4)
+        # Debug: After second DWConv
+        x4_step3 = ttnn.to_torch(x4)
+        x4_step3_flat = x4_step3.flatten()
+        x4_step3_unique, _ = torch.unique(x4_step3_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After cv3_0_1_dw: {len(x4_step3_unique)} unique values out of {len(x4_step3_flat)} total")
+        
         x4 = self.cv3_0_1_conv(device, x4)
+        # Debug: After second Conv
+        x4_step4 = ttnn.to_torch(x4)
+        x4_step4_flat = x4_step4.flatten()
+        x4_step4_unique, _ = torch.unique(x4_step4_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After cv3_0_1_conv: {len(x4_step4_unique)} unique values out of {len(x4_step4_flat)} total")
+        
         x4 = self.cv3_0_2(x4)
+        # Debug: After final Conv2d
+        x4_step5 = ttnn.to_torch(x4)
+        x4_step5_flat = x4_step5.flatten()
+        x4_step5_unique, _ = torch.unique(x4_step5_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After cv3_0_2 (final): {len(x4_step5_unique)} unique values out of {len(x4_step5_flat)} total")
         
         # Debug: Check cv3 scale 0 output (x4)
         x4_debug = ttnn.to_torch(x4)
