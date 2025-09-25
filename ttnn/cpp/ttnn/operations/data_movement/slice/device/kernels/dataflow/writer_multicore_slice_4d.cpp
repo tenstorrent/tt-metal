@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * TTNN Slice Operation - Multi-Core Writer Kernel (N-Dimensional Support)
+ * TTNN Slice Operation - Multi-Core Writer Kernel (4D Support)
  *
  * This kernel handles the output data writing phase of the slice operation for multi-core
  * execution, writing sliced tensor data from circular buffer to output tensor memory.
- * Supports 1D, 2D, 3D, 4D, 5D, etc. tensors with work distribution across cores.
+ * Supports 1D, 2D, 3D, and 4D tensors with work distribution across cores.
  *
  * Key Responsibilities:
  * - Read sliced data from circular buffer (produced by reader kernel)
@@ -37,46 +37,31 @@
  * - Sequential access patterns optimized for DRAM controllers
  * - Parallel processing with load balancing across multiple cores
  *
- * N-Dimensional Processing:
- * - Row concept: for rank R, rows = product(dims[0:R-1]), width = dims[R-1]
- * - Each core writes a contiguous range of logical output rows
- * - Simple linear mapping from logical row index to physical address
- *
- * Compatible with: TTNN framework, ROW_MAJOR_LAYOUT tensors, 1D-ND dimensions, multi-core execution
+ * Compatible with: TTNN framework, ROW_MAJOR_LAYOUT tensors, 1D-4D dimensions, multi-core execution
  */
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
-    DPRINT << "ND writer kernel_main" << ENDL();
-
-    // Runtime arguments - first get basic parameters
+    // Runtime arguments for 4D slice support with multi-core work distribution
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t tensor_rank = get_arg_val<uint32_t>(1);
-    uint32_t element_size = get_arg_val<uint32_t>(2);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(3);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(4);
+    uint32_t output_w = get_arg_val<uint32_t>(2);
+    uint32_t output_h = get_arg_val<uint32_t>(3);
+    uint32_t output_d = get_arg_val<uint32_t>(4);
+    uint32_t output_n = get_arg_val<uint32_t>(5);
+    uint32_t element_size = get_arg_val<uint32_t>(6);
+    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(7);
+    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(8);
 
     // Compile-time arguments
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
-    // Get dimension arrays from runtime arguments
-    // Layout: output_dims[rank]
-    uint32_t arg_offset = 5;
-
-    // Read output dimensions
-    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(arg_offset));
-
-    DPRINT << "tensor_rank: " << tensor_rank << ENDL();
-    DPRINT << "num_rows_for_this_core: " << num_rows_for_this_core << ENDL();
-    DPRINT << "start_row_for_this_core: " << start_row_for_this_core << ENDL();
-
     // Calculate sizes - working with rows, not tiles
-    uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
+    uint32_t output_bytes_per_row = output_w * element_size;  // Dynamic element size
 
     // Set up TensorAccessor for output data - use row size as page size
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_bytes_per_row);

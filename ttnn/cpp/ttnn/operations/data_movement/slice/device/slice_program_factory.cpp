@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_op.hpp"
+#include "slice_program_factory.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 

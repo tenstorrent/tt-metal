@@ -42,21 +42,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
 
 void kernel_main() {
-    DPRINT << "LLONG reader kernel_main" << ENDL();
     // Runtime arguments for 4D slice support with multi-core work distribution
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t tensor_rank = get_arg_val<uint32_t>(1);
@@ -83,8 +70,6 @@ void kernel_main() {
     uint32_t element_size = get_arg_val<uint32_t>(22);
     uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(23);
     uint32_t start_row_for_this_core = get_arg_val<uint32_t>(24);
-    DPRINT << "num_rows_for_this_core: " << num_rows_for_this_core << ENDL();
-    DPRINT << "start_row_for_this_core: " << start_row_for_this_core << ENDL();
 
     // Compile-time arguments
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);

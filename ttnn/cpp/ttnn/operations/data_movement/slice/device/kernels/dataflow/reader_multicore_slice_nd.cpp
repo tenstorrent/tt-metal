@@ -48,11 +48,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
-    DPRINT << "ND reader kernel_main" << ENDL();
-
     // Runtime arguments - first get basic parameters
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t tensor_rank = get_arg_val<uint32_t>(1);
@@ -85,10 +82,6 @@ void kernel_main() {
     arg_offset += tensor_rank;
 
     volatile tt_l1_ptr uint32_t* slice_steps = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(arg_offset));
-
-    DPRINT << "tensor_rank: " << tensor_rank << ENDL();
-    DPRINT << "num_rows_for_this_core: " << num_rows_for_this_core << ENDL();
-    DPRINT << "start_row_for_this_core: " << start_row_for_this_core << ENDL();
 
     // Calculate sizes - working with rows, not tiles
     uint32_t input_bytes_per_row = input_dims[tensor_rank - 1] * element_size;

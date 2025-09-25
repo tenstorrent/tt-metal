@@ -597,13 +597,13 @@ def test_run_slice_test(
 )
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttnn.DRAM_MEMORY_CONFIG,),
-    ids=["out_DRAM"],
+    (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in_mem_config",
-    (ttnn.DRAM_MEMORY_CONFIG,),
-    ids=["in0_DRAM"],
+    (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "input_tensor_shape, output_tensor_start, output_tensor_end",
@@ -613,15 +613,21 @@ def test_run_slice_test(
         ((1, 1, 64, 64), (0, 0, 0, 0), (1, 1, 32, 64)),
         ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
         ((1, 1, 128, 96), (0, 0, 64, 32), (1, 1, 96, 96)),
+        ((1, 1, 128, 96), (0, 0, 64, 33), (1, 1, 96, 96)),
         ((1, 3, 32, 32), (0, 1, 0, 0), (1, 2, 32, 32)),
         ((1, 6, 32, 32), (0, 2, 0, 0), (1, 4, 32, 32)),
         ((1, 6, 128, 64), (0, 2, 64, 32), (1, 4, 96, 64)),
         ((4, 6, 128, 64), (1, 2, 64, 32), (2, 4, 96, 64)),
+        ((4, 6, 128, 64), (1, 2, 64, 33), (2, 4, 96, 64)),
     ),
 )
 @pytest.mark.parametrize(
     "slice_step",
-    ((2, 2, 2, 2),),
+    (
+        (1, 1, 1, 1),
+        (2, 2, 2, 2),
+        (1, 3, 2, 5),
+    ),
 )
 def test_run_slice_rm_multi_core_test(
     input_tensor_shape,
