@@ -65,7 +65,7 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.padded_shape();
     if (!this->token_idx.has_value()) {
-        shape[-2] = round_up(this->seq_len, TILE_HEIGHT);
+        shape[-2] = ttsl::math::round_up(this->seq_len, TILE_HEIGHT);
     }
 
     if (this->output_mem_config.is_sharded()) {

@@ -9,6 +9,7 @@
 #include <vector>
 #include <array>
 #include <ranges>
+#include <tt_stl/math.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
@@ -509,7 +510,7 @@ static size_t compute_math_pages_from_tensor_slices(
     using namespace ttnn::ccl::cmd;
 
     auto get_slice_vol = [pages_per_cb_packet](ttnn::ccl::v2::TensorSlice const& slice) {
-        return round_up(slice.worker_slice_shape.volume(), pages_per_cb_packet);
+        return ttsl::math::round_up(slice.worker_slice_shape.volume(), pages_per_cb_packet);
     };
 
     size_t total_num_pages = 0;

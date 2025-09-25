@@ -129,7 +129,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
     std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, erisc_unreserved_base + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(
         max_concurrent_samples,
-        erisc_unreserved_base + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
+        erisc_unreserved_base + 16 + 16 + ttsl::math::round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
         erisc_buffer_addresses.at(i) += i * sample_page_size;
@@ -170,7 +170,7 @@ std::vector<uint32_t> get_eth_sender_rt_args(
     std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, erisc_unreserved_base + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(
         max_concurrent_samples,
-        erisc_unreserved_base + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
+        erisc_unreserved_base + 16 + 16 + ttsl::math::round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_buffer_addresses.at(i) += i * sample_page_size;
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
