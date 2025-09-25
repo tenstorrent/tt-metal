@@ -257,12 +257,26 @@ class WanAttention:
         if self.parallel_config.tensor_parallel.factor > 1:
             q_1BNF = self.shard_qk_on_tp(q_1BNF, compute_kernel_config=self.mm_compute_kernel_config)
             k_1BNF = self.shard_qk_on_tp(k_1BNF, compute_kernel_config=self.mm_compute_kernel_config)
+            # q_1BNF = ttnn.mesh_partition(q_1BNF, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
+
+            # # NOTE: mesh_partition does not support padded shapes, so explicitly pad and unpad
+            # k_N_logical = None
+            # if k_1BNF.shape[2] != k_1BNF.padded_shape[2]:
+            #     k_N_logical = k_1BNF.shape[2]
+            #     padded_shape = (k_1BNF.shape[0], k_1BNF.shape[1], k_1BNF.padded_shape[2], k_1BNF.shape[3])
+            #     k_1BNF = ttnn.reshape(k_1BNF, padded_shape, padded_shape)
+            # k_1BNF = ttnn.mesh_partition(k_1BNF, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
+            # if k_N_logical is not None:
+            #     unpadded_shape = (k_1BNF.shape[0], k_1BNF.shape[1], k_N_logical, k_1BNF.shape[3])
+            #     k_1BNF = ttnn.reshape(k_1BNF, unpadded_shape, k_1BNF.shape)
 
         def create_heads(inp):
             # Unfortunate hack - we don't have a split_heads operation that takes unfused qkv
+            # Can pass None kv input and 0 KV heads to create_qkv_heads to create just Q heads, but it's suspicious
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 inp,
                 ttnn.concat([inp, inp], dim=-1),
+                None,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_heads,
                 transpose_k_heads=False,
