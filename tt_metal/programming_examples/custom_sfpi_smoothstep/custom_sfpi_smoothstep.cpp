@@ -2,18 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/ostream.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <random>
-#include <string_view>
 #include <vector>
-#include "tt-metalium/base_types.hpp"
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -24,13 +23,12 @@ int main(int argc, char** argv) {
 
     // clang-format off
     try {
-        // Initialize the device (here we use the 1st device, but you can use any device)
+        // Create a 1x1 mesh on device 0 (same API scales to multi-device meshes)
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        // In Metalium, submitting operations to the device is done through a command queue. This includes
-        // uploading/downloading data to/from the device, and executing programs.
-        CommandQueue& cq = device->command_queue();
+        // Submit work via the mesh command queue: uploads/downloads and program execution.
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
@@ -46,18 +44,21 @@ int main(int argc, char** argv) {
         constexpr uint32_t n_tiles = 64;
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
+        constexpr uint32_t dram_buffer_size = tile_size_bytes * n_tiles;
 
-        // Create 3 buffers on DRAM. These will hold the input and output data. src0 and src1 are the input buffers, dst is the
-        // output buffer.
-        InterleavedBufferConfig config{
-            .device = device,                       // The device to create the buffer on
-            .size = n_tiles * tile_size_bytes,      // The size of the buffer in bytes
-            .page_size = tile_size_bytes,           // The page size of the buffer in bytes. Unlike the `loopback` example, we
-                                                    // need the page size to be the same as the tile size for a large portion of
-                                                    // the NoC transfer APIs to work.
-            .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
-        auto src0_dram_buffer = CreateBuffer(config);
-        auto dst_dram_buffer = CreateBuffer(config);
+        // Configure mesh buffers. Use single-tile page size so transfers operate tile-by-tile.
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = tile_size_bytes,    // Number of bytes when round-robin between banks
+            .buffer_type = BufferType::DRAM  // Type of buffer (DRAM or L1)
+        };
+        distributed::ReplicatedBufferConfig dram_buffer_config{
+            // Size per device (replicated across mesh). Since we are operating on a unit mesh this is the total size.
+            .size = dram_buffer_size};
+
+        // Allocate the buffers (replicated across mesh; on unit mesh ⇒ single device allocation)
+        // src0 is input buffer; dst is output buffer
+        auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
 
         // Initialize the input buffers with random data. For this example, src0 is a random vector of bfloat16 values
         std::mt19937 rng(std::random_device{}());
@@ -69,7 +70,7 @@ int main(int argc, char** argv) {
 
 
         // Upload the data from host to the device.
-        EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
@@ -102,14 +103,14 @@ int main(int argc, char** argv) {
         // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
         // back to DRAM.
         std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_compile_time_args);
         auto reader = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/dataflow/read_tiles.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_compile_time_args);
         auto writer = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "custom_sfpi_smoothstep/kernels/dataflow/write_tile.cpp",
@@ -129,19 +130,20 @@ int main(int argc, char** argv) {
         SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
         SetRuntimeArgs(program, compute, core, {n_tiles});
 
-        // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
-        // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must
-        // ensure that the kernel is finished before we read the output buffer. This is done by calling Finish(cq) which waits until
-        // all operations in the command queue are finished. This is equivalent to calling EnqueueProgram(cq, program, true); telling
-        // Metalium to wait until the program is finished before returning.
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
-        // Equivalently:
-        // EnqueueProgram(cq, program, true);
+        // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
+        // local to a single device. Here we create a workload for our single-device mesh.
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+        // Add the program to the workload for the mesh.
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion before reading back.
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        distributed::Finish(cq);
+        // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
         // Read the output buffer and compare it with the expected output.
         std::vector<bfloat16> result_vec;
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking*/ true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
@@ -163,7 +165,9 @@ int main(int argc, char** argv) {
         }
 
         // Finally, we close the device.
-        pass &= CloseDevice(device);
+        if (!mesh_device->close()) {
+            pass = false;
+        }
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");
         fmt::print(stderr, "{}\n", e.what());
