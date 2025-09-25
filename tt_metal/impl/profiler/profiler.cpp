@@ -1101,12 +1101,12 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
         core_control_buffers[virtual_core] = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device_id, virtual_core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
     }
-    log_info(
-        tt::LogMetal,
-        "Read global trace count from control buffer for core {}, {}: {}",
-        virtual_core.x,
-        virtual_core.y,
-        core_control_buffers[virtual_core][kernel_profiler::GLOBAL_TRACE_COUNT]);
+    // log_info(
+    //     tt::LogMetal,
+    //     "Read global trace count from control buffer for core {}, {}: {}",
+    //     virtual_core.x,
+    //     virtual_core.y,
+    //     core_control_buffers[virtual_core][kernel_profiler::GLOBAL_TRACE_COUNT]);
 }
 
 void DeviceProfiler::readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
@@ -1236,7 +1236,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             uint32_t riscNumRead = 0;
             uint32_t coreFlatIDRead = 0;
-            uint32_t traceCounterRead = 0;
+            uint32_t deviceTraceCounterRead = 0;
             uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
@@ -1261,7 +1261,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     // TODO(MO): Cleanup magic numbers
                     riscNumRead = data_buffer.at(index) & 0x7;
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
-                    traceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
+                    deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
                     runHostCounterRead = data_buffer.at(index + 1);
                     log_info(
                         tt::LogMetal,
@@ -1269,15 +1269,14 @@ void DeviceProfiler::readRiscProfilerResults(
                         data_source,
                         worker_core.x,
                         worker_core.y,
-                        traceCounterRead);
+                        deviceTraceCounterRead);
                     uint32_t base_program_id =
                         tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
 
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
                 } else if (oneStartFound) {
-                    uint32_t timer_id =
-                        (data_buffer.at(index) >> 12) & 0x7FFFF;  // will this conflict with traceCounterRead?
+                    uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
                     switch (packet_type) {
@@ -1318,6 +1317,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 readDeviceMarkerData(
                                     device_markers_for_core_risc,
                                     runHostCounterRead,
+                                    deviceTraceCounterRead,
                                     opname,
                                     device_id,
                                     phys_coord,
@@ -1335,6 +1335,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
                                 runHostCounterRead,
+                                deviceTraceCounterRead,
                                 opname,
                                 device_id,
                                 phys_coord,
@@ -1353,6 +1354,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
                                 runHostCounterRead,
+                                deviceTraceCounterRead,
                                 opname,
                                 device_id,
                                 phys_coord,
@@ -1368,6 +1370,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
                                 runHostCounterRead,
+                                deviceTraceCounterRead,
                                 opname,
                                 device_id,
                                 phys_coord,
@@ -1401,6 +1404,7 @@ tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
 void DeviceProfiler::readDeviceMarkerData(
     std::set<tracy::TTDeviceMarker>& device_markers,
     uint32_t run_host_id,
+    uint32_t device_trace_counter,
     const std::string& op_name,
     chip_id_t device_id,
     const CoreCoord& physical_core,
@@ -1414,19 +1418,24 @@ void DeviceProfiler::readDeviceMarkerData(
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
-    log_info(tt::LogMetal, "trace_ids size: {}", trace_ids.size());
-    for (const auto& trace_id : trace_ids) {
-        log_info(tt::LogMetal, "trace_id: {}", trace_id);
-    }
+    TT_ASSERT(device_trace_counter <= trace_ids.size());
+    const uint64_t trace_id =
+        device_trace_counter == 0 ? tracy::TTDeviceMarker::INVALID_NUM : trace_ids[device_trace_counter - 1];
 
-    TT_ASSERT(
-        trace_ids.size() == traceCounterRead,
-        "trace_ids size: {}, traceCounterRead: {}",
-        trace_ids.size(),
-        traceCounterRead);
+    // log_info(tt::LogMetal, "trace_ids size: {}", trace_ids.size());
+    // for (const auto& trace_id : trace_ids) {
+    //     log_info(tt::LogMetal, "trace_id: {}", trace_id);
+    // }
+
+    // TT_ASSERT(
+    //     trace_ids.size() == traceCounterRead,
+    //     "trace_ids size: {}, traceCounterRead: {}",
+    //     trace_ids.size(),
+    //     traceCounterRead);
 
     const auto& [_, new_marker_inserted] = device_markers.emplace(
         run_host_id,
+        trace_id,
         device_id,
         physical_core.x,
         physical_core.y,

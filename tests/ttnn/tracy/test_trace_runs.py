@@ -36,7 +36,10 @@ def test_with_ops(device):
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(5):
+        print(f"execute_trace {i}")
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        ttnn.ReadDeviceProfiler(device)
+    print("release trace")
     ttnn.release_trace(device, tid)
 
 
@@ -67,7 +70,10 @@ def test_with_ops_single_core(device):
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(5):
+        print(f"execute_trace {i}")
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        ttnn.ReadDeviceProfiler(device)
+    print("release trace")
     ttnn.release_trace(device, tid)
 
 
