@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import torch
 from models.demos.yolov11m.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors
 from models.demos.yolov11m.tt.ttnn_yolov11_dwconv import TtnnDWConv
 
@@ -213,22 +214,42 @@ class TtnnOBB:
         yb_debug = ttnn.to_torch(yb)
         print(f"🔍 [DEBUG] TTNN raw yb before sigmoid - min: {yb_debug.min()}, max: {yb_debug.max()}, mean: {yb_debug.mean()}")
         
-        # Debug: Show 200 highest raw values before scaling
+        # Debug: Full distribution analysis before scaling
         yb_flat = yb_debug.flatten()
-        yb_sorted, _ = yb_flat.sort(descending=True)  # Sort highest to lowest
-        print(f"🔍 [DEBUG] TTNN 100 HIGHEST raw values BEFORE scaling:")
-        print(f"    Top 100:    {yb_sorted[:100].tolist()}")
+        
+        # 1. Statistical summary
+        percentiles = [0, 1, 5, 10, 25, 50, 75, 90, 95, 99, 100]
+        values = [torch.quantile(yb_flat, p/100.0) for p in percentiles]
+        print(f"🔍 [DEBUG] TTNN Raw distribution percentiles:")
+        for p, v in zip(percentiles, values):
+            print(f"    {p:3d}%: {v:.6f}")
+        
+        # 2. Unique value analysis (reveals quantization)
+        unique_vals, counts = torch.unique(yb_flat, return_counts=True)
+        print(f"🔍 [DEBUG] TTNN Unique values: {len(unique_vals)} out of {len(yb_flat)} total")
+        print(f"    Most common values:")
+        sorted_indices = torch.argsort(counts, descending=True)
+        for i in range(min(10, len(unique_vals))):
+            idx = sorted_indices[i]
+            print(f"      {unique_vals[idx]:.6f}: {counts[idx]:5d} times")
+        
+        # 3. Range analysis
+        ranges = [(-25, -20), (-20, -15), (-15, -10), (-10, -5), (-5, 0), (0, 5)]
+        print(f"🔍 [DEBUG] TTNN Value ranges:")
+        for low, high in ranges:
+            mask = (yb_flat >= low) & (yb_flat < high)
+            count = mask.sum()
+            print(f"    [{low:4.0f}, {high:4.0f}): {count:5d} values ({100*count/len(yb_flat):.1f}%)")
         
         # Simple fix: Scale and shift to match PyTorch sigmoid input range
         # PyTorch range: min=-21, max=1.98, mean=-13.6
         # Let's add bias to bring mean closer to reasonable sigmoid range
-        temperature = 3  # experiment with values like 1.5, 2.0, etc.
-        yb = ttnn.multiply(yb, 1 / temperature)
-
-        print(f"🔍 [DEBUG] Applying bias correction...")
-        bias_correction = 3.0  # Add 10 to shift mean from ~-13 to ~-3
+        bias_correction = 10.0  # Add 10 to shift mean from ~-13 to ~-3
         yb = ttnn.add(yb, bias_correction)
         
+        scale = 1.5  # experiment with values like 1.5, 2.0, etc.
+        yb = ttnn.multiply(yb, scale)
+
         # Debug: Check values after bias correction
         yb_debug_after = ttnn.to_torch(yb)
         print(f"🔍 [DEBUG] TTNN after bias correction - min: {yb_debug_after.min()}, max: {yb_debug_after.max()}, mean: {yb_debug_after.mean()}")
@@ -239,11 +260,24 @@ class TtnnOBB:
         yb_debug_final = ttnn.to_torch(yb)
         print(f"🔍 [DEBUG] TTNN after sigmoid - min: {yb_debug_final.min()}, max: {yb_debug_final.max()}, mean: {yb_debug_final.mean()}")
         
-        # Debug: Show 200 highest values after applying sigmoid function
+        # Debug: Full distribution analysis after sigmoid
         yb_final_flat = yb_debug_final.flatten()
-        yb_final_sorted, _ = yb_final_flat.sort(descending=True)  # Sort highest to lowest
-        print(f"🔍 [DEBUG] TTNN 100 HIGHEST values AFTER sigmoid:")
-        print(f"    Top 100:    {yb_final_sorted[:100].tolist()}")
+        
+        # Statistical summary for sigmoid outputs
+        percentiles = [0, 1, 5, 10, 25, 50, 75, 90, 95, 99, 100]
+        values = [torch.quantile(yb_final_flat, p/100.0) for p in percentiles]
+        print(f"🔍 [DEBUG] TTNN Sigmoid distribution percentiles:")
+        for p, v in zip(percentiles, values):
+            print(f"    {p:3d}%: {v:.6f}")
+        
+        # Unique value analysis for sigmoid outputs
+        unique_vals, counts = torch.unique(yb_final_flat, return_counts=True)
+        print(f"🔍 [DEBUG] TTNN Sigmoid unique values: {len(unique_vals)} out of {len(yb_final_flat)} total")
+        print(f"    Most common sigmoid values:")
+        sorted_indices = torch.argsort(counts, descending=True)
+        for i in range(min(10, len(unique_vals))):
+            idx = sorted_indices[i]
+            print(f"      {unique_vals[idx]:.6f}: {counts[idx]:5d} times")
         
         # Process angle predictions - reshape and concat to get [batch, 1, N]
         x7 = ttnn.reshape(x7, (x7.shape[0], x7.shape[1], x7.shape[2] * x7.shape[3]))

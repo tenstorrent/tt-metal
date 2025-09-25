@@ -1168,7 +1168,19 @@ class OBB(nn.Module):
         
         # Debug: Check raw values before sigmoid
         print(f"🔍 [DEBUG] PyTorch OBB raw yb before sigmoid - min: {yb.min()}, max: {yb.max()}, mean: {yb.mean()}")
-        print(f"🔍 [DEBUG] PyTorch OBB raw yb sample: {yb[0, :5, :5]}")
+        
+        # Debug: PyTorch distribution analysis
+        yb_flat = yb.flatten()
+        unique_vals, counts = torch.unique(yb_flat, return_counts=True)
+        print(f"🔍 [DEBUG] PyTorch Unique values: {len(unique_vals)} out of {len(yb_flat)} total")
+        
+        # Show quantization comparison
+        ranges = [(-25, -20), (-20, -15), (-15, -10), (-10, -5), (-5, 0), (0, 5)]
+        print(f"🔍 [DEBUG] PyTorch Value ranges:")
+        for low, high in ranges:
+            mask = (yb_flat >= low) & (yb_flat < high)
+            count = mask.sum()
+            print(f"    [{low:4.0f}, {high:4.0f}): {count:5d} values ({100*count/len(yb_flat):.1f}%)")
         
         yb = torch.sigmoid(yb)
 
