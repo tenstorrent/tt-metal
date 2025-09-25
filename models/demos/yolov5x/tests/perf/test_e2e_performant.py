@@ -9,8 +9,6 @@ import torch
 from loguru import logger
 
 import ttnn
-
-# Temporary redirect removed in this repo; import directly from common
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE
 from models.demos.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
