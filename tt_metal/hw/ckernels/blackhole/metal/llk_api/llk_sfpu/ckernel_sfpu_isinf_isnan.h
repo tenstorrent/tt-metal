@@ -54,7 +54,8 @@ inline void calculate_isposinf() {
         sfpi::vInt exp = sfpi::exexp(in);
         sfpi::vInt man = sfpi::exman9(in);
         vFloat out = sfpi::vConst0;
-        v_if(in > 0 && exp == 128 && man == 0) { out = sfpi::vConst1; }
+        vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000;  // returns 0 for +ve value
+        v_if(signbit == 0 && exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
         dst_reg[0] = out;
         dst_reg++;
@@ -69,7 +70,8 @@ inline void calculate_isneginf() {
         sfpi::vInt exp = sfpi::exexp(in);
         sfpi::vInt man = sfpi::exman9(in);
         vFloat out = sfpi::vConst0;
-        v_if(in < 0 && exp == 128 && man == 0) { out = sfpi::vConst1; }
+        vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000;  // returns 0 for +ve value
+        v_if(signbit == 0x80000000 && exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
         dst_reg[0] = out;
         dst_reg++;
