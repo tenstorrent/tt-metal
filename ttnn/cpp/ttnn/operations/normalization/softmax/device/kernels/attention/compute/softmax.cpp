@@ -16,6 +16,20 @@
 
 #include "ttnn/cpp/ttnn/operations/kernel_helper_functions/kahan.hpp"
 
+#include "debug/dprint.h"
+#include "tt_metal/hw/inc/debug/dprint_tensix.h"
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = true) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 16, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -263,9 +277,18 @@ void MAIN {
 #endif
 
         constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
+        DPRINT << "SCALER " << bcast_scaler0 << ENDL();
+        UNPACK(print_full_tile(cb_bcast_scaler, bcast_scaler0));
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
+            DPRINT << "WT " << wt << " " << Wt << ENDL();
+            UNPACK(print_full_tile(cb_exps, wt));
 #ifdef KA
+#define SYNC 1
+#ifdef SYNC
+            MATH((tensix_sync()));
+            MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
+#endif
             kahan_iterative_sum(cb_exps, wt);
 #else
             reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
@@ -277,28 +300,40 @@ void MAIN {
 #endif
         }
 #ifdef KA
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
-        // reduce_tile_math<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(dst0);
-        // reduce_tile_math(dst0);
-        reduce_uninit();
-        copy_tile_init(cb_bcast_scaler);
-        constexpr uint32_t dst1 = 1;
-        copy_tile(cb_bcast_scaler, bcast_scaler0, dst1);
-        mul_binary_tile_init();
-        mul_binary_tile(dst0, dst1, dst0);
-        recip_tile_init<false>();
-        recip_tile<false>(dst0);  // DST[0] = 1/sum(exp(x))
-#else
+        // Use cb_recipsumexps as temporary to store summation result
+        pack_tile(dst0, cb_recipsumexps);
+        cb_push_back(cb_recipsumexps, 1);
+        REL();
+        // Perform reduction with scalar scaling on summation result
+        cb_wait_front(cb_recipsumexps, 1);
+        reconfig_data_format(cb_recipsumexps, cb_bcast_scaler);
+        ACQ();
+        cb_reserve_back(cb_recipsumexps, onetile);
+        // reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        reduce_init(cb_recipsumexps, cb_bcast_scaler, cb_recipsumexps);
+        reduce_tile(
+            /*iCB=*/cb_recipsumexps,
+            /*icb_scaler=*/cb_bcast_scaler,
+            /*itile=*/0,
+            /*itile_scaler=*/bcast_scaler0,
+            /*idst0=*/dst0);
+        // Set up cb_recipsumexps to be the same as without compensated summation
+        cb_pop_front(cb_recipsumexps, 1);
+        cb_reserve_back(cb_recipsumexps, onetile);
+#endif
+        DPRINT << "AFTER REDUCE" << ENDL();
+        dprint_tensix_dest_reg(dst0);
         reduce_uninit();
         recip_tile_init();
         recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
-#endif
         pack_tile(dst0, cb_recipsumexps);
         cb_push_back(cb_recipsumexps, 1);
 
         REL();
 
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
+        DPRINT << "RECIPSUMEXPS" << ENDL();
+        UNPACK(print_full_tile(cb_recipsumexps));
 
         reconfig_data_format(cb_exps, cb_recipsumexps);
         pack_reconfig_data_format(cb_out0);

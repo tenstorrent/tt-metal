@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
-#define MMM
+// #define MMM
 #ifdef MMM
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
 #else

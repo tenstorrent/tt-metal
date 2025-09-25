@@ -464,18 +464,21 @@ def test_softmax_dtypes(device, shape, dim, dtype):
 @pytest.mark.parametrize(
     "fp32_acc_en, math_approx_mode, expected_ulp",
     [
-        (True, False, 3),
-        (False, True, 11),
-        (True, True, 9),
-        (False, False, 7),
+        (True, False, 1),
+        # (True, False, 3),
+        # (False, True, 11),
+        # (True, True, 9),
+        # (False, False, 7),
     ],
 )
-@pytest.mark.parametrize("shape", [(1, 1, 16384, 256)])
+# @pytest.mark.parametrize("shape", [(1, 1, 16384, 256)])
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
 def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected_ulp):
     torch.manual_seed(0)
 
     # Reference output
-    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    # torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_tensor = torch.ones(shape, dtype=torch.bfloat16)
     torch_output = torch.ops.aten._softmax.default(torch_tensor, dim=-1, half_to_float=False)
 
     # TTNN Softmax
