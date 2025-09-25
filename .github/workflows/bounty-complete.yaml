@@ -1,0 +1,13 @@
+name: Bounty Complete Workflow
+
+on:
+  issues:
+    types:
+      - closed
+
+permissions:
+  issues: write
+
+jobs:
+  call-central-workflow:
+    uses: tenstorrent/tt-github-actions/.github/workflows/bounty-complete.yml@main
