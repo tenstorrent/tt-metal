@@ -161,10 +161,9 @@ class RotarySetup:
 
         return rot_idxs
 
-    def get_rot_mats_table(self, seq_len=None):
+    def get_rot_mats_table(self, seq_len: int):
         """
         Get the cos and sin matrices for all positions in the sequence length.
-        If seq_len is None, it will use the max position embeddings from the HF config.
         """
 
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
@@ -189,9 +188,7 @@ class RotarySetup:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
 
-        if seq_len is not None:
-            return cos_matrix, sin_matrix, self.transformation_mat_prefill
-        return cos_matrix, sin_matrix
+        return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": self.transformation_mat_prefill}
 
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         """
@@ -243,5 +240,5 @@ class RotarySetup:
         sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
 
         if return_rot_idxs:
-            return [cos, sin, self.transformation_mat], rot_idxs
-        return [cos, sin, self.transformation_mat]
+            return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs
+        return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}

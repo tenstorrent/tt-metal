@@ -14,10 +14,10 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.mla import MLA
+from models.demos.deepseek_v3.tt.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.model import Model
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
@@ -52,7 +52,7 @@ class DeepseekGenerator:
     Notes:
     - Prefill at the model level is not fully implemented in Model; we emulate
       prefill by iterating decode steps over the prompt tokens (updates caches).
-    - Batch size in configs is tied to MAX_BATCH_SIZE; for simplicity we decode
+    - Batch size in configs is tied to USERS_PER_ROW; for simplicity we decode
       up to that many sequences. If fewer are provided, we pad/ignore extras.
     """
 
@@ -61,7 +61,7 @@ class DeepseekGenerator:
         mesh_device: ttnn.MeshDevice,
         model_path: str | Path,
         cache_dir: str | Path | None = None,
-        batch_size: int = MAX_BATCH_SIZE,
+        batch_size: int = USERS_PER_ROW,
         tokenizer=None,
         random_weights: bool = False,
         dense_layers: int | None = None,
@@ -70,7 +70,7 @@ class DeepseekGenerator:
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
-        self.batch_size = min(MAX_BATCH_SIZE, batch_size)
+        self.batch_size = min(USERS_PER_ROW, batch_size)
 
         # Load HF config + tokenizer
         self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
@@ -95,11 +95,11 @@ class DeepseekGenerator:
         self.dp_factor = mesh_shape[1]
 
         # Paged attention setup
-        self.paged_config = MLA.get_valid_paged_config(self.hf_config.max_seq_len, MAX_BATCH_SIZE, self.dp_factor)
-        self.page_table_tt, _ = MLA.create_page_table(
-            MAX_BATCH_SIZE, dp_factor=self.dp_factor, config=self.paged_config, mesh_device=mesh_device
+        self.paged_config = MLA1D.get_valid_paged_config(self.hf_config.max_seq_len, USERS_PER_ROW, self.dp_factor)
+        self.page_table_tt, _ = MLA1D.create_page_table(
+            dp_factor=self.dp_factor, config=self.paged_config, mesh_device=mesh_device
         )
-        self.rope = RotarySetup(device=mesh_device, batch_size=MAX_BATCH_SIZE, hf_config=self.hf_config)
+        self.rope = RotarySetup(device=mesh_device, batch_size=USERS_PER_ROW, hf_config=self.hf_config)
 
         # Prepare weights/configs
         self.random_weights = random_weights
@@ -205,8 +205,7 @@ class DeepseekGenerator:
         returns: (rope_tensors, tt_positions)
         """
         # Build RoPE tensors for current positions
-        rope_mats = self.rope.get_rot_mats(positions.to(torch.int32))
-        rope_tensors = {"cos_matrix": rope_mats[0], "sin_matrix": rope_mats[1], "trans_matrix": rope_mats[2]}
+        rope_tensors = self.rope.get_rot_mats(positions.to(torch.int32))
 
         # Create TTNN position tensor as INT32 with the same sharding pattern used in tests
         mesh_shape = list(self.mesh_device.shape)
@@ -242,15 +241,15 @@ class DeepseekGenerator:
         return torch.argmax(logits[0, 0], dim=-1)  # [B]
 
     def _pad_batch(self, tokens_list: List[List[int]]) -> Tuple[torch.Tensor, List[int]]:
-        """Pad/pack a list of token id sequences to batch of size MAX_BATCH_SIZE.
+        """Pad/pack a list of token id sequences to batch of size USERS_PER_ROW.
 
         Returns
-            tokens_packed: torch.LongTensor [MAX_BATCH_SIZE, S]
+            tokens_packed: torch.LongTensor [USERS_PER_ROW, S]
             valid_counts: list of actual sequence lengths for first N sequences
         """
-        assert len(tokens_list) > 0 and len(tokens_list) <= MAX_BATCH_SIZE
+        assert len(tokens_list) > 0 and len(tokens_list) <= USERS_PER_ROW
         max_len = max(len(t) for t in tokens_list)
-        B = MAX_BATCH_SIZE
+        B = USERS_PER_ROW
         out = torch.full((B, max_len), 0, dtype=torch.long)
         valid = []
         for i, seq in enumerate(tokens_list):
@@ -270,14 +269,14 @@ class DeepseekGenerator:
         Returns: list of generated token id lists for the provided prompts (order preserved).
         """
         prompts = list(prompts)
-        assert 1 <= len(prompts) <= MAX_BATCH_SIZE, f"Supports 1..{MAX_BATCH_SIZE} prompts"
+        assert 1 <= len(prompts) <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
 
         # Tokenize using HF chat template
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
-        tokens_batched, lengths = self._pad_batch(encoded)  # [MAX_BATCH_SIZE, S]
+        tokens_batched, lengths = self._pad_batch(encoded)  # [USERS_PER_ROW, S]
 
         # Prefill via repeated decode steps over prompt tokens
-        B = MAX_BATCH_SIZE
+        B = USERS_PER_ROW
         positions = torch.zeros(B, dtype=torch.int32)
         last_logits = None
         for step in range(tokens_batched.shape[1]):

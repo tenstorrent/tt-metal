@@ -18,8 +18,9 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
+from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, dequantize, even_int_div, get_weight_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div, get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -201,7 +202,7 @@ def paged_cache_from_torch(
     """
     if user_id is not None:
         torch_cache_line = torch_cache
-        torch_cache = torch.zeros((MAX_BATCH_SIZE, *torch_cache_line.shape[1:]), dtype=torch_cache_line.dtype)
+        torch_cache = torch.zeros((USERS_PER_ROW, *torch_cache_line.shape[1:]), dtype=torch_cache_line.dtype)
         torch_cache[user_id : user_id + 1] = torch_cache_line
 
     batch_size, num_heads, seq_len, dim = torch_cache.shape
@@ -482,3 +483,20 @@ def get_test_weight_config(
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )
+
+
+def get_rope_tensors(
+    hf_config: PretrainedConfig,
+    batch_size: int,
+    seq_len: int,
+    position_ids: torch.Tensor | None,
+    mesh_device: ttnn.MeshDevice,
+) -> dict[str, ttnn.Tensor]:
+    rope_setup = RotarySetup(
+        device=mesh_device,
+        batch_size=batch_size,
+        hf_config=hf_config,
+    )
+    if position_ids is None:
+        return rope_setup.get_rot_mats_table(seq_len)
+    return rope_setup.get_rot_mats(position_ids)

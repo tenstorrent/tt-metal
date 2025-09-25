@@ -12,9 +12,9 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Decod
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
-from models.demos.deepseek_v3.tt.mla import MLA
+from models.demos.deepseek_v3.tt.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -108,8 +108,8 @@ def test_forward_pass(
     # Set up page config
     logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
-    user_id = None if mode == "decode" else torch.randint(0, MAX_BATCH_SIZE, ()).item()
-    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
+    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
+    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, dp_factor)
     paged_input_cache, torch_page_table = paged_cache_from_torch(input_cache, dp_factor, paged_config, user_id)
 
     # Set up model config
@@ -154,7 +154,7 @@ def test_forward_pass(
         else None
     )
 
-    tt_page_table = MLA.create_page_table(torch_page_table, paged_config, mesh_device)
+    tt_page_table = MLA1D.create_page_table(torch_page_table, paged_config, mesh_device)
 
     # RoPE setup
     rope_setup = RotarySetup(
@@ -174,7 +174,7 @@ def test_forward_pass(
         "trans_matrix": rot_mats[2],
     }
 
-    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, mesh_device.shape[1])
+    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
     # Forward pass
     logger.info("Running TTNN forward pass")

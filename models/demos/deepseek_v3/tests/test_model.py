@@ -11,10 +11,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.tt.mla import MLA
+from models.demos.deepseek_v3.tt.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.model import Model
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -132,8 +132,8 @@ def test_forward_pass(
     # Set up page config
     logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
-    user_id = None if mode == "decode" else torch.randint(0, MAX_BATCH_SIZE, ()).item()
-    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
+    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
+    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, dp_factor)
     paged_input_caches, torch_page_tables = paged_caches_from_torch(input_cache, dp_factor, paged_config, user_id)
 
     # Set up model config
@@ -176,7 +176,7 @@ def test_forward_pass(
     )
 
     tt_page_tables = tuple(
-        MLA.create_page_table(torch_page_table, paged_config, mesh_device) for torch_page_table in torch_page_tables
+        MLA1D.create_page_table(torch_page_table, paged_config, mesh_device) for torch_page_table in torch_page_tables
     )
 
     # RoPE setup
@@ -197,7 +197,7 @@ def test_forward_pass(
         "trans_matrix": rot_mats[2],
     }
 
-    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, mesh_device.shape[1])
+    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
     # Forward pass
     logger.info("Running TTNN forward pass")

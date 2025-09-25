@@ -10,7 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.mla import MLA
+from models.demos.deepseek_v3.tt.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
@@ -41,7 +41,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
             "mla_norm": DistributedRMSNorm.convert_weights(
                 hf_config, sub_state_dicts(state_dicts, "input_layernorm."), output_path / "mla_norm", mesh_device
             ),
-            "mla": MLA.convert_weights(
+            "mla": MLA1D.convert_weights(
                 hf_config, sub_state_dicts(state_dicts, "self_attn."), output_path / "mla", mesh_device
             ),
             "mlp_norm": DistributedRMSNorm.convert_weights(
@@ -67,7 +67,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
     ) -> ModelPrefillConfig:
         return {
             "mla_norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
-            "mla": MLA.prefill_model_config(hf_config, mesh_device),
+            "mla": MLA1D.prefill_model_config(hf_config, mesh_device),
             "mlp_norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
             "mlp": cls.prefill_mlp_config(hf_config, mesh_device, is_padding_layer),
         }
@@ -82,7 +82,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         mla_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
 
-        mla_config = MLA.decode_model_config(hf_config, mesh_device)
+        mla_config = MLA1D.decode_model_config(hf_config, mesh_device)
 
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
@@ -107,7 +107,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
     ) -> ModelState:
         return {
             "mla_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
-            "mla": MLA.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache),
+            "mla": MLA1D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache),
             "mlp_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "mlp": cls.create_mlp_state(
                 hf_config,
@@ -147,7 +147,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
         # MLA
-        mla_out = MLA.forward_prefill(mla_norm_out, user_id, row_idx, cfg["mla"], rope_tensors, page_table)
+        mla_out = MLA1D.forward_prefill(mla_norm_out, user_id, row_idx, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
@@ -184,7 +184,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
 
         # MLA
         mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
-        mla_out = MLA.forward_decode(mla_norm_out, position_idxs, row_idx, cfg["mla"], rope_tensors, page_table)
+        mla_out = MLA1D.forward_decode(mla_norm_out, position_idxs, row_idx, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
