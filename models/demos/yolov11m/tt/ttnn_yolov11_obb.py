@@ -125,17 +125,38 @@ class TtnnOBB:
         x4 = self.cv3_0_1_conv(device, x4)
         x4 = self.cv3_0_2(x4)
         
+        # Debug: Check cv3 scale 0 output (x4)
+        x4_debug = ttnn.to_torch(x4)
+        x4_flat = x4_debug.flatten()
+        x4_unique, _ = torch.unique(x4_flat, return_counts=True)
+        print(f"🔍 [DEBUG] cv3_0 output (x4): {len(x4_unique)} unique values out of {len(x4_flat)} total")
+        print(f"    Range: [{x4_flat.min()}, {x4_flat.max()}], Mean: {x4_flat.mean()}")
+        
         x5 = self.cv3_1_0_dw(device, y2)
         x5 = self.cv3_1_0_conv(device, x5)
         x5 = self.cv3_1_1_dw(device, x5)
         x5 = self.cv3_1_1_conv(device, x5)
         x5 = self.cv3_1_2(x5)
         
+        # Debug: Check cv3 scale 1 output (x5)
+        x5_debug = ttnn.to_torch(x5)
+        x5_flat = x5_debug.flatten()
+        x5_unique, _ = torch.unique(x5_flat, return_counts=True)
+        print(f"🔍 [DEBUG] cv3_1 output (x5): {len(x5_unique)} unique values out of {len(x5_flat)} total")
+        print(f"    Range: [{x5_flat.min()}, {x5_flat.max()}], Mean: {x5_flat.mean()}")
+        
         x6 = self.cv3_2_0_dw(device, y3)
         x6 = self.cv3_2_0_conv(device, x6)
         x6 = self.cv3_2_1_dw(device, x6)
         x6 = self.cv3_2_1_conv(device, x6)
         x6 = self.cv3_2_2(x6)
+        
+        # Debug: Check cv3 scale 2 output (x6)
+        x6_debug = ttnn.to_torch(x6)
+        x6_flat = x6_debug.flatten()
+        x6_unique, _ = torch.unique(x6_flat, return_counts=True)
+        print(f"🔍 [DEBUG] cv3_2 output (x6): {len(x6_unique)} unique values out of {len(x6_flat)} total")
+        print(f"    Range: [{x6_flat.min()}, {x6_flat.max()}], Mean: {x6_flat.mean()}")
         
         # cv4: Angle predictions for all scales
         x7 = self.cv4_0_0(device, y1)
@@ -166,12 +187,34 @@ class TtnnOBB:
         y2_box_cls = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         y3_box_cls = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         
+        # Debug: Check after per-scale concatenation
+        y1_debug = ttnn.to_torch(y1_box_cls)
+        y1_flat = y1_debug.flatten()
+        y1_unique, _ = torch.unique(y1_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After y1_box_cls concat: {len(y1_unique)} unique values out of {len(y1_flat)} total")
+        
         # Concatenate all scales for box coordinates and class predictions
         y_box_cls = ttnn.concat((y1_box_cls, y2_box_cls, y3_box_cls), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        
+        # Debug: Check after multi-scale concatenation
+        y_debug = ttnn.to_torch(y_box_cls)
+        y_flat = y_debug.flatten()
+        y_unique, _ = torch.unique(y_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After all-scale concat: {len(y_unique)} unique values out of {len(y_flat)} total")
+        print(f"    Range: [{y_flat.min()}, {y_flat.max()}], Mean: {y_flat.mean()}")
+        
         y_box_cls = ttnn.squeeze(y_box_cls, dim=0)
         
         # Split into box coordinates (64 channels) and class predictions (15 channels)
         ya, yb = y_box_cls[:, :, :64], y_box_cls[:, :, 64:79]  # 64 + 15 = 79
+        
+        # Debug: Check immediately after split (focus on class predictions yb)
+        yb_split_debug = ttnn.to_torch(yb)
+        yb_split_flat = yb_split_debug.flatten()
+        yb_split_unique, _ = torch.unique(yb_split_flat, return_counts=True)
+        print(f"🔍 [DEBUG] After split (yb only): {len(yb_split_unique)} unique values out of {len(yb_split_flat)} total")
+        print(f"    Range: [{yb_split_flat.min()}, {yb_split_flat.max()}], Mean: {yb_split_flat.mean()}")
+        print(f"    Shape: {yb_split_debug.shape}")
         
         # Clean up intermediate tensors
         deallocate_tensors(y1_box_cls, y2_box_cls, y3_box_cls, x1, x2, x3, x4, x5, x6, y_box_cls)
@@ -208,6 +251,13 @@ class TtnnOBB:
         z = ttnn.multiply(z, strides)
         
         # Process class predictions - transpose to [batch, 15, N] for concat
+        # Debug: Check yb before permute
+        yb_pre_permute_debug = ttnn.to_torch(yb)
+        yb_pre_permute_flat = yb_pre_permute_debug.flatten()
+        yb_pre_permute_unique, _ = torch.unique(yb_pre_permute_flat, return_counts=True)
+        print(f"🔍 [DEBUG] Before permute: {len(yb_pre_permute_unique)} unique values out of {len(yb_pre_permute_flat)} total")
+        print(f"    Range: [{yb_pre_permute_flat.min()}, {yb_pre_permute_flat.max()}], Mean: {yb_pre_permute_flat.mean()}")
+        
         yb = ttnn.permute(yb, (0, 2, 1))  # [batch, H*W, 15] -> [batch, 15, H*W]
         
         # Debug: Check raw values before sigmoid
