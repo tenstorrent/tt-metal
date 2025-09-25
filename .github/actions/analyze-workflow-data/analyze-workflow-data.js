@@ -5,12 +5,13 @@
 //
 // See: https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28
 
-const core = require('@actions/core');
-const github = require('@actions/github');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { execFileSync } = require('child_process');
+// These are all node.js modules needed for the action to work
+const core = require('@actions/core'); // Core utilities for I/O
+const github = require('@actions/github'); // GitHub API client
+const fs = require('fs'); // File system operations
+const path = require('path'); // File path utilities
+const os = require('os'); // Operating system utilities
+const { execFileSync } = require('child_process'); // Used to run external commands
 
 // Constants
 const DEFAULT_LOOKBACK_DAYS = 15;
@@ -21,23 +22,25 @@ const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
 
 // Owners mapping cache
-let __ownersMapping = undefined;
+let __ownersMapping = undefined; // Stores the owners data
 function loadOwnersMapping() {
-  if (__ownersMapping !== undefined) return __ownersMapping;
+  if (__ownersMapping !== undefined) return __ownersMapping; // If the owners mapping is already loaded, return it
   try {
-    const ownersPath = path.join(__dirname, 'owners.json');
+    const ownersPath = path.join(__dirname, 'owners.json'); // Path to the owners.json file
     if (fs.existsSync(ownersPath)) {
-      const raw = fs.readFileSync(ownersPath, 'utf8');
-      __ownersMapping = JSON.parse(raw);
+      const raw = fs.readFileSync(ownersPath, 'utf8'); // Read the owners.json file in some raw format
+      __ownersMapping = JSON.parse(raw); // Parse the raw data into a JSON object
     } else {
-      __ownersMapping = null;
+      __ownersMapping = null; // If the owners.json file does not exist, set the owners mapping to null
     }
   } catch (_) {
-    __ownersMapping = null;
+    __ownersMapping = null; // If there is an error, set the owners mapping to null
   }
   return __ownersMapping;
 }
 
+// Normalizes the owner information to a consistent format for easier processing later
+// Example: ["charlie", { id: "david", name: "David" }] → [{ id: "charlie" }, { id: "david", name: "David" }]
 function normalizeOwners(value) {
   if (!value) return undefined;
   // Single string -> id-only
@@ -64,17 +67,26 @@ function normalizeOwners(value) {
 function extractSignificantTokens(str) {
   if (typeof str !== 'string') return [];
   return str
-    .split(/\s+[^A-Za-z0-9\s]+\s+/)
-    .flatMap(segment => segment.split(/[\r\n]+/))
-    .map(segment => segment.trim())
-    .filter(Boolean)
-    .map(segment => segment.replace(/^[^A-Za-z0-9_\-\s]+|[^A-Za-z0-9_\-\s]+$/g, '').trim())
-    .filter(segment => segment.replace(/\s+/g, '').length > 1);
+    .split(/\s+[^A-Za-z0-9\s]+\s+/) // Splits the string where there's whitespace plus punctuation plus whitespace
+                                    // For example: "test::function_name" → ["test", "function_name"]
+
+    .flatMap(segment => segment.split(/[\r\n]+/)) // Splits the string where there's a newline
+                                                // For example: "test\nfunction_name" → ["test", "function_name"]
+
+    .map(segment => segment.trim()) // Trims the string
+                                    // For example: "   test" → "test"
+
+    .filter(Boolean) // Removes empty values
+
+    .map(segment => segment.replace(/^[^A-Za-z0-9_\-\s]+|[^A-Za-z0-9_\-\s]+$/g, '').trim()) // Removes non-alphanumeric characters from the beginning and end of each segment
+                                                                                            // Keeps letters, numbers, underscores, hyphens, and spaces
+
+    .filter(segment => segment.replace(/\s+/g, '').length > 1); // Removes segments that are 1 character or less without spaces
 }
 
 function getNeedleTail(needle) {
   const tokens = extractSignificantTokens(needle);
-  return tokens.length ? tokens[tokens.length - 1] : undefined;
+  return tokens.length ? tokens[tokens.length - 1] : undefined; // Returns the last token in the array
 }
 
 function findOwnerForLabel(label) {
