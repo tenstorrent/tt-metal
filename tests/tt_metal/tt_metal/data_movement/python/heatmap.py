@@ -27,14 +27,14 @@ def matrix_arch_fill(matrix, coords, val):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Produce heatmap data from profiler log CSV")
-    parser.add_argument("log_csv", type=str, help="Path to the log CSV file")
+    parser.add_argument("-l", "--log_csv", type=str, help="Path to the log CSV file")
     parser.add_argument("-r", "--risc", choices=["riscv_0", "riscv_1"], help="RISC-V processor to analyze")
     parser.add_argument("-n", "--num_transactions", type=int, help="Number of transactions")
     parser.add_argument("-s", "--transaction_size", type=int, help="Transaction size in bytes")
     parser.add_argument("-i", "--test_id", type=int, help="Test ID to analyze")
     args = parser.parse_args()
 
-    file_path = args.log_csv
+    file_path = args.log_csv if args.log_csv else "generated/profiler/.logs/profile_log_device.csv"
     collector = StatsCollector(file_path, test_id_to_name={}, test_type_attributes={}, verbose=True)
     result, attrs = collector.gather_bw_per_core(args.num_transactions, args.transaction_size, args.risc, args.test_id)
 
