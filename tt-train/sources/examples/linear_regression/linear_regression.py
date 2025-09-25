@@ -86,7 +86,7 @@ def train_ttml_linear_regression(
     Shapes TTML expects: [B, 1, 1, n_features] for inputs, [B, 1, 1, 1] for targets.
     """
     model = _ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
-    loss_fn = _ttml.ops.mse_loss
+    loss_fn = _ttml.ops.loss.mse_loss
     opt_cfg = _ttml.optimizers.SGDConfig.make(cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov)
     opt = _ttml.optimizers.SGD(model.parameters(), opt_cfg)
     model.train()
