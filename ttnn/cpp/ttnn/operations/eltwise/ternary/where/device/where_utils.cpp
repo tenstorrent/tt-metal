@@ -56,12 +56,12 @@ static const std::vector<KernelConfigEntry> kernel_config_table = {
     {WhereVariant::TTS,
      WhereBroadcastType::ROW_BCAST,
      KernelName::ReaderRowBcastTTS,
-     KernelName::ComputeNoBcastTTS,
+     KernelName::ComputeUnifiedTTSTST,
      KernelName::WriterNoBcast},
     {WhereVariant::TTS,
      WhereBroadcastType::OUTER_BCAST,
      KernelName::ReaderOuterBcastTTS,
-     KernelName::ComputeNoBcastTTS,
+     KernelName::ComputeUnifiedTTSTST,
      KernelName::WriterNoBcast},
     {WhereVariant::TTS,
      WhereBroadcastType::SCALAR_A_BCAST,
@@ -76,7 +76,7 @@ static const std::vector<KernelConfigEntry> kernel_config_table = {
     {WhereVariant::TTS,
      WhereBroadcastType::NONE,
      KernelName::ReaderNoBcastTTS,
-     KernelName::ComputeNoBcastTTS,
+     KernelName::ComputeUnifiedTTSTST,
      KernelName::WriterNoBcast},
 
     // TST configurations
@@ -88,12 +88,12 @@ static const std::vector<KernelConfigEntry> kernel_config_table = {
     {WhereVariant::TST,
      WhereBroadcastType::ROW_BCAST,
      KernelName::ReaderRowBcastTST,
-     KernelName::ComputeNoBcastTST,
+     KernelName::ComputeUnifiedTTSTST,
      KernelName::WriterNoBcast},
     {WhereVariant::TST,
      WhereBroadcastType::OUTER_BCAST,
      KernelName::ReaderOuterBcastTST,
-     KernelName::ComputeNoBcastTST,
+     KernelName::ComputeUnifiedTTSTST,
      KernelName::WriterNoBcast},
     {WhereVariant::TST,
      WhereBroadcastType::SCALAR_A_BCAST,
@@ -108,7 +108,7 @@ static const std::vector<KernelConfigEntry> kernel_config_table = {
     {WhereVariant::TST,
      WhereBroadcastType::NONE,
      KernelName::ReaderNoBcastTST,
-     KernelName::ComputeNoBcastTST,
+     KernelName::ComputeUnifiedTTSTST,
      KernelName::WriterNoBcast},
 };
 
@@ -175,8 +175,6 @@ std::string get_kernel_file_path(KernelName kernel_name) {
                    "writer_unary_interleaved_start_id.cpp";
 
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "where_sfpu_no_bcast_ttt.cpp");
-        case KernelName::ComputeNoBcastTST: return fmt::format(compute, root, "where_sfpu_no_bcast_tst.cpp");
-        case KernelName::ComputeNoBcastTTS: return fmt::format(compute, root, "where_sfpu_no_bcast_tts.cpp");
         case KernelName::ComputeScalarBcastTST: return fmt::format(compute, root, "where_sfpu_scalar_bcast_tst.cpp");
         case KernelName::ComputeScalarBcastTTS: return fmt::format(compute, root, "where_sfpu_scalar_bcast_tts.cpp");
         case KernelName::ComputeBcastTTT:
@@ -186,6 +184,9 @@ std::string get_kernel_file_path(KernelName kernel_name) {
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tts.cpp";
         case KernelName::ComputeColBcastTST:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tst.cpp";
+        case KernelName::ComputeUnifiedTTSTST:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
+                   "where_sfpu_no_bcast_tts_tst.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }

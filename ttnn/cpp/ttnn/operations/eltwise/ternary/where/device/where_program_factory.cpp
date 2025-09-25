@@ -1062,6 +1062,15 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         compute_kernel_args = {num_tiles_per_cycle};
     }
 
+    // Set compile-time args for unified TTS/TST kernel
+    std::vector<uint32_t> compute_kernel_compile_args;
+    if (variant == WhereVariant::TTS || variant == WhereVariant::TST) {
+        // Compile-time arg 0: num_tiles_per_cycle (always 1)
+        // Compile-time arg 1: scalar_is_true (1 for TST, 0 for TTS)
+        uint32_t scalar_is_true = (variant == WhereVariant::TST) ? 1 : 0;
+        compute_kernel_compile_args = {1, scalar_is_true};
+    }
+
     std::map<std::string, std::string> kernel_defines;
 
     // Add binary_ng style defines for TTT column broadcast case
@@ -1110,15 +1119,15 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
     }
 
+    tt_metal::ComputeConfig compute_config{
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .compile_args = (variant == WhereVariant::TTS || variant == WhereVariant::TST) ? compute_kernel_compile_args
+                                                                                       : compute_kernel_args,
+        .defines = kernel_defines};
+
     auto compute_kernel_id = tt_metal::CreateKernel(
-        program,
-        get_kernel_file_path(kernel_config.compute_kernel),
-        all_device_cores,
-        tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_kernel_args,
-            .defines = kernel_defines});
+        program, get_kernel_file_path(kernel_config.compute_kernel), all_device_cores, compute_config);
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
