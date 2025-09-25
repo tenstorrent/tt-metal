@@ -556,11 +556,11 @@ public:
                     std::filesystem::copy_options::overwrite_existing
                 );
             } catch (const std::filesystem::filesystem_error& e) {
-                log_error(tt::LogTest, "Failed to copy CSV file {} to CI artifacts directory: {}", csv_filepath.filename().string(), e.what());
+                log_debug(tt::LogTest, "Failed to copy CSV file {} to CI artifacts directory: {}", csv_filepath.filename().string(), e.what());
                 return;
             }
         }
-        log_info(tt::LogTest, "Copied CSV files to CI artifacts directory: {}", ci_artifacts_path.string());
+        log_trace(tt::LogTest, "Copied CSV files to CI artifacts directory: {}", ci_artifacts_path.string());
     }
 
     void read_telemetry();
