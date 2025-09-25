@@ -211,9 +211,8 @@ class TtnnOBB:
         
         # Debug: Check raw values before sigmoid
         yb_debug = ttnn.to_torch(yb)
-        print(f"🔍 [DEBUG] Raw yb before sigmoid - shape: {yb_debug.shape}")
-        print(f"🔍 [DEBUG] Raw yb stats: min={yb_debug.min():.6f}, max={yb_debug.max():.6f}, mean={yb_debug.mean():.6f}")
-        print(f"🔍 [DEBUG] Raw yb sample values: {yb_debug[0, 0, :10].tolist()}")
+        print(f"🔍 [DEBUG] TTNN raw yb before sigmoid - min: {yb_debug.min()}, max: {yb_debug.max()}, mean: {yb_debug.mean()}")
+        print(f"🔍 [DEBUG] TTNN raw yb sample: {yb_debug[0, 0, :5]}")
         
         yb = ttnn.sigmoid(yb)
         

@@ -761,6 +761,11 @@ class Detect(nn.Module):
         z2 = z2 / 2
         z = torch.concat((z2, z1), 1)
         z = z * strides
+        
+        # Debug: Check raw values before sigmoid
+        print(f"🔍 [DEBUG] PyTorch raw yb before sigmoid - min: {yb.min()}, max: {yb.max()}, mean: {yb.mean()}")
+        print(f"🔍 [DEBUG] PyTorch raw yb sample: {yb[0, :, :5]}")
+        
         yb = torch.sigmoid(yb)
         out = torch.concat((z, yb), 1)
         return out
@@ -1162,9 +1167,8 @@ class OBB(nn.Module):
         z = z * strides
         
         # Debug: Check raw values before sigmoid
-        print(f"🔍 [DEBUG] PyTorch raw yb before sigmoid - shape: {yb.shape}")
-        print(f"🔍 [DEBUG] PyTorch raw yb stats: min={yb.min():.6f}, max={yb.max():.6f}, mean={yb.mean():.6f}")
-        print(f"🔍 [DEBUG] PyTorch raw yb sample values: {yb[0, :, :10].tolist()}")
+        print(f"🔍 [DEBUG] PyTorch OBB raw yb before sigmoid - min: {yb.min()}, max: {yb.max()}, mean: {yb.mean()}")
+        print(f"🔍 [DEBUG] PyTorch OBB raw yb sample: {yb[0, :5, :5]}")
         
         yb = torch.sigmoid(yb)
 
