@@ -14,6 +14,7 @@
 
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -27,6 +28,11 @@ bool use_composite_reduce_scatter(const ttnn::Tensor& input_tensor, int32_t dim,
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config);
 bool use_composite_all_gather(
     const ttnn::Tensor& input_tensor, int32_t dim, const std::optional<ttnn::MemoryConfig>& memory_config);
+bool use_composite_all_to_all(
+    const ttnn::Tensor& input_tensor,
+    int32_t in_dim,
+    int32_t out_dim,
+    const std::optional<ttnn::MemoryConfig>& memory_config);
 
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
@@ -43,5 +49,13 @@ std::vector<ttnn::Tensor> composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis);
+
+ttnn::Tensor composite_all_to_all(
+    ttnn::Tensor input_tensor,
+    int32_t in_dim,
+    int32_t out_dim,
+    uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
 
 }  // namespace composite_common
