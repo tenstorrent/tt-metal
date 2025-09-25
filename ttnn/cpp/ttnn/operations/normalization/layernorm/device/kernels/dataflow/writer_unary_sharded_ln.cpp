@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t block_w = get_compile_time_arg_val(3);
     constexpr bool use_welford = get_compile_time_arg_val(4) == 1;
-    constexpr auto gamma_args = TensorAccessorArgs<4>();
+    constexpr auto gamma_args = TensorAccessorArgs<5>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     // Reshard writer

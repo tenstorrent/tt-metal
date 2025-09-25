@@ -1258,8 +1258,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (use_welford) {
         // For Welford combine
         constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
-        uint32_t block_w = block_wt * tile_width;
-        uint32_t last_tile_data_width = block_w - (block_w / tile_width) * tile_width;
+        uint32_t last_tile_data_width = K - (K / tile_width) * tile_width;
 
         all_to_all_except_top_compute_compile_time_args.push_back(tile_width);
         all_to_all_except_top_compute_compile_time_args.push_back(K);
