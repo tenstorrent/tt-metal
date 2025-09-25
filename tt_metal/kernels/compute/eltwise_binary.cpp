@@ -26,6 +26,9 @@ void MAIN {
 
     constexpr auto cb_in2 = tt::CBIndex::c_2;
 
+    UNPACK((DPRINT << "per_core_block_cnt: " << per_core_block_cnt << ENDL()));
+    UNPACK((DPRINT << "per_core_block_size: " << per_core_block_size << ENDL()));
+
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
     sub_bcast_row_tile_init();
 
@@ -47,7 +50,13 @@ void MAIN {
         }
         tile_regs_release();
 
-        PACK((tt::compute::common::print_full_tile(cb_out0, 0)));
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            // dprint_tensix_dest_reg<true>(i);
+            for (uint32_t j = 0; j < 10000; j++) {
+                TTI_NOP;
+            }
+            PACK((tt::compute::common::print_full_tile(cb_out0, i)));
+        }
 
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
