@@ -22,6 +22,7 @@
 #include "../tt_cpp/deit_config.h"
 #include "../tt_cpp/deit_for_image_classification_with_teacher.h"
 #include "../helper_funcs.h"
+#include "../image_utils.h"
 
 namespace {
 
@@ -82,7 +83,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     // Use a sample image path for testing (you can replace this with any valid image file)
     std::string test_image_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
 
-    torch::Tensor pixel_values = helper_funcs::load_and_preprocess_image(test_image_path);
+    torch::Tensor pixel_values = image_utils::load_and_preprocess_image(test_image_path);
 
     std::cout << "Using load_and_preprocess_image function for input preprocessing" << std::endl;
 
@@ -225,7 +226,7 @@ void test_separate_logits_functionality(const std::string& model_path) {
     // Use a sample image path for testing
     std::string test_image_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
 
-    torch::Tensor pixel_values = helper_funcs::load_and_preprocess_image(test_image_path);
+    torch::Tensor pixel_values = image_utils::load_and_preprocess_image(test_image_path);
 
     // Create DeiT config
     DeiTConfig config;
