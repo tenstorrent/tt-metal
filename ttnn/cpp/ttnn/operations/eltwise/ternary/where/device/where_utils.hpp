@@ -34,8 +34,7 @@ enum class KernelName {
     ComputeNoBcastTTT,  // TTT: no bcast, outer dim and row bcast cases
     ComputeBcastTTT,    // TTT : column and scalar bcast cases
     ComputeColBcastTTSTST,
-    ComputeScalarBcastTST,
-    ComputeScalarBcastTTS,
+    ComputeScalarBcastTTSTST,
     ComputeUnifiedTTSTST,
 };
 

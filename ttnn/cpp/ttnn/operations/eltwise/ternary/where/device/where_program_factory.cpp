@@ -1093,17 +1093,18 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
         }
     }
-    if ((variant == WhereVariant::TTS) && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                                           broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
-        // 2-tensor broadcast configuration - set defines for each tensor independently
+    if ((variant == WhereVariant::TTS || variant == WhereVariant::TST) &&
+        (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+         broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
+        // Unified TTS/TST scalar broadcast configuration
         kernel_defines["BCAST_PRED"] = (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";
-        kernel_defines["BCAST_TRUE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
-    }
-    if ((variant == WhereVariant::TST) && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                                           broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
-        // 2-tensor broadcast configuration - set defines for each tensor independently
-        kernel_defines["BCAST_PRED"] = (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";
-        kernel_defines["BCAST_FALSE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
+        if (variant == WhereVariant::TTS) {
+            kernel_defines["BCAST_TRUE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
+            kernel_defines["BCAST_FALSE"] = "0";  // False is scalar for TTS
+        } else {                                  // TST
+            kernel_defines["BCAST_TRUE"] = "0";   // True is scalar for TST
+            kernel_defines["BCAST_FALSE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
+        }
     }
 
     kernel_defines["WHERE_LLK"] = "where_tile";
