@@ -158,7 +158,7 @@ template <typename T>
 using ProcessFunc = void (GraphProcessor::*)(const T&);
 
 template <typename T, ProcessFunc<T> Process>
-static void process(GraphProcessor& self, const std::any& any_val) {
+void process(GraphProcessor& self, const std::any& any_val) {
     (self.*Process)(std::any_cast<std::reference_wrapper<T>>(any_val).get());
 }
 

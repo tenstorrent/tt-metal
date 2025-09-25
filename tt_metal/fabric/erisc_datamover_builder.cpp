@@ -64,7 +64,8 @@ namespace tt::tt_fabric {
  * @param is_sender_channel_serviced Output parameter for sender channel service flags
  * @param is_receiver_channel_serviced Output parameter for receiver channel service flags
  */
-static void configure_risc_settings(
+namespace {
+void configure_risc_settings(
     size_t num_riscv_cores,
     size_t risc_id,
     tt::ARCH arch,
@@ -112,12 +113,12 @@ static void configure_risc_settings(
     }
 }
 
-static uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
+uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     return is_2D_routing ? direction : 0;
 }
 
-static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
+uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
     uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
     // if without vc1, return worker channel, otherwise return vc1 channel
     if (topology == tt::tt_fabric::Topology::Ring) {
@@ -131,7 +132,7 @@ static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_direct
 // for fabric with tensix extension, for linear/mesh topology, only one sender channel is used, and all
 // other sender channels are makred as skipped. For ring/torus topology, one extra vc1 sender channel will
 // also be used.
-static void update_sender_channel_servicing(
+void update_sender_channel_servicing(
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     std::vector<FabricRiscConfig>& risc_configs,
     eth_chan_directions direction,
@@ -165,7 +166,7 @@ static void update_sender_channel_servicing(
     }
 }
 
-static size_t get_num_riscv_cores() {
+size_t get_num_riscv_cores() {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
         size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
@@ -178,29 +179,31 @@ static size_t get_num_riscv_cores() {
     }
 }
 
-static uint32_t get_sender_channel_count(const bool is_2D_routing) {
+uint32_t get_sender_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? FabricEriscDatamoverConfig::num_sender_channels_2d
                          : FabricEriscDatamoverConfig::num_sender_channels_1d;
 }
 
-static uint32_t get_downstream_edm_count(const bool is_2D_routing) {
+uint32_t get_downstream_edm_count(const bool is_2D_routing) {
     return is_2D_routing ? FabricEriscDatamoverConfig::num_downstream_edms_2d
                          : FabricEriscDatamoverConfig::num_downstream_edms;
 }
 
-static uint32_t get_vc0_downstream_edm_count(const bool is_2D_routing) {
+uint32_t get_vc0_downstream_edm_count(const bool is_2D_routing) {
     return is_2D_routing ? FabricEriscDatamoverConfig::num_downstream_edms_2d_vc0
                          : FabricEriscDatamoverConfig::num_downstream_edms_vc0;
 }
 
-static size_t get_dateline_sender_channel_skip_idx(const bool is_2D_routing) {
+size_t get_dateline_sender_channel_skip_idx(const bool is_2D_routing) {
     return is_2D_routing ? FabricEriscDatamoverConfig::dateline_sender_channel_skip_idx_2d
                          : FabricEriscDatamoverConfig::dateline_sender_channel_skip_idx;
 }
 
-static uint32_t get_downstream_edm_sender_channel(const bool is_2D_routing, const eth_chan_directions direction) {
+uint32_t get_downstream_edm_sender_channel(const bool is_2D_routing, const eth_chan_directions direction) {
     return is_2D_routing ? direction : 1;
 }
+
+}  // anonymous namespace
 
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
@@ -222,7 +225,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_);
 }
 
-static bool requires_forced_assignment_to_noc1() {
+bool requires_forced_assignment_to_noc1() {
     return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
            get_num_riscv_cores() == 1;
 }

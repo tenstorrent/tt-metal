@@ -326,7 +326,8 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
 }
 
 // calculate the size of buffer allocated/deallocated on each core
-static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, size_t interleaved_storage_cores) {
+namespace {
+uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, size_t interleaved_storage_cores) {
     uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
     uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
     if (num_of_cores == 0) {
@@ -336,6 +337,7 @@ static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, siz
     uint32_t total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
     return detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
 }
+}  // namespace
 
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores) {
     uint32_t current_size = 0;
