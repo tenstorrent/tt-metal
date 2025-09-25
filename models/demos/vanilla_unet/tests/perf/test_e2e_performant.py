@@ -32,20 +32,16 @@ def run_e2e_performant(
         model_location_generator=model_location_generator,
     )
     iterations_count = 10
-    inference_times = []
+    input_shape = (total_batch_size, channels, *resolution)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    t0 = time.time()
     for i in range(iterations_count):
-        input_shape = (total_batch_size, channels, *resolution)
-        torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-
-        t0 = time.time()
         _ = performant_runner.run(torch_input_tensor)
-        if i + 1 == iterations_count:
-            ttnn.synchronize_device(device)
-        t1 = time.time()
-        inference_times.append(t1 - t0)
+    ttnn.synchronize_device(device)
+    t1 = time.time()
     performant_runner.release()
 
-    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
+    inference_time_avg = round((t1 - t0) / iterations_count, 6)
 
     tolerance = 0.03
     expected_inference_time = get_expected_times("ttnn_vanilla_unet")

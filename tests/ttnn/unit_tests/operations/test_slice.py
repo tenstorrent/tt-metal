@@ -7,10 +7,22 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull, is_blackhole
+from models.common.utility_functions import is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from .test_utils import round_up
 import math
+
+
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint8:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
 
 
 def run_slice_rm_sharded(device, n, c, h, w):
@@ -565,12 +577,13 @@ def test_run_slice_test(
 
 # slice alternate elements in a given tensor
 @pytest.mark.parametrize("dim", [4, 12, 20, 68])
-def test_stride_slice_single_dim_skip_2(dim, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_single_dim_skip_2(dim, dtype, device):
     torch.manual_seed(2005)
-    torch_input = torch.rand(dim)
+    torch_input = random_torch_tensor(dtype, (dim,))
     torch_output = torch_input[::2]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype)
     ttnn_output = ttnn_input[::2]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -583,12 +596,13 @@ def test_stride_slice_single_dim_skip_2(dim, device):
 @pytest.mark.parametrize("begins_w", [2])
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
-def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
-    torch_input = torch.rand(h, w)
+    torch_input = random_torch_tensor(dtype, (h, w))
     torch_output = torch_input[begins_h:h:stride_h, begins_w:w:stride_w]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype)
     ttnn_output = ttnn_input[begins_h::stride_h, begins_w::stride_w]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -604,12 +618,13 @@ def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, devi
 @pytest.mark.parametrize("stride_c", [2])
 @pytest.mark.parametrize("stride_h", [1])
 @pytest.mark.parametrize("stride_w", [1])
-def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c, stride_h, stride_w, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
-    torch_input = torch.rand(c, h, w)
+    torch_input = random_torch_tensor(dtype, (c, h, w))
     torch_output = torch_input[begins_c:c:stride_c, begins_h:h:stride_h, begins_w:w:stride_w]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=dtype)
     ttnn_output = ttnn_input[begins_c:c:stride_c, begins_h:h:stride_h, begins_w:w:stride_w]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -621,16 +636,20 @@ def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c,
 @pytest.mark.parametrize("ends", [[18, 16, 16, 18]])
 @pytest.mark.parametrize("strides", [[2, 2, 2, 2]])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_stride_slice_four_dim(dims, begins, ends, strides, layout, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, device):
+    # Skip if tiled and uint8/16
+    if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
+        pytest.skip("Skipping test for tiled layout with uint8/16 dtype")
     torch.manual_seed(2005)
-    torch_input = torch.rand(dims)
+    torch_input = random_torch_tensor(dtype, dims)
     slices = []
     for i in range(len(dims)):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
     ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -641,17 +660,20 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, device):
 @pytest.mark.parametrize("begins", [[0, 0, 0, 0], [0, 0, 0, 90]])
 @pytest.mark.parametrize("ends", [[1, -1, 56, 96], [1, 56, 56, 95], [-1, 1, -1, -1]])
 @pytest.mark.parametrize("strides", [[1, 2, 1, 1]])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype, device):
+    if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
+        pytest.skip("Skipping test for tiled layout with uint8/16 dtype")
     torch.manual_seed(2005)
-    torch_input = torch.rand(dims)
+    torch_input = random_torch_tensor(dtype, dims)
     slices = []
     for i in range(len(dims)):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
     ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
