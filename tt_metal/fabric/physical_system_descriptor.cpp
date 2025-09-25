@@ -243,6 +243,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
+    this->generate_ethernet_metrics();
     system_graph_.host_connectivity_graph[hostname] = {};
 }
 
@@ -279,13 +280,27 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
     }
+    for (auto& [asic, metrics] : other.ethernet_metrics_) {
+        ethernet_metrics_[asic] = std::move(metrics);
+    }
 }
 
 void PhysicalSystemDescriptor::remove_unresolved_nodes() {
     for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
-            std::erase_if(
+            auto edges_copy = edges;
+            auto num_erased_edges = std::erase_if(
                 edges, [&](const auto& pair) { return asic_descriptors_.find(pair.first) == asic_descriptors_.end(); });
+            // Erase the metrics for the deleted edges
+            if (num_erased_edges > 0) {
+                for (const auto& edge : edges_copy) {
+                    if (std::find(edges.begin(), edges.end(), edge) == edges.end()) {
+                        for (const auto& eth_conn : edge.second) {
+                            ethernet_metrics_[src_asic].erase(eth_conn.src_chan);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -667,6 +682,84 @@ std::vector<ExitNodeConnection> PhysicalSystemDescriptor::get_connecting_exit_no
         }
     }
     return {};
+}
+
+uint32_t PhysicalSystemDescriptor::get_chip_id_for_asic(AsicID asic_id) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& chip_unique_ids = cluster.get_unique_chip_ids();
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        if (unique_id == *asic_id) {
+            return chip_id;
+        }
+    }
+    TT_FATAL(false, "Chip ID not found for asic ID {}", asic_id);
+    return 0;
+}
+
+std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_channel(
+    AsicID asic_id, uint8_t chan_id) const {
+    auto host = asic_descriptors_.at(asic_id).host_name;
+    auto asic_graph = system_graph_.asic_connectivity_graph.at(host);
+    for (const auto& [src_asic, edges] : asic_graph) {
+        if (src_asic != asic_id) {
+            continue;
+        }
+        for (const auto& edge : edges) {
+            auto dst_asic = edge.first;
+
+            for (const auto& eth_conn : edge.second) {
+                if (eth_conn.src_chan == chan_id) {
+                    return {dst_asic, eth_conn.dst_chan};
+                }
+            }
+        }
+    }
+    TT_FATAL(false, "No connected ASIC and channel found for asic ID {} and channel ID {}", asic_id, chan_id);
+    return {AsicID{0}, 0};
+}
+
+void PhysicalSystemDescriptor::generate_ethernet_metrics() {
+    const auto& local_asics = get_asics_connected_to_host(my_host_name());
+    const auto& local_asic_graph = get_asic_topology(my_host_name());
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    auto retrain_count_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+    auto crc_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
+    auto corr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
+    auto uncorr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
+
+    for (const auto& asic : local_asics) {
+        const auto& asic_connections = local_asic_graph.at(asic);
+        for (const auto& [dst_asic, eth_connections] : asic_connections) {
+            for (const auto& eth_connection : eth_connections) {
+                uint32_t retrain_count_val = 0, crc_error_val = 0, corr_val_lo = 0, corr_val_hi = 0, uncorr_val_lo = 0,
+                         uncorr_val_hi = 0;
+                auto src_eth_chan = eth_connection.src_chan;
+                tt_cxy_pair src_eth_core(
+                    get_chip_id_for_asic(asic),
+                    cluster.get_virtual_coordinate_from_logical_coordinates(
+                        get_chip_id_for_asic(asic), CoreCoord{0, src_eth_chan}, CoreType::ETH));
+                cluster.read_core(&retrain_count_val, sizeof(uint32_t), src_eth_core, retrain_count_addr);
+                cluster.read_core(&crc_error_val, sizeof(uint32_t), src_eth_core, crc_addr);
+                cluster.read_core(&corr_val_hi, sizeof(uint32_t), src_eth_core, corr_addr);
+                cluster.read_core(&corr_val_lo, sizeof(uint32_t), src_eth_core, corr_addr + 4);
+                cluster.read_core(&uncorr_val_hi, sizeof(uint32_t), src_eth_core, uncorr_addr);
+                cluster.read_core(&uncorr_val_lo, sizeof(uint32_t), src_eth_core, uncorr_addr + 4);
+
+                ethernet_metrics_[asic][src_eth_chan] = {
+                    .retrain_count = retrain_count_val,
+                    .crc_error_count = crc_error_val,
+                    .corrected_codeword_count =
+                        (static_cast<uint64_t>(corr_val_hi) << 32) | static_cast<uint64_t>(corr_val_lo),
+                    .uncorrected_codeword_count =
+                        (static_cast<uint64_t>(uncorr_val_hi) << 32) | static_cast<uint64_t>(uncorr_val_lo)};
+            }
+        }
+    }
 }
 
 const HostTopology& PhysicalSystemDescriptor::get_host_topology() const {
