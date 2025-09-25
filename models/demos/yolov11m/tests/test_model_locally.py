@@ -320,7 +320,7 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
                 input_channels=input_tensor.shape[1], 
                 input_height=input_tensor.shape[2],
                 input_width=input_tensor.shape[3],
-                is_sub_module=True,
+                is_sub_module=False,
             )
             
             # Run TTNN inference

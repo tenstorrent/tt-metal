@@ -48,6 +48,8 @@ def create_yolov11_input_tensors(
         print(f"    Dtype: {post_conversion_debug.dtype}")
         print(f"🔍 [PREPROCESSING DEBUG] DIVERSITY LOSS: {len(pre_conversion_unique)} → {len(post_conversion_unique)} ({100*(len(pre_conversion_unique)-len(post_conversion_unique))/len(pre_conversion_unique):.2f}% loss)")
     else:
+
+        
         n, c, h, w = torch_input_tensor.shape
         if c == 3:
             c = 16
@@ -57,6 +59,13 @@ def create_yolov11_input_tensors(
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
+        # Debug: Check diversity before ttnn.from_torch conversion (ELSE branch)
+        pre_conversion_flat = torch_input_tensor.flatten()
+        pre_conversion_unique = torch.unique(pre_conversion_flat)
+        print(f"🔍 [PREPROCESSING DEBUG - ELSE] BEFORE ttnn.from_torch: {len(pre_conversion_unique)} unique values out of {len(pre_conversion_flat)} total")
+        print(f"    Range: [{pre_conversion_flat.min()}, {pre_conversion_flat.max()}], Mean: {pre_conversion_flat.mean()}")
+        print(f"    Dtype: {torch_input_tensor.dtype}")
+        
         ttnn_input_tensor = ttnn.from_torch(
             torch_input_tensor,
             dtype=ttnn.bfloat16,
@@ -65,6 +74,15 @@ def create_yolov11_input_tensors(
             memory_config=input_mem_config,
             mesh_mapper=inputs_mesh_mapper,
         )
+        
+        # Debug: Check diversity after ttnn.from_torch conversion (ELSE branch)
+        post_conversion_debug = ttnn.to_torch(ttnn_input_tensor)
+        post_conversion_flat = post_conversion_debug.flatten()
+        post_conversion_unique = torch.unique(post_conversion_flat)
+        print(f"🔍 [PREPROCESSING DEBUG - ELSE] AFTER ttnn.from_torch: {len(post_conversion_unique)} unique values out of {len(post_conversion_flat)} total")
+        print(f"    Range: [{post_conversion_flat.min()}, {post_conversion_flat.max()}], Mean: {post_conversion_flat.mean()}")
+        print(f"    Dtype: {post_conversion_debug.dtype}")
+        print(f"🔍 [PREPROCESSING DEBUG - ELSE] DIVERSITY LOSS: {len(pre_conversion_unique)} → {len(post_conversion_unique)} ({100*(len(pre_conversion_unique)-len(post_conversion_unique))/len(pre_conversion_unique):.2f}% loss)")
     return torch_input_tensor, ttnn_input_tensor
 
 
