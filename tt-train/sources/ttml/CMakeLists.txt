@@ -482,7 +482,11 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
-nanobind_add_module(_ttml ${TTML_SRC_NANOBIND})
+nanobind_add_module(
+    _ttml
+    STABLE_ABI NB_SHARED LTO
+    ${TTML_SRC_NANOBIND}
+)
 target_link_libraries(
     _ttml
     PRIVATE
