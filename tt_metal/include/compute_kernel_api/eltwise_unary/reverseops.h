@@ -8,10 +8,6 @@
 #ifdef TRISC_MATH
 #include "ckernel_reverseops.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {
@@ -39,9 +35,7 @@ namespace ckernel {
  * | param0         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void rsub_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_rsub, RC, APPROX, 8, idst, param0));
-}
+ALWI void rsub_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst, param0))); }
 
 /**
  * Please refer to documentation for any_init.
