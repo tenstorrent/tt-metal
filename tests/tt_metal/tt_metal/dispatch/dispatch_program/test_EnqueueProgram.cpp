@@ -24,7 +24,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
