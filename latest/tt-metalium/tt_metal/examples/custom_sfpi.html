@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Matmul (Multi Core Optimized) &mdash; TT-Metalium  documentation</title>
+  <title>Writing Custom SFPU Operations using SFPI &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/examples/matmul_multi_core_optimized.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/examples/custom_sfpi.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Data Reuse in matmul_multicore_reuse" href="matmul_multi_core_optimizations/data_reuse.html" />
-    <link rel="prev" title="Matmul (Multi Core)" href="matmul_multi_core.html" /> 
+    <link rel="next" title="Vector addition using SFPI" href="custom_sfpi_add.html" />
+    <link rel="prev" title="Data Multicasting in matmul_multicore_reuse_mcast" href="matmul_multi_core_optimizations/data_mcast.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -65,12 +65,12 @@
 <li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
-<li class="toctree-l2 current"><a class="current reference internal" href="#">Matmul (Multi Core Optimized)</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="matmul_multi_core_optimizations/data_reuse.html">Data Reuse in <cite>matmul_multicore_reuse</cite></a></li>
-<li class="toctree-l3"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Writing Custom SFPU Operations using SFPI</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_add.html">Vector addition using SFPI</a></li>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_smoothstep.html">Smoothstep using SFPI</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
@@ -98,9 +98,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="index.html">Programming Examples</a></li>
-      <li class="breadcrumb-item active">Matmul (Multi Core Optimized)</li>
+      <li class="breadcrumb-item active">Writing Custom SFPU Operations using SFPI</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/tt_metal/examples/matmul_multi_core_optimized.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/tt_metal/examples/custom_sfpi.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -108,40 +108,17 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="matmul-multi-core-optimized">
-<span id="matmul-multi-core-example"></span><h1>Matmul (Multi Core Optimized)<a class="headerlink" href="#matmul-multi-core-optimized" title="Permalink to this heading"></a>
+  <section id="writing-custom-sfpu-operations-using-sfpi">
+<span id="custom-sfpu"></span><h1>Writing Custom SFPU Operations using SFPI<a class="headerlink" href="#writing-custom-sfpu-operations-using-sfpi" title="Permalink to this heading"></a>
 </h1>
-<p>The Tensix core architecture’s secret weapon is its full user control over memory workload spread, core communication style, novel block matmul kernels, and compute patterns. In this section, we will harness real power through 3 shiny optimizations, each building off one another: data reuse, data multicast, and multidimensional systolic arrays (coming soon).</p>
-<div class="highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">ARCH_NAME</span><span class="o">=&lt;</span><span class="n">arch</span> <span class="n">name</span><span class="o">&gt;</span>
-<span class="n">export</span> <span class="n">TT_METAL_HOME</span><span class="o">=&lt;</span><span class="n">this</span> <span class="n">repo</span> <span class="nb">dir</span><span class="o">&gt;</span>
-<span class="o">./</span><span class="n">build_metal</span><span class="o">.</span><span class="n">sh</span>
-<span class="o">./</span><span class="n">build</span><span class="o">/</span><span class="n">programming_examples</span><span class="o">/</span><span class="n">matmul_multi_core_reuse</span>
-<span class="o">./</span><span class="n">build</span><span class="o">/</span><span class="n">programming_examples</span><span class="o">/</span><span class="n">matmul_multi_core_reuse_mcast</span>
-</pre></div>
-</div>
+<p>The SFPU (Special Function Processing Unit) is a programmable vector engine designed to perform more complicated mathematical operations than the matrix engine. It is used internally for many standard compute functions, such as <code class="docutils literal notranslate"><span class="pre">sin</span></code>, <code class="docutils literal notranslate"><span class="pre">cos</span></code>, <code class="docutils literal notranslate"><span class="pre">exp</span></code>, <code class="docutils literal notranslate"><span class="pre">relu</span></code>, and <code class="docutils literal notranslate"><span class="pre">tanh</span></code>. Programming the SFPU directly allows you to implement custom mathematical operations beyond those provided by the standard library, which can be useful for specialized workloads.</p>
+<p>The SFPU operates on 32-wide vectors and supports FP32 and INT32 arithmetic, with full instruction predication. Note that FP32 arithmetic on the SFPU does not fully comply with the IEEE 754 standard, but it is a practical implementation for most use case, and is more compliant than the matrix engine (FPU)</p>
+<p>SFPI (SFPU Interface) is a library and compiler for writing custom SFPU programs in C++. SFPI provides a high-level abstraction over the SFPU’s instruction set, making it easier to develop and maintain code running on the SFPU.</p>
+<p>Please also see the <a class="reference internal" href="../advanced_topics/compute_engines_and_dataflow_within_tensix.html#compute-engines-and-dataflow-within-tensix"><span class="std std-ref">Compute Engines and Data Flow within Tensix</span></a>, the <a class="reference internal" href="../apis/kernel_apis/sfpu/llk.html#llk"><span class="std std-ref">LLK</span></a> documentation, and the <a class="reference internal" href="../advanced_topics/tiles.html#internal-structure-of-a-tile"><span class="std std-ref">Internal structure of a Tile</span></a> documentation for more context on how the SFPU fits into the overall architecture.</p>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1">
-<a class="reference internal" href="matmul_multi_core_optimizations/data_reuse.html">Data Reuse in <cite>matmul_multicore_reuse</cite></a><ul>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_reuse.html#fine-grained-block-size-control">Fine-Grained Block Size Control</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_reuse.html#intermediate-circular-buffer-configuration">Intermediate Circular Buffer Configuration</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_reuse.html#stride-kernel-arguments">Stride Kernel Arguments</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_reuse.html#intermediate-results-handling">Intermediate Results Handling</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_reuse.html#conclusion">Conclusion</a></li>
-</ul>
-</li>
-<li class="toctree-l1">
-<a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html">Data Multicasting in <cite>matmul_multicore_reuse_mcast</cite></a><ul>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#additional-compile-time-argument">Additional Compile-Time Argument</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#configuring-core-ranges-for-tile-distribution">Configuring Core Ranges for Tile Distribution</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#circular-buffer-creation-for-coregrid">Circular Buffer Creation for CoreGrid</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#multicast-reader-writer-kernel-setup">Multicast Reader/Writer Kernel Setup</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#new-compute-kernel-fused-bias-addition-and-activation-functions">New Compute Kernel: Fused Bias Addition and Activation Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#semaphores">Semaphores</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#kernel-runtime-arguments">Kernel Runtime Arguments</a></li>
-</ul>
-</li>
+<li class="toctree-l1"><a class="reference internal" href="custom_sfpi_add.html">Vector addition using SFPI</a></li>
+<li class="toctree-l1"><a class="reference internal" href="custom_sfpi_smoothstep.html">Smoothstep using SFPI</a></li>
 </ul>
 </div>
 </section>
@@ -151,8 +128,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="matmul_multi_core.html" class="btn btn-neutral float-left" title="Matmul (Multi Core)" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="matmul_multi_core_optimizations/data_reuse.html" class="btn btn-neutral float-right" title="Data Reuse in matmul_multicore_reuse" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="matmul_multi_core_optimizations/data_mcast.html" class="btn btn-neutral float-left" title="Data Multicasting in matmul_multicore_reuse_mcast" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="custom_sfpi_add.html" class="btn btn-neutral float-right" title="Vector addition using SFPI" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -257,6 +257,44 @@
 </li>
 </ul>
 </li>
+<li class="toctree-l2">
+<a class="reference internal" href="tt_metal/examples/custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html">Vector addition using SFPI</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html#program-setup">Program setup</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html#the-kernels">The Kernels</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html#data-movement-kernels">Data Movement Kernels</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html#sfpi-compute-kernel">SFPI Compute Kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html#custom-sfpi-implementation">Custom SFPI Implementation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html#runtime-arguments-and-execution">Runtime Arguments and Execution</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_add.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html">Smoothstep using SFPI</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#building-and-running">Building and Running</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#program-setup">Program setup</a></li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#the-kernels">The Kernels</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#data-movement-kernels">Data Movement Kernels</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#sfpi-compute-kernel">SFPI Compute Kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l4">
+<a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#custom-sfpi-implementation-of-smoothstep">Custom SFPI Implementation of Smoothstep</a><ul>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#parameter-passing">Parameter Passing</a></li>
+<li class="toctree-l5"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#vector-predicates">Vector Predicates</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#runtime-arguments-and-execution">Runtime Arguments and Execution</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/examples/custom_sfpi_smoothstep.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toctree-l1">
@@ -295,6 +333,13 @@
 <li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#dst-register">Dst register</a></li>
 <li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#matrix-engine-fpu">Matrix engine/FPU</a></li>
 <li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#vector-engine-sfpu">Vector engine/SFPU</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tt_metal/advanced_topics/fp32_accuracy.html">Achieving FP32 Accuracy for Computation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/fp32_accuracy.html#host-side-configuration">Host-Side Configuration</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/fp32_accuracy.html#kernel-side-implementation">Kernel-Side Implementation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tt_metal/advanced_topics/fp32_accuracy.html#distinguishing-between-matrix-and-vector-engine-apis">Distinguishing Between matrix and vector engine APIs</a></li>
 </ul>
 </li>
 </ul>
@@ -685,12 +730,7 @@
 <li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#vuint">vUInt</a></li>
 </ul>
 </li>
-<li class="toctree-l6">
-<a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#library">Library</a><ul>
-<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#grayskull-and-wormhole">Grayskull and Wormhole</a></li>
-<li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#wormhole-only">Wormhole only</a></li>
-</ul>
-</li>
+<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#library">Library</a></li>
 <li class="toctree-l6">
 <a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#immediate-floating-point-values">Immediate Floating Point Values</a><ul>
 <li class="toctree-l7"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#boolean-operators">Boolean Operators</a></li>
@@ -706,7 +746,6 @@
 <li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#register-pressure-management">Register Pressure Management</a></li>
 <li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#optimizer">Optimizer</a></li>
 <li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#sfpreplay">SFPREPLAY</a></li>
-<li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#emulation">Emulation</a></li>
 <li class="toctree-l6"><a class="reference internal" href="tt_metal/apis/kernel_apis/sfpu/llk.html#tools">Tools</a></li>
 </ul>
 </li>
@@ -753,9 +792,21 @@
 <li class="toctree-l2">
 <a class="reference internal" href="tools/tracy_profiler.html">Tracy Profiler</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#overview">Overview</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#gui">GUI</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#enabling-tracy">Enabling Tracy</a></li>
 <li class="toctree-l3">
-<a class="reference internal" href="tools/tracy_profiler.html#profiling-host">Profiling Host</a><ul>
+<a class="reference internal" href="tools/tracy_profiler.html#gui">GUI</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/tracy_profiler.html#installing-for-mac-users">Installing for Mac users</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/tracy_profiler.html#building-for-linux-users">Building for Linux users</a></li>
+<li class="toctree-l4"><a class="reference internal" href="tools/tracy_profiler.html#starting-the-gui">Starting the GUI</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/tracy_profiler.html#capturing-profiling-data">Capturing Profiling Data</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/tracy_profiler.html#capturing-via-command-line">Capturing via Command Line</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="tools/tracy_profiler.html#profiling-host-code">Profiling Host Code</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="tools/tracy_profiler.html#c">C++</a></li>
 <li class="toctree-l4">
 <a class="reference internal" href="tools/tracy_profiler.html#python">Python</a><ul>
@@ -768,19 +819,18 @@
 </li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#profiling-device">Profiling Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/tracy_profiler.html#profiling-device-code">Profiling Device Code</a></li>
 </ul>
 </li>
 <li class="toctree-l2">
 <a class="reference internal" href="tools/device_program_profiler.html">Device Program Profiler</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="tools/device_program_profiler.html#enabling-device-profiling">Enabling Device Profiling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/device_program_profiler.html#instrumenting-kernel-code">Instrumenting Kernel Code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/device_program_profiler.html#controlling-profiling-from-host-code">Controlling Profiling from Host Code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tools/device_program_profiler.html#example-walkthrough-test-full-buffer">Example Walkthrough: <code class="docutils literal notranslate"><span class="pre">test_full_buffer</span></code></a></li>
 <li class="toctree-l3">
-<a class="reference internal" href="tools/device_program_profiler.html#overview">Overview</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="tools/device_program_profiler.html#how-to-run">How to Run</a></li>
-</ul>
-</li>
-<li class="toctree-l3">
-<a class="reference internal" href="tools/device_program_profiler.html#example">Example</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="tools/device_program_profiler.html#description">Description</a></li>
+<a class="reference internal" href="tools/device_program_profiler.html#analyzing-profiler-output">Analyzing Profiler Output</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="tools/device_program_profiler.html#tracy-gui-integration">Tracy GUI Integration</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="tools/device_program_profiler.html#limitations">Limitations</a></li>

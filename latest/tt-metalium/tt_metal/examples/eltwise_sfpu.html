@@ -73,6 +73,7 @@
 <li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
@@ -116,11 +117,11 @@
 <p>We now build a program that will perform operations using the SFPU (vector engine/Special Function Processing Unit). Though not packing as much punch as the FPU (Matrix Engine), the SFPU is a powerful unit that can perform complex element-wise operations. This example will show how to use the SFPU to perform <code class="docutils literal notranslate"><span class="pre">exp(x)</span></code> on the input data.</p>
 <p>This example is similar to the previous example of adding two vectors using the FPU. But instead of using the FPU, we will use the SFPU. And only 1 input buffer is used instead of 2. The SFPU can perform a variety of operations not just exponential, such as square root, sine, cosine, ReLU and more.</p>
 <p>We’ll go through this code section by section. The fully source code for this example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/eltwise_sfpu</span></code> directory.</p>
-<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">eltwise_sfpu</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
+<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">metal_example_eltwise_sfpu</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
 ./build_metal.sh
-./build/programming_examples/eltwise_sfpu
+./build/programming_examples/metal_example_eltwise_sfpu
 </pre></div>
 </div>
 <section id="program-setup">

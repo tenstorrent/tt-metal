@@ -76,6 +76,7 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
@@ -126,11 +127,11 @@ changes to:</p>
 </ul>
 <p>It is important to note that this example builds on top of the previous single core matmul example, so it is recommended to understand the single core matmul example first. The single core matmul example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/matmul_single_core/</span></code> directory.</p>
 <p>The full source code for this example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/matmul/matmul_multi_core/</span></code> directory.</p>
-<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">matmul_multi_core</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
+<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">metal_example_matmul_multi_core</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
 ./build_metal.sh<span class="w"> </span>--build-programming-examples
-./build/programming_examples/matmul_multi_core
+./build/programming_examples/metal_example_matmul_multi_core
 </pre></div>
 </div>
 <div class="admonition note">

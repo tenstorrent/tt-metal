@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Achieving FP32 Accuracy for Computation &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/advanced_topics/fp32_accuracy.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="APIs" href="../apis/index.html" />
+    <link rel="prev" title="Compute Engines and Data Flow within Tensix" href="compute_engines_and_dataflow_within_tensix.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Advanced Topics</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="index.html#hardware-implications-and-the-effects">Hardware implications and the effects</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="tiles.html">Tiles</a></li>
+<li class="toctree-l3"><a class="reference internal" href="memory_for_kernel_developers.html">Memory from a kernel developer’s perspective</a></li>
+<li class="toctree-l3"><a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html">Compute Engines and Data Flow within Tensix</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Achieving FP32 Accuracy for Computation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#host-side-configuration">Host-Side Configuration</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#kernel-side-implementation">Kernel-Side Implementation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#distinguishing-between-matrix-and-vector-engine-apis">Distinguishing Between matrix and vector engine APIs</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Advanced Topics</a></li>
+      <li class="breadcrumb-item active">Achieving FP32 Accuracy for Computation</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/advanced_topics/fp32_accuracy.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="achieving-fp32-accuracy-for-computation">
+<span id="id1"></span><h1>Achieving FP32 Accuracy for Computation<a class="headerlink" href="#achieving-fp32-accuracy-for-computation" title="Permalink to this heading"></a>
+</h1>
+<p>Tensix provides two main compute engines: the matrix engine (FPU) and the vector engine (SFPU). Each has distinct strengths and limitations that affect numerical accuracy and throughput. For a detailed overview of these engines, see <a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html#compute-engines-and-dataflow-within-tensix"><span class="std std-ref">Compute Engines and Data Flow within Tensix</span></a>.</p>
+<p>The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, …) properly. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy. For detailed information about FPU and SFPU numerical accuracy characteristics, please review the follwoing documentations:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/Miscellaneous/FMA/README.md#correctness-of-fma_model_ieee">SFPU FMA Numerical Accuracy</a></p></li>
+<li><p><a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/FloatBitPatterns.md">Floaring Point Bit Patterns</a></p></li>
+<li><p><a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/SrcASrcB.md">FPU SrcA/B and Fidelity Phases</a></p></li>
+</ul>
+<p>The vector engine, on the other hand, supports full 32-bit floating-point (FP32) arithmetic and is more IEEE 754-compliant (though not 100%). This makes it suitable for computations where precision is critical. However, as a vector unit, it processes data in smaller batches and at lower throughput—behavior similar to SIMD units found in conventional CPUs and GPUs.</p>
+<p>Choosing between these engines depends on the requirements of your workload. Use the matrix engine for bulk computation where speed is the priority and the vector engine when higher accuracy is needed.</p>
+<p>To achieve maximum accuracy with the vector engine, several conditions must be met, from host-side configuration to kernel-side implementation.</p>
+<section id="host-side-configuration">
+<h2>Host-Side Configuration<a class="headerlink" href="#host-side-configuration" title="Permalink to this heading"></a>
+</h2>
+<p>On the host, the <code class="docutils literal notranslate"><span class="pre">DeviceComputeKernelConfig</span></code> struct controls the precision settings for compute kernels, including both the matrix engine (FPU), the vector engine (SFPU) and other components. To ensure the highest possible accuracy, enable the following two options:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span> <span class="pre">=</span> <span class="pre">true</span></code>: This setting allocates 32-bit space in the Dst registers. This is required to store intermediate and final results at FP32 precision. If disabled (<code class="docutils literal notranslate"><span class="pre">false</span></code>, the default), the Dst registers will store 16-bit data, with FP32 values automatically converted to BFP16.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">math_approx_mode</span> <span class="pre">=</span> <span class="pre">false</span></code>: This disables optimizations that approximate certain math operations, ensuring that calculations are performed with maximum fidelity that the kernel library provides. By default, this is <code class="docutils literal notranslate"><span class="pre">true</span></code>.</p></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">math_fidelity</span></code> setting in <code class="docutils literal notranslate"><span class="pre">DeviceComputeKernelConfig</span></code> only applies to the matrix engine. The vector engine always performs operations in 32-bit mode.</p>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// On the host, configure the kernel for FP32 computation</span>
+<span class="n">KernelHandle</span><span class="w"> </span><span class="n">compute_kernel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="w">    </span><span class="n">program</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"/path/to/your/kernels/compute.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="n">core</span><span class="p">,</span>
+<span class="w">    </span><span class="n">DeviceComputeKernelConfig</span><span class="p">{</span>
+<span class="w">        </span><span class="p">.</span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span>
+<span class="w">        </span><span class="p">.</span><span class="n">fp32_dest_acc_en</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Additionally, ensure that the circular buffers that will handle the FP32 data are created with the <code class="docutils literal notranslate"><span class="pre">DataFormat::Float32</span></code> type.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Some functions, most notably <code class="docutils literal notranslate"><span class="pre">exp_tile</span></code> and the various trigonometric functions, have inherent limitations due to their polynomial approximations. Some functions have multiple available approximations (e.g. approx and fast_and_approx template parameters for exp_tile). These limitations can lead to reduced accuracy for certain input ranges, even when using the vector engine with FP32 settings. Always validate the accuracy of results for your specific use case. The operator implementations are built to balance performance and accuracy for the intended (machine learning) workloads. If your application requires higher precision across all input ranges, consider implementing custom functions.</p>
+</div>
+</section>
+<section id="kernel-side-implementation">
+<h2>Kernel-Side Implementation<a class="headerlink" href="#kernel-side-implementation" title="Permalink to this heading"></a>
+</h2>
+<p>Inside the compute kernel, you must use the vector engine (SFPU) for computations and correctly configure the unpacker and packer for FP32 data.</p>
+<ul>
+<li>
+<p><strong>Configure Unpacker and Packer</strong>: Before moving data, you must explicitly configure the unpacker and packer to handle the FP32 format.</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p>Call <code class="docutils literal notranslate"><span class="pre">copy_tile_init()</span></code> before unpacking data from a circular buffer into the Dst registers. This function reconfigures the unpacker to correctly interpret the 32-bit data from the circular buffer.</p></li>
+<li><p>Call <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> before packing data from Dst registers to an output circular buffer. This ensures the packer formats the data correctly for the destination.</p></li>
+</ul>
+</div>
+</blockquote>
+</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>If you are unpcking or packing to multiple circular buffers of different data formats, you must call <code class="docutils literal notranslate"><span class="pre">copy_tile_init()</span></code> and <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> each time you switch between circular buffers with different formats. Otherwise the data may be misinterpreted, leading to incorrect results.</p>
+</div>
+<p>The following example demonstrates a typical compute kernel structure for achieving FP32 accuracy.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"compute_kernel_api/common.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"compute_kernel_api/tile_move_copy.h"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"compute_kernel_api/binary.h"</span>
+
+<span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">MAIN</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_in0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_in1</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_out0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// Initialize for a binary operation on the SFPU</span>
+<span class="w">    </span><span class="n">init_sfpu</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span>
+<span class="w">    </span><span class="n">add_binary_tile_init</span><span class="p">();</span>
+
+<span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Wait for input data</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">        </span><span class="c1">// Acquire Dst registers</span>
+<span class="w">        </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Configure unpacker for FP32 and copy data from CB to Dst</span>
+<span class="w">        </span><span class="n">copy_tile_init</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"> </span><span class="c1">// Copy tile from cb_in0 to Dst[0]</span>
+
+<span class="w">        </span><span class="n">copy_tile_init</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="c1">// Copy tile from cb_in1 to Dst[1]</span>
+
+<span class="w">        </span><span class="c1">// Perform computation on the SFPU</span>
+<span class="w">        </span><span class="n">add_binary_tile</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"> </span><span class="c1">// Dst[0] = Dst[0] + Dst[1]</span>
+
+<span class="w">        </span><span class="c1">// Commit results and release Dst for the packer</span>
+<span class="w">        </span><span class="n">tile_regs_commit</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Reserve space in the output CB</span>
+<span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">        </span><span class="c1">// Wait for packer to be ready</span>
+<span class="w">        </span><span class="n">tile_regs_wait</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Configure packer for FP32 and pack data from Dst to CB</span>
+<span class="w">        </span><span class="c1">// This can be hoisted out of the loop as only one output</span>
+<span class="w">        </span><span class="c1">// exists in the kernel</span>
+<span class="w">        </span><span class="n">pack_reconfig_data_format</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">pack_tile</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span>
+
+<span class="w">        </span><span class="c1">// Release Dst registers</span>
+<span class="w">        </span><span class="n">tile_regs_release</span><span class="p">();</span>
+
+<span class="w">        </span><span class="c1">// Announce data is available in output CB</span>
+<span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+
+<span class="w">        </span><span class="c1">// Pop from input CBs</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="p">}</span><span class="w"> </span><span class="c1">// NAMESPACE</span>
+</pre></div>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Failing to call <code class="docutils literal notranslate"><span class="pre">copy_tile_init()</span></code> and <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> will result in data being treated as 16-bit, leading to a loss of precision, even if <code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span></code> is enabled.</p>
+</div>
+</section>
+<section id="distinguishing-between-matrix-and-vector-engine-apis">
+<h2>Distinguishing Between matrix and vector engine APIs<a class="headerlink" href="#distinguishing-between-matrix-and-vector-engine-apis" title="Permalink to this heading"></a>
+</h2>
+<p>A general way to distinguish between matrix engine (FPU) and vector engine (SFPU) APIs is by their parameters.</p>
+<ul class="simple">
+<li><p><strong>matrix engine APIs</strong> typically take circular buffer indices as arguments, as the FPU operates directly on data unpacked from circular buffers into its dedicated <code class="docutils literal notranslate"><span class="pre">SrcA</span></code> and <code class="docutils literal notranslate"><span class="pre">SrcB</span></code> registers.</p></li>
+<li><p><strong>vector engine APIs</strong> operate on data already present in the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> registers. Therefore, their arguments are indices into the <code class="docutils literal notranslate"><span class="pre">Dst</span></code> register set.</p></li>
+</ul>
+<p>For example:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Adding tiles using the FPU</span>
+<span class="c1">// Operands are specified by their location in circular buffers.</span>
+<span class="c1">// Result is written to Dst tile 0.</span>
+<span class="c1">// DO NOT use if accuracy is of concern</span>
+<span class="n">add_tiles</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+
+<span class="c1">// Adding tiles using the SFPU</span>
+<span class="c1">// Operands are specified by their location in Dst registers.</span>
+<span class="c1">// Result is written back to Dst tile 0.</span>
+<span class="n">add_binary_tile</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="compute_engines_and_dataflow_within_tensix.html" class="btn btn-neutral float-left" title="Compute Engines and Data Flow within Tensix" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../apis/index.html" class="btn btn-neutral float-right" title="APIs" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
