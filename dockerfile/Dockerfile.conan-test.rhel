@@ -3,10 +3,7 @@
 #############################################################
 
 ARG RHEL_VERSION=9.6
-FROM redhat/ubi9:${RHEL_VERSION} AS base
-
-# # Install runtime deps
-COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+FROM redhat/ubi9:${RHEL_VERSION}
 
 RUN dnf update -y && dnf install -y \
     git wget patch which pcre2-devel perl-core \
@@ -15,38 +12,7 @@ RUN dnf update -y && dnf install -y \
     clang clang-tools-extra \
     && dnf clean all
 
-# Set up virtual environment and TT_METAL_HOME
-ENV PYTHON_ENV_DIR=/opt/venv
-ENV TT_METAL_HOME=/tt-metal
-ENV PYTHONPATH=/tt-metal
-
-ENV HOME="/root"
-WORKDIR $HOME
-ENV PATH_FIRST="$PATH"
-
-ENV VIRTUAL_ENV=/root/tt-metal-virtualenv-tmp
-ENV PATH="$VIRTUAL_ENV/bin:$PATH_FIRST"
-
-RUN python3 -m venv $VIRTUAL_ENV
-
-RUN pip3 install conan
-RUN conan profile detect --force
-COPY conan_profile_clang_19.txt /tmp/profile
-RUN cp /tmp/profile $(conan profile path default)
-RUN git config --global --add safe.directory /workspace
-RUN conan profile show
-
-WORKDIR /tt-conan
-COPY .git /tt-conan/.git
-COPY conanfile.py /tt-conan/conanfile.py
-RUN conan install . --build=missing -cc core.net.http:timeout=240
-# Create virtual environment with the python 3.10 which is necessary for the tt-metal
-RUN . .conan-build/Release/generators/conanrun.sh && python3.10 -m venv /root/tt-metal-virtualenv
-
-ENV VIRTUAL_ENV=/root/tt-metal-virtualenv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH_FIRST"
-# Install conan again in a newly created virtual environment
-RUN pip3 install conan
-
-WORKDIR /tt-metal
-COPY . /tt-metal
+# Ensure python3 command exists
+RUN if ! command -v python3 >/dev/null 2>&1; then \
+        ln -s /usr/bin/python /usr/bin/python3; \
+    fi

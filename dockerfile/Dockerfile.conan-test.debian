@@ -3,50 +3,14 @@
 #############################################################
 
 ARG DEBIAN_VERSION=12
-FROM debian:${DEBIAN_VERSION} AS base
+FROM debian:${DEBIAN_VERSION}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime deps
-COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     build-essential \
     pkg-config \
-    python3-pip python3-full python3-dev \
+    python3-pip python3-full python3-dev python3-venv \
+    wget curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Set up TT_METAL_HOME
-ENV TT_METAL_HOME=/tt-metal
-ENV PYTHONPATH=/tt-metal
-
-ENV HOME="/root"
-WORKDIR $HOME
-ENV PATH_FIRST="$PATH"
-
-ENV VIRTUAL_ENV=/root/tt-metal-virtualenv-tmp
-ENV PATH="$VIRTUAL_ENV/bin:$PATH_FIRST"
-
-RUN python3 -m venv $VIRTUAL_ENV
-
-RUN pip3 install conan
-RUN conan profile detect --force
-COPY conan_profile_gcc_12.txt /tmp/profile
-RUN cp /tmp/profile $(conan profile path default)
-RUN git config --global --add safe.directory /workspace
-RUN conan profile show
-
-WORKDIR /tt-conan
-COPY .git /tt-conan/.git
-COPY conanfile.py /tt-conan/conanfile.py
-RUN conan install . --build=missing -cc core.net.http:timeout=240
-# Create virtual environment with the python 3.10 which is necessary for the tt-metal
-RUN . .conan-build/Release/generators/conanrun.sh && python3.10 -m venv /root/tt-metal-virtualenv
-
-ENV VIRTUAL_ENV=/root/tt-metal-virtualenv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH_FIRST"
-# Install conan again in a newly created virtual environment
-RUN pip3 install conan
-
-WORKDIR /tt-metal
-COPY . /tt-metal

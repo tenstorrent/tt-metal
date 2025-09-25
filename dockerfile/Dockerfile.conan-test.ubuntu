@@ -2,38 +2,23 @@
 
 #############################################################
 
-# Accept an argument to specify the Ubuntu version
 ARG UBUNTU_VERSION=22.04
-FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
+FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime deps
-COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gcc build-essential \
     pkg-config \
     python3-pip python3-full python3-dev \
     wget curl \
-    lsb-release wget software-properties-common gnupg \
+    lsb-release software-properties-common gnupg \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && ./llvm.sh 20 && ./llvm.sh 17
-
-# Set up virtual environment and TT_METAL_HOME
-ENV PYTHON_ENV_DIR=/opt/venv
-ENV TT_METAL_HOME=/tt-metal
-ENV PYTHONPATH=/tt-metal
-
-RUN git config --global --add safe.directory /workspace
-
-RUN pip3 install conan
-RUN conan profile detect --force
-COPY conan_profile_clang_17.txt /tmp/profile
-RUN cp /tmp/profile $(conan profile path default)
-RUN conan profile show
-
-WORKDIR /tt-metal
-COPY . /tt-metal
-RUN conan install . --build=missing -cc core.net.http:timeout=240
+# Install LLVM
+RUN wget https://apt.llvm.org/llvm.sh && \
+    chmod +x llvm.sh && \
+    ./llvm.sh 20 && \
+    ./llvm.sh 17 && \
+    rm llvm.sh
