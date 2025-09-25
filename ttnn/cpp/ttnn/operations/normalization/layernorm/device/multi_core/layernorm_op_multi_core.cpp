@@ -1260,6 +1260,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
         uint32_t block_w = block_wt * tile_width;
         uint32_t last_tile_data_width = block_w - (block_w / tile_width) * tile_width;
+
         all_to_all_except_top_compute_compile_time_args.push_back(tile_width);
         all_to_all_except_top_compute_compile_time_args.push_back(K);
         all_to_all_except_top_compute_compile_time_args.push_back(last_tile_data_width);
@@ -1401,37 +1402,39 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 .set_page_size(ex_cb_external_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
-    // ex_partial2
-    uint32_t ex_cb_partial2_index = tt::CBIndex::c_11;
-    tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
-        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial2_index, cb_data_format}})
-            .set_page_size(ex_cb_partial2_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
-    // ex2
-    uint32_t ex2_cb_index = tt::CBIndex::c_12;
-    tt::tt_metal::CircularBufferConfig ex2_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
-            .set_page_size(ex2_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
-    // ex_external2
-    uint32_t ex_cb_external2_index = tt::CBIndex::c_13;
-    tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
-        tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
-            .set_page_size(ex_cb_external2_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
+    if (!use_welford) {
+        // ex_partial2
+        uint32_t ex_cb_partial2_index = tt::CBIndex::c_11;
+        tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
+            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial2_index, cb_data_format}})
+                .set_page_size(ex_cb_partial2_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
+        // ex2
+        uint32_t ex2_cb_index = tt::CBIndex::c_12;
+        tt::tt_metal::CircularBufferConfig ex2_cb_config =
+            tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
+                .set_page_size(ex2_cb_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
+        // ex_external2
+        uint32_t ex_cb_external2_index = tt::CBIndex::c_13;
+        tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
+            tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
+                .set_page_size(ex_cb_external2_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
+        // ex2pe
+        uint32_t cb_ex2pe_index;
+        cb_ex2pe_index = tt::CBIndex::c_20;
+        tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
+            tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
+                .set_page_size(cb_ex2pe_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+    }
     // ex_global
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig ex_global_cb_config =
         tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
             .set_page_size(ex_global_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
-    // ex2pe
-    uint32_t cb_ex2pe_index;
-    cb_ex2pe_index = tt::CBIndex::c_20;
-    tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
-            .set_page_size(cb_ex2pe_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
 
     CBHandle cb_stats = 0;
     if (is_post_all_gather) {
