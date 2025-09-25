@@ -62,13 +62,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t L = joint_q_shape[2];
 
     // Calculate padded sequence length. Both N_local and L may need to be padded to chunk size.
-    const uint32_t padded_Lq = tt::round_up(L, q_chunk_size);
-    const uint32_t padded_Lk = tt::round_up(L, k_chunk_size);
+    const uint32_t padded_Lq = ttsl::math::round_up(L, q_chunk_size);
+    const uint32_t padded_Lk = ttsl::math::round_up(L, k_chunk_size);
 
     const uint32_t local_Nt = local_N / tt::constants::TILE_HEIGHT;
     const uint32_t global_Nt = global_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
-    const uint32_t logical_Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
+    const uint32_t logical_Lt = ttsl::math::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t padded_Lqt = padded_Lq / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Lkt = padded_Lk / tt::constants::TILE_HEIGHT;
 
@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     [[maybe_unused]] const uint32_t k_num_chunks = cat_Sk / k_chunk_size;
     const uint32_t N_k_num_chunks_local = local_N / k_chunk_size;
     const uint32_t L_k_num_chunks = padded_Lk / k_chunk_size;
-    const uint32_t global_logical_NK_chunks = tt::div_up(logical_n, k_chunk_size);
+    const uint32_t global_logical_NK_chunks = ttsl::math::div_up(logical_n, k_chunk_size);
     const uint32_t global_padded_NK_chunks = global_N / k_chunk_size;
 
     log_debug(tt::LogOp, "B: {}", B);
@@ -178,7 +178,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
      *
      */
     const uint32_t global_q_chunks = B * NH * q_num_chunks;
-    const uint32_t q_per_core = tt::div_up(global_q_chunks, num_cores);
+    const uint32_t q_per_core = ttsl::math::div_up(global_q_chunks, num_cores);
 
     const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
 

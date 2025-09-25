@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     uint32_t cb_id = tt::CBIndex::c_0;
     uint32_t cb_npages = 16;  // multibuffering
     uint32_t cb_pagesize =
-        tt::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
+        ttsl::math::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
@@ -862,7 +862,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         (std::uint32_t)stick_size_padded,
         (std::uint32_t)stick_size_padded_front,
         (std::uint32_t)stick_size_padded_end,
-        (std::uint32_t)tt::div_up(stick_size_padded, 512),  // max zero size is 512B
+        (std::uint32_t)ttsl::math::div_up(stick_size_padded, 512),  // max zero size is 512B
         (std::uint32_t)(stick_size_padded % 512 == 0 ? 512 : stick_size_padded % 512),
         (std::uint32_t)not_pad_by_zero,
         (std::uint32_t)packed_pad_value,
@@ -1408,9 +1408,9 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     }
 
     auto l1_alignment_bytes = hal::get_l1_alignment();
-    uint32_t padded_stick_step = tt::round_up(
+    uint32_t padded_stick_step = ttsl::math::round_up(
         padded_stick_bytes, l1_alignment_bytes);  // round padded_stick bytes to a multiple of l1_alignment_bytes
-    uint32_t unpadded_stick_step = tt::round_up(
+    uint32_t unpadded_stick_step = ttsl::math::round_up(
         unpadded_stick_bytes,
         l1_alignment_bytes);  // round unpadded_stick bytes to a multiple of l1_alignment_bytes
 

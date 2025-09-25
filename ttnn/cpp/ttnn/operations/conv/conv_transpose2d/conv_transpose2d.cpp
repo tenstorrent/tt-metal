@@ -179,7 +179,7 @@ Result conv_transpose2d(
 
     // Call Conv2d u_op with Stride = 1, Padding = 0.
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape({1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
+        ttnn::Shape({1, 1, batch_size * output_height * output_width, ttsl::math::round_up(out_channels, 32)}),
         output_parallel_config,
         round_up_size);
 
@@ -195,7 +195,7 @@ Result conv_transpose2d(
         input_tensor.memory_config().buffer_type(),
         mm_conv,
         input_tensor_post_tm.memory_config());
-    uint32_t in_channels_padded = tt::round_up(
+    uint32_t in_channels_padded = ttsl::math::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
                                     conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;

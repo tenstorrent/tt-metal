@@ -253,7 +253,7 @@ size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
     if (!memory_config_.is_sharded()) {
         const size_t num_pages =
             physical_shape.height() * physical_shape.width() / page_shape.height() / page_shape.width();
-        num_pages_per_bank = div_up(num_pages, num_banks);
+        num_pages_per_bank = ttsl::math::div_up(num_pages, num_banks);
     } else if (const auto& shard_spec = memory_config_.shard_spec()) {
         Shape2D shard_shape = Shape2D(shard_spec->shape);
         num_pages_per_bank =

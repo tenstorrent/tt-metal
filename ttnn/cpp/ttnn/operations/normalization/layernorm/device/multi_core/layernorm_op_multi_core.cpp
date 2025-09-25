@@ -173,7 +173,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
-    uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
+    uint32_t WtB = ttsl::math::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     bool large_tensor_needed = false;
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
@@ -708,12 +708,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t num_rows_per_all_to_all_worker = tt::div_up(block_ht, num_blocks);
+    uint32_t num_rows_per_all_to_all_worker = ttsl::math::div_up(block_ht, num_blocks);
     if (use_two_stage_reduce) {
         if (row_wise) {
-            num_rows_per_all_to_all_worker = tt::div_up(block_ht, grid_size.x);
+            num_rows_per_all_to_all_worker = ttsl::math::div_up(block_ht, grid_size.x);
         } else {
-            num_rows_per_all_to_all_worker = tt::div_up(block_ht, grid_size.y);
+            num_rows_per_all_to_all_worker = ttsl::math::div_up(block_ht, grid_size.y);
         }
     }
     uint32_t num_rows_per_all_to_all_worker_last =
@@ -750,7 +750,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
-    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
+    uint32_t ex_external_CB_size = ttsl::math::div_up(Kt, block_wt) * single_tile_size;
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
@@ -778,7 +778,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
-    uint32_t num_cores_all_to_all = tt::div_up(block_ht, num_rows_per_all_to_all_worker);
+    uint32_t num_cores_all_to_all = ttsl::math::div_up(block_ht, num_rows_per_all_to_all_worker);
     uint32_t num_cores_all_to_all_first_stage = num_cores_all_to_all;
     uint32_t num_cores_all_to_all_second_stage = 0;
     uint32_t num_blocks_first_stage = num_blocks;

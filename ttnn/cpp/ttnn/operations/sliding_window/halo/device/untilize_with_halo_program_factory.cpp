@@ -93,10 +93,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1], "Expected input and output shard shapes to match");
 
     const uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
-    const uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
+    const uint32_t remapped_input_shard_shape_for_output_grid = ttsl::math::div_up(input_nhw_height, ncores_nhw);
 
-    uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
-    uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
+    uint32_t ntiles_per_block = ttsl::math::div_up(input_shard_shape[1], TILE_WIDTH);
+    uint32_t input_nblocks_per_core = ttsl::math::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
     uint32_t in_page_size = tt::tile_size(in_df);
@@ -243,7 +243,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
-        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
+        aligned_input_nstick_nbytes = ttsl::math::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }
 
     const uint32_t block_stride = 2;  // Skip every 2nd block because of split reader
@@ -419,9 +419,9 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     auto output_shard_shape = output_tensor.shard_spec().value().shape;
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1]);
     uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
-    uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
-    uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
-    uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
+    uint32_t remapped_input_shard_shape_for_output_grid = ttsl::math::div_up(input_nhw_height, ncores_nhw);
+    uint32_t ntiles_per_block = ttsl::math::div_up(input_shard_shape[1], TILE_WIDTH);
+    uint32_t input_nblocks_per_core = ttsl::math::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
     uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
@@ -572,7 +572,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
     int32_t num_active_cores = cores.size();
-    int32_t num_cores_rectangular = is_block_sharded ? num_active_cores : tt::round_up(num_active_cores, num_cores_x);
+    int32_t num_cores_rectangular = is_block_sharded ? num_active_cores : ttsl::math::round_up(num_active_cores, num_cores_x);
     int32_t num_noop_cores = is_block_sharded ? 0 : num_cores_rectangular - num_active_cores;
     TT_FATAL(
         !is_block_sharded || all_cores.ranges().size() == 1,
@@ -604,7 +604,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     log_debug(tt::LogOp, "input_tensor.buffer()->alignment() = {}", input_tensor.buffer()->alignment());
 
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
-        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
+        aligned_input_nstick_nbytes = ttsl::math::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }
 
     // create the NC/BR sync CBs

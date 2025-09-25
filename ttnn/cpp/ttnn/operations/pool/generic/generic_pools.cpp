@@ -166,7 +166,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         }
 
         uint32_t input_tensor_width_snapped_to_channels_alignment =
-            tt::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
+            ttsl::math::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
 
         // Calculate padding needed for channels dimension
         uint32_t input_channels = input_tensor_shape[3];
@@ -216,10 +216,10 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     auto shard_spec = out_memory_config.shard_spec().value();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
-        tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
+        ttsl::math::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded = tt::round_up(
+    uint32_t output_c_padded = ttsl::math::round_up(
         output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2));
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(

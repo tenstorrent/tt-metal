@@ -67,7 +67,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
+    uint32_t unpadded_row_size_bytes_offset = ttsl::math::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
     std::vector<uint32_t> common_reader_kernel_args = {
@@ -170,7 +170,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     }
     const ttnn::Shape& output_shape = output.padded_shape();
     const uint32_t unpadded_row_size_bytes = output_shape[-1] * input.element_size();
-    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
+    const uint32_t cb_page_size = ttsl::math::round_up(unpadded_row_size_bytes, alignment);
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
                                          ? num_sticks_per_core_group_1
                                          : num_sticks_per_core_group_2;
@@ -336,10 +336,10 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     uint32_t src_is_dram = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t page_size_output = dst_is_dram ? tt::round_up(output_shape[-1] * a.element_size(), TILE_WIDTH)
-                                            : tt::round_up(output_shape[-1] * a.element_size(), TILE_WIDTH / 2);
-    uint32_t page_size_input = src_is_dram ? tt::round_up(input_shape[-1] * a.element_size(), TILE_WIDTH)
-                                           : tt::round_up(input_shape[-1] * a.element_size(), TILE_WIDTH / 2);
+    uint32_t page_size_output = dst_is_dram ? ttsl::math::round_up(output_shape[-1] * a.element_size(), TILE_WIDTH)
+                                            : ttsl::math::round_up(output_shape[-1] * a.element_size(), TILE_WIDTH / 2);
+    uint32_t page_size_input = src_is_dram ? ttsl::math::round_up(input_shape[-1] * a.element_size(), TILE_WIDTH)
+                                           : ttsl::math::round_up(input_shape[-1] * a.element_size(), TILE_WIDTH / 2);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(1 * page_size_input, {{tt::CBIndex::c_0, cb_data_format}})

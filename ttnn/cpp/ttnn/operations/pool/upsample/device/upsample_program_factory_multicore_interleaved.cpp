@@ -68,7 +68,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         // Row-major layout specific calculations
         input_unit_size = input.padded_shape()[-1] * input.element_size();
         output_unit_size = output.padded_shape()[-1] * output.element_size();
-        aligned_input_unit_size = tt::round_up(input_unit_size, tt::tt_metal::hal::get_dram_alignment());
+        aligned_input_unit_size = ttsl::math::round_up(input_unit_size, tt::tt_metal::hal::get_dram_alignment());
 
         /*
         For Row-major layout, a unit of work is one row (stick) of the input tensor

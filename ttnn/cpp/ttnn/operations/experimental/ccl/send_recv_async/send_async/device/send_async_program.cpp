@@ -48,7 +48,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     auto input_page_size = input_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
     auto num_pages = input_tensor.buffer()->num_pages();
-    auto fabric_max_payload_size = tt::round_down(
+    auto fabric_max_payload_size = ttsl::math::round_down(
         std::min(
             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),

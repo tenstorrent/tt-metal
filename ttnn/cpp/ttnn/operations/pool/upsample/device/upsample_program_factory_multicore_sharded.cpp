@@ -201,7 +201,7 @@ static Tensor create_config_tensor(
         config_vector.size(),
         elems_per_core);
 
-    ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core), elems_per_core});
+    ttnn::Shape config_shape({ttsl::math::div_up(config_vector.size(), elems_per_core), elems_per_core});
     auto config_buffer = HostBuffer(std::move(config_vector));
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
@@ -253,7 +253,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
 
     uint32_t next_cb_index = CBIndex::c_0;
     const uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
-    const uint32_t aligned_input_stick_nbytes = tt::round_up(input_stick_nbytes, input.buffer()->alignment());
+    const uint32_t aligned_input_stick_nbytes = ttsl::math::round_up(input_stick_nbytes, input.buffer()->alignment());
     const uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     const uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
 
@@ -262,7 +262,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
 
     // output sharded CB with upsampled data
     uint32_t out_cb_pagesize =
-        tt::round_up(output_stick_nbytes, output.buffer()->alignment());  // aligned output stick n bytes
+        ttsl::math::round_up(output_stick_nbytes, output.buffer()->alignment());  // aligned output stick n bytes
     uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
 
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(

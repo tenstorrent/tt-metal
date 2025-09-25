@@ -272,7 +272,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     uint32_t total_num_rows = a.logical_shape()[-2];
 
-    if (output.padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
+    if (output.padded_shape()[-2] > ttsl::math::round_up(total_num_rows, tile_height)) {
         total_num_rows = output.padded_shape()[-2];
     }
 

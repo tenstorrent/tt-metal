@@ -53,11 +53,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id, cb_in_total_size, cb_in_page_size, input_format, is_input_in_dram ? nullptr : a.buffer());
 
     const uint32_t cb_in_tiled_id = tt::CBIndex::c_1;
-    const uint32_t cb_in_tiled_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_tiled_total_size = ttsl::math::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
-    const uint32_t cb_in_transpose_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_transpose_total_size = ttsl::math::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
 
     const uint32_t cb_in_transpose_id0 = tt::CBIndex::c_2;
@@ -75,8 +75,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    const uint32_t total_tiles_per_core = tt::div_up(input_shard_width, TILE_HEIGHT);
-    const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);
+    const uint32_t total_tiles_per_core = ttsl::math::div_up(input_shard_width, TILE_HEIGHT);
+    const uint32_t total_tiles_writer0 = ttsl::math::div_up(total_tiles_per_core, 2);
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
     uint32_t output_stride_sticks = TILE_WIDTH;  // needed to stride output address when doing split writers
 
