@@ -1,396 +1,274 @@
-"""
-This is the ImageAttention block for Gemma-3-4b-it
-We have reused the TTLlamaImageAttention with some modification.
-We have made the linears (Q,K,V) to be executed separately and added bias support for O_projection, along with few
-configuration changes.
-"""
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+from typing import Dict, Optional, Tuple
+
 import torch
+from pydantic import BaseModel, Field
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import nearest_32
+from models.tt_transformers.tt.common import get_out_subblock_w
+from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
+from models.utility_functions import nearest_32
 
 
-class TtGemmaImageAttention(LightweightModule):
+def find_largest_divisor(n, max_divisor=8):
+    for i in range(max_divisor, 0, -1):
+        if n % i == 0:
+            return i
+    return 1
+
+
+def matmul_config(
+    tile_size,
+    m: int,
+    k: int,
+    n: int,
+    grid_size: Tuple[int, int],
+    in0_block_w: int = None,
+    fuse_batch: bool = False,
+    fused_activation=None,
+    per_core_M=None,
+    per_core_N=None,
+):
+    if per_core_M is None:
+        per_core_M = math.ceil(m / (tile_size * grid_size[1]))
+    if per_core_N is None:
+        per_core_N = math.ceil(n / (tile_size * grid_size[0]))
+
+    out_subblock_h = 1
+    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
+
+    if in0_block_w is None:
+        assert k % (tile_size * grid_size[1]) == 0, f"Input width must be divisible by tile size times grid size"
+        in0_block_w = find_largest_divisor(k // (tile_size * grid_size[1]))
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=fuse_batch,
+    )
+
+
+class GemmaAttentionConfig(BaseModel):
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
+    tile_size: Optional[int] = 32
+    num_devices: int
+    vision_dim: int
+    vision_head_dim: int
+    vision_attn_n_heads: int
+    max_grid_size: ttnn.CoreGrid
+    base_model_name: str = ""
+    VISION_MAX_MM_SEQ: int = 32
+    compute_kernel_config_hifi2: ttnn.WormholeComputeKernelConfig = Field(
+        default_factory=lambda: ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    )
+    compute_kernel_config_hifi4: ttnn.WormholeComputeKernelConfig = Field(
+        default_factory=lambda: ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    )
+    compute_kernel_config_sdpa: ttnn.WormholeComputeKernelConfig = Field(
+        default_factory=lambda: ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+    )
+    sdpa_cfg: ttnn.SDPAProgramConfig = Field(
+        default_factory=lambda: ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=256,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+    )
+    dummy_weights: bool = False
+
+    def get_model_config(self):
+        return {
+            "IMAGE_ATTN_OUT_PROGCFG": lambda seq_len, max_seq: matmul_config(
+                tile_size=self.tile_size,
+                m=min(seq_len, max_seq),
+                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads)
+                // self.num_devices,  # Correctly divided by num_devices
+                n=self.vision_dim,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= max_seq,
+            ),
+            "IMAGE_ATTN_QKV_PROGCFG": lambda seq_len, max_seq: matmul_config(
+                tile_size=self.tile_size,
+                m=min(seq_len, max_seq),
+                k=self.vision_dim,
+                n=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3)
+                // self.num_devices,  # Head dim was padded to nearest 32
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= max_seq,
+            ),
+        }
+
+
+def transform_gemma_weights_for_llama(state_dict: Dict, state_dict_prefix: str) -> Dict:
+    """
+    Transorm weight names to fit llama format
+    """
+    wq_str = f"{state_dict_prefix}wq.weight"
+    wk_str = f"{state_dict_prefix}wk.weight"
+    wv_str = f"{state_dict_prefix}wv.weight"
+    wo_str = f"{state_dict_prefix}wo.weight"
+
+    bq_str = f"{state_dict_prefix}wq.bias"
+    bk_str = f"{state_dict_prefix}wk.bias"
+    bv_str = f"{state_dict_prefix}wv.bias"
+    bo_str = f"{state_dict_prefix}wo.bias"
+
+    # Create new state dict with Llama-compatible keys
+    llama_state_dict = {}
+
+    if wq_str in state_dict and wk_str in state_dict and wv_str in state_dict:
+        wq = state_dict[wq_str]
+        wk = state_dict[wk_str]
+        wv = state_dict[wv_str]
+
+        # Store individual Q, K, V weights - LlamaImageAttention will fuse them internally
+        llama_state_dict["wq.weight"] = wq
+        llama_state_dict["wk.weight"] = wk
+        llama_state_dict["wv.weight"] = wv
+        llama_state_dict["wo.weight"] = state_dict[wo_str]
+
+        # Handle biases if they exist
+        if bq_str in state_dict and bk_str in state_dict and bv_str in state_dict:
+            bq = state_dict[bq_str]
+            bk = state_dict[bk_str]
+            bv = state_dict[bv_str]
+
+            llama_state_dict["wq.bias"] = bq
+            llama_state_dict["wk.bias"] = bk
+            llama_state_dict["wv.bias"] = bv
+
+        if bo_str in state_dict:
+            llama_state_dict["wo.bias"] = state_dict[bo_str]
+
+    return llama_state_dict
+
+
+class TtGemmaImageAttention:
+    """
+    Gemma Image Attention class using TtLlamaImageAttention internally.
+    """
+
     def __init__(
         self,
         mesh_device,
         tt_ccl,
-        state_dict,
-        state_dict_prefix,
-        weight_cache_path,
-        dtype,
-        configuration,
+        state_dict: Dict,
+        state_dict_prefix: str,
+        weight_cache_path: str,
+        dtype=ttnn.bfloat16,
+        configuration=None,
     ):
-        super().__init__()
+        """
+        Initialize the Gemma Image Attention.
 
-        self.state_dict = state_dict
+        Args:
+            mesh_device: Device mesh
+            tt_ccl: CCL instance
+            state_dict: Model weights dictionary
+            state_dict_prefix: Prefix for weight keys
+            weight_cache_path: Path for weight caching
+            dtype: Data type for computation
+            configuration: Model configuration (ModelArgs instance)
+        """
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
-        self.num_devices = configuration.num_devices
-
-        self.hidden_size = configuration.vision_dim
-        self.n_heads = configuration.vision_attn_n_heads
-        self.head_dim = self.hidden_size // self.n_heads
-        self.n_kv_heads = self.n_heads
-
-        self.n_local_heads = self.n_heads // configuration.num_devices
-        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices
-
+        self.state_dict = state_dict
+        self.state_dict_prefix = state_dict_prefix
+        self.weight_cache_path = weight_cache_path
         self.dtype = dtype
-
-        self.grid_size = configuration.max_grid_size
-
-        self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
-        self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
-        self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
         self.configuration = configuration
 
-        self.model_config = configuration.get_model_config()
+        # Extract vision parameters from configuration
+        vision_dim = configuration.vision_dim if configuration else 1152
+        num_heads = configuration.vision_attn_n_heads if configuration else 16
+        base_model_name = configuration.base_model_name if configuration else ""
+        vision_max_mm_seq = configuration.VISION_MAX_MM_SEQ if hasattr(configuration, "VISION_MAX_MM_SEQ") else 32
 
-        if configuration.dummy_weights or (weight_cache_path is None):
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}{name}")
+        # Transform Gemma weights to Llama format
+        llama_state_dict = transform_gemma_weights_for_llama(state_dict, state_dict_prefix)
 
-        wq_str = f"{state_dict_prefix}wq.weight"
-        wk_str = f"{state_dict_prefix}wk.weight"
-        wv_str = f"{state_dict_prefix}wv.weight"
-        wo_str = f"{state_dict_prefix}wo.weight"
-
-        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
-        assert self.n_heads % configuration.num_devices == 0
-        assert self.n_kv_heads % configuration.num_devices == 0
-
-        # Pad head_dim to multiple of 32
-        def pad_head_dim(weight, heads_out=True):
-            # Pad head dim to multiple of 32
-            # heads_out means that the output dim of this weight contains heads.
-            dim = weight.shape[1]
-            assert weight.shape[0] == dim
-            padded_head_dim = nearest_32(self.head_dim)
-            padding_size = padded_head_dim - self.head_dim
-            if padding_size > 0:
-                if heads_out:
-                    weight = weight.transpose(-1, -2)
-                weight = weight.reshape(dim, self.n_heads, self.head_dim)
-                padding = torch.zeros(dim, self.n_heads, padding_size, dtype=weight.dtype)
-                weight = torch.cat([weight, padding], dim=-1)
-                weight = weight.reshape(dim, self.n_heads * padded_head_dim)
-                if heads_out:
-                    weight = weight.transpose(-1, -2)
-            return weight
-
-        wq_padded = pad_head_dim(self.state_dict[wq_str])
-        wk_padded = pad_head_dim(self.state_dict[wk_str])
-        wv_padded = pad_head_dim(self.state_dict[wv_str])
-        wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
-        wq_chunked, wk_chunked, wv_chunked = (
-            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
+        grid = mesh_device.compute_with_storage_grid_size()
+        attention_config = GemmaAttentionConfig(
+            num_devices=mesh_device.get_num_devices() if mesh_device else 0,
+            vision_dim=vision_dim,
+            vision_head_dim=vision_dim // num_heads,
+            vision_attn_n_heads=num_heads,
+            max_grid_size=ttnn.CoreGrid(x=grid.x, y=grid.y),
+            base_model_name=base_model_name,
+            VISION_MAX_MM_SEQ=vision_max_mm_seq,
         )
 
-        self.qkv_program_config = lambda seq_len, MAX_MM_SEQ_LEN: (
-            None
-            if self.configuration.is_gemma
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
+        # Initialize the underlying TtLlamaImageAttention
+        self.ttnn_attention = TtLlamaImageAttention(
+            mesh_device,
+            tt_ccl=tt_ccl,
+            state_dict=llama_state_dict,  # Use transformed weights
+            state_dict_prefix="",  # Empty prefix since keys are already transformed
+            weight_cache_path=weight_cache_path,
+            dtype=dtype,
+            configuration=attention_config,
         )
 
-        # for Gemma
-        self.wq = ttnn.as_tensor(
-            tensor=wq_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            cache_file_name=cache_name("wq_sharded"),
-            preprocess=lambda x: x.transpose(-2, -1),
-        )
+    def __call__(self, hidden_states, attention_mask=None):
+        """
+        Forward pass of the attention layer.
 
-        self.wk = ttnn.as_tensor(
-            tensor=wk_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            cache_file_name=cache_name("wk_sharded"),
-            preprocess=lambda x: x.transpose(-2, -1),
-        )
+        Args:
+            hidden_states: Input tensor (torch.Tensor or ttnn.Tensor)
+            attention_mask: Optional attention mask
 
-        self.wv = ttnn.as_tensor(
-            tensor=wv_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            cache_file_name=cache_name("wv_sharded"),
-            preprocess=lambda x: x.transpose(-2, -1),
-        )
+        Returns:
+            Output tensor
+        """
+        if isinstance(hidden_states, torch.Tensor):
+            # Ensure the tensor has the correct 4D shape for Gemma3: (batch, 1, seq_len, dimensions)
+            if len(hidden_states.shape) == 3:  # (batch, seq_len, hidden_dim)
+                hidden_states = hidden_states.unsqueeze(1)  # (batch, 1, seq_len, hidden_dim)
 
-        self.wqkv = ttnn.as_tensor(
-            torch.concat(
-                [
-                    torch.concat(
-                        [
-                            torch.transpose(
-                                wq_chunked[i],
-                                -2,
-                                -1,
-                            ),
-                            torch.transpose(
-                                wk_chunked[i],
-                                -2,
-                                -1,
-                            ),
-                            torch.transpose(
-                                wv_chunked[i],
-                                -2,
-                                -1,
-                            ),
-                        ],
-                        dim=-1,
-                    )
-                    for i in range(configuration.num_devices)
-                ],
-                dim=-1,
-            ),
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            dtype=self.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name("wqkv_sharded"),
-        )
-
-        bq_str = f"{state_dict_prefix}wq.bias"
-        bk_str = f"{state_dict_prefix}wk.bias"
-        bv_str = f"{state_dict_prefix}wv.bias"
-        bo_str = f"{state_dict_prefix}wo.bias"
-
-        if bq_str in self.state_dict:
-
-            def pad_head_dim_bias(bias):
-                # Pad 1D bias to match padded head dim
-                dim = bias.shape[0]
-                assert (
-                    dim == self.n_heads * self.head_dim
-                ), f"Expected bias of shape ({self.n_heads} * {self.head_dim}) = {self.n_heads * self.head_dim}, but got {dim}"
-
-                padded_head_dim = nearest_32(self.head_dim)
-                padding_size = padded_head_dim - self.head_dim
-
-                if padding_size > 0:
-                    bias = bias.view(self.n_heads, self.head_dim)
-                    padding = torch.zeros(self.n_heads, padding_size, dtype=bias.dtype)
-                    bias = torch.cat([bias, padding], dim=-1)
-                    bias = bias.view(self.n_heads * padded_head_dim)
-
-                return bias
-
-            bq_padded = pad_head_dim_bias(self.state_dict[bq_str])
-            bk_padded = pad_head_dim_bias(self.state_dict[bk_str])
-            bv_padded = pad_head_dim_bias(self.state_dict[bv_str])
-
-            bq_chunked, bk_chunked, bv_chunked = (
-                torch.chunk(b, configuration.num_devices) for b in [bq_padded, bk_padded, bv_padded]
-            )
-
-            self.bqkv = ttnn.as_tensor(
-                torch.concat(
-                    [
-                        torch.concat(
-                            [
-                                bq_chunked[i],
-                                bk_chunked[i],
-                                bv_chunked[i],
-                            ],
-                            dim=-1,
-                        )
-                        for i in range(configuration.num_devices)
-                    ],
-                    dim=-1,
-                ),
+            hidden_states = ttnn.from_torch(
+                hidden_states,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                layout=ttnn.TILE_LAYOUT,
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("bqkv_sharded"),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
-            # for Gemma
-            self.bq = ttnn.as_tensor(
-                tensor=bq_padded,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                cache_file_name=cache_name("bq_sharded"),
-            )
-
-            self.bk = ttnn.as_tensor(
-                tensor=bk_padded,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                cache_file_name=cache_name("bk_sharded"),
-            )
-
-            self.bv = ttnn.as_tensor(
-                tensor=bv_padded,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                cache_file_name=cache_name("bv_sharded"),
-            )
-
+            output = self.ttnn_attention(hidden_states, mask=attention_mask)
+            output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0]
         else:
-            self.bqkv = None
+            if hidden_states.shape != (1, 1, hidden_states.shape[-2], hidden_states.shape[-1]):
+                hidden_states = ttnn.reshape(hidden_states, [1, 1, hidden_states.shape[-2], hidden_states.shape[-1]])
+            output = self.ttnn_attention(hidden_states, mask=attention_mask)
 
-        self.wo = ttnn.as_tensor(
-            torch.transpose(
-                wo_padded,
-                -2,
-                -1,
-            ),
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            # cache_file_name=cache_name("wo_sharded"),
-        )
-
-        if bo_str in self.state_dict:
-            self.bo = ttnn.as_tensor(
-                self.state_dict[bo_str],
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("bo_sharded"),
-            )
-        else:
-            self.bo = None
-
-        self.scale = self.head_dim**-0.5
-
-    def forward(self, x_11SH, mask=None):
-        seq_len = x_11SH.shape[-2]
-        batch_size = x_11SH.shape[0]
-
-        MAX_MM_SEQ_LEN = seq_len if self.configuration.is_gemma else self.configuration.VISION_MAX_MM_SEQ
-
-        if seq_len > MAX_MM_SEQ_LEN:
-            x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-
-        q_heads_1QSD = ttnn.linear(
-            x_11SH,
-            self.wq,
-            bias=self.bq,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
-        )
-
-        q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
-
-        k_heads_1KSD = ttnn.linear(
-            x_11SH,
-            self.wk,
-            bias=self.bk,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
-        )
-
-        k_heads_1KSD = ttnn.transpose(ttnn.reshape(k_heads_1KSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
-
-        v_heads_1VSD = ttnn.linear(
-            x_11SH,
-            self.wv,
-            bias=self.bv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
-        )
-        v_heads_1VSD = ttnn.transpose(ttnn.reshape(v_heads_1VSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
-
-        # TODO: get this from model_config
-        sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), q_chunk_size=256, k_chunk_size=256, exp_approx_mode=False
-        )
-        attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
-            q_heads_1QSD,
-            k_heads_1KSD,
-            v_heads_1VSD,
-            is_causal=False,
-            scale=self.scale,
-            attn_mask=mask,
-            program_config=sdpa_cfg,
-            compute_kernel_config=self.compute_kernel_config_sdpa,
-        )
-        # deallocate keys and values
-        ttnn.deallocate(q_heads_1QSD)
-        ttnn.deallocate(k_heads_1KSD)
-        ttnn.deallocate(v_heads_1VSD)
-
-        ###
-        # Output matmul
-        ###
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
-            attn_output_1QSD,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(attn_output_1QSD)
-
-        # reshaping long sequence to matmul fit on device
-        if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_11SH = ttnn.reshape(
-                attn_output_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1]
-            )
-
-        if self.num_devices > 1:
-            attn_output_11SH = ttnn.experimental.all_gather_async(
-                attn_output_11SH,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-
-        output_11SH = ttnn.linear(
-            attn_output_11SH,
-            self.wo,
-            bias=self.bo,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
-        )
-        if seq_len > MAX_MM_SEQ_LEN:
-            output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len, -1])
-        ttnn.deallocate(attn_output_11SH)
-
-        return output_11SH
+        return output

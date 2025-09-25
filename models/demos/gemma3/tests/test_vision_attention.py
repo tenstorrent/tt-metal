@@ -49,7 +49,10 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     head_dim = hidden_size // n_heads
     seq_len = model_args.vision_chunk_ntok
 
-    tt_model = TtGemmaImageAttention(
+    pt_attention_input = torch.rand(batch, seq_len, dim)
+
+    # Create the attention model
+    tt_attention = TtGemmaImageAttention(
         mesh_device=mesh_device,
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
@@ -59,28 +62,21 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
         configuration=model_args,
     )
 
-    pt_attention_input = torch.randn(batch, seq_len, dim)
+    reference_output = reference_model(pt_attention_input, attention_mask=None)
 
-    attention_input = ttnn.from_torch(
-        pt_attention_input.unsqueeze(0),
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    # Extract tensor from tuple if needed (reference model returns (tensor, None))
+    if isinstance(reference_output, tuple):
+        reference_output = reference_output[0]
 
-    tt_out = tt_model(attention_input)
+    tt_output = tt_attention(pt_attention_input, attention_mask=None)
 
-    # Doing contract in tt is correct!!
-    tt_output_torch = ttnn.to_torch(
-        tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1), device=mesh_device
-    )[0, :, :, :]
+    tt_output_torch = tt_output
 
-    reference_output = reference_model(pt_attention_input)[0]
-    tt_output_torch = tt_output_torch[:, :4097, :]
+    # Trim to match sequence length if needed because of padding
+    if tt_output_torch.shape[1] > seq_len:
+        tt_output_torch = tt_output_torch[:, :seq_len, :]
+
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
 
