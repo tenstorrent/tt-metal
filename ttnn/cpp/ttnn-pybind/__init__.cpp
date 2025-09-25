@@ -51,6 +51,7 @@
 #include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
+#include "ttnn/operations/new_examples/new_examples_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/full/full_pybind.hpp"
 #include "ttnn/operations/full_like/full_like_pybind.hpp"
@@ -87,6 +88,9 @@ void py_module(py::module& module) {
 
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
+
+    auto m_new_examples = module.def_submodule("new_examples", "new examples of operations");
+    new_examples::py_module(m_new_examples);
 
     //  Eltwise operations: unary, binary, ternary, backward, complex
     auto m_unary = module.def_submodule("unary", "unary operations");
