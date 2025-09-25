@@ -34,14 +34,6 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::SizeIs;
 
-std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
-    std::vector<chip_id_t> device_ids;
-    for (auto* device : mesh.get_devices()) {
-        device_ids.push_back(device->id());
-    }
-    return device_ids;
-}
-
 std::vector<MeshShape> get_mesh_shapes() {
     static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
         MeshShape{1, 1}, MeshShape{1, 2}, MeshShape{1, 3}, MeshShape{1, 4}, MeshShape{1, 5}, MeshShape{1, 6},

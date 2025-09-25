@@ -165,7 +165,7 @@ bool check_connection_requested(
     }
 }
 
-std::string create_port_tag(port_id_t port_id) {
+[[maybe_unused]] std::string create_port_tag(port_id_t port_id) {
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
 
