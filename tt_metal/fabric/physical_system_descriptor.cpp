@@ -101,7 +101,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
             auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
             auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster);
-            auto tunnels = tunnels_from_mmio_device.at(mmio_device);
+            const auto& tunnels = tunnels_from_mmio_device.at(mmio_device);
             for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
                 const auto& devices_on_tunnel = tunnels[tunnel];
                 auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
