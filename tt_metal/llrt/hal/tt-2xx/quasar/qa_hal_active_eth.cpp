@@ -104,6 +104,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(0);
+    // TODO Disabling Erisc FW for now
     // std::vector<HalJitBuildConfig> processor_types(1);
     // for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++)
     // {

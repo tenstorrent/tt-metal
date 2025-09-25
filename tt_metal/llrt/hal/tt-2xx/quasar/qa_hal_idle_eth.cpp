@@ -77,6 +77,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(0);
+    // TODO Disabling Erisc FW for now
     // std::vector<HalJitBuildConfig> processor_types(1);
     // for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
     //     DeviceAddr fw_base, local_init, fw_launch;

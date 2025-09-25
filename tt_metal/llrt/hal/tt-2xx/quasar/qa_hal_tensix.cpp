@@ -87,7 +87,6 @@ HalCoreInfoType create_tensix_mem_map() {
     std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
         // DM
         {
-            // BRISC
             {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
              .local_init_addr = MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
