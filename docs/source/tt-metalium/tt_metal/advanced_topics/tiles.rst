@@ -29,7 +29,7 @@ Internal structure of a Tile
 Most tiles are not stored as a simple flat array. Instead, a 32x32 tile is subdivided into four 16x16 faces, where each face is stored as a contiguous block in memory. The faces are arranged sequentially in memory, creating a hierarchical structure that enables efficient access patterns for the matrix and vector engines in each Tensix core.
 
 .. figure:: /images/tenstorrent-32x32tile-16x16face-structure.webp
-    :scale: 65%
+    :width: 85%
     :alt: 32x32 tile with 16x16 faces
     :align: center
 
@@ -38,7 +38,7 @@ Most tiles are not stored as a simple flat array. Instead, a 32x32 tile is subdi
 For example, consider a bfloat16 tile starting at address ``0x1000`` with a size of ``0x800`` (2KB). The tile occupies memory from ``0x1000`` to ``0x17FF``, with the four 16x16 faces located at addresses ``0x1000``, ``0x1200``, ``0x1400``, and ``0x1600`` respectively.
 
 .. figure:: /images/tenstorrent-32x32tile-16x16face-memory-layout.webp
-    :scale: 65%
+    :width: 85%
     :alt: 32x32 tile with 16x16 face memory layout
     :align: center
 
