@@ -255,7 +255,8 @@ struct EdmChannelWorkerInterface {
         worker_location_info_ptr(nullptr),
         cached_worker_semaphore_address(0),
         connection_live_semaphore(nullptr),
-        sender_sync_noc_cmd_buf(write_at_cmd_buf) {}
+        sender_sync_noc_cmd_buf(write_at_cmd_buf),
+        read_counter_update_src_address(0) {}
     EdmChannelWorkerInterface(
         // TODO: PERF: See if we can make this non-volatile and then only
         // mark it volatile when we know we need to reload it (i.e. after we receive a
@@ -268,11 +269,13 @@ struct EdmChannelWorkerInterface {
         volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
         volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
-        uint8_t edm_read_counter_initial_value) :
+        uint8_t edm_read_counter_initial_value,
+        uint32_t read_counter_update_src_address = 0) :
         worker_location_info_ptr(worker_location_info_ptr),
         cached_worker_semaphore_address(0),
         connection_live_semaphore(connection_live_semaphore),
-        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
+        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf),
+        read_counter_update_src_address(read_counter_update_src_address) {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
         local_write_counter.reset();
         local_read_counter.reset();
@@ -295,9 +298,20 @@ struct EdmChannelWorkerInterface {
             this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
+    template <bool enable_noc_flush = true>
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-            this->cached_worker_semaphore_address, local_read_counter.counter, 0xf, WORKER_HANDSHAKE_NOC);
+        // make sure when noc flush is disabled, the read_counter_update_src_address has a valid address for temporarily
+        // store src addr
+        if constexpr (!enable_noc_flush) {
+            ASSERT(read_counter_update_src_address != 0);
+        }
+        noc_inline_dw_write<InlineWriteDst::L1, true, enable_noc_flush>(
+            this->cached_worker_semaphore_address,
+            local_read_counter.counter,
+            0xf,
+            WORKER_HANDSHAKE_NOC,
+            NOC_UNICAST_WRITE_VC,
+            read_counter_update_src_address);
     }
 
     FORCE_INLINE void increment_local_read_counter(int32_t inc_val) {
@@ -350,6 +364,7 @@ struct EdmChannelWorkerInterface {
     uint64_t cached_worker_semaphore_address = 0;
     volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
+    uint32_t read_counter_update_src_address;
 
     ChannelCounter<NUM_BUFFERS> local_write_counter;
     ChannelCounter<NUM_BUFFERS> local_read_counter;
