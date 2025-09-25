@@ -121,7 +121,7 @@ jobs:
             mesh-device: T3K,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
             tt-llama-text-ver: tt_transformers,
-            multimodal: true,
+            multimodal: false, # Disabled until the error seen in https://github.com/tenstorrent/tt-metal/actions/runs/18021096729/job/51279632451 is fixed
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
@@ -188,9 +188,6 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
-          ls $HF_HUB_CACHE
-          ls $TT_CACHE_HOME
-
           if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
             export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
           else
@@ -268,10 +265,8 @@ jobs:
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
-          pip list | grep datasets
-
-          unset HF_HUB_OFFLINE
-          echo "HF_HUB_OFFLINE: $HF_HUB_OFFLINE"
+          echo "Using: $(pip list | grep datasets)"
+          unset HF_HUB_OFFLINE # Disable offline mode to allow downloading the dataset
 
           python3 vllm/benchmarks/benchmark_serving.py \
             --backend openai-chat \
