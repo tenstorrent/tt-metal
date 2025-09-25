@@ -9,20 +9,9 @@ FROM redhat/ubi9:${RHEL_VERSION} AS base
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 
 RUN dnf update -y && dnf install -y \
-    acl \
-    gdb \
-    less \
-    mpfr-devel \
-    mesa-libGL \
-    git \
-    gcc gcc-c++ make \
-    pkg-config \
-    xz \
+    git wget patch which pcre2-devel perl-core \
     python3-pip python3-devel \
-    wget patch which \
-    pcre2-devel perl-core \
     gcc-toolset-14-libatomic-devel.x86_64 \
-    dnf-plugins-core \
     clang clang-tools-extra \
     && dnf clean all
 

@@ -11,15 +11,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install runtime deps
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    acl \
-    gdb \
     git \
     gcc build-essential \
     pkg-config \
-    xz-utils \
     python3-pip python3-full python3-dev \
-    wget \
-    curl \
+    wget curl \
     lsb-release wget software-properties-common gnupg \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
