@@ -215,8 +215,10 @@ def test_slice_reshard_async(
     slice_reshard_topology,
     num_iters,
 ):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape([1, num_devices]))
+
     run_slice_reshard_impl(
-        mesh_device,
+        submesh_device,
         num_devices=num_devices,
         input_shape=input_shape,
         dim=dim,
