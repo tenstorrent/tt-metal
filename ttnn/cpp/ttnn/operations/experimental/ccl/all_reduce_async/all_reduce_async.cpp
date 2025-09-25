@@ -15,7 +15,10 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/experimental/ccl/all_broadcast_async/device/all_broadcast_async_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -28,7 +31,7 @@ uint32_t finding_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, const
             input_tensor_padded_shape[1],
             input_tensor_padded_shape[2] / tt::constants::TILE_HEIGHT,
             input_tensor_padded_shape[3] / tt::constants::TILE_WIDTH};
-        for (uint32_t dim = 0; dim < 4; ++dim) {
+        for (int dim = 3; dim >= 0; dim--) {
             if (input_tensor_shape_in_tiles[dim] % num_workers == 0) {
                 log_debug(
                     tt::LogOp,
@@ -39,7 +42,7 @@ uint32_t finding_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, const
             }
         }
     } else {
-        for (uint32_t dim = 0; dim < 4; ++dim) {
+        for (int dim = 3; dim >= 0; dim--) {
             if (input_tensor_padded_shape[dim] % num_workers == 0) {
                 log_debug(
                     tt::LogOp,
@@ -50,27 +53,13 @@ uint32_t finding_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, const
             }
         }
     }
-
     return input_tensor_padded_shape.size();
 }
 
-Tensor strided_reduce(
+Tensor local_sum(
     const ttnn::Tensor& gathered_tensor,
     int reduce_dim,
-    uint32_t num_devices,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
-    const auto& input_shape = gathered_tensor.logical_shape();
-    int rank = input_shape.size();
-
-    // 1. Reshape to expose the device dimension
-    uint32_t dim_to_split_size = input_shape[reduce_dim];
-    TT_FATAL(
-        dim_to_split_size % num_devices == 0,
-        "Gathered dimension size ({}) must be divisible by the number of devices ({}).",
-        dim_to_split_size,
-        num_devices);
-    uint32_t local_dim_size = dim_to_split_size / num_devices;
-
     // if row major convert first to tile layout
     auto input_tensor = gathered_tensor;
     bool is_rm = (gathered_tensor.layout() == Layout::ROW_MAJOR);
@@ -78,41 +67,18 @@ Tensor strided_reduce(
         input_tensor = ttnn::to_layout(gathered_tensor, Layout::TILE);
     }
 
-    bool do_typecast = input_tensor.dtype() == DataType::BFLOAT8_B && reduce_dim == 2;
-    if (do_typecast) {
-        input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
-    }
-    ttnn::SmallVector<uint32_t> reshape_dims_vec;
-    for (int i = 0; i < rank; ++i) {
-        if (i == reduce_dim) {
-            reshape_dims_vec.push_back(num_devices);
-            reshape_dims_vec.push_back(local_dim_size);
-        } else {
-            reshape_dims_vec.push_back(input_shape[i]);
-        }
-    }
-    ttnn::Shape reshaped_shape(reshape_dims_vec);
-    auto reshaped_tensor = ttnn::reshape(input_tensor, reshaped_shape);
+    auto sum_tensor = ttnn::moreh_sum(
+        input_tensor,
+        reduce_dim,
+        /* keep_dim */ true,
+        /* output */ std::nullopt,
+        memory_config,
+        /* device kernel config */ std::nullopt);
 
-    // 2. Transpose to bring the device dimension next to the data to be reduced
-    // Shape is now [N, num_devices, local_rows, H, W]
-    // We want to sum over num_devices, so we transpose it with local_rows
-    // New shape: [N, local_rows, num_devices, H, W]
-    int device_dim = reduce_dim;
-    int local_rows_dim = reduce_dim + 1;
-    auto transposed_tensor = ttnn::transpose(reshaped_tensor, device_dim, local_rows_dim);
-
-    // 3. Reduce along the device dimension (which is now at `local_rows_dim`)
-    auto reduced_tensor = ttnn::sum(transposed_tensor, local_rows_dim, false, memory_config);
-
-    // The shape of reduced_tensor is now [N, local_rows, H, W], which is the desired final shape.
-    if (do_typecast) {
-        reduced_tensor = ttnn::typecast(reduced_tensor, DataType::BFLOAT8_B);
-    }
     if (is_rm) {
-        return ttnn::to_layout(reduced_tensor, Layout::ROW_MAJOR);
+        return ttnn::to_layout(sum_tensor, Layout::ROW_MAJOR);
     }
-    return reduced_tensor;
+    return sum_tensor;
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
@@ -131,29 +97,56 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         input_tensor.padded_shape(),
         input_tensor.layout(),
         ttnn::ccl::get_active_physical_devices(input_tensor).size());
-    auto composite_dim = (dim == input_tensor.padded_shape().size()) ? dim - 1 : dim;
+
+    auto padded_tensor = input_tensor;
+    auto initial_shape = input_tensor.padded_shape();
+    // force RS+AG by using dim 3 after padding
+    // temporary before adding support for RS dim 2
+    if (dim == 2 && input_tensor.layout() == Layout::TILE) {
+        dim = 3;
+        uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * num_devices;
+        uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
+        // pad with zeros to next aligned tile size
+        std::array<uint32_t, 4> new_padded_shape = {
+            input_tensor.padded_shape()[0],
+            input_tensor.padded_shape()[1],
+            input_tensor.padded_shape()[2],
+            input_tensor.padded_shape()[3]};
+        new_padded_shape[3] = next_aligned_tile;
+        padded_tensor =
+            ttnn::pad(input_tensor, tt::tt_metal::Array4D(new_padded_shape), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+    }
+
+    auto composite_dim = (dim == padded_tensor.padded_shape().size()) ? 0 : dim;
     bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
+        composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, std::nullopt);
+        composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, std::nullopt);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
+        composite_dim = 0;
+        auto reshaped_tensor = ttnn::reshape(
+            padded_tensor, ttnn::Shape({1, initial_shape[0] * initial_shape[1], initial_shape[2], initial_shape[3]}));
+        padded_tensor.deallocate();
         auto gather_tensor = composite_common::composite_all_gather(
-            input_tensor,
+            reshaped_tensor,
             composite_dim,
             num_preferred_links.value_or(1),
             out_memory_config,
             worker_subdevice_id_opt,
             std::nullopt);
-        auto sum_tensor =
-            strided_reduce(gather_tensor, static_cast<int>(composite_dim), num_devices, out_memory_config);
-        return sum_tensor;
+        reshaped_tensor.deallocate();
+
+        auto sum_tensor = local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
+        gather_tensor.deallocate();
+
+        return ttnn::reshape(sum_tensor, initial_shape);
     }
     // Reduce scatter + all gather
-    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(input_tensor, out_memory_config);
+    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        input_tensor,
+        padded_tensor,
         std::nullopt,
         dim,
         rs_global_semaphores,
@@ -163,7 +156,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         std::nullopt,
         topology,
         worker_subdevice_id_opt);
-    return ttnn::operations::experimental::ccl::all_gather_async(
+    padded_tensor.deallocate();
+    auto gathered = ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
         ag_global_semaphores,
@@ -174,6 +168,16 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         false,
         use_llama_sharded,
         barrier_semaphores[1]);
+    scattered_tensor.deallocate();
+    // slice to inital shape if needed using slice
+    if (gathered.padded_shape() != initial_shape) {
+        ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> ends = {
+            initial_shape[0] - 1, initial_shape[1] - 1, initial_shape[2] - 1, initial_shape[3] - 1};
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        gathered = ttnn::slice(gathered, begins, ends, step);
+    }
+    return gathered;
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
@@ -193,31 +197,54 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::vector<IDevice*> devices =
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
     uint32_t dim = finding_scatter_dim(input_tensor.padded_shape(), input_tensor.layout(), devices.size());
-    auto composite_dim = (dim == input_tensor.padded_shape().size()) ? dim - 1 : dim;
+    auto padded_tensor = input_tensor;
+    auto initial_shape = input_tensor.padded_shape();
+    // force RS+AG by using dim 3 after padding
+    // temporary before adding support for RS dim 2
+    if (dim == 2 && input_tensor.layout() == Layout::TILE) {
+        dim = 3;
+        uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * devices.size();
+        uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
+        // pad with zeros to next aligned tile size
+        std::array<uint32_t, 4> new_padded_shape = {
+            input_tensor.padded_shape()[0],
+            input_tensor.padded_shape()[1],
+            input_tensor.padded_shape()[2],
+            input_tensor.padded_shape()[3]};
+        new_padded_shape[3] = next_aligned_tile;
+        padded_tensor =
+            ttnn::pad(input_tensor, tt::tt_metal::Array4D(new_padded_shape), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+    }
+    auto composite_dim = (dim == padded_tensor.padded_shape().size()) ? 0 : dim;
     bool composite_all_gather =
-        composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
+        composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, cluster_axis);
+        composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
+        composite_dim = 0;
+        auto reshaped_tensor = ttnn::reshape(
+            padded_tensor, ttnn::Shape({1, initial_shape[0] * initial_shape[1], initial_shape[2], initial_shape[3]}));
+        padded_tensor.deallocate();
         auto gather_tensor = composite_common::composite_all_gather(
-            input_tensor,
+            reshaped_tensor,
             composite_dim,
             num_preferred_links.value_or(1),
             out_memory_config,
             worker_subdevice_id_opt,
             cluster_axis);
+        reshaped_tensor.deallocate();
 
-        auto sum_tensor =
-            strided_reduce(gather_tensor, static_cast<int>(composite_dim), devices.size(), out_memory_config);
+        auto sum_tensor = local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
+        gather_tensor.deallocate();
 
-        return sum_tensor;
+        return ttnn::reshape(sum_tensor, initial_shape);
     }
     // Reduce scatter + all gather
-    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(input_tensor, out_memory_config);
+    bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        input_tensor,
+        padded_tensor,
         std::nullopt,
         dim,
         rs_global_semaphores,
@@ -228,7 +255,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         topology,
         worker_subdevice_id_opt,
         cluster_axis);
-    return ttnn::operations::experimental::ccl::all_gather_async(
+    padded_tensor.deallocate();
+    auto gathered = ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
         cluster_axis,
@@ -242,6 +270,15 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         false,
         use_llama_sharded,
         barrier_semaphores[1]);
+    scattered_tensor.deallocate();
+    // slice to inital shape if needed using slice
+    if (gathered.padded_shape() != initial_shape) {
+        ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        gathered = ttnn::slice(gathered, begins, ends, step);
+    }
+    return gathered;
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
