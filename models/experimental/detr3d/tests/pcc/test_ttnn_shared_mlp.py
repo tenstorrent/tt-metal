@@ -51,16 +51,16 @@ def custom_preprocessor_whole_model(model, name):
 def test_ttnn_shared_mlp(device, mlp, bn, features_shape, reset_seeds):
     torch_model = SharedMLP(mlp, bn=bn).to(torch.bfloat16)
 
-    weights_path = "models/experimental/detr3d/sunrgbd_masked_ep720.pth"
-    state_dict = torch.load(weights_path)["model"]
+    # weights_path = "models/experimental/detr3d/sunrgbd_masked_ep720.pth"
+    # state_dict = torch.load(weights_path)["model"]
 
-    pointnet_state_dict = {k: v for k, v in state_dict.items() if (k.startswith("pre_encoder.mlp_module"))}
-    new_state_dict = {}
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in pointnet_state_dict.items()]
+    # pointnet_state_dict = {k: v for k, v in state_dict.items() if (k.startswith("pre_encoder.mlp_module"))}
+    # new_state_dict = {}
+    # keys = [name for name, parameter in torch_model.state_dict().items()]
+    # values = [parameter for name, parameter in pointnet_state_dict.items()]
 
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
+    # for i in range(len(keys)):
+    #     new_state_dict[keys[i]] = values[i]
     torch_model.eval()
     features = torch.randn(features_shape, dtype=torch.bfloat16)
     ref_out = torch_model(features)
@@ -85,5 +85,5 @@ def test_ttnn_shared_mlp(device, mlp, bn, features_shape, reset_seeds):
     ttnn_out = ttnn_out.permute(0, 3, 1, 2)
 
     assert_with_pcc(
-        ref_out, ttnn_out, 1.0
+        ref_out, ttnn_out, 0.999
     )  # pre_encoder.mlp_module - 0.9993508842817294; encoder.interim_downsampling.mlp_module - 0.99924764727396

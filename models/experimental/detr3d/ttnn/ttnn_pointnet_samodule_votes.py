@@ -4,6 +4,45 @@
 
 import ttnn
 from models.experimental.detr3d.ttnn.ttnn_shared_mlp import TtnnSharedMLP
+from models.experimental.detr3d.reference.model_utils import (
+    QueryAndGroup,
+    FurthestPointSampling,
+)
+
+
+def _fallback_furthestpointsampling(
+    points,
+    num_samples,
+    device,
+):
+    furthestpointsampling = FurthestPointSampling()
+    points_torch = ttnn.to_torch(points)
+    num_samples,
+    centroids = furthestpointsampling(points_torch, num_samples)
+    return ttnn.from_torch(centroids, dtype=ttnn.uint32, device=device)
+
+
+def _fallback_queryandgroup(xyz, new_xyz, features, device, QnG):
+    xyz_torch = ttnn.to_torch(xyz)
+    new_xyz_torch, features_torch = None, None
+    if new_xyz is not None:
+        new_xyz_torch = ttnn.to_torch(new_xyz)
+    if features is not None:
+        features_torch = ttnn.to_torch(features)
+
+    grouped_features_torch, grouped_xyz_torch = QnG(xyz_torch, new_xyz_torch, features_torch)
+    grouped_features = ttnn.from_torch(
+        grouped_features_torch,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    grouped_xyz = ttnn.from_torch(
+        grouped_xyz_torch,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+
+    return grouped_features, grouped_xyz
 
 
 class TtnnBallQuery:
@@ -48,6 +87,20 @@ class TtnnBallQuery:
         first_nsample[invalid_mask] = first_valid[invalid_mask]
 
         return first_nsample.to(ttnn.int32)
+
+
+class TtnnGatherOperation:
+    def __call__(self, points, idx):
+        B, C, N = points.shape
+        M = idx.shape[1]
+        # idx = idx.to(ttnn.int32)
+        idx_expand = ttnn.unsqueeze(idx, 1)
+        idx_expand = ttnn.expand(idx_expand, (B, C, M))
+        points = ttnn.to_layout(points, ttnn.TILE_LAYOUT)
+        idx_expand = ttnn.to_layout(idx_expand, ttnn.TILE_LAYOUT)
+        output = ttnn.gather(points, 2, idx_expand)
+
+        return output
 
 
 class TtnnGroupingOperation:
@@ -119,8 +172,29 @@ class TtnnQueryAndGroup:
 class TtnnFurthestPointSampling:
     def __call__(self, points, n_samples, device):
         B, N, _ = points.shape
-        centroids = ttnn.zeros((B, n_samples), device=device)
+        centroids = ttnn.zeros((B, n_samples), dtype=ttnn.int32, device=device)
         distance = ttnn.ones(shape=[B, N], dtype=points.dtype, device=device) * 1e10
+        farthest = ttnn.zeros((B,), dtype=ttnn.int32, device=device)
+        batch_indices = ttnn.arange(B, dtype=ttnn.int32, device=device)
+
+        centroids = []
+        for i in range(n_samples):
+            # centroids[:, i] = farthest
+            centroids.append(farthest)
+            # centroid = points[batch_indices, farthest, :]
+            centroid = []
+            for b in range(B):
+                batch_center = points[b, farthest[b], :]
+                centroid.append(batch_center)
+            centroid = ttnn.concat(centroid)
+            centroid = ttnn.reshape(centroid, (B, 1, 3))
+            dist = ttnn.sum((points - centroid) ** 2, dim=2)
+            distance = ttnn.min(distance, dist)
+            farthest = ttnn.max(distance, dim=1)[1]
+
+        # centroids = ttnn.concat(centroids)
+
+        return ttnn.concat(centroids)
 
 
 class TtnnPointnetSAModuleVotes:
@@ -160,8 +234,17 @@ class TtnnPointnetSAModuleVotes:
         self.normalize_xyz = normalize_xyz
         self.ret_unique_cnt = ret_unique_cnt
 
-        self.grouper = TtnnQueryAndGroup(
-            device,
+        # self.grouper = TtnnQueryAndGroup(
+        #     device,
+        #     radius,
+        #     nsample,
+        #     use_xyz=use_xyz,
+        #     ret_grouped_xyz=True,
+        #     normalize_xyz=normalize_xyz,
+        #     sample_uniformly=sample_uniformly,
+        #     ret_unique_cnt=ret_unique_cnt,
+        # )
+        self.grouper = self.QnG_init(
             radius,
             nsample,
             use_xyz=use_xyz,
@@ -175,5 +258,95 @@ class TtnnPointnetSAModuleVotes:
             mlp_spec[0] += 3
 
         self.mlp_module = TtnnSharedMLP(module.mlp_module, parameters, device)
-        self.gather_operation = TtnnGroupingOperation()
+        self.gather_operation = TtnnGatherOperation()
         self.furthest_point_sample = TtnnFurthestPointSampling()
+
+    def QnG_init(
+        self,
+        radius,
+        nsample,
+        use_xyz,
+        ret_grouped_xyz,
+        normalize_xyz,
+        sample_uniformly,
+        ret_unique_cnt,
+    ):
+        return QueryAndGroup(
+            radius,
+            nsample,
+            use_xyz=use_xyz,
+            ret_grouped_xyz=ret_grouped_xyz,
+            normalize_xyz=normalize_xyz,
+            sample_uniformly=sample_uniformly,
+            ret_unique_cnt=ret_unique_cnt,
+        )
+
+    def __call__(self, xyz, features=None, inds=None):
+        xyz_flipped = ttnn.transpose(xyz, 1, 2)
+        if inds is None:
+            inds = _fallback_furthestpointsampling(xyz, self.npoint, self.device)
+            # inds = self.furthest_point_sample(xyz, self.npoint, self.device)
+        else:
+            assert inds.shape[1] == self.npoint
+
+        new_xyz = None
+        if self.npoint is not None:
+            new_xyz = self.gather_operation(xyz_flipped, inds)
+            new_xyz = ttnn.transpose(new_xyz, 1, 2)
+
+        if not self.ret_unique_cnt:
+            grouped_features, grouped_xyz = _fallback_queryandgroup(
+                xyz, new_xyz, features, device=self.device, QnG=self.grouper
+            )
+            # grouped_features, grouped_xyz = self.grouper(xyz, new_xyz, features)  # (B, C, npoint, nsample)
+        else:
+            grouped_features, grouped_xyz, unique_cnt = self.grouper(
+                xyz, new_xyz, features
+            )  # (B, C, npoint, nsample), (B,3,npoint,nsample), (B,npoint)
+        # print("input to shared mlpforward ", grouped_features.shape)
+        grouped_features = ttnn.permute(grouped_features, (0, 2, 3, 1))
+        new_features = self.mlp_module(grouped_features)  # (B, mlp[-1], npoint, nsample)
+
+        if self.pooling == "max":
+            partial_maxpool_out = []
+            num_maxpool_slice = 2
+            new_features = ttnn.reshape(new_features, (1, 2048, 64, 256))
+            slice_h = 2048 // num_maxpool_slice
+            B, H, W, C = (1, slice_h, 64, 256)
+            for slice in range(num_maxpool_slice):
+                slice_input = new_features[:, slice_h * slice : slice_h * (slice + 1), :, :]
+                slice_input = ttnn.reallocate(slice_input)
+                slice_input = ttnn.reshape(slice_input, (1, 1, B * H * W, C))
+                partial_maxpool_out.append(
+                    ttnn.max_pool2d(
+                        input_tensor=slice_input,
+                        batch_size=1,
+                        input_h=slice_h,
+                        input_w=64,
+                        channels=256,
+                        kernel_size=[1, 64],
+                        stride=[1, 64],
+                        padding=[0, 0],
+                        dilation=[1, 1],
+                        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                )
+
+            for i in range(len(partial_maxpool_out)):
+                partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, 1, C))
+
+            new_features = ttnn.concat((partial_maxpool_out), dim=1)
+        else:
+            raise NotImplementedError("Currently only Maxpool is supported")
+        new_features = ttnn.permute(new_features, (0, 3, 1, 2))
+        new_features = ttnn.squeeze(new_features, -1)  # (B, mlp[-1], npoint)
+
+        if not self.ret_unique_cnt:
+            return new_xyz, new_features, inds
+        else:
+            return (
+                new_xyz,
+                new_features,
+                inds,
+            )

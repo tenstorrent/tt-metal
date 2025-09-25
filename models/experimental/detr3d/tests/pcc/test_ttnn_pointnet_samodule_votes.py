@@ -4,12 +4,14 @@
 
 import torch
 import pytest
+import ttnn
 from models.experimental.detr3d.reference.detr3d_model import PointnetSAModuleVotes
 from models.experimental.detr3d.ttnn.ttnn_pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 from models.experimental.detr3d.tests.pcc.test_ttnn_shared_mlp import (
     custom_preprocessor_whole_model as custom_preprocessor_shared_mlp,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -64,16 +66,16 @@ def test_pointnet_samodule_votes(
         sample_uniformly=sample_uniformly,
         ret_unique_cnt=ret_unique_cnt,
     ).to(torch.bfloat16)
-    weights_path = "models/experimental/detr3d/sunrgbd_masked_ep720.pth"
-    state_dict = torch.load(weights_path)["model"]
+    # weights_path = "models/experimental/detr3d/sunrgbd_masked_ep720.pth"
+    # state_dict = torch.load(weights_path)["model"]
 
-    pointnet_state_dict = {k: v for k, v in state_dict.items() if (k.startswith("pre_encoder"))}
-    new_state_dict = {}
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in pointnet_state_dict.items()]
+    # pointnet_state_dict = {k: v for k, v in state_dict.items() if (k.startswith("pre_encoder"))}
+    # new_state_dict = {}
+    # keys = [name for name, parameter in torch_model.state_dict().items()]
+    # values = [parameter for name, parameter in pointnet_state_dict.items()]
 
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
+    # for i in range(len(keys)):
+    #     new_state_dict[keys[i]] = values[i]
 
     torch_model.eval()
 
@@ -116,3 +118,39 @@ def test_pointnet_samodule_votes(
         parameters,
         device,
     )
+
+    ttnn_xyz = ttnn.from_torch(
+        xyz,
+        dtype=ttnn.bfloat16,
+        device=device,
+    )
+    ttnn_features = ttnn_inds = None
+    if features is not None:
+        ttnn_features = ttnn.from_torch(
+            features,
+            dtype=ttnn.bfloat16,
+            device=device,
+        )
+    if inds is not None:
+        ttnn_inds = ttnn.from_torch(
+            inds,
+            dtype=ttnn.bfloat16,
+            device=device,
+        )
+
+    ttnn_output = ttnn_model(xyz=ttnn_xyz, features=ttnn_features, inds=ttnn_inds)
+    ttnn_torch_out = []
+    for tt_out, torch_out in zip(ttnn_output, torch_output):
+        ttnn_torch_out.append(
+            ttnn.to_torch(
+                tt_out,
+            )
+        )
+        ttnn_torch_out[-1] = torch.reshape(ttnn_torch_out[-1], torch_out.shape)
+
+    pcc_pass, pcc_message = assert_with_pcc(torch_output[0], ttnn_torch_out[0], 0.999)
+    print(f"{pcc_message=}")
+    pcc_pass, pcc_message = assert_with_pcc(torch_output[1], ttnn_torch_out[1], 0.999)
+    print(f"{pcc_message=}")
+    pcc_pass, pcc_message = assert_with_pcc(torch_output[2], ttnn_torch_out[2], 0.999)
+    print(f"{pcc_message=}")
