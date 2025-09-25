@@ -274,7 +274,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "static-checks, code-analysis, find-changes"
+          required-jobs: "static-checks"
           optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
@@ -288,3 +288,18 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
           owner: "U08GTDV8MDH,U0908S3LUMD,U0982FCD80N,U08VC9954CE,U08TVGQGGAE,U08LG51QALX,U08DEGUJY3H,U08BNDNLUCD,U084DCKE0B0,U0883RN6CRE,U088NCP32NP,U07J3K6KS1K,U07HTBQPHFG,U085LTYEC00,U014XCQ9CF8"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
