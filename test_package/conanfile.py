@@ -11,7 +11,7 @@ import os
 
 class TestPackageConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
-    generators = "CMakeToolchain", "CMakeDeps"
+    generators = "CMakeDeps"
     test_type = "explicit"
 
     def requirements(self):
@@ -26,6 +26,12 @@ class TestPackageConan(ConanFile):
         cmake.build()
 
     def generate(self):
+        from conan.tools.cmake import CMakeToolchain
+
+        tc = CMakeToolchain(self)
+        tc.generator = "Ninja"
+        tc.generate()
+
         runenv = VirtualRunEnv(self)
         runenv.generate()
 

@@ -1,0 +1,5 @@
+[settings]
+os=Linux
+arch=x86_64
+compiler=clang
+build_type=Release

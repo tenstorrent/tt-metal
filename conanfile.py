@@ -49,9 +49,9 @@ class TTMetaliumConan(ConanFile):
             "third_party/**",
             ".clang-tidy",
             # exclude build artifacts
+            "!build*/**",
             "!**/*.o",
             "!**/*.out",
-            "!**/*.bin",
             "!**/*.obj",
             "!**/*.a",
             "!**/*.lib",
@@ -66,7 +66,7 @@ class TTMetaliumConan(ConanFile):
 
     def set_version(self):
         _version = subprocess.check_output("git describe --abbrev=0 --tags", shell=True).decode().strip()
-        m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+)(?:-rc(\d+))?", _version)
+        m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+)(?:-(?:rc|dev)(\d+))?", _version)
         if not m:
             raise ValueError(f"error: unsupported version format: {m!r}")
 
@@ -122,6 +122,19 @@ class TTMetaliumConan(ConanFile):
         cmake = CMake(self)
         cmake.configure(variables={"VERSION_NUMERIC": self.version})
         cmake.build()
+
+    def configure(self):
+        self.options["libnuma"].shared = True
+        self.options["cpython"].with_tkinter = False
+
+    def requirements(self):
+        self.requires("openmpi/4.1.6")
+        self.requires("capstone/5.0.6")
+        self.requires("libnuma/2.0.19")
+        self.requires("boost/1.88.0")
+        self.requires("hwloc/2.10.0")
+        self.requires("zlib/1.3.1")
+        self.requires("cpython/3.10.14")
 
     def package(self):
         cmake = CMake(self)

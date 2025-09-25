@@ -1,0 +1,18 @@
+# TT-Metalium Dockerfile for RHEL
+
+#############################################################
+
+ARG RHEL_VERSION=9.6
+FROM redhat/ubi9:${RHEL_VERSION}
+
+RUN dnf update -y && dnf install -y \
+    git wget patch which pcre2-devel perl-core \
+    python3-pip python3-devel \
+    gcc-toolset-14-libatomic-devel.x86_64 \
+    clang clang-tools-extra vim-common \
+    && dnf clean all
+
+# Ensure python3 command exists
+RUN if ! command -v python3 >/dev/null 2>&1; then \
+        ln -s /usr/bin/python /usr/bin/python3; \
+    fi
