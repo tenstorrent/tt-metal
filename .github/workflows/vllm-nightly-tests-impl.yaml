@@ -261,7 +261,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run multimodal benchmark
+      - name: 🖼️ Run multimodal benchmark
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
