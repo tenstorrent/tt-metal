@@ -35,13 +35,13 @@ Tests:
       topology: Linear/Mesh/Ring/Torus # The logical topology we're testing.
       # LowLatency: Each packet is loaded with an infiniband-style packet header, where a segment is peeled off for each hop.
       # Dynamic: Every time a packet arrives at a router, the router checks its routing table to figure out where to send it.
-      (optional) routing_type: "LowLatency"/"Dynamic"
+      (optional) routing_type: LowLatency/Dynamic
       # Tensix extension for fabric routers, used to build connections between worker->fabric router, upstream fabric router->downstream fabric router.
-      (optional) fabric_tensix_config: "Default"/"Mux"
+      (optional) fabric_tensix_config: Default/Mux
       # Controls the number of ETH links on each chip that is used in the test.
       # Each sender is duplicated N times, 1 for each link. Allows a single traffic pattern to be sent multiple times simultaneously to the same destination
       (optional) num_links: 1/2/4
-      (optional) torus_config: "XY"/"X"/"Y" # Only used for Torus topology, to specify torus links
+      (optional) torus_config: XY/X/Y # Only used for Torus topology, to specify torus links
 
     # Provides default values for traffic patterns.
     (optional) defaults:
