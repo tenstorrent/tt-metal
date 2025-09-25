@@ -8,6 +8,8 @@
 
 namespace tt::llrt {
 
+// TODO: Stop using these functions here and in PhysicalSystemDescriptor once UMD provides support for ASIC index/offset
+// in WH systems
 const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(
     const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t mmio_device_id) {
     const auto& cluster_descriptor = cluster->get_cluster_description();
