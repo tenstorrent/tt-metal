@@ -81,7 +81,7 @@ void run_heartbeat_check_point_to_point(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& control_channel_interface = control_plane.get_control_channel_interface();
 
-    const auto result = control_channel_interface.request_heartbeat_check(
+    const auto result = control_channel_interface.request_remote_heartbeat_check(
         initiator_endpoint.node_id, initiator_endpoint.channel_id, target_endpoint.node_id, target_endpoint.channel_id);
 
     log_info(tt::LogTest, "Heartbeat check result: {}", result);
@@ -89,6 +89,7 @@ void run_heartbeat_check_point_to_point(
     EXPECT_EQ(result, ControlChannelResult::SUCCESS);
 
     // need a way to wait for the heartbeat check to complete
+    // we can also check for the number of credits in the host buffer
 }
 
 void run_heartbeat_check(

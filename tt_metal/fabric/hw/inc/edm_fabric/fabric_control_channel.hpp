@@ -13,6 +13,7 @@
 #include "fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "eth_chan_noc_mapping.h"
+#include "hostdevcommon/fabric_common.h"
 #include "debug/dprint.h"
 
 namespace tt::tt_fabric {
@@ -470,28 +471,37 @@ protected:
     bool has_outbound_packet_ = false;
 };
 
-class HeartbeatFSMContext : public BaseFSMContext<HeartbeatFSMContext> {
+class RemoteHeartbeatFSMContext : public BaseFSMContext<RemoteHeartbeatFSMContext> {
 public:
-    void init() { state_ = State::INIT; }
+    RemoteHeartbeatFSMContext() {
+        auto* log_ptr = reinterpret_cast<tt_l1_ptr FSMLog*>(log_address_);
+        log_ptr->counter = 0;
+        log_ptr->current_state = static_cast<uint8_t>(RemoteHeartbeatFSMState::INVALID);
+    }
+
+    void init() {
+        state_ = RemoteHeartbeatFSMState::INIT;
+        log_state();
+    }
 
     void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         // drop any non-heartbeat packets
-        if (packet_header->type != ControlPacketType::HEARTBEAT) {
+        if (packet_header->type != ControlPacketType::REMOTE_HEARTBEAT) {
             return;
         }
 
         switch (state_) {
-            case State::INIT:
+            case RemoteHeartbeatFSMState::INIT:
                 if (packet_header->sub_type == ControlPacketSubType::INIT) {
                     prepare_request_packet(packet_header, staging_packet_address);
-                    state_ = State::WAITING_FOR_HEARTBEAT;
+                    state_ = RemoteHeartbeatFSMState::WAITING_FOR_HEARTBEAT;
                 } else if (packet_header->sub_type == ControlPacketSubType::ACK_REQUEST) {
                     prepare_response_packet(packet_header, staging_packet_address);
-                    state_ = State::COMPLETED;
+                    state_ = RemoteHeartbeatFSMState::COMPLETED;
                 }  // Drop any other packets
 
                 break;
-            case State::WAITING_FOR_HEARTBEAT:
+            case RemoteHeartbeatFSMState::WAITING_FOR_HEARTBEAT:
                 // Drop any non-ack response packets
                 if (packet_header->sub_type != ControlPacketSubType::ACK_RESPONSE) {
                     break;
@@ -499,7 +509,8 @@ public:
 
                 pending_heartbeat_mask_ &= ~(1 << packet_header->src_channel_id);
                 if (pending_heartbeat_mask_ == 0) {
-                    state_ = State::COMPLETED;
+                    state_ = RemoteHeartbeatFSMState::COMPLETED;
+                    log_counter();
                 }
 
                 break;
@@ -507,33 +518,37 @@ public:
                 // do nothing, silently drop the packet
                 break;
         }
+
+        log_state();
     }
 
-    bool is_active() const { return state_ != State::COMPLETED; }
+    bool is_active() const { return state_ != RemoteHeartbeatFSMState::COMPLETED; }
 
 private:
-    enum class State : uint32_t {
-        INIT,
-        WAITING_FOR_HEARTBEAT,
-        COMPLETED,
-    };
+    static constexpr uint32_t log_address_ = control_channel_heartbeat_fsm_log_address;
+
+    FORCE_INLINE void log_state() const {
+        reinterpret_cast<tt_l1_ptr FSMLog*>(log_address_)->current_state = static_cast<uint8_t>(state_);
+    }
+
+    FORCE_INLINE void log_counter() const { reinterpret_cast<tt_l1_ptr FSMLog*>(log_address_)->counter++; }
 
     void prepare_request_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         auto* request_packet = reinterpret_cast<tt_l1_ptr ControlPacketHeader*>(staging_packet_address);
-        request_packet->type = ControlPacketType::HEARTBEAT;
+        request_packet->type = ControlPacketType::REMOTE_HEARTBEAT;
         request_packet->sub_type = ControlPacketSubType::ACK_REQUEST;
         request_packet->src_node_id = packet_header->dst_node_id;
-        request_packet->dst_node_id = packet_header->context.heartbeat_packet_context.target_node_id;
+        request_packet->dst_node_id = packet_header->context.remote_heartbeat_packet_context.target_node_id;
         request_packet->src_channel_id = packet_header->dst_channel_id;
-        request_packet->dst_channel_id = packet_header->context.heartbeat_packet_context.target_channel_id;
+        request_packet->dst_channel_id = packet_header->context.remote_heartbeat_packet_context.target_channel_id;
 
-        pending_heartbeat_mask_ = 1 << packet_header->context.heartbeat_packet_context.target_channel_id;
+        pending_heartbeat_mask_ = 1 << packet_header->context.remote_heartbeat_packet_context.target_channel_id;
         has_outbound_packet_ = true;
     }
 
     void prepare_response_packet(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         auto* response_packet = reinterpret_cast<tt_l1_ptr ControlPacketHeader*>(staging_packet_address);
-        response_packet->type = ControlPacketType::HEARTBEAT;
+        response_packet->type = ControlPacketType::REMOTE_HEARTBEAT;
         response_packet->sub_type = ControlPacketSubType::ACK_RESPONSE;
         response_packet->src_node_id = packet_header->dst_node_id;
         response_packet->dst_node_id = packet_header->src_node_id;
@@ -543,35 +558,49 @@ private:
         has_outbound_packet_ = true;
     }
 
-    State state_;
+    RemoteHeartbeatFSMState state_;
     uint32_t pending_heartbeat_mask_ = 0;
 };
 
 class RerouteFSMContext : public BaseFSMContext<RerouteFSMContext> {
 public:
-    FORCE_INLINE void init() { state_ = 0; }
+    RerouteFSMContext() {
+        auto* log_ptr = reinterpret_cast<tt_l1_ptr FSMLog*>(log_address_);
+        log_ptr->counter = 0;
+        log_ptr->current_state = static_cast<uint8_t>(RerouteFSMState::INVALID);
+    }
 
-    FORCE_INLINE void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) { state_++; }
+    void init() {
+        state_ = RerouteFSMState::INIT;
+        log_state();
+    }
 
-    FORCE_INLINE bool is_active() const { return state_ != 0; }
+    void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+        state_ = RerouteFSMState::COMPLETED;
+        log_state();
+    }
+
+    bool is_active() const { return state_ != RerouteFSMState::COMPLETED; }
 
 private:
-    uint32_t state_;
+    static constexpr uint32_t log_address_ = control_channel_reroute_fsm_log_address;
+
+    FORCE_INLINE void log_state() const {
+        reinterpret_cast<tt_l1_ptr FSMLog*>(log_address_)->current_state = static_cast<uint8_t>(state_);
+    }
+
+    FORCE_INLINE void log_counter() const { reinterpret_cast<tt_l1_ptr FSMLog*>(log_address_)->counter++; }
+
+    RerouteFSMState state_;
 };
 
 class FSMManager {
 public:
-    enum class ActiveFSMType : uint32_t {
-        NONE,
-        HEARTBEAT,
-        REROUTE,
-    };
-
     FSMManager() = default;
 
-    FORCE_INLINE void init() { active_fsm_type_ = ActiveFSMType::NONE; }
+    FORCE_INLINE void init() { active_fsm_type_ = FSMType::NONE; }
 
-    FORCE_INLINE bool is_any_fsm_active() const { return active_fsm_type_ != ActiveFSMType::NONE; }
+    FORCE_INLINE bool is_any_fsm_active() const { return active_fsm_type_ != FSMType::NONE; }
 
     FORCE_INLINE void activate_fsm(ControlPacketType packet_type) {
         // TODO: do we really need to check here if any FSM is active?
@@ -580,12 +609,12 @@ public:
         }
 
         switch (packet_type) {
-            case ControlPacketType::HEARTBEAT:
-                active_fsm_type_ = ActiveFSMType::HEARTBEAT;
-                heartbeat_fsm_context_.init();
+            case ControlPacketType::REMOTE_HEARTBEAT:
+                active_fsm_type_ = FSMType::REMOTE_HEARTBEAT;
+                remote_heartbeat_fsm_context_.init();
                 break;
             case ControlPacketType::REROUTE:
-                active_fsm_type_ = ActiveFSMType::REROUTE;
+                active_fsm_type_ = FSMType::REROUTE;
                 reroute_fsm_context_.init();
                 break;
             default: __builtin_unreachable();
@@ -594,26 +623,28 @@ public:
 
     FORCE_INLINE void process(ControlPacketHeader* packet_header) {
         switch (active_fsm_type_) {
-            case ActiveFSMType::HEARTBEAT:
-                heartbeat_fsm_context_.process(packet_header, staging_packet_address_);
+            case FSMType::REMOTE_HEARTBEAT:
+                remote_heartbeat_fsm_context_.process(packet_header, staging_packet_address_);
                 break;
-            case ActiveFSMType::REROUTE: reroute_fsm_context_.process(packet_header, staging_packet_address_); break;
+            case FSMType::REROUTE: reroute_fsm_context_.process(packet_header, staging_packet_address_); break;
             default: __builtin_unreachable();
         }
+
+        *reinterpret_cast<tt_l1_ptr uint32_t*>(current_fsm_type_address_) = static_cast<uint32_t>(active_fsm_type_);
     }
 
     FORCE_INLINE bool has_outbound_packet() const {
         switch (active_fsm_type_) {
-            case ActiveFSMType::HEARTBEAT: return heartbeat_fsm_context_.has_outbound_packet();
-            case ActiveFSMType::REROUTE: return reroute_fsm_context_.has_outbound_packet();
+            case FSMType::REMOTE_HEARTBEAT: return remote_heartbeat_fsm_context_.has_outbound_packet();
+            case FSMType::REROUTE: return reroute_fsm_context_.has_outbound_packet();
             default: __builtin_unreachable();
         }
     }
 
     FORCE_INLINE void clear_outbound_packet() {
         switch (active_fsm_type_) {
-            case ActiveFSMType::HEARTBEAT: heartbeat_fsm_context_.clear_outbound_packet(); break;
-            case ActiveFSMType::REROUTE: reroute_fsm_context_.clear_outbound_packet(); break;
+            case FSMType::REMOTE_HEARTBEAT: remote_heartbeat_fsm_context_.clear_outbound_packet(); break;
+            case FSMType::REROUTE: reroute_fsm_context_.clear_outbound_packet(); break;
             default: __builtin_unreachable();
         }
     }
@@ -622,9 +653,10 @@ public:
 
 private:
     static constexpr uint32_t staging_packet_address_ = control_channel_staging_packet_buffer_address;
+    static constexpr uint32_t current_fsm_type_address_ = control_channel_current_fsm_type_address;
 
-    ActiveFSMType active_fsm_type_ = ActiveFSMType::NONE;
-    HeartbeatFSMContext heartbeat_fsm_context_;
+    FSMType active_fsm_type_ = FSMType::NONE;
+    RemoteHeartbeatFSMContext remote_heartbeat_fsm_context_;
     RerouteFSMContext reroute_fsm_context_;
 };
 

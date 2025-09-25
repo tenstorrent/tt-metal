@@ -391,7 +391,14 @@ constexpr size_t control_channel_local_buffer_remote_read_counter_base_address =
 constexpr size_t control_channel_staging_packet_buffer_address =
     get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 15);
 
-constexpr size_t CONTROL_CHANNEL_CT_ARGS_END_IDX = CONTROL_CHANNEL_CT_ARGS_START_IDX + 15;
+constexpr size_t control_channel_current_fsm_type_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 16);
+constexpr size_t control_channel_heartbeat_fsm_log_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 17);
+constexpr size_t control_channel_reroute_fsm_log_address =
+    get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 18);
+
+constexpr size_t CONTROL_CHANNEL_CT_ARGS_END_IDX = CONTROL_CHANNEL_CT_ARGS_START_IDX + 18;
 
 constexpr size_t SPECIAL_MARKER_4_IDX = CONTROL_CHANNEL_CT_ARGS_END_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 constexpr size_t SPECIAL_MARKER_4 = 0x40c0ffee;

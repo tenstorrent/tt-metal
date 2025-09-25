@@ -17,6 +17,38 @@
 
 namespace tt::tt_fabric {
 
+class HostToRouterCommConfig {
+public:
+    HostToRouterCommConfig() = default;
+    ~HostToRouterCommConfig() = default;
+
+    HostToRouterCommConfig(
+        size_t num_buffer_slots,
+        size_t buffer_base_address,
+        size_t router_write_counter_address,
+        size_t router_read_counter_address,
+        size_t current_fsm_type_address,
+        size_t heartbeat_fsm_log_address,
+        size_t reroute_fsm_log_address);
+
+    size_t get_num_buffer_slots() const;
+    size_t get_buffer_base_address() const;
+    size_t get_router_write_counter_address() const;
+    size_t get_router_read_counter_address() const;
+    size_t get_current_fsm_type_address() const;
+    size_t get_heartbeat_fsm_log_address() const;
+    size_t get_reroute_fsm_log_address() const;
+
+private:
+    size_t num_buffer_slots_ = 0;
+    size_t buffer_base_address_ = 0;
+    size_t router_write_counter_address_ = 0;
+    size_t router_read_counter_address_ = 0;
+    size_t current_fsm_type_address_ = 0;
+    size_t heartbeat_fsm_log_address_ = 0;
+    size_t reroute_fsm_log_address_ = 0;
+};
+
 class FabricContext {
 public:
     static constexpr auto routing_directions = {
@@ -69,10 +101,9 @@ public:
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
     void initialize_router_comm_context(chip_id_t chip_id, chan_id_t chan_id);
-    size_t get_control_channel_num_buffer_slots() const;
-    size_t get_control_channel_buffer_base_address() const;
-    size_t get_control_channel_remote_write_counter_address() const;
-    size_t get_control_channel_remote_read_counter_address() const;
+
+    HostToRouterCommConfig* get_host_to_router_comm_config() const;
+
     RouterCommContext& get_router_comm_context(FabricNodeId& node_id, chan_id_t chan_id);
 
 private:
@@ -119,10 +150,7 @@ private:
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
 
-    size_t control_channel_num_buffer_slots_ = 0;
-    size_t control_channel_buffer_base_address_ = 0;
-    size_t control_channel_remote_write_counter_address_ = 0;
-    size_t control_channel_remote_read_counter_address_ = 0;
+    std::unique_ptr<HostToRouterCommConfig> host_to_router_comm_config_;
     std::unordered_map<FabricNodeId, std::unordered_map<chan_id_t, RouterCommContext>> router_comm_contexts_;
 };
 

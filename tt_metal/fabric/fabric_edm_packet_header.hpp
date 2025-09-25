@@ -619,7 +619,7 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
 };
 
 enum ControlPacketType : uint8_t {
-    HEARTBEAT = 0,
+    REMOTE_HEARTBEAT = 0,
     REROUTE = 1,
 };
 
@@ -637,7 +637,7 @@ union NodeId {
     uint32_t node_id_32;
 };
 
-struct HeartbeatPacketContext {
+struct RemoteHeartbeatPacketContext {
     NodeId target_node_id;
     uint8_t target_channel_id;
     uint8_t reserved[3];
@@ -648,7 +648,7 @@ struct ReroutePacketContext {
 };
 
 union ControlPacketContext {
-    HeartbeatPacketContext heartbeat_packet_context;
+    RemoteHeartbeatPacketContext remote_heartbeat_packet_context;
     ReroutePacketContext reroute_packet_context;
     uint8_t context[8];
 };

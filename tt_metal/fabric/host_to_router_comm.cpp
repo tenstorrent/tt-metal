@@ -38,21 +38,16 @@ void write_core_helper(
 
 HostToRouterCommInterface::HostToRouterCommInterface() {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    num_buffer_slots_ = fabric_context.get_control_channel_num_buffer_slots();
-    remote_buffer_address_ = fabric_context.get_control_channel_buffer_base_address();
-    remote_read_counter_address_ = fabric_context.get_control_channel_remote_read_counter_address();
-    remote_write_counter_address_ = fabric_context.get_control_channel_remote_write_counter_address();
+    host_to_router_comm_config_ptr_ = fabric_context.get_host_to_router_comm_config();
 }
 
 bool HostToRouterCommInterface::write_packet_to_router(
     ControlPacketHeader& packet, FabricNodeId& node_id, chan_id_t eth_chan_id) {
-    uint32_t remote_read_counter = this->get_remote_read_counter(node_id, eth_chan_id);
-
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& router_comm_context = control_plane.get_fabric_context().get_router_comm_context(node_id, eth_chan_id);
     auto& local_write_counter = router_comm_context.get_local_write_counter();
 
-    if (!has_space_for_packet(local_write_counter, remote_read_counter)) {
+    if (!has_space_for_packet(node_id, eth_chan_id, local_write_counter)) {
         return false;
     }
 
@@ -62,27 +57,36 @@ bool HostToRouterCommInterface::write_packet_to_router(
     local_write_counter.increment();
 
     // update router's remote write counter
-    this->update_remote_write_counter(node_id, eth_chan_id, local_write_counter.get_counter());
+    this->update_router_write_counter(node_id, eth_chan_id, local_write_counter.get_counter());
 
     return true;
 }
 
-uint32_t HostToRouterCommInterface::get_remote_read_counter(FabricNodeId& node_id, chan_id_t eth_chan_id) const {
-    return read_core_helper(node_id, eth_chan_id, remote_read_counter_address_)[0];
+uint32_t HostToRouterCommInterface::get_router_read_counter(FabricNodeId& node_id, chan_id_t eth_chan_id) const {
+    return read_core_helper(
+        node_id, eth_chan_id, host_to_router_comm_config_ptr_->get_router_read_counter_address())[0];
 }
 
 bool HostToRouterCommInterface::has_space_for_packet(
-    HostChannelCounter& local_write_counter, uint32_t remote_read_counter) const {
-    return local_write_counter.get_counter() - remote_read_counter < num_buffer_slots_;
+    FabricNodeId& node_id, chan_id_t eth_chan_id, HostChannelCounter& local_write_counter) const {
+    uint32_t remote_read_counter = this->get_router_read_counter(node_id, eth_chan_id);
+    return local_write_counter.get_counter() - remote_read_counter <
+           host_to_router_comm_config_ptr_->get_num_buffer_slots();
 }
 
 uint32_t HostToRouterCommInterface::get_next_buffer_address(HostChannelCounter& local_write_counter) const {
-    return remote_buffer_address_ + (local_write_counter.get_buffer_index() * sizeof(ControlPacketHeader));
+    return host_to_router_comm_config_ptr_->get_buffer_base_address() +
+           (local_write_counter.get_buffer_index() * sizeof(ControlPacketHeader));
 }
 
-void HostToRouterCommInterface::update_remote_write_counter(
+void HostToRouterCommInterface::update_router_write_counter(
     FabricNodeId& node_id, chan_id_t eth_chan_id, uint32_t local_write_counter) const {
-    write_core_helper(node_id, eth_chan_id, remote_write_counter_address_, &local_write_counter, sizeof(uint32_t));
+    write_core_helper(
+        node_id,
+        eth_chan_id,
+        host_to_router_comm_config_ptr_->get_router_write_counter_address(),
+        &local_write_counter,
+        sizeof(uint32_t));
 }
 
 }  // namespace tt::tt_fabric

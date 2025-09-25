@@ -20,6 +20,36 @@
 
 namespace tt::tt_fabric {
 
+HostToRouterCommConfig::HostToRouterCommConfig(
+    size_t num_buffer_slots,
+    size_t buffer_base_address,
+    size_t router_write_counter_address,
+    size_t router_read_counter_address,
+    size_t current_fsm_type_address,
+    size_t heartbeat_fsm_log_address,
+    size_t reroute_fsm_log_address) :
+    num_buffer_slots_(num_buffer_slots),
+    buffer_base_address_(buffer_base_address),
+    router_write_counter_address_(router_write_counter_address),
+    router_read_counter_address_(router_read_counter_address),
+    current_fsm_type_address_(current_fsm_type_address),
+    heartbeat_fsm_log_address_(heartbeat_fsm_log_address),
+    reroute_fsm_log_address_(reroute_fsm_log_address) {}
+
+size_t HostToRouterCommConfig::get_num_buffer_slots() const { return num_buffer_slots_; }
+
+size_t HostToRouterCommConfig::get_buffer_base_address() const { return buffer_base_address_; }
+
+size_t HostToRouterCommConfig::get_router_write_counter_address() const { return router_write_counter_address_; }
+
+size_t HostToRouterCommConfig::get_router_read_counter_address() const { return router_read_counter_address_; }
+
+size_t HostToRouterCommConfig::get_current_fsm_type_address() const { return current_fsm_type_address_; }
+
+size_t HostToRouterCommConfig::get_heartbeat_fsm_log_address() const { return heartbeat_fsm_log_address_; }
+
+size_t HostToRouterCommConfig::get_reroute_fsm_log_address() const { return reroute_fsm_log_address_; }
+
 std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
@@ -187,11 +217,14 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     set_routing_mode(this->topology_, this->fabric_config_);
 
     const auto& control_channel_config = this->router_config_->control_channel_config;
-    this->control_channel_num_buffer_slots_ = control_channel_config.num_host_buffer_slots;
-    this->control_channel_buffer_base_address_ = control_channel_config.host_buffer_base_address;
-    this->control_channel_remote_write_counter_address_ =
-        control_channel_config.host_buffer_remote_write_counter_address;
-    this->control_channel_remote_read_counter_address_ = control_channel_config.host_buffer_remote_read_counter_address;
+    this->host_to_router_comm_config_ = std::make_unique<HostToRouterCommConfig>(
+        control_channel_config.num_host_buffer_slots,
+        control_channel_config.host_buffer_base_address,
+        control_channel_config.host_buffer_remote_write_counter_address,
+        control_channel_config.host_buffer_remote_read_counter_address,
+        control_channel_config.current_fsm_type_address,
+        control_channel_config.heartbeat_fsm_log_address,
+        control_channel_config.reroute_fsm_log_address);
 }
 
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
@@ -349,21 +382,13 @@ void FabricContext::initialize_tensix_config() {
 void FabricContext::initialize_router_comm_context(chip_id_t chip_id, chan_id_t chan_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
-    this->router_comm_contexts_[node_id].emplace(chan_id, RouterCommContext(this->control_channel_num_buffer_slots_));
+    this->router_comm_contexts_[node_id].emplace(
+        chan_id, RouterCommContext(this->host_to_router_comm_config_->get_num_buffer_slots()));
 }
 
-size_t FabricContext::get_control_channel_num_buffer_slots() const { return this->control_channel_num_buffer_slots_; }
-
-size_t FabricContext::get_control_channel_buffer_base_address() const {
-    return this->control_channel_buffer_base_address_;
-}
-
-size_t FabricContext::get_control_channel_remote_write_counter_address() const {
-    return this->control_channel_remote_write_counter_address_;
-}
-
-size_t FabricContext::get_control_channel_remote_read_counter_address() const {
-    return this->control_channel_remote_read_counter_address_;
+HostToRouterCommConfig* FabricContext::get_host_to_router_comm_config() const {
+    TT_FATAL(this->host_to_router_comm_config_ != nullptr, "Error, host to router comm config is uninitialized");
+    return this->host_to_router_comm_config_.get();
 }
 
 RouterCommContext& FabricContext::get_router_comm_context(FabricNodeId& node_id, chan_id_t chan_id) {

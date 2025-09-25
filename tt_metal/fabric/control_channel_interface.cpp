@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "fabric_edm_packet_header.hpp"
 #include "control_channel_interface.hpp"
 #include "fabric_context.hpp"
 #include <hostdevcommon/fabric_common.h>
@@ -13,7 +14,7 @@ ControlChannelInterface::ControlChannelInterface(HostToRouterCommInterface* host
     host_to_router_comm_interface_ptr_ = host_to_router_comm_interface;
 }
 
-ControlChannelResult ControlChannelInterface::request_heartbeat_check(
+ControlChannelResult ControlChannelInterface::request_remote_heartbeat_check(
     FabricNodeId& initiator_node,
     chan_id_t initiator_channel,
     FabricNodeId& target_node,
@@ -23,7 +24,7 @@ ControlChannelResult ControlChannelInterface::request_heartbeat_check(
     }
 
     // Create INIT packet to trigger device HeartbeatFSM
-    auto packet = create_heartbeat_init_packet(initiator_node, initiator_channel, target_node, target_channel);
+    auto packet = create_remote_heartbeat_init_packet(initiator_node, initiator_channel, target_node, target_channel);
 
     return send_control_packet(packet, initiator_node, initiator_channel);
 }
@@ -39,15 +40,15 @@ ControlChannelResult ControlChannelInterface::send_control_packet(
     return success ? ControlChannelResult::SUCCESS : ControlChannelResult::BUFFER_FULL;
 }
 
-ControlPacketHeader ControlChannelInterface::create_heartbeat_init_packet(
+ControlPacketHeader ControlChannelInterface::create_remote_heartbeat_init_packet(
     FabricNodeId& initiator_node,
     chan_id_t initiator_channel,
     FabricNodeId& target_node,
     chan_id_t target_channel) const {
     ControlPacketHeader packet = {};
 
-    // Basic packet info - triggers HeartbeatFSM on device
-    packet.type = ControlPacketType::HEARTBEAT;
+    // Basic packet info - triggers RemoteHeartbeatFSM on device
+    packet.type = ControlPacketType::REMOTE_HEARTBEAT;
     packet.sub_type = ControlPacketSubType::INIT;
 
     // Source: Host, Destination: Initiator router (to trigger its FSM)
@@ -61,8 +62,8 @@ ControlPacketHeader ControlChannelInterface::create_heartbeat_init_packet(
     packet.dst_channel_id = initiator_channel;
 
     // Context: Tell initiator FSM who to heartbeat (matches device FSM expectations)
-    packet.context.heartbeat_packet_context.target_node_id = reinterpret_cast<const NodeId&>(target_node);
-    packet.context.heartbeat_packet_context.target_channel_id = target_channel;
+    packet.context.remote_heartbeat_packet_context.target_node_id = reinterpret_cast<const NodeId&>(target_node);
+    packet.context.remote_heartbeat_packet_context.target_channel_id = target_channel;
 
     return packet;
 }
