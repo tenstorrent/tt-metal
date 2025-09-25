@@ -6,6 +6,7 @@
 
 #include <map>
 #include <string>
+#include <span>
 
 #include "unary_op_types.hpp"
 #include "ttnn/tensor/types.hpp"
