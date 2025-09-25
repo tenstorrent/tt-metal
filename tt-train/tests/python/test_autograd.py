@@ -3,7 +3,10 @@
 
 import numpy as np
 import pytest
+import os
+import sys
 
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/build/tt-train/sources/ttml')
 import _ttml  # noqa: E402
 
 
