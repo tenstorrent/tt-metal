@@ -22,3 +22,15 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 target_link_libraries(multi_host_tests PRIVATE TT::Metalium::Test::Distributed::Multihost)
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(multi_host PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(multi_host_tests PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()

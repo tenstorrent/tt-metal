@@ -11,6 +11,16 @@ function(setup_ttnn_test_target target_name)
             test_common_libs
             TTNN::CPP
     )
+    check_function_exists(
+        backtrace
+        HAVE_BACKTRACE
+    )
+    if(NOT HAVE_BACKTRACE)
+        find_library(EXECINFO_LIB execinfo)
+        if(EXECINFO_LIB)
+            target_link_libraries(${target_name} PUBLIC ${EXECINFO_LIB})
+        endif()
+    endif()
     target_include_directories(
         ${target_name}
         PRIVATE
@@ -192,6 +202,29 @@ target_link_libraries(
         Boost::lockfree
         test_common_utils
 )
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(test_ccl_multi_cq_multi_device PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_tensor PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_ccl_ops_lib PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_ccl PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_ccl_lib PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_basic PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_smoke PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(unit_tests_ttnn_basic PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(test_common_utils PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()
 
 # unit_tests_ttnn_emitc
 

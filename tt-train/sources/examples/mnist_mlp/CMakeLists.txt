@@ -13,3 +13,15 @@ add_executable(mnist_mlp ${SOURCES})
 target_link_libraries(mnist_mlp PRIVATE ttml)
 target_compile_definitions(mnist_mlp PRIVATE MNIST_DATA_LOCATION="${mnist_dataset_SOURCE_DIR}/")
 add_definitions(-DCONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs")
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(mnist_mlp PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()

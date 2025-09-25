@@ -62,6 +62,19 @@ target_link_libraries(
     GTest::gmock_main
     ttml
 )
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(ttml_tests ${EXECINFO_LIB})
+    endif()
+endif()
+
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # Define the target file location

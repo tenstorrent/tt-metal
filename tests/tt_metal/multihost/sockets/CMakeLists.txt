@@ -31,3 +31,14 @@ set_target_properties(
 
 # Link the object library to the executable
 target_link_libraries(multi_host_socket_tests PRIVATE multi_host_sockets)
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(multi_host_sockets PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()

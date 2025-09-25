@@ -185,6 +185,26 @@ target_link_libraries(
         fabric
         test_common_libs
 )
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(unit_tests_1d_fabric_latency PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(fabric_smoke_tests INTERFACE ${EXECINFO_LIB})
+        target_link_libraries(test_fabric_smoke INTERFACE ${EXECINFO_LIB})
+        target_link_libraries(test_system_health INTERFACE ${EXECINFO_LIB})
+        target_link_libraries(test_system_health_smoke PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(fabric_elastic_channels_host_test PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(test_physical_discovery PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(fabric_unit_tests PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()
+
 target_sources(
     unit_tests_1d_fabric_latency
     PRIVATE

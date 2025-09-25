@@ -60,6 +60,19 @@ target_link_libraries(
         benchmark::benchmark_main
 )
 
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(distributed_benchmarks PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(distributed_unit_tests PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()
+
 target_include_directories(
     distributed_benchmarks
     PRIVATE

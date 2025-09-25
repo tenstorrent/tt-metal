@@ -62,3 +62,17 @@ if(NOT EXISTS "${SHAKESPEARE_FILE}")
 else()
     message(STATUS "Shakespeare text file already exists at ${SHAKESPEARE_FILE}, skipping download.")
 endif()
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+    if(EXECINFO_LIB)
+        target_link_libraries(nano_gpt PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(nano_gpt_aggregator PRIVATE ${EXECINFO_LIB})
+        target_link_libraries(nano_gpt_optimizer PRIVATE ${EXECINFO_LIB})
+    endif()
+endif()
