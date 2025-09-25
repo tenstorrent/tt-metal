@@ -125,20 +125,18 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
     auto target_device_coord = mesh_coord;
 
-    auto tensor_topology = input_tensors[0].tensor_topology();
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
+        input_tensors[0], mesh_coord, this->all_gather_async_struct.cluster_axis);
 
-    uint32_t device_index =
-        ccl::get_physical_linearized_index(tensor_topology, mesh_coord, this->all_gather_async_struct.cluster_axis);
-
-    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor(
-        tensor_topology,
+    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0],
         mesh_coord,
         1,
         this->all_gather_async_struct.topology,
         this->all_gather_async_struct.cluster_axis);
 
-    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor(
-        tensor_topology,
+    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0],
         mesh_coord,
         -1,
         this->all_gather_async_struct.topology,

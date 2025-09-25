@@ -26,7 +26,7 @@ ttnn::Tensor composite_reduce_scatter(
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), cluster_axis);
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;

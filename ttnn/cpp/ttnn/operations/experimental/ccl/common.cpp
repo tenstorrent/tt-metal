@@ -14,7 +14,7 @@ bool use_composite_reduce_scatter(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), cluster_axis);
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     // Must scatter evenly
     auto input_shape = input_tensor.logical_shape();

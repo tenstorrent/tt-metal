@@ -179,15 +179,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     auto target_device_coord = coord;
 
-    auto tensor_topology = input_tensors[0].tensor_topology();
-
-    uint32_t device_index = ccl::get_physical_linearized_index(tensor_topology, coord, this->cluster_axis);
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
 
     std::optional<MeshCoordinate> forward_coord =
-        ccl::get_physical_neighbor(tensor_topology, coord, 1, this->topology, this->cluster_axis);
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord =
-        ccl::get_physical_neighbor(tensor_topology, coord, -1, this->topology, this->cluster_axis);
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
@@ -287,7 +285,7 @@ Tensor all_gather_async_impl(
     bool reverse_order) {
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), std::nullopt);
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
@@ -343,7 +341,7 @@ Tensor all_gather_async_impl(
 
     TT_FATAL(input_tensor.device() != nullptr, "Mesh device is required");
 
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), cluster_axis);
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
@@ -400,7 +398,7 @@ Tensor all_gather_async_impl(
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), cluster_axis);
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     int32_t rank = input_tensor.logical_shape().rank();
 

@@ -225,21 +225,19 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at {} is called", coord);
     auto target_device_coord = coord;
-    uint32_t target_ring_size =
-        ::ttnn::ccl::get_topological_dimension(input_tensors[0].tensor_topology(), this->cluster_axis);
+    uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensors[0], this->cluster_axis);
 
-    auto tensor_topology = input_tensors[0].tensor_topology();
     log_debug(tt::LogOp, "Getting forward neighbor for {}", coord);
     std::optional<MeshCoordinate> forward_coord =
-        ccl::get_physical_neighbor(tensor_topology, coord, 1, this->topology, this->cluster_axis);
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
 
     log_debug(tt::LogOp, "Getting backward neighbor for {}", coord);
     std::optional<MeshCoordinate> backward_coord =
-        ccl::get_physical_neighbor(tensor_topology, coord, -1, this->topology, this->cluster_axis);
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     log_debug(tt::LogOp, "Getting device index for {}", coord);
-    uint32_t device_index = ccl::get_physical_linearized_index(tensor_topology, coord, this->cluster_axis);
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
     log_debug(tt::LogOp, "Device index for {} is {}", coord, device_index);
 
     return reduce_scatter_minimal_async(
@@ -315,7 +313,7 @@ Tensor reduce_scatter_minimal_async_impl(
 
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor.tensor_topology(), cluster_axis);
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;

@@ -77,21 +77,21 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     const GlobalSemaphore& final_barrier_semaphore) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", coord);
 
-    auto tensor_topology = input_tensors[0].tensor_topology();
+    auto input_tensor = input_tensors[0];
 
-    uint32_t target_ring_size = ccl::get_topological_dimension(tensor_topology, this->cluster_axis);
+    uint32_t target_ring_size = ccl::get_topological_dimension(input_tensor, this->cluster_axis);
 
-    uint32_t device_index = ccl::get_physical_linearized_index(tensor_topology, coord, this->cluster_axis);
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensor, coord, this->cluster_axis);
 
     std::optional<MeshCoordinate> forward_coord =
-        ccl::get_physical_neighbor(tensor_topology, coord, 1, this->topology, this->cluster_axis);
+        ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, 1, this->topology, this->cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord =
-        ccl::get_physical_neighbor(tensor_topology, coord, -1, this->topology, this->cluster_axis);
+        ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     return all_broadcast_async_multicore(
-        input_tensors[0],
+        input_tensor,
         coord,
         forward_coord,
         backward_coord,
@@ -149,7 +149,7 @@ std::vector<Tensor> all_broadcast_async_impl(
             "all_broadcast_async op is only supported for a linear tensor topology shape");
     }
 
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(tensor_topology, cluster_axis);
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     TT_FATAL(
         num_devices > 1,

@@ -22,28 +22,16 @@ namespace ccl {
 
 std::vector<IDevice*> get_devices(const MeshDevice& mesh_device, const MeshCoordinate& coord, const std::optional<uint32_t>& cluster_axis);
 
-std::optional<MeshCoordinate> get_topological_neighbor(
-    const tt::tt_metal::distributed::MeshShape& shape,
-    const MeshCoordinate& coord,
-    int offset,
-    ttnn::ccl::Topology topology,
-    const std::optional<uint32_t>& cluster_axis);
-
-uint32_t get_topological_linearized_index(
-const tt::tt_metal::distributed::MeshShape& shape,
-    const MeshCoordinate& coord,
-    const std::optional<uint32_t>& cluster_axis);
-
 uint32_t get_topological_dimension(
-    const tt::tt_metal::TensorTopology& tensor_topology, const std::optional<uint32_t>& cluster_axis);
+    const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
-uint32_t get_physical_linearized_index(
-    const tt::tt_metal::TensorTopology& tensor_topology,
+uint32_t get_linearized_index_from_physical_coord(
+    const Tensor& tensor,
     const MeshCoordinate& physical_coord,
     const std::optional<uint32_t>& cluster_axis);
 
-std::optional<MeshCoordinate> get_physical_neighbor(
-    const tt::tt_metal::TensorTopology& tensor_topology,
+std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
+    const Tensor& tensor,
     const MeshCoordinate& physical_coord,
     int offset,
     ttnn::ccl::Topology topology,
