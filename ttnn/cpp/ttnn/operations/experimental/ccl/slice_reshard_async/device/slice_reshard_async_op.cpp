@@ -23,10 +23,6 @@ void SliceReshardAsync::validate_with_output_tensors(
     TT_FATAL(
         !(this->output_dim_shape % this->ring_size),
         "Output dim shape must be divisible by num devices on cluster axis");
-    TT_FATAL(
-        (input_tensors[0].padded_shape()[this->dim] * this->ring_size) - this->output_dim_offset >=
-            this->output_dim_shape,
-        "Output dim shape is smaller than the input data + output_dim_offset, data will be lost.");
 
     TT_FATAL(this->cluster_axis == 0 || this->cluster_axis == 1, "Unsupported cluster axis {}.", this->cluster_axis);
 
