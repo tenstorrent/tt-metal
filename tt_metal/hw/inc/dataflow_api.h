@@ -2293,7 +2293,7 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 // clang-format off
 /**
  * This resets the barrier counter for a given transaction id on a given NOC using a mask.
- * Only the the N bits up to the number of transaction ids are used.
+ * Only the N bits up to the number of transaction ids are used.
  *
  * Return value: None
  *

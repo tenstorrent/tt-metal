@@ -32,7 +32,6 @@ namespace tt::tt_metal {
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 void build_and_run_program(
     const std::shared_ptr<distributed::MeshDevice>& device,
@@ -173,7 +172,7 @@ void build_and_run_program(
 
 TEST_F(MeshDispatchFixture, TestDynamicNoCOneProgram) {
     uint32_t NUM_PROGRAMS = 1;
-    uint32_t MAX_LOOP = 20;
+    uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
     bool mix_noc_mode = false;
 
@@ -182,7 +181,7 @@ TEST_F(MeshDispatchFixture, TestDynamicNoCOneProgram) {
 
 TEST_F(MeshDispatchFixture, TestDynamicNoCMutlipleProgram) {
     uint32_t NUM_PROGRAMS = 3;
-    uint32_t MAX_LOOP = 20;
+    uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
     bool mix_noc_mode = false;
 
@@ -191,7 +190,7 @@ TEST_F(MeshDispatchFixture, TestDynamicNoCMutlipleProgram) {
 
 TEST_F(MeshDispatchFixture, TestDynamicNoCMutlipleProgramMixedMode) {
     uint32_t NUM_PROGRAMS = 5;
-    uint32_t MAX_LOOP = 20;
+    uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
     bool mix_noc_mode = true;
 
