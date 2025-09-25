@@ -22,7 +22,7 @@ inline Tensor unary_impl(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    TT_FATAL(op_chain.size() > 0, "Op chain cannot be empty");
+    TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
     DataType output_dtype = (op_chain[0].type() == UnaryOpType::TYPECAST)
                                 ? static_cast<DataType>(*op_chain[0].get_param_if<float>(1))
@@ -119,6 +119,7 @@ template struct ExecuteUnary<UnaryOpType::FRAC>;
 template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
 template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
+template struct ExecuteUnary<UnaryOpType::CBRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -228,6 +229,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RPOW>;
 
 // threshold(a,t,v) = (a <= t ? v : a)
 template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
@@ -257,7 +259,7 @@ Tensor Sigmoid_accurate::invoke(
     return detail::unary_impl(
         input,
         {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP, 1.0f),
+         UnaryWithParam(UnaryOpType::EXP),
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
@@ -289,7 +291,7 @@ Tensor Unary_chain::invoke(
     const std::vector<EltwiseUnaryWithParam>& ops_chain,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    TT_FATAL(ops_chain.size() > 0, "Op chain cannot be empty");
+    TT_FATAL(!ops_chain.empty(), "Op chain cannot be empty");
     return detail::unary_impl(input_tensor, ops_chain, memory_config, optional_output_tensor);
 }
 

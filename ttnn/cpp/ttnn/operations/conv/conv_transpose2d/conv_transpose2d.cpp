@@ -192,6 +192,7 @@ Result conv_transpose2d(
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor.layout(),
+        input_tensor.memory_config().buffer_type(),
         mm_conv,
         input_tensor_post_tm.memory_config());
     uint32_t in_channels_padded = tt::round_up(
@@ -274,7 +275,7 @@ Result conv_transpose2d(
         return matmul_output;
     }
     // call conv micro op
-    auto conv_output = optimized_conv_new(
+    auto conv_output = ttnn::operations::conv::conv2d::conv2d(
         halo_output,
         weight_tensor_on_device,
         bias_tensor_on_device,
