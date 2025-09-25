@@ -67,7 +67,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 // clang-format on
 ALWI void reduce_max_row_init() {
     UNPACK((llk_unpack_AB_reduce_row_max_init()));
-    MATH((_llk_math_reduce_max_row_init_()));
+    MATH((llk_math_reduce_max_row_init()));
     PACK((llk_pack_reduce_max_row_mask_config()));
 }
 
@@ -158,14 +158,13 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
- * | Function   | itile                     | The index of the tile within the first CB                                               | uint32_t  | Must be less than the size of the CB           | True     |
- * | Function   | itile_scaler              | The index of the tile within the scaling factor CB                                      | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | itile                     | The index of the tile within the first CB, for second is always 0                       | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
-    MATH((llk_math_reduce_max_row(icb, icb_scaler, idst)));
-    UNPACK((llk_unpack_AB(icb, icb_scaler, itile, itile_scaler)));
+ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t idst) {
+    UNPACK((llk_unpack_AB_reduce_row_max(icb, icb_scaler, itile)));
+    MATH((llk_math_reduce_max_row(idst)));
 }
 
 // clang-format off

@@ -49,12 +49,8 @@ inline void llk_math_reduce_init(
         within_face_16x16_transpose);
 }
 
-// Specialized functions for PoolType::MAX and ReduceDim::REDUCE_ROW
-inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max_row_(dst_index); }
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+inline void llk_math_reduce_max_row_init() { _llk_math_reduce_max_row_init_(); }
 
-inline void llk_math_reduce_max_row(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t dst_index) {  // both operands must have same number of faces
-    _llk_math_reduce_max_row_(dst_index);
-}
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max_row_(dst_index); }

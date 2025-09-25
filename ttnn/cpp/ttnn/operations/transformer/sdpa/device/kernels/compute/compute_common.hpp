@@ -64,16 +64,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
         // Use specialized functions for MAX row reduction when possible
-        if constexpr (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW) {
-            reduce_max_row_init();
-            for (uint32_t j = 0; j < cols; j++) {
-                reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-            }
-        } else {
-            reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-            for (uint32_t j = 0; j < cols; j++) {
-                reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-            }
+        reduce_max_row_init();
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
         }
         reduce_uninit();
         if (do_eltwise_max) {

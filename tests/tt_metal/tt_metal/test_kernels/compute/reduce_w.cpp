@@ -26,7 +26,7 @@ void MAIN {
             acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_wait_front(tt::CBIndex::c_0, onetile);
-                reduce_tile_max_row(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+                reduce_tile_max_row(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, reduce_dst_idx);
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
             // dprint_tensix_dest_reg(0);
