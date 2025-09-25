@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #ifndef OVERLAY_REG_DEFINES_DEBUG_H
 #define OVERLAY_REG_DEFINES_DEBUG_H
 

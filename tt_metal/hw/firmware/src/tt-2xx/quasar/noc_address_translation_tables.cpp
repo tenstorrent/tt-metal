@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "noc_address_translation_tables.hpp"
 #include "noc_address_translation_table_a_reg.h"
 
