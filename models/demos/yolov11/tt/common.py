@@ -22,7 +22,7 @@ class Yolov11Conv2D:
         bn=None,
         device=None,
         activation=None,
-        activation_dtype=ttnn.bfloat16,
+        activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         reshard=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
