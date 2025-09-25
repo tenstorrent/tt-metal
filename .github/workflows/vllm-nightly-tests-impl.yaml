@@ -139,6 +139,8 @@ jobs:
         PYTHONPATH: /work:/work/vllm
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
+        HF_HUB_OFFLINE: 1
+        HF_DATASETS_OFFLINE: 1
         HF_HOME: /mnt/MLPerf/huggingface
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
