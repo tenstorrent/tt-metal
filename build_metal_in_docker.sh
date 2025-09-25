@@ -11,7 +11,7 @@ case "$DISTRO" in
         CONAN_PROFILE="conan_profile_gcc_12.txt"
         ;;
     "fedora")
-        CONAN_PROFILE="conan_profile_clang_17.txt"
+        CONAN_PROFILE="conan_profile_gcc_15.txt"
         ;;
     "rhel")
         CONAN_PROFILE="conan_profile_clang_19.txt"

@@ -2,12 +2,11 @@
 
 #############################################################
 
-ARG FEDORA_VERSION=39
+ARG FEDORA_VERSION=42
 FROM fedora:${FEDORA_VERSION}
 
 RUN dnf update -y && dnf install -y \
-    git wget curl which patch perl-core \
-    clang make \
+    git wget curl which patch perl-core make \
     python3-pip python3-devel python3-virtualenv python3 \
     texinfo \
     && dnf clean all

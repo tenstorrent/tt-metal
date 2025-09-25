@@ -22,7 +22,7 @@ RUN pip3 install conan
 RUN conan profile detect --force
 
 # Copy and apply the conan profile
-COPY ${CONAN_PROFILE} /tmp/profile
+COPY dockerfile/${CONAN_PROFILE} /tmp/profile
 RUN cp /tmp/profile $(conan profile path default)
 RUN git config --global --add safe.directory /workspace
 RUN conan profile show

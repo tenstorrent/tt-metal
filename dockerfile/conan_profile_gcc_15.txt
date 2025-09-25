@@ -1,0 +1,15 @@
+[settings]
+os=Linux
+arch=x86_64
+compiler=gcc
+compiler.cppstd=gnu20
+compiler.version=15
+compiler.libcxx=libstdc++11
+build_type=Release
+
+[buildenv]
+CC=gcc-15
+CXX=g++-15
+
+[tool_requires]
+cmake/[>=3.25]
