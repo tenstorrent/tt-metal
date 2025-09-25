@@ -29,6 +29,8 @@ inline uint32_t get_element_size_kb(const DataType& dtype) {
         case DataType::FLOAT32: return 4;    // 32-bit IEEE floating point
         case DataType::INT32: return 4;      // 32-bit signed integer
         case DataType::UINT32: return 4;     // 32-bit unsigned integer
+        case DataType::UINT16: return 2;     // 16-bit unsigned integer
+        case DataType::UINT8: return 1;      // 8-bit unsigned integer
         case DataType::BFLOAT8_B: return 1;  // 8-bit brain floating point
         default: TT_THROW("Unsupported data type for KB slice operation");
     }
