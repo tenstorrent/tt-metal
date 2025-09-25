@@ -6,13 +6,9 @@
 
 #include <string>
 
-namespace tt {
-namespace jit_build {
-namespace utils {
+namespace tt::jit_build::utils {
 
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose);
 void create_file(const std::string& file_path_str);
 
-}  // namespace utils
-}  // namespace jit_build
-}  // namespace tt
+}  // namespace tt::jit_build::utils
