@@ -2526,7 +2526,6 @@ def test_unused_cores(device):
             grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))}),
             shard_shape=[32, 64],
             shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            shard_mode=ttnn.ShardMode.PHYSICAL,
         ),
     )
 

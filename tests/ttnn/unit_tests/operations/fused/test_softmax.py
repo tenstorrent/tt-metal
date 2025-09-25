@@ -414,7 +414,6 @@ def test_softmax_sd(device):
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             [64, 256],
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
 

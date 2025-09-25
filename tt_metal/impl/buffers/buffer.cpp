@@ -596,23 +596,10 @@ DeviceAddr ShardSpecBuffer::num_pages() const {
 
 namespace ttsl::json {
 tt::tt_metal::ShardSpec from_json_t<tt::tt_metal::ShardSpec>::operator()(const nlohmann::json& json_object) const {
-    const auto& shard_mode = from_json<tt::tt_metal::ShardMode>(json_object.at("mode"));
-    const auto& physical_shard_shape =
-        from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
-    if (physical_shard_shape.has_value()) {
-        TT_FATAL(
-            shard_mode == tt::tt_metal::ShardMode::LOGICAL,
-            "Physical shard shape can only be provided in logical sharding mode!");
-        return tt::tt_metal::ShardSpec{
-            from_json<CoreRangeSet>(json_object.at("grid")),
-            from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
-            physical_shard_shape.value(),
-            from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation"))};
-    }
     return tt::tt_metal::ShardSpec{
         from_json<CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation")),
-        shard_mode};
+    };
 }
 }  // namespace ttsl::json
