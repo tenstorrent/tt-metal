@@ -419,7 +419,7 @@ inline std::string op_meta_data_serialized_json(
     uint32_t opID, const tt::tt_metal::operation::ExternalOperation& op, const std::vector<Tensor>& input_tensors) {
     auto j = get_base_json<true>(opID, op, input_tensors);
     j["op_type"] = enchantum::to_string(OpType::python_fallback);
-    std::string ser = j.dump();
+    std::string ser = j.dump(4);
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"].dump(), ser);
 }
 
@@ -473,7 +473,7 @@ inline std::string op_meta_data_serialized_json(
             cached_ops.at(device_id).emplace(program_hash, short_str);
         }
 
-        std::string ser = j.dump();
+        std::string ser = j.dump(4);
         return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
     } else {
         auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
