@@ -30,10 +30,10 @@ def test_ttnn_pytorch_sweep(device, input_spec):
     if input_spec in failing_parameters_ttnn_pytorch:
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
 
-    passed, pcc = run_conv2d_short_sweep(
+    passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
-    )[0]
+    )
     print(pcc)
     assert passed, pcc
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
@@ -49,10 +49,10 @@ def test_tt_forge_sweep(device, input_spec):
     if input_spec in failing_parameters_ttnn_forge:
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
 
-    passed, pcc = run_conv2d_short_sweep(
+    passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
-    )[0]
+    )
     print(pcc)
     assert passed, pcc
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
