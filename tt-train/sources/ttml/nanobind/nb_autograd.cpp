@@ -55,20 +55,20 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
-        py_tensor.def("set_value", &Tensor::set_value);
-        py_tensor.def("set_grad", &Tensor::set_grad);
-        py_tensor.def("set_node", &Tensor::set_node);
+        py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"));
+        py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"));
+        py_tensor.def("set_node", &Tensor::set_node, nb::arg("node"));
         py_tensor.def("clean_node", &Tensor::clean_node);
-        py_tensor.def("add_grad", &Tensor::add_grad);
-        py_tensor.def("set_requires_grad", &Tensor::set_requires_grad);
-        py_tensor.def("get_value", &Tensor::get_value);
+        py_tensor.def("add_grad", &Tensor::add_grad, nb::arg("grad"));
+        py_tensor.def("set_requires_grad", &Tensor::set_requires_grad, nb::arg("requires_grad"));
+        py_tensor.def("get_value", &Tensor::get_value, nb::arg("precision") = PreferredPrecision::HALF);
         py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_));
         py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad));
         py_tensor.def("get_requires_grad", &Tensor::get_requires_grad);
         py_tensor.def("get_node", &Tensor::get_node);
         py_tensor.def("get_shape", &Tensor::get_shape);
         py_tensor.def("get_rank", &Tensor::get_rank);
-        py_tensor.def("backward", &Tensor::backward);
+        py_tensor.def("backward", &Tensor::backward, nb::arg("retain_graph"));
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
         py_tensor.def_static(
             "from_numpy",
@@ -106,7 +106,7 @@ void py_module(nb::module_& m) {
         // py_autocast_tensor.def(nb::init<tt::tt_metal::Tensor&>());
         py_autocast_tensor.def(nb::init<const AutocastTensor&>());
         py_autocast_tensor.def(nb::init<AutocastTensor&&>());
-        py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
+        py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor, nb::arg("tensor"));
         py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
     }
 
@@ -114,28 +114,32 @@ void py_module(nb::module_& m) {
         auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
         py_auto_context.def_static("get_instance", &AutoContext::get_instance, nb::rv_policy::reference);
         py_auto_context.def("get_generator", &AutoContext::get_generator);
-        py_auto_context.def("set_generator", &AutoContext::set_generator);
-        py_auto_context.def("set_seed", &AutoContext::set_seed);
+        py_auto_context.def("set_generator", &AutoContext::set_generator, nb::arg("generator"));
+        py_auto_context.def("set_seed", &AutoContext::set_seed, nb::arg("seed"));
         py_auto_context.def("get_seed", &AutoContext::get_seed);
-        py_auto_context.def("add_backward_node", &AutoContext::add_backward_node);
+        py_auto_context.def(
+            "add_backward_node", &AutoContext::add_backward_node, nb::arg("grad_function"), nb::arg("links"));
         py_auto_context.def("reset_graph", &AutoContext::reset_graph);
-        py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode);
-        py_auto_context.def("open_device", &AutoContext::open_device);
+        py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode, nb::arg("mode"));
+        py_auto_context.def("open_device", &AutoContext::open_device, nb::arg("mesh_shape"), nb::arg("device_ids"));
         py_auto_context.def("close_device", &AutoContext::close_device);
         py_auto_context.def("get_device", &AutoContext::get_device);
         // TODO: argv's char** not supported
         // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
-        py_auto_context.def("initialize_distributed_context", [](AutoContext& auto_context, nb::args args) {
-            const auto argc = args.size();
-            std::vector<const char*> argv(argc);
+        py_auto_context.def(
+            "initialize_distributed_context",
+            [](AutoContext& auto_context, nb::args args) {
+                const auto argc = args.size();
+                std::vector<const char*> argv(argc);
 
-            for (const auto& arg : args) {
-                argv.push_back(nb::str(arg).c_str());
-            }
-            argv.push_back(nullptr);
+                for (const auto& arg : args) {
+                    argv.push_back(nb::str(arg).c_str());
+                }
+                argv.push_back(nullptr);
 
-            auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
-        });
+                auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
+            },
+            nb::arg("args"));
         py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
         py_auto_context.def("get_profiler", &AutoContext::get_profiler);
         py_auto_context.def("close_profiler", &AutoContext::close_profiler);
