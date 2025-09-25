@@ -50,11 +50,12 @@
 
 void kernel_main() {
     // Runtime arguments - first get basic parameters
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(1);
-    uint32_t element_size = get_arg_val<uint32_t>(2);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(3);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(4);
+    uint32_t rt_args_idx = 0;
+    uint32_t dst_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Compile-time arguments
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
@@ -63,10 +64,9 @@ void kernel_main() {
 
     // Get dimension arrays from runtime arguments
     // Layout: output_dims[rank]
-    uint32_t arg_offset = 5;
 
     // Read output dimensions
-    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(arg_offset));
+    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
 
     // Calculate sizes - working with rows, not tiles
     uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;

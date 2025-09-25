@@ -45,15 +45,16 @@
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(1);
-    uint32_t output_w = get_arg_val<uint32_t>(2);
-    uint32_t output_h = get_arg_val<uint32_t>(3);
-    uint32_t output_d = get_arg_val<uint32_t>(4);
-    uint32_t output_n = get_arg_val<uint32_t>(5);
-    uint32_t element_size = get_arg_val<uint32_t>(6);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(7);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(8);
+    uint32_t rt_args_idx = 0;
+    uint32_t dst_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_w = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_h = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_d = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_n = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Compile-time arguments
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
