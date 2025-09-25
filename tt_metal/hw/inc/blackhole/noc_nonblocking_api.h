@@ -677,7 +677,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -686,14 +686,19 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
     ASSERT((dest_addr & 0x3) == 0);
-    uint32_t src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
-
+    uint32_t src_addr;
+    if constexpr (!flush) {
+        src_addr = customized_src_addr;
+    } else {
+        src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
+    }
     // Flush to make sure write left L1 before updating it. Both posted and non-posted counters
     // need to be checked because we don't know, in the moment, the history of spoofed writes and
     // if they were posted or non-posted.
@@ -704,12 +709,14 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     // a consumer when the write has completed (when the data and consumer are on different cores -
     // a completion ack is needed to avoid race). Forcing posted removes this as a supported use
     // case; it was not chosen as an approach.
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
-    } else {
-        while (!ncrisc_noc_nonposted_writes_sent(noc));
-        while (!ncrisc_noc_posted_writes_sent(noc));
+    if constexpr (flush) {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+            while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+        } else {
+            while (!ncrisc_noc_nonposted_writes_sent(noc));
+            while (!ncrisc_noc_posted_writes_sent(noc));
+        }
     }
 
     volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
@@ -789,7 +796,7 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -798,12 +805,14 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     if constexpr (dst_type == InlineWriteDst::DEFAULT) {
         if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
             noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
         } else {
-            noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
+            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
         }
     } else if constexpr (dst_type == InlineWriteDst::L1) {
         noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
