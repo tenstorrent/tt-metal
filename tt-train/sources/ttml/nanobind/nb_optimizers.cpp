@@ -11,6 +11,7 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
 
 namespace ttml::optimizers {
@@ -24,42 +25,63 @@ void py_module_types(nb::module_& m) {
 }
 
 void py_module(nb::module_& m) {
-    // {
-    //     auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
-    //     py_optimizer_base.def(nb::init<serialization::NamedParameters&&>());
-    //     // TODO
-    // }
+    {
+        auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
+        py_optimizer_base.def("zero_grad", &OptimizerBase::zero_grad);
+        py_optimizer_base.def("step", &OptimizerBase::step);
+        py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict);
+        py_optimizer_base.def("set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"));
+        py_optimizer_base.def("get_lr", &OptimizerBase::get_lr);
+        py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"));
+        py_optimizer_base.def("print_stats", &OptimizerBase::print_stats);
+    }
+
     {
         auto py_sgd_config = static_cast<nb::class_<SGDConfig>>(m.attr("SGDConfig"));
+        py_sgd_config.def(nb::init<>());
         py_sgd_config.def_static(
-            "make", [](float lr, float momentum, float dampening, float weight_decay, bool nesterov) {
+            "make",
+            [](float lr, float momentum, float dampening, float weight_decay, bool nesterov) {
                 return SGDConfig{
                     .lr = lr,
                     .momentum = momentum,
                     .dampening = dampening,
                     .weight_decay = weight_decay,
                     .nesterov = nesterov};
-            });
+            },
+            nb::arg("lr"),
+            nb::arg("momentum"),
+            nb::arg("dampening"),
+            nb::arg("weight_decay"),
+            nb::arg("nesterov"));
+    }
 
-        auto py_sgd = static_cast<nb::class_<SGD, optimizers::OptimizerBase>>(m.attr("SGD"));
-        py_sgd.def(nb::init<serialization::NamedParameters, const SGDConfig&>());
-        py_sgd.def("zero_grad", &SGD::zero_grad);
-        py_sgd.def("step", &SGD::step);
-        py_sgd.def("get_state_dict", &SGD::get_state_dict);
-        py_sgd.def("set_state_dict", &SGD::set_state_dict);
+    {
+        auto py_sgd = static_cast<nb::class_<SGD, OptimizerBase>>(m.attr("SGD"));
+        py_sgd.def(
+            nb::init<serialization::NamedParameters, const SGDConfig&>(), nb::arg("parameters"), nb::arg("config"));
+    }
 
+    {
         auto py_adamw_config = static_cast<nb::class_<AdamWConfig>>(m.attr("AdamWConfig"));
-        py_adamw_config.def_static("make", [](float lr, float beta1, float beta2, float epsilon, float weight_decay) {
-            return AdamWConfig{
-                .lr = lr, .beta1 = beta1, .beta2 = beta2, .epsilon = epsilon, .weight_decay = weight_decay};
-        });
+        py_adamw_config.def(nb::init<>());
+        py_adamw_config.def_static(
+            "make",
+            [](float lr, float beta1, float beta2, float epsilon, float weight_decay) {
+                return AdamWConfig{
+                    .lr = lr, .beta1 = beta1, .beta2 = beta2, .epsilon = epsilon, .weight_decay = weight_decay};
+            },
+            nb::arg("lr"),
+            nb::arg("beta1"),
+            nb::arg("beta2"),
+            nb::arg("epsilon"),
+            nb::arg("weight_decay"));
+    }
 
-        auto py_adamw = static_cast<nb::class_<MorehAdamW, optimizers::OptimizerBase>>(m.attr("AdamW"));
-        py_adamw.def(nb::init<serialization::NamedParameters, const AdamWConfig&>());
-        py_adamw.def("zero_grad", &MorehAdamW::zero_grad);
-        py_adamw.def("step", &MorehAdamW::step);
-        py_adamw.def("get_state_dict", &MorehAdamW::get_state_dict);
-        py_adamw.def("set_state_dict", &MorehAdamW::set_state_dict);
+    {
+        auto py_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("AdamW"));
+        py_adamw.def(
+            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
     }
 }
 
