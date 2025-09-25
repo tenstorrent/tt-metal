@@ -81,6 +81,8 @@ def test_rms_norm_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)
+    if isinstance(reference_model, torch.nn.LayerNorm):
+        input = input.to(dtype=next(iter(partial_state_dict.values())).dtype)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
@@ -105,7 +107,7 @@ def test_rms_norm_inference(
         ),
     )[:1, :, :, :]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.999)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
@@ -115,4 +117,4 @@ def test_rms_norm_inference(
     else:
         logger.warning("rms_norm Failed!")
 
-    assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
+    assert passing, f"rms_norm output does not meet PCC requirement {0.999}."

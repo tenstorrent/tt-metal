@@ -162,11 +162,6 @@ class LMHead(LightweightModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
             )
-            outputs.append(
-                ttnn.sharded_to_interleaved(
-                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
-                )
-            )
             output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
             if bias is not None:
                 bias = ttnn.sharded_to_interleaved(bias, memory_config=ttnn.L1_MEMORY_CONFIG)
