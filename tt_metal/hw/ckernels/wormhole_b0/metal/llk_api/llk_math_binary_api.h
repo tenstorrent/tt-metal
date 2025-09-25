@@ -84,7 +84,7 @@ inline void llk_math_eltwise_binary(
 }
 
 /*************************************************************************
- * LLK COL - TILE eltwise subtraction unpacker implementation for SDPA
+ * LLK sub_bcast_row_tile unpacker implementation for SDPA
  *************************************************************************/
 
 template <

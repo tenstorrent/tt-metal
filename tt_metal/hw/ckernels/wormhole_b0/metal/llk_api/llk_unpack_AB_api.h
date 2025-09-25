@@ -117,7 +117,7 @@ inline void llk_unpack_AB_reduce_init(
 }
 
 /*************************************************************************
- * LLK COL - TILE eltwise subtraction unpacker implementation for SDPA
+ * LLK sub_bcast_row_tile unpacker implementation for SDPA
  *************************************************************************/
 
 template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>

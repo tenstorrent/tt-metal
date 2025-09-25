@@ -34,14 +34,6 @@ void MAIN {
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
 
-        // cb_wait_front(cb_in2, per_core_block_size);
-        // DPRINT << "KOPIRANJE 2" << ENDL();
-        // copy_tile_to_dst_init_short(cb_in2);
-        // for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        //     copy_tile(cb_in2, i, i);  // copy from c_in[0] to DST[0]
-        // }
-        // cb_pop_front(cb_in2, per_core_block_size);
-
         tile_regs_acquire();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             sub_bcast_row_tile(cb_inp0, cb_inp1, 0, 0, i /*dst_index*/);

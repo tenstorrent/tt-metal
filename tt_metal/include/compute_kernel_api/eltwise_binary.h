@@ -234,7 +234,7 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
 }  // namespace ckernel
 
 /*************************************************************************
- * LLK COL - TILE eltwise subtraction unpacker implementation for SDPA
+ * LLK sub_bcast_row_tile unpacker implementation for SDPA
  *************************************************************************/
 
 ALWI void sub_bcast_row_tiles_hw_configure(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
