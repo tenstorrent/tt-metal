@@ -64,6 +64,8 @@ enum class FabricConfig : uint32_t;
 struct RuntimeArgsData;
 struct TraceDescriptor;
 
+#error "Intentional failure for merge-gate test"
+
 namespace {
 
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {

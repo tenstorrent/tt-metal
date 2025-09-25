@@ -94,22 +94,22 @@ jobs:
   #     - id: find-changes
   #       uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
 
-  # build:
-  #   if: ${{ github.ref_name == 'main' ||
-  #           needs.find-changes.outputs.cmake-changed == 'true' ||
-  #           needs.find-changes.outputs.any-code-changed == 'true' ||
-  #           needs.find-changes.outputs.docs-changed == 'true'
-  #       }}
-  #   needs: find-changes
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   permissions:
-  #     packages: write
-  #   secrets: inherit
-  #   with:
-  #     build-type: Release
-  #     build-wheel: true
-  #     version: 22.04
-  #     skip-tt-train: false
+  build:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.docs-changed == 'true'
+        }}
+    needs: find-changes
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      version: 22.04
+      skip-tt-train: false
 
   # build-docs:
   #   if: ${{ needs.find-changes.outputs.any-code-changed == 'true' ||
@@ -288,18 +288,3 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
           owner: "U08GTDV8MDH,U0908S3LUMD,U0982FCD80N,U08VC9954CE,U08TVGQGGAE,U08LG51QALX,U08DEGUJY3H,U08BNDNLUCD,U084DCKE0B0,U0883RN6CRE,U088NCP32NP,U07J3K6KS1K,U07HTBQPHFG,U085LTYEC00,U014XCQ9CF8"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
