@@ -5,6 +5,8 @@
 #include "all_reduce_async.hpp"
 
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
 #include "device/all_reduce_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -127,6 +129,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    bool input_is_sharded = input_tensor.memory_config().is_sharded();
+    bool output_is_sharded = out_memory_config.is_sharded();
     uint32_t dim = finding_scatter_dim(
         input_tensor.padded_shape(),
         input_tensor.layout(),
@@ -151,29 +155,43 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         return sum_tensor;
     }
     // Reduce scatter + all gather
+    bool change_mem_config = false;
+    if ((input_is_sharded || output_is_sharded) && out_memory_config != input_tensor.memory_config()) {
+        change_mem_config = true;
+    }
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(input_tensor, out_memory_config);
+    auto interleaved_tensor = input_tensor;
+    if (change_mem_config) {
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        interleaved_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
+    }
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        input_tensor,
+        interleaved_tensor,
         std::nullopt,
         dim,
         rs_global_semaphores,
         barrier_semaphores[0],
         num_preferred_links.value_or(1),
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         std::nullopt,
         topology,
         worker_subdevice_id_opt);
-    return ttnn::operations::experimental::ccl::all_gather_async(
+    auto gather_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
         ag_global_semaphores,
         num_preferred_links.value_or(1),
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         topology,
         worker_subdevice_id_opt,
         false,
         use_llama_sharded,
         barrier_semaphores[1]);
+
+    if (change_mem_config) {
+        gather_tensor = ttnn::to_memory_config(gather_tensor, out_memory_config, std::nullopt);
+    }
+    return gather_tensor;
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
@@ -189,6 +207,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    bool input_is_sharded = input_tensor.memory_config().is_sharded();
+    bool output_is_sharded = out_memory_config.is_sharded();
     const auto& mesh_view = mesh_device.get_view();
     std::vector<IDevice*> devices =
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
@@ -215,20 +235,29 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         return sum_tensor;
     }
     // Reduce scatter + all gather
+    bool change_mem_config = false;
+    if ((input_is_sharded || output_is_sharded) && out_memory_config != input_tensor.memory_config()) {
+        change_mem_config = true;
+    }
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(input_tensor, out_memory_config);
+    auto interleaved_tensor = input_tensor;
+    if (change_mem_config) {
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        interleaved_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
+    }
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        input_tensor,
+        interleaved_tensor,
         std::nullopt,
         dim,
         rs_global_semaphores,
         barrier_semaphores[0],
         num_preferred_links.value_or(1),
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         std::nullopt,
         topology,
         worker_subdevice_id_opt,
         cluster_axis);
-    return ttnn::operations::experimental::ccl::all_gather_async(
+    auto gather_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
         cluster_axis,
@@ -236,12 +265,16 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         topology,
         ag_global_semaphores,
         std::nullopt,
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         num_preferred_links.value_or(1),
         worker_subdevice_id_opt,
         false,
         use_llama_sharded,
         barrier_semaphores[1]);
+    if (change_mem_config) {
+        gather_tensor = ttnn::to_memory_config(gather_tensor, out_memory_config, std::nullopt);
+    }
+    return gather_tensor;
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(

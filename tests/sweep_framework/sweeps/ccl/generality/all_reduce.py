@@ -71,7 +71,7 @@ LEAD_MODEL_SHARD_SPECS = [
         input_cores=(4, 6),
         input_strategy="w",
         output_shape=None,
-        output_cores=(1, 10),
+        output_cores=(2, 5),
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 1280]],
     ),
