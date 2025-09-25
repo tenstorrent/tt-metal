@@ -219,7 +219,8 @@ class TtnnOBB:
         
         # 1. Statistical summary
         percentiles = [0, 1, 5, 10, 25, 50, 75, 90, 95, 99, 100]
-        values = [torch.quantile(yb_flat, p/100.0) for p in percentiles]
+        yb_flat_float = yb_flat.float()  # Convert to float for quantile calculation
+        values = [torch.quantile(yb_flat_float, p/100.0) for p in percentiles]
         print(f"🔍 [DEBUG] TTNN Raw distribution percentiles:")
         for p, v in zip(percentiles, values):
             print(f"    {p}%: {v}")
@@ -265,7 +266,8 @@ class TtnnOBB:
         
         # Statistical summary for sigmoid outputs
         percentiles = [0, 1, 5, 10, 25, 50, 75, 90, 95, 99, 100]
-        values = [torch.quantile(yb_final_flat, p/100.0) for p in percentiles]
+        yb_final_flat_float = yb_final_flat.float()  # Convert to float for quantile calculation
+        values = [torch.quantile(yb_final_flat_float, p/100.0) for p in percentiles]
         print(f"🔍 [DEBUG] TTNN Sigmoid distribution percentiles:")
         for p, v in zip(percentiles, values):
             print(f"    {p}%: {v}")
