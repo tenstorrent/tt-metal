@@ -182,7 +182,7 @@ void dispatch_core_manager::add_dispatch_core_to_device(chip_id_t device_id, con
 }
 
 std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(chip_id_t device_id) {
-    return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
+    return tt::get_logical_dispatch_cores(device_id, this->num_hw_cqs, this->dispatch_core_config_);
 }
 
 // private methods
@@ -199,7 +199,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
         for (const CoreCoord& logical_dispatch_core :
-             tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {
+             tt::get_logical_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config)) {
             logical_dispatch_cores.push_back(logical_dispatch_core);
         }
 
