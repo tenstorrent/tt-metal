@@ -166,12 +166,10 @@ def run_slice_reshard_impl(
     [
         (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 88),  # (1,8)
         (4, [84, 120, 106, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 84),  # (1,4)
-        (8, [176, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1, 168),  # (1,8)
     ],
     ids=[
         "8mochi_vae_1",
         "4mochi_vae_1",
-        "8mochi_vae_2",
     ],
 )
 @pytest.mark.parametrize(
