@@ -12,7 +12,7 @@
 #include <tt_stl/math.hpp>
 
 #include "slice_write_op.hpp"
-#include "tt-metalium/math.hpp"
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.hpp"

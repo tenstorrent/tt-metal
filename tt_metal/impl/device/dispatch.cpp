@@ -8,7 +8,6 @@
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include <tt-metalium/math.hpp>
 
 namespace tt {
 namespace tt_metal {

@@ -67,7 +67,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard_height_last =
             num_units_per_shard_height - (ttsl::math::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
-            output_unit_size - (round_up(num_units_per_row, output_unit_size) - num_units_per_row);
+            output_unit_size - (ttsl::math::round_up(num_units_per_row, output_unit_size) - num_units_per_row);
     }
 
     // re-calculate end_core in the case shard grid is larger than used grid

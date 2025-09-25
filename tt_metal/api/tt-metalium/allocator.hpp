@@ -17,7 +17,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 namespace tt {
 
@@ -119,7 +119,8 @@ constexpr DeviceAddr calculate_bank_size_spread(
         size_bytes);
     DeviceAddr num_pages = page_size_bytes == 0 ? 0 : size_bytes / page_size_bytes;
     DeviceAddr num_equally_distributed_pages = num_pages == 0 ? 0 : 1 + ((num_pages - 1) / num_banks);
-    return num_equally_distributed_pages * round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
+    return num_equally_distributed_pages *
+           ttsl::math::round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
 }
 
 }  // namespace detail
