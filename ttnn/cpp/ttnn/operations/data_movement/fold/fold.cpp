@@ -6,6 +6,7 @@
 
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <vector>
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -169,18 +170,49 @@ Tensor ensure_transpose_compatible_sharding(const Tensor& input, const CoreRange
     uint32_t num_cores = max_cores;
     uint32_t optimal_shard_height = 0;
 
-    while (num_cores > 0) {
-        uint32_t shard_height_candidate = tt::div_up(total_height, num_cores);
-
-        // Round up to next multiple of H to satisfy condition2
-        uint32_t rounded_shard_height = tt::div_up(shard_height_candidate, H) * H;
-
-        if (rounded_shard_height * num_cores >= total_height && rounded_shard_height >= H &&
-            (rounded_shard_height % H == 0)) {
-            optimal_shard_height = rounded_shard_height;
-            break;
+    // For better support of non-power-of-2 batch sizes, try divisors of total_height first
+    // Prioritize solutions with more cores (smaller shard heights) by iterating from max_cores down
+    for (uint32_t cores = max_cores; cores >= 1; cores--) {
+        if (total_height % cores == 0) {
+            uint32_t candidate_height = total_height / cores;
+            if (candidate_height >= H && candidate_height % H == 0) {
+                num_cores = cores;
+                optimal_shard_height = candidate_height;
+                log_debug(
+                    tt::LogOp,
+                    "Found exact divisor: num_cores={}, shard_height={}, total_height={}",
+                    num_cores,
+                    optimal_shard_height,
+                    total_height);
+                break;
+            }
         }
-        num_cores--;
+    }
+
+    // Fallback to original algorithm if no exact divisor works
+    if (optimal_shard_height == 0) {
+        num_cores = max_cores;
+        while (num_cores > 0) {
+            uint32_t shard_height_candidate = tt::div_up(total_height, num_cores);
+
+            // Round up to next multiple of H to satisfy condition2
+            uint32_t rounded_shard_height = tt::div_up(shard_height_candidate, H) * H;
+
+            log_debug(
+                tt::LogOp,
+                "Trying num_cores={}, candidate={}, rounded={}, total_needed={}",
+                num_cores,
+                shard_height_candidate,
+                rounded_shard_height,
+                rounded_shard_height * num_cores);
+
+            if (rounded_shard_height * num_cores >= total_height && rounded_shard_height >= H &&
+                (rounded_shard_height % H == 0)) {
+                optimal_shard_height = rounded_shard_height;
+                break;
+            }
+            num_cores--;
+        }
     }
 
     // Fallback: use H itself with single core if nothing works
@@ -191,11 +223,12 @@ Tensor ensure_transpose_compatible_sharding(const Tensor& input, const CoreRange
 
     log_debug(
         tt::LogOp,
-        "Resharding for transpose: H={}, old_shard_height={}, new_shard_height={}, cores={}",
+        "Resharding for transpose: H={}, old_shard_height={}, new_shard_height={}, cores={}, total_height={}",
         H,
         current_shard_height,
         optimal_shard_height,
-        num_cores);
+        num_cores,
+        total_height);
 
     // Create new core range and shard spec
     CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
@@ -252,7 +285,9 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     // pad input tensor
     tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, w};
-    auto pad_mem_config = create_sharded_memory_config(ttnn::Shape(padded_shape), grid_size, shard_spec.orientation);
+    auto input_grid_size = input.shard_spec().value().grid;
+    auto pad_mem_config =
+        create_sharded_memory_config(ttnn::Shape(padded_shape), input_grid_size, shard_spec.orientation);
     auto tt_output_tensor = ttnn::pad(
         input, padded_shape, tt::tt_metal::Array4D({0, 0, pad_h, 0}), 0, /*use_multicore*/ false, pad_mem_config);
 
@@ -261,15 +296,16 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     tt_output_tensor = ensure_transpose_compatible_sharding(tt_output_tensor, grid_size);
     grid_size = tt_output_tensor.shard_spec().value().grid;
     // transpose
-    auto tphw_mem_config =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
+    auto tphw_mem_config = tt_output_tensor.memory_config();  // Use actual config
     tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config);
 
     log_debug(tt::LogOp, "transpose_hw_output: {}", tt_output_tensor.logical_shape());
 
     // pad tensor W dim
     tt::tt_metal::Array4D padded_shape2 = {n, padded_c, padded_h32, padded_w32};
-    auto pad_mem_config2 = create_sharded_memory_config(ttnn::Shape(padded_shape2), grid_size, shard_spec.orientation);
+    auto current_grid_size = tt_output_tensor.shard_spec().value().grid;
+    auto pad_mem_config2 =
+        create_sharded_memory_config(ttnn::Shape(padded_shape2), current_grid_size, shard_spec.orientation);
     tt_output_tensor = ttnn::pad(
         tt_output_tensor,
         padded_shape2,
@@ -281,8 +317,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "pad_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphc_mem_config =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
+    auto tphc_mem_config = tt_output_tensor.memory_config();  // Use actual config
     tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config);
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", tt_output_tensor.logical_shape());
@@ -293,10 +328,16 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, (w / stride_w), (c * stride_w), h});
 
     log_debug(tt::LogOp, "reshape_hc_output: {}", tt_output_tensor.logical_shape());
+    log_debug(
+        tt::LogOp,
+        "Expected after first reshape: n={}, w_new={}, c_new={}, h={}",
+        n,
+        (w / stride_w),
+        (c * stride_w),
+        h);
 
     // transpose
-    auto tphw_mem_config2 =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
+    auto tphw_mem_config2 = tt_output_tensor.memory_config();  // Use actual config
     tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config2);
 
     log_debug(tt::LogOp, "transpose_hw_output2: {}", tt_output_tensor.logical_shape());
@@ -307,10 +348,16 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, w, (h / stride_h), (c * stride_h)});
 
     log_debug(tt::LogOp, "reshape_hw_output: {}", tt_output_tensor.logical_shape());
+    log_debug(
+        tt::LogOp,
+        "Expected after second reshape: n={}, w={}, h_new={}, c_new={}",
+        n,
+        w,
+        (h / stride_h),
+        (c * stride_h));
 
     // transpose
-    auto tphc_mem_config2 =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
+    auto tphc_mem_config2 = tt_output_tensor.memory_config();  // Use actual config
     tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config2);
 
     log_debug(tt::LogOp, "transpose_hc_output2: {}", tt_output_tensor.logical_shape());
@@ -322,10 +369,11 @@ std::vector<Tensor> fold_with_transpose_sharded_(
         // slice
         n = output_shape.value()[0], h = output_shape.value()[1], w = output_shape.value()[2],
         c = output_shape.value()[3];
+
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
         tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
-        auto slice_mem_config = create_sharded_memory_config(
-            ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
+        auto slice_mem_config =
+            override_memory_config.has_value() ? override_memory_config.value() : tt_output_tensor.memory_config();
         tt_output_tensor =
             ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
 
@@ -335,10 +383,14 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     } else {
         // slice
         n = slice_output_shape[0], h = slice_output_shape[1], w = slice_output_shape[2], c = slice_output_shape[3];
+
+        log_debug(tt::LogOp, "slice target: n={}, h={}, w={}, c={}", n, h, w, c);
+        log_debug(tt::LogOp, "tensor before slice: {}", tt_output_tensor.logical_shape());
+
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
         tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
-        auto slice_mem_config = create_sharded_memory_config(
-            ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
+        auto slice_mem_config =
+            override_memory_config.has_value() ? override_memory_config.value() : tt_output_tensor.memory_config();
         tt_output_tensor =
             ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
 
