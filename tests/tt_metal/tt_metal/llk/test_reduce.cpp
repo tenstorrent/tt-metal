@@ -206,7 +206,7 @@ void add_reader_writer_kernels(
 
             auto unary_reader_kernel = tt_metal::CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
                 logical_core,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -225,31 +225,28 @@ void add_reader_writer_kernels(
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = writer_compile_args});
 
+            // New argument order: src_addr, Ht, Wt, NC, scaler
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_reader_kernel,
                 logical_core,
                 {
                     src_dram_buffer->address(),
-                    (uint32_t)0,  // dram bank id
-                    (uint32_t)0,  // unused
-                    num_tensor_tiles,
-                    NC,
-                    Ht,
-                    Wt,
-                    Ht * Wt,
-                    *reinterpret_cast<uint32_t*>(&scaler),
+                    Ht,                                     // Number of rows (height in tiles)
+                    Wt,                                     // Number of cols (width in tiles)
+                    NC,                                     // Number of channels
+                    *reinterpret_cast<uint32_t*>(&scaler),  // scaler value
                 });
 
-            uint32_t num_tiles =
-                test_config.reduce_dim == ReduceDim::W ? (num_tensor_tiles / Wt) : (num_tensor_tiles / (Wt * Ht));
+            // Output tiles: one per row per channel (NC * Ht)
+            uint32_t output_tiles = NC * Ht;
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel,
                 logical_core,
                 {dst_dram_buffer->address(),
-                 (uint32_t)0,  // dram bank id
-                 num_tiles});
+                 (uint32_t)0,     // dram bank id
+                 output_tiles});  // number of output tiles
 
             break;
         }
@@ -347,7 +344,9 @@ void run_single_core_reduce_program(
         distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
 
     uint32_t src0_cb_index = 0;
-    uint32_t num_buffer_tiles = 32;
+    // Increase buffer size to handle NC * Ht * Wt tiles for reduce_c pattern
+    uint32_t max_input_tiles = NC * Ht * Wt;
+    uint32_t num_buffer_tiles = std::max(32U, max_input_tiles);
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
             num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -356,7 +355,9 @@ void run_single_core_reduce_program(
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_buffer_tiles = 32;
+    // Increase output buffer size to handle NC * Ht output tiles
+    uint32_t max_output_tiles = NC * Ht;
+    uint32_t num_output_buffer_tiles = std::max(32U, max_output_tiles);
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
