@@ -70,6 +70,7 @@ class CompositeOperation(Operation):
     local_var_names: Optional[List[str]] = None
     append_var_names_to_end: Optional[List[str]] = None
     is_const_fold_composite: bool = False
+    graph_outputs: List[str] = field(default_factory=list)
     counter: ClassVar[int] = 0
     generated_code: ClassVar[Dict[str, str]] = None
     duplicate_ops: ClassVar[Dict[str, str]] = None
@@ -211,6 +212,8 @@ class CompositeOperation(Operation):
     return {self.output_var_name()} END
 """
         new_func = str(orig_func)
+        if self.id == "main":
+            new_func = new_func.replace("return OUTPUT END", f"return {', '.join(self.graph_outputs)} ")
 
         for arg_index, arg in enumerate(args_not_in_var_names + var_names):
             new_func = new_func.replace(f"({arg})", f"(var{arg_index})")
@@ -220,6 +223,7 @@ class CompositeOperation(Operation):
             new_func = new_func.replace(f", {arg})", f", var{arg_index})")
             new_func = new_func.replace(f",{arg})", f",var{arg_index})")
             new_func = new_func.replace(f", {arg}[", f", var{arg_index}[")
+            new_func = new_func.replace(f", {arg} ", f", var{arg_index}")
             new_func = new_func.replace(f" {arg})", f", var{arg_index})")
             new_func = new_func.replace(f"= {arg}[", f"= var{arg_index}[")
             new_func = new_func.replace(f"= {arg}.", f"= var{arg_index}.")
@@ -230,6 +234,7 @@ class CompositeOperation(Operation):
             new_func = new_func.replace(f"\t{arg} = ", f"\tvar{arg_index} = ")
             new_func = new_func.replace(f"    {arg} = ", f"    var{arg_index} = ")
             new_func = new_func.replace(f"return {arg} END", f"return var{arg_index}")
+            new_func = new_func.replace(f"return {arg}, ", f"return var{arg_index}, ")
         for arg_index, arg in enumerate(consts):
             new_func = new_func.replace(f"({arg})", f"(args[{arg_index}])")
             new_func = new_func.replace(f"({arg},", f"(args[{arg_index}],")
@@ -249,9 +254,6 @@ class CompositeOperation(Operation):
             new_func = new_func.replace(f"    {arg} = ", f"    args[{arg_index}] = ")
             new_func = new_func.replace(f"return {arg} END", f"return args[{arg_index}]")
 
-        ## Add graph outputs here.
-        if self.id == "main":
-            new_func = new_func.replace("return OUTPUT END", "return")
         fun_body = new_func.split(f"def {self.fun_name}")[1]
         args_not_in_var_names = list(dict.fromkeys(arg for arg in arg_names if arg not in var_names))
         args_not_in_var_names = list(args_not_in_var_names) + consts
@@ -377,7 +379,15 @@ def merge_nodes_as_composite(
         main_output = order[-1]
     if len(set([out_edge[0] for out_edge in outgoing if out_edge[0] != main_output])) != 0:
         return None
-
+    for node in nodes_to_merge:
+        if node not in G.nodes:
+            return None
+        elif (
+            isinstance(G.nodes[node]["operation"].graph_output_indices, list)
+            and len(G.nodes[node]["operation"].graph_output_indices) != 0
+            and node != main_output
+        ):
+            return None
     if len(ancestors) == 0 and isinstance(G.nodes[main_output]["operation"], CompositeOperation):
         return None
     if keep_existing_name:
@@ -392,6 +402,7 @@ def merge_nodes_as_composite(
         args=[],
         kwargs={},
         meta_data=G.nodes[main_output]["operation"].meta_data,
+        graph_output_indices=G.nodes[main_output]["operation"].graph_output_indices,
     )
     for edge in incoming.union(outgoing):
         G.remove_edge(*edge)
@@ -939,6 +950,39 @@ def merge_nested_tree(tree, operation_graph):
     return list(set(all_nodes))
 
 
+def unloop_composites_with_less_than_n_nodes(new_operation_graph, n=2):
+    G = new_operation_graph.graph
+    changed = True
+    while changed:
+        changed = False
+        for node in list(nx.topological_sort(G))[::-1]:
+            op = G.nodes[node]["operation"]
+            if isinstance(op, CompositeOperation):
+                found_parent_lead_child = False
+                while not found_parent_lead_child:
+                    found_parent_lead_child = True
+                    for sub_op in op.sub_operations:
+                        if isinstance(sub_op, CompositeOperation) and any(
+                            isinstance(child_op, CompositeOperation) for child_op in sub_op.sub_operations
+                        ):
+                            found_parent_lead_child = False
+                            op = sub_op
+                            break
+                for index, sub_op in enumerate(op.sub_operations):
+                    if (
+                        isinstance(sub_op, CompositeOperation)
+                        and len(sub_op.sub_operations) + len(op.sub_operations) <= n
+                    ):
+                        op.sub_operations = (
+                            op.sub_operations[:index] + sub_op.sub_operations + op.sub_operations[index + 1 :]
+                        )
+                        changed = True
+                        break
+            if changed:
+                break
+    return new_operation_graph
+
+
 def trace_model_structure(
     model,
     input_shapes,
@@ -1003,6 +1047,7 @@ def trace_model_structure(
     except:
         pass
     make_every_node_composite(new_operation_graph)
+    unloop_composites_with_less_than_n_nodes(new_operation_graph, n=15)
     json_structure = create_graph_json_structure(operation_graph)
     # Write the JSON structure to the specified output file
     with open("combined_operation_graph_viz.json", "w") as f:

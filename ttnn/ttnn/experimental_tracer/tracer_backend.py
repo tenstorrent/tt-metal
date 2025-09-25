@@ -1063,6 +1063,8 @@ def set_is_graph_output(outputs, index=0):
             ## no recursion since we only support one level of nesting
             if isinstance(output, Trackable_Tensor):
                 output.graph_output_index = index2
+            elif isinstance(output, (list, tuple)):
+                set_is_graph_output(output, index2)
     elif outputs is not None:
         for output in outputs.__dict__.values():
             if isinstance(output, Trackable_Tensor):

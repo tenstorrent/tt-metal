@@ -76,15 +76,21 @@ class CompositePytorchGraph(PytorchGraph):
         ConstantTensor.ConstantTensorFromModel = True
         imports: Dict[str, List[str]] = {}
         code_lines: Dict[str, List[str]] = {}
+        sub_operations = list(
+            self.graph.graph.nodes[node_id]["operation"] for node_id in nx.topological_sort(self.graph.graph)
+        )
         main_op = CompositeOperation(
             id="main",
             unique_name="OUTPUT",
-            sub_operations=list(
-                self.graph.graph.nodes[node_id]["operation"] for node_id in nx.topological_sort(self.graph.graph)
-            ),
+            sub_operations=sub_operations,
             function_call_name="composite",
             args=[],
             kwargs={},
+            graph_outputs=[
+                sub_operation.output_var_name()
+                for sub_operation in sub_operations[::-1]
+                if isinstance(sub_operation.graph_output_indices, list) and len(sub_operation.graph_output_indices) > 0
+            ],
         )
         code_lines["main"] = ""
         main_op_code = main_op.generate_code()
