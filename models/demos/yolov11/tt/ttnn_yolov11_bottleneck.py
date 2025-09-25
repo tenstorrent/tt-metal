@@ -39,16 +39,16 @@ class TtnnBottleneck:
         p(x, "cv2 out")
         # p(x, "x")
         # p(input, "input is")
-        if input.memory_config() != x.memory_config():
-            print("it is execcc")
-            input = ttnn.reshard(input, x.memory_config())
-        if input.shape[2] > x.shape[2]:
-            p(input, "bfore btlneck slice")
-            input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
-            input = input[:, :, : x.shape[2], :]
-            input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
-            p(input, "after btlneck slice")
-        x = ttnn.add(input, x, use_legacy=False, memory_config=x.memory_config())
+        # if input.memory_config() != x.memory_config():
+        #     print("it is execcc")
+        #     input = ttnn.reshard(input, x.memory_config())
+        # if input.shape[2] > x.shape[2]:
+        #     p(input, "bfore btlneck slice")
+        #     input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
+        #     input = input[:, :, : x.shape[2], :]
+        #     input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
+        #     p(input, "after btlneck slice")
+        x = ttnn.add(input, x, memory_config=x.memory_config())
         p(x, "after bottlencekc addd")
         # if x.shape[3] < tile_shape:
         #     input = ttnn.to_layout(input, layout=ttnn.TILE_LAYOUT)

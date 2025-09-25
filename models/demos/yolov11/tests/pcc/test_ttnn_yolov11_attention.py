@@ -15,7 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
-        ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 7, 7]),
+        ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 20, 20]),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
@@ -41,7 +41,7 @@ def test_yolo_v11_attention(
         input_width=fwd_input_shape[3],
     )
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
-    ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.ROW, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     torch_output = torch_module(torch_input)
     parameters = create_yolov11_model_parameters(torch_module, torch_input, device=device)
     ttnn_module = ttnn_attention(device=device, parameter=parameters.conv_args, conv_pt=parameters)

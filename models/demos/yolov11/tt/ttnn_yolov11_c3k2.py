@@ -41,10 +41,10 @@ class TtnnC3k2:
             self.c3k = TtnnC3K(device, parameter[0], conv_pt.m[0])
 
     def __call__(self, device, x, use_shard_concat=True, tile_shape=32):
-        cv1_a = self.cv1_a(device, x)
+        cv1_a = self.cv1_a(device, x, output_rm_needed=True)
         p(cv1_a, "cv1_a out is")
         print("cv1_a out is", cv1_a.shape, cv1_a.memory_config())
-        if x.shape[2] == 400 and x.shape[-1] == 384:
+        if x.shape[2] == 416 and x.shape[-1] == 384:
             print("spcl case true is triggered")
             spcl_case = True
         else:
@@ -81,8 +81,26 @@ class TtnnC3k2:
             cv1_b = ttnn.sharded_to_interleaved(cv1_b, ttnn.L1_MEMORY_CONFIG)
             y3 = ttnn.sharded_to_interleaved(y3, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.concat((cv1_a, cv1_b, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # p(x, "concat out is")
+        p(x, "concat out is")
 
+        # if(x.shape[-1] == 48):
+        #     p(x,"before reshard")
+        #     target_shard_spec = ttnn.ShardSpec(
+        #         grid=ttnn.CoreRangeSet([
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(5, 7))
+        #         ]),
+        #         shard_shape=[416, 64],
+        #         shard_orientation=ttnn.ShardOrientation.ROW_MAJOR
+        #     )
+
+        #     target_memory_config = ttnn.MemoryConfig(
+        #         memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #         buffer_type=ttnn.BufferType.L1,
+        #         shard_spec=target_shard_spec
+        #     )
+        #     x = ttnn.to_memory_config(x,target_memory_config)
+        #     p(x,"after reshard")
         x = self.cv2(device, x, output_rm_needed=False)
         deallocate_tensors(cv1_a, cv1_b, y3)
         return x

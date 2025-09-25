@@ -22,7 +22,7 @@ class Yolov11Conv2D:
         bn=None,
         device=None,
         activation=None,
-        activation_dtype=ttnn.bfloat8_b,
+        activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         reshard=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -137,7 +137,7 @@ class Yolov11Conv2D:
 from models.common.utility_functions import roundup32
 
 
-def reshard_if_possible(x):  # reshards if shard_spec is not multiples of 32
+def reshard_if_possible(x, core_grid=None):  # reshards if shard_spec is not multiples of 32
     if x.is_sharded() and (
         x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0
     ):
@@ -148,7 +148,7 @@ def reshard_if_possible(x):  # reshards if shard_spec is not multiples of 32
         # print("after IS", aligned_h, aligned_w)
         resharded_memory_config = ttnn.create_sharded_memory_config(
             shape=(aligned_h, aligned_w),
-            core_grid=x.memory_config().shard_spec.grid,
+            core_grid=x.memory_config().shard_spec.grid if core_grid is None else core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=x.memory_config().shard_spec.orientation,
             use_height_and_width_as_shard_shape=True,
