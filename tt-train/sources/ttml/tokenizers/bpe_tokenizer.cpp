@@ -7,7 +7,6 @@
 #include <fmt/format.h>
 #include <tokenizers_cpp.h>
 
-#include <algorithm>
 #include <fstream>
 #include <string>
 
@@ -52,17 +51,8 @@ public:
     }
 
     [[nodiscard]] std::string decode(const std::vector<uint32_t>& tokens) const {
-        try {
-            const std::vector<int32_t> tokens_i32(tokens.begin(), tokens.end());
-            std::string result = m_tokenizer->Decode(tokens_i32);
-            
-            // Only remove null bytes, keep the original text as much as possible
-            result.erase(std::remove(result.begin(), result.end(), '\0'), result.end());
-            
-            return result;
-        } catch (const std::exception& e) {
-            throw std::runtime_error(fmt::format("Error decoding tokens: {}", e.what()));
-        }
+        const std::vector<int32_t> tokens_i32(tokens.begin(), tokens.end());
+        return m_tokenizer->Decode(tokens_i32);
     }
 
     [[nodiscard]] uint32_t get_vocab_size() const {
