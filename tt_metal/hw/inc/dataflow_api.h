@@ -1786,8 +1786,10 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | be                                       | Byte-enable                                                | uint8_t  | 0x1-0xF                          | False    |
  * | noc                                      | NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
  * | vc                                       | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Unicast VCs)                | False    |
- * | InlineWriteDst (template parameter)      | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst     | DEFAULT, L1, REG       | False    |
+ * | customized_src_addr                      | Custom source address for storing the value to be written  | uint32_t | Any uint32_t value               | False    |
+ * | dst_type            (template parameter) | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst     | DEFAULT, L1, REG       | False    |
  * | posted              (template parameter) | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                    | False    |
+ * | flush               (template parameter) | Whether to flush the NOC transaction before issue transaction | bool     | true or false                 | False    |
  */
 // clang-format on
 template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
