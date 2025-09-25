@@ -542,11 +542,18 @@ class Generator:
     def process_decode_output_host(self, tt_out, is_tokens=True):
         if isinstance(tt_out, tuple):
             tt_out = tt_out[0]
+        # Check if tensor is distributed across mesh devices (vocab_size // 8 indicates sharding)
+        # If so, convert from distributed TT tensor to consolidated torch tensor
         if tt_out.shape[-1] >= self.model.vocab_size // 8:
+            # Convert from TT tensor format using mesh composition to concatenate
+            # across devices in an 8x4 mesh layout (dims 3,1 specify concatenation axes)
             out = ttnn.to_torch(
                 tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 1), mesh_shape=(8, 4))
             )
+            # Extract the first sequence, first batch element, all tokens up to vocab_size
+            # and add back the sequence dimension that was removed
             return out[0, 0, :, : self.model.vocab_size].unsqueeze(1)
+        # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
         return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, 0, 0, :]
 
     def chat_completion(
