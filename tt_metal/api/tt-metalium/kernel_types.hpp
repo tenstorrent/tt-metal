@@ -78,9 +78,7 @@ struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
-    // This should be a std::array<UnpackToDestMode, NUM_CIRCULAR_BUFFERS>
-    std::vector<UnpackToDestMode> unpack_to_dest_mode =
-        std::vector<UnpackToDestMode>(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
     std::vector<uint32_t> compile_args;
