@@ -21,6 +21,7 @@
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include <tt_stl/caseless_comparison.hpp>
 
 namespace ttnn::core {
 
@@ -68,21 +69,51 @@ void py_module(py::module& module) {
 
     module.def(
         "set_printoptions",
-        &ttnn::set_printoptions,
+        [](const std::string& profile, const py::object& sci_mode) {
+            tt::tt_metal::tensor_impl::SciMode sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Default;
+            if (!sci_mode.is_none()) {
+                if (py::isinstance<py::bool_>(sci_mode)) {
+                    sci_mode_enum = sci_mode.cast<bool>() ? tt::tt_metal::tensor_impl::SciMode::Enable
+                                                          : tt::tt_metal::tensor_impl::SciMode::Disable;
+                } else if (py::isinstance<py::str>(sci_mode)) {
+                    auto cmp = [](const auto a, const auto b) -> bool {
+                        return ttsl::ascii_caseless_comp(std::string_view(a), std::string_view(b));
+                    };
+                    const std::string sci_mode_str = sci_mode.cast<std::string>();
+                    if (cmp(sci_mode_str, "true")) {
+                        sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Enable;
+                    } else if (cmp(sci_mode_str, "false")) {
+                        sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Disable;
+                    } else if (cmp(sci_mode_str, "none") || cmp(sci_mode_str, "default")) {
+                        sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Default;
+                    } else {
+                        throw std::invalid_argument("sci_mode must be None, bool, or str (true, false, default)");
+                    }
+                } else {
+                    throw std::invalid_argument("sci_mode must be None, bool, or str (true, false, default)");
+                }
+            }
+            ttnn::set_printoptions(profile, sci_mode_enum);
+        },
         py::kw_only(),
         py::arg("profile"),
+        py::arg("sci_mode") = py::none(),
         R"doc(
 
         Set print options for tensor output.
 
         Keyword Args:
             profile (const std::string): the profile to use for print options.
+            sci_mode (Optional[str]): scientific notation mode. Can be None (auto-detect),
+                                      True/False (force enable/disable), or "default" (auto-detect).
 
         Returns:
             `None`: modifies print options.
 
         Examples:
             >>> ttnn.set_printoptions(profile="short")
+            >>> ttnn.set_printoptions(profile="short", sci_mode=True)
+            >>> ttnn.set_printoptions(profile="short", sci_mode=None)
         )doc");
 
     module.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);

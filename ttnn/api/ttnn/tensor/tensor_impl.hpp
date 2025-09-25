@@ -234,7 +234,14 @@ enum class TensorPrintProfile {
     Full,
 };
 
+enum class SciMode {
+    Enable,
+    Disable,
+    Default,
+};
+
 extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
+extern SciMode TTNN_TENSOR_SCI_MODE;
 
 template <typename T>
 std::string to_string(const Tensor& tensor);

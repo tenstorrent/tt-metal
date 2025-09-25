@@ -22,6 +22,7 @@ namespace ttnn {
 using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
 using Tensors = std::vector<Tensor>;
+using SciMode = tt::tt_metal::tensor_impl::SciMode;
 
 }  // namespace ttnn
 
@@ -33,7 +34,7 @@ bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& st
 
 std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor);
 
-void set_printoptions(const std::string& profile);
+void set_printoptions(const std::string& profile, SciMode sci_mode = SciMode::Default);
 
 void segfault_handler(int sig);
 
