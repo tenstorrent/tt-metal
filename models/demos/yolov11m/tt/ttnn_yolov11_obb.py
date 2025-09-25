@@ -242,14 +242,18 @@ class TtnnOBB:
             count = mask.sum()
             print(f"    [{low}, {high}): {count} values")
         
-        # Simple fix: Scale and shift to match PyTorch sigmoid input range
-        # PyTorch range: min=-21, max=1.98, mean=-13.6
-        # Let's add bias to bring mean closer to reasonable sigmoid range
-        bias_correction = 10.0  # Add 10 to shift mean from ~-13 to ~-3
+        # Aggressive scaling for bfloat8_b quantization limits
+        # Current TTNN range: [-17.75, -12.625] with ~27 unique values
+        # Target: Map to sigmoid effective range [-4, +4]
+        
+        # Step 1: Shift center to ~0 (add +15 to get range [-2.75, +2.375])
+        bias_correction = 15.0  
         yb = ttnn.add(yb, bias_correction)
         
-        scale = 1.5  # experiment with values like 1.5, 2.0, etc.
-        yb = ttnn.multiply(yb, scale)
+        # Step 2: Scale to spread the quantized values across sigmoid range
+        # With 27 unique values, we want to spread them from -4 to +4 (8 unit range)
+        scale_factor = 2.0  # This should spread the range better
+        yb = ttnn.multiply(yb, scale_factor)
 
         # Debug: Check values after bias correction
         yb_debug_after = ttnn.to_torch(yb)
