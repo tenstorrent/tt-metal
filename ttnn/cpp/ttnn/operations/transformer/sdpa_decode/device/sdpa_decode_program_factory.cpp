@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "sdpa_decode_program_factory.hpp"
 
 #include <optional>

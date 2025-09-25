@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <tt_stl/math.hpp>
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/fabric.hpp>

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <tt_stl/math.hpp>
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -64,7 +65,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     uint32_t target_num_tile = 1;
-    uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, tt::constants::TILE_WIDTH) : 0;
+    uint32_t weight_num_tile = weight_has_value ? ttsl::math::div_up(channel_size, tt::constants::TILE_WIDTH) : 0;
     uint32_t intermed_num_tile = 1;
     uint32_t output_num_tile = 1;
     uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_op.hpp"

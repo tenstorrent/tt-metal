@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 

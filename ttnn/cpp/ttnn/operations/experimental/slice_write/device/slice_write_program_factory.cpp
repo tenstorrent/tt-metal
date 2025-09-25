@@ -9,6 +9,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/math.hpp>
 
 #include "slice_write_op.hpp"
 #include "tt-metalium/math.hpp"

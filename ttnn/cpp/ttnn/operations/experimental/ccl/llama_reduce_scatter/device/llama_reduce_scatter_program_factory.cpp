@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "llama_reduce_scatter_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
@@ -505,7 +506,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     // There is one sender from link, and each sender splits the packet workload for each device
     // For llama there are 3 senders, and each device sends 30 pages to each other device
-    // there is thus div_up(30, 4) = 8 packets
+    // there is thus ttsl::math::div_up(30, 4) = 8 packets
     // Sender 0 -> 3 packets per device, Sender 1 -> 3 packets per device, Sender 2 -> 2 packets per device
     // Sender 2 will have less work, so we use it to perform the atomic increment
     // The below CB will read in the packets to send to each other device

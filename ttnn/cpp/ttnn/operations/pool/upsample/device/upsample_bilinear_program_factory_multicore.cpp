@@ -122,8 +122,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         TT_FATAL(false, "Unsupported sharding layout");
     }
 
-    uint32_t input_nsticks_per_core = div_up(input_nsticks, ncores_nhw);
-    uint32_t output_nsticks_per_core = div_up(output_nsticks, ncores_nhw);
+    uint32_t input_nsticks_per_core = ttsl::math::div_up(input_nsticks, ncores_nhw);
+    uint32_t output_nsticks_per_core = ttsl::math::div_up(output_nsticks, ncores_nhw);
 
     TT_FATAL(
         in_nsticks_per_core == input_nsticks_per_core,
@@ -304,7 +304,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
             // Note: the first row of the input shard corresponds to the second row (index 1) in the halo shard
     reader_rt_args[7] = in_h;
 
-    uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);
+    uint32_t num_rows_per_core = ttsl::math::div_up(batch_size * in_h, ncores_nhw);
 
     uint32_t start_input_row_in_image_id = 0;
 

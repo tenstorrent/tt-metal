@@ -6,6 +6,7 @@
 #include <vector>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"

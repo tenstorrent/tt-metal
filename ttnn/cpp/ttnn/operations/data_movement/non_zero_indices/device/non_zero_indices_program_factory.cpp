@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <tt_stl/math.hpp>
 
 #include "non_zero_indices_op.hpp"
 #include <tt-metalium/work_split.hpp>

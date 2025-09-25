@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <tt_stl/math.hpp>
 
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"

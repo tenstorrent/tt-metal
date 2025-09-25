@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "conv2d/conv2d_utils.hpp"
 #include "conv2d/device/conv2d_op.hpp"

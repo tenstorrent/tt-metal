@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <tt_stl/math.hpp>
 
 #include "topk.hpp"
 #include "device/topk_op.hpp"

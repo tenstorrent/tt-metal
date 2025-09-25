@@ -22,6 +22,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt_stl/math.hpp>
 #include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 

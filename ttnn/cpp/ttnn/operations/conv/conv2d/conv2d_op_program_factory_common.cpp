@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "conv2d_op_program_factory_common.hpp"
 #include <umd/device/types/arch.h>
 #include <algorithm>

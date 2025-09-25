@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "optional"
 #include <tt_stl/assert.hpp>

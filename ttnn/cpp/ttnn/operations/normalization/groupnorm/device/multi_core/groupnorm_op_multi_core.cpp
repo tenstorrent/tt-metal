@@ -5,6 +5,7 @@
 #include <string>
 
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
