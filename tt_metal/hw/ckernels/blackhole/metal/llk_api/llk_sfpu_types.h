@@ -127,4 +127,5 @@ enum SfpuType {
     max_pool_with_indices,
     selu,
     rpow,
+    cbrt,  // cube root
 };

@@ -82,7 +82,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -144,6 +144,15 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
                     unary_defines["FILL_INT"] = "fill_tile_int";
                 } else {
                     unary_defines["FILL_FLOAT"] = "fill_tile";
+                }
+                break;
+            default: break;
+        }
+    } else {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::CBRT:
+                if (input.dtype() == DataType::FLOAT32) {
+                    unary_defines["CBRT_FLOAT"] = "mul_binary_tile";
                 }
                 break;
             default: break;

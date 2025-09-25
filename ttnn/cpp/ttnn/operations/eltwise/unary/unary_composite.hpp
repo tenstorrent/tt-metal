@@ -147,9 +147,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
     })
 
 constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
-constexpr auto cbrt = ttnn::register_operation<
-    "ttnn::cbrt",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
 constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
