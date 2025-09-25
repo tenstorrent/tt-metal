@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <pybind11/pybind11.h>
 // #include <pybind11/trampoline_self_life_support.h>
 
