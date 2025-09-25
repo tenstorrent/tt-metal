@@ -78,8 +78,8 @@ def do_test_numpy_autograd_conversion(
             except RuntimeError as e:
                 runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
     # sanity check: the occurence of an exception implies we were expecting it
-    assert type_error**expect_type_exception
-    assert runtime_error**expect_runtime_exception
+    assert (not type_error) or (type_error and expect_type_exception)
+    assert (not runtime_error) or (runtime_error and expect_runtime_exception)
 
 
 default_tensor_data = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]

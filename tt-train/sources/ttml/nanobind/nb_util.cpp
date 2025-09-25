@@ -258,7 +258,6 @@ tt::tt_metal::Tensor make_metal_tensor(
     const auto impl = [&numpy_data_type, rank, &numpy_data, target_layout]<typename NumpyType>(
                           tt::tt_metal::DataType tensor_data_type) {
         static_assert(std::is_same_v<NumpyType, std::remove_cvref_t<NumpyType>>);
-        nb::type_error("hi");
         NB_COND_THROW(
             (numpy_data_type.bits == (sizeof(NumpyType) * 8)),
             nb::exception_type::type_error,
