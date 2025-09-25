@@ -353,7 +353,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
     tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {page_size_input, input_shape.rank(), a.element_size()};
+    std::vector<uint32_t> reader_compile_time_args = {page_size_input, input_shape.rank()};
     TensorAccessorArgs(*a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

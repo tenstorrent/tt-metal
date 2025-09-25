@@ -35,7 +35,10 @@ protected:
 public:
     bool check_dispatch_mode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        return slow_dispatch == nullptr;
+        if (slow_dispatch) {
+            return false;
+        }
+        return true;
     }
 
     TTNNFixtureBase() : TTNNFixtureBase(DEFAULT_TRACE_REGION_SIZE, DEFAULT_L1_SMALL_SIZE) { }

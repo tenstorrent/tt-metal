@@ -18,9 +18,7 @@ MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 WeightConfig = (
     dict[str, "WeightConfig | SavedWeight | None"]
     | list["WeightConfig | SavedWeight | None"]
-    | tuple[
-        "WeightConfig | SavedWeight | None", ...
-    ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    | tuple["WeightConfig | SavedWeight | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
@@ -128,12 +126,9 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
-    if isinstance(
-        model_state_config_item, FromWeightConfig
+    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(
+        weight_config_item, SavedWeight
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
-        assert isinstance(
-            weight_config_item, SavedWeight
-        ), "Expected a SavedWeight in the weight config for a FromWeightConfig in the model state config"
         return load_weight(weight_config_item, model_state_config_item.mesh_device)
 
     if weight_config_item is None:
@@ -172,21 +167,12 @@ def _merge_config_containers(
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
-        if (
-            cfg_a is None
-            or cfg_b is None
-            or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b))
-            or (len(cfg_a) == 1 or len(cfg_b) == 1 and type(cfg_a) == type(cfg_b))
-        ):
+        if cfg_a is None or cfg_b is None or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b)):
             container = type(cfg_a) if cfg_a is not None else type(cfg_b)
             if cfg_a is None:
                 cfg_a = container([None]) * len(cfg_b)
             if cfg_b is None:
                 cfg_b = container([None]) * len(cfg_a)
-            if len(cfg_a) == 1:
-                cfg_a *= len(cfg_b)
-            if len(cfg_b) == 1:
-                cfg_b *= len(cfg_a)
             return container(
                 _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
                 for a, b in zip(cfg_a, cfg_b, strict=True)
@@ -352,6 +338,7 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
     """
+
     return ttnn.load_tensor(
         saved_weight.path,
     ).to(

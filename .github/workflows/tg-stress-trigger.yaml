@@ -1,0 +1,25 @@
+name: "Galaxy Stress"
+
+on:
+  schedule:
+    - cron: "0 3 * * 6" # Run @ 3am every Saturday
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+
+  tg-stress-test:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-stress.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

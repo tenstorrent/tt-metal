@@ -30,7 +30,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 namespace tt_metal {

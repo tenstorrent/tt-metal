@@ -8,7 +8,6 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov8s_world.common import YOLOV8SWORLD_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8s_world.reference import yolov8s_world
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import (
@@ -24,6 +23,7 @@ from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import (
     TtYOLOWorld,
 )
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import create_custom_preprocessor, move_to_device
+from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

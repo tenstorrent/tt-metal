@@ -6,7 +6,7 @@ import torch
 import ttnn
 import math
 
-from models.common.utility_functions import (
+from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
 )

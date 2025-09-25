@@ -277,7 +277,7 @@ public:
         // Handshake address
         args.push_back(handshake_addr);
 
-        bool senders_below_receivers = active_channels.empty() || this->active_channels.front().is_sender;
+        bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
 
         // Receiver channel args
         uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;

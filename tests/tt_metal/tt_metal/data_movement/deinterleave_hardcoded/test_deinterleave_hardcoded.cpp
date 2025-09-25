@@ -30,14 +30,9 @@ struct DeinterleaveConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const DeinterleaveConfig& test_config) {
+bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
     // Program
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
 
     for (int k = 0; k < test_config.dest_core_set.size(); k++) {
         // Kernels
@@ -60,16 +55,15 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const D
 
     // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    tt::tt_metal::detail::LaunchProgram(device, program);
 
     return true;
 }
 }  // namespace unit_tests::dm::deinterleave_hardcoded
 
-TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
-    auto mesh_device = devices_.at(0);
-    auto arch_ = mesh_device->arch();
+TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
 
     if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
@@ -134,13 +128,13 @@ TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
             .noc_id = noc_id};
 
         // Run
-        EXPECT_TRUE(run_dm(mesh_device, test_config));
+        EXPECT_TRUE(run_dm(device, test_config));
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
-    auto mesh_device = devices_.at(0);
-    auto arch_ = mesh_device->arch();
+TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
 
     if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
@@ -229,7 +223,7 @@ TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
             .noc_id = noc_id};
 
         // Run
-        EXPECT_TRUE(run_dm(mesh_device, test_config));
+        EXPECT_TRUE(run_dm(device, test_config));
     }
 }
 

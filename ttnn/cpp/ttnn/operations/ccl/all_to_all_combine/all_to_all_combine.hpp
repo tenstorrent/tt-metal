@@ -14,6 +14,7 @@ namespace operations::ccl {
 
 struct ExecuteAllToAllCombine {
     static ttnn::Tensor invoke(
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         const ttnn::Tensor& expert_metadata_tensor,

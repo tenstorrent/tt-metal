@@ -21,7 +21,7 @@ namespace ttnn {
 Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     tt::stl::Span<std::byte> tensor_data,
-    const tt::tt_metal::MemoryPin& memory_pin);
+    tt::tt_metal::MemoryPin memory_pin);
 
 // Converts Tensor object to FlatBuffer representation, writing the serialized flatbuffer object to `builder` and
 // recording tensor buffers that need to be serialized in-order to `buffers` vector. Replicated buffers are

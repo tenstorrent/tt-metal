@@ -77,7 +77,6 @@ class TtDetectionTransformerDecoder:
                 spatial_shapes=spatial_shapes,
             )
             output = ttnn.permute(output, (1, 0, 2))
-            ttnn.ReadDeviceProfiler(self.device)
 
             if reg_branches is not None:
                 # Select reg_branch layers for current lid

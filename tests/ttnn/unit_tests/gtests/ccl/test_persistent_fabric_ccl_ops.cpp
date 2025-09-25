@@ -33,7 +33,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include <umd/device/types/arch.hpp>
+#include "umd/device/types/arch.h"
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     const size_t dim = 3;
@@ -51,9 +51,20 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         return;
     }
     MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    const size_t num_devices = test_expected_num_devices;
+    std::vector<IDevice*> devices = {
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(1, 1)),
+        view.get_device(MeshCoordinate(1, 2)),
+        view.get_device(MeshCoordinate(0, 2))};
+    const size_t num_devices = devices.size();
+    TT_FATAL(
+        test_expected_num_devices == num_devices,
+        "Expected {} devices but got {}",
+        test_expected_num_devices,
+        num_devices);
     const ttnn::Shape input_shape({1, 1, 32, 32 * num_devices});
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
@@ -71,17 +82,18 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
                      ttnn::distributed::MeshMapperConfig::Replicate{}},
                 .mesh_shape_override = MeshShape{1, num_devices}}),
         *test_fixture.mesh_device_);
+    std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
     GlobalSemaphore from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
         test_fixture.mesh_device_.get(),
-        test_fixture.mesh_device_->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                            // initial value
         tt::tt_metal::BufferType::L1  // buffer type
     );
 
     GlobalSemaphore to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
         test_fixture.mesh_device_.get(),
-        test_fixture.mesh_device_->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                            // initial value
         tt::tt_metal::BufferType::L1  // buffer type
     );
@@ -95,11 +107,13 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
         num_links,
-        SubDeviceId{0});
+        subdevice_managers->worker_subdevice_id.at(devices[0]->id()));
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
-    tt_metal::distributed::Finish(test_fixture.mesh_device_->mesh_command_queue(), {{SubDeviceId(0)}});
+    std::ranges::for_each(devices, [&](IDevice* d) {
+        tt_metal::Finish(d->command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->id())}});
+    });
 
     log_info(tt::LogTest, "Finished");
 }

@@ -7,7 +7,7 @@
 
 #include "fd_kernel.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/tt_xy_pair.h>
 
 namespace tt {
 namespace tt_metal {

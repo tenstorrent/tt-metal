@@ -58,7 +58,7 @@ constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
     return MPI_DATATYPE_NULL;
 }
 
-constexpr int mpi_dtype_size(DType dt) noexcept {
+constexpr inline int mpi_dtype_size(DType dt) noexcept {
     switch (dt) {
         case DType::INT8:
         case DType::UINT8:

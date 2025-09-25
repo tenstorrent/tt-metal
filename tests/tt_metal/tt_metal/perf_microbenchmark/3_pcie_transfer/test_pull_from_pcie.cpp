@@ -40,9 +40,10 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include "umd/device/tt_xy_pair.h"
 #include <tt-metalium/distributed.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+
+enum class CoreType;
 
 using namespace tt;
 using namespace tt::tt_metal;

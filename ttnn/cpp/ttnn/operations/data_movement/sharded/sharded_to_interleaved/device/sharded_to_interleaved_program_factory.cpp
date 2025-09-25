@@ -261,7 +261,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
             Buffer* dst_buffer = nullptr;
             uint32_t starting_idx_h = 0;
-            const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.empty());
+            const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0);
             if (partial_op) {
                 // If we have num_slices > 1, it means that our op is S->I partial.
                 // And currently we store output tensors there as input[1]

@@ -24,6 +24,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -64,6 +65,7 @@ struct TestConfig {
     uint32_t num_full_size_channel_iters = 0;
     bool is_2d_fabric = false;
     bool terminate_from_kernel = false;
+    bool enable_fabric_tracing = false;
 };
 
 struct WorkerMemoryMap {
@@ -265,15 +267,15 @@ void create_kernel(
 void create_mux_kernel(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     const CoreCoord& mux_logical_core,
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& dest_device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> dest_device,
     tt::tt_metal::Program& program_handle) {
     const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
     const auto dst_node_id =
         tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dest_device->get_devices()[0]->id());
     const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
     TT_FATAL(
-        !available_links.empty(),
+        available_links.size() > 0,
         "Couldnt find any forwarding routing planes from: {} to: {}",
         device->id(),
         dest_device->id());
@@ -298,7 +300,7 @@ void create_worker_kernel(
     const WorkerTestConfig& worker_test_config,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     const CoreCoord& mux_virtual_core,
-    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
     tt::tt_metal::Program& program_handle) {
     auto worker_memory_map = worker_test_config.memory_map;
     CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
@@ -464,7 +466,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         }
     }
 
-    auto assign_worker_cores = [&](const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
+    auto assign_worker_cores = [&](std::shared_ptr<tt_metal::distributed::MeshDevice> device,
                                    uint8_t num_workers,
                                    uint8_t num_hops,
                                    bool is_sender) {
@@ -642,6 +644,9 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     log_info(LogTest, "Waiting for programs");
     for (auto i = 0; i < devices.size(); i++) {
         fixture->WaitForSingleProgramDone(devices[i], program_handles[i]);
+        if (test_config.enable_fabric_tracing) {
+            tt::tt_metal::detail::ReadDeviceProfilerResults(devices[i]->get_devices()[0]);
+        }
     }
 
     auto validate_worker_results = [&](tt::tt_metal::IDevice* device, const CoreCoord& core) {
@@ -717,7 +722,6 @@ TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariant3) {
     run_mux_test_variant(this, test_config);
 }
 
-// Use fewer packets to prevent profiler buffer from becoming full
 TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariantWithNocTracing) {
     TestConfig test_config = {
         .num_devices = 2,
@@ -732,6 +736,7 @@ TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariantWithNocTracing) {
         .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
+        .enable_fabric_tracing = true,
     };
     run_mux_test_variant(this, test_config);
 }

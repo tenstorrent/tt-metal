@@ -222,6 +222,7 @@ class transformer_2d_model:
         )
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
+            activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             reshard_if_not_optimal=False,
             override_sharding_config=True,
@@ -288,6 +289,7 @@ class transformer_2d_model:
             if not use_linear_projection:
                 conv_config = ttnn.Conv2dConfig(
                     weights_dtype=ttnn.bfloat8_b,
+                    activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     enable_act_double_buffer=True,
                     enable_weights_double_buffer=True,

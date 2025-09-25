@@ -9,7 +9,9 @@ from ..utils.tensor import bf16_tensor
 
 
 class RMSNorm:
-    def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
+    def __init__(
+        self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None, init=False
+    ):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
@@ -17,19 +19,23 @@ class RMSNorm:
         self.use_bias = bias
         self.weight = None
         self.bias = None
+        if norm_elementwise_affine and init:
+            self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
+            if bias:
+                self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+    def to_cached_state_dict(self, path_prefix):
         cache_dict = {}
 
         # Cache weight
         if self.weight is not None:
-            weight_path = path_prefix + "weight" + path_suffix
+            weight_path = path_prefix + "weight"
             ttnn.dump_tensor(weight_path, self.weight)
             cache_dict["weight"] = weight_path
 
         # Cache bias if it exists
         if self.bias is not None:
-            bias_path = path_prefix + "bias" + path_suffix
+            bias_path = path_prefix + "bias"
             ttnn.dump_tensor(bias_path, self.bias)
             cache_dict["bias"] = bias_path
 
@@ -61,6 +67,7 @@ class LayerNorm:
         norm_elementwise_affine=True,
         bias=True,
         mesh_device=None,
+        init=False,
         use_row_major_workaround=False,  # Issue #20789
     ):
         self.embedding_dim = embedding_dim
@@ -72,7 +79,7 @@ class LayerNorm:
         self.weight = None
         self.bias = None
         # When using the row-major workaround, ensure that dummy weight/bias are created
-        if use_row_major_workaround:
+        if norm_elementwise_affine and init or use_row_major_workaround:
             if use_row_major_workaround:
                 self.weight = bf16_tensor(
                     torch.ones(1, embedding_dim).reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -97,18 +104,18 @@ class LayerNorm:
             packer_l1_acc=False,
         )
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+    def to_cached_state_dict(self, path_prefix):
         cache_dict = {}
 
         if self.weight is not None:
             # Cache weight
-            weight_path = path_prefix + "weight" + path_suffix
+            weight_path = path_prefix + "weight"
             ttnn.dump_tensor(weight_path, self.weight)
             cache_dict["weight"] = weight_path
 
         if self.bias is not None:
             # Cache bias
-            bias_path = path_prefix + "bias" + path_suffix
+            bias_path = path_prefix + "bias"
             ttnn.dump_tensor(bias_path, self.bias)
             cache_dict["bias"] = bias_path
 
@@ -162,6 +169,7 @@ class DistributedLayerNorm:
         mesh_axis=0,
         mesh_device=None,
         ccl_manager=None,
+        init=False,
     ):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
@@ -174,7 +182,7 @@ class DistributedLayerNorm:
         self.bias = None
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
-        if not (norm_elementwise_affine and bias):
+        if init or not (norm_elementwise_affine and bias):
             if not (norm_elementwise_affine and bias):
                 pass  # TODO: make logging less noisy
                 # logger.debug(
@@ -199,18 +207,18 @@ class DistributedLayerNorm:
             packer_l1_acc=False,
         )
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+    def to_cached_state_dict(self, path_prefix):
         cache_dict = {}
 
         # Cache weight
         if self.weight is not None:
-            weight_path = path_prefix + "weight" + path_suffix
+            weight_path = path_prefix + "weight"
             ttnn.dump_tensor(weight_path, self.weight)
             cache_dict["weight"] = weight_path
 
         # Cache bias
         if self.bias is not None:
-            bias_path = path_prefix + "bias" + path_suffix
+            bias_path = path_prefix + "bias"
             ttnn.dump_tensor(bias_path, self.bias)
             cache_dict["bias"] = bias_path
 

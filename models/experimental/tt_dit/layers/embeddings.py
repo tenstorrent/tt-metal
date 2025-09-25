@@ -13,13 +13,13 @@ from .linear import Linear
 
 # Helper classes for SD35Transformer2DModel
 class TimestepEmbedding:
-    def __init__(self, in_channels, time_embed_dim, mesh_device=None):
+    def __init__(self, in_channels, time_embed_dim, mesh_device=None, init=False):
         self.in_channels = in_channels
         self.time_embed_dim = time_embed_dim
         self.mesh_device = mesh_device
 
-        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device)
-        self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device)
+        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device, init=init)
+        self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, init=init)
 
     def to_cached_state_dict(self, path_prefix):
         linear_1_cache = self.linear_1.to_cached_state_dict(path_prefix + "linear_1.")
@@ -48,13 +48,13 @@ class TimestepEmbedding:
 
 
 class PixartAlphaTextProjection:
-    def __init__(self, in_features, hidden_size, mesh_device=None):
+    def __init__(self, in_features, hidden_size, mesh_device=None, init=False):
         self.in_features = in_features
         self.hidden_size = hidden_size
         self.mesh_device = mesh_device
 
-        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device)
-        self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device)
+        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device, init=init)
+        self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device, init=init)
 
     def to_cached_state_dict(self, path_prefix):
         linear_1_cache = self.linear_1.to_cached_state_dict(path_prefix + "linear_1.")
@@ -83,13 +83,15 @@ class PixartAlphaTextProjection:
 
 
 class SD35CombinedTimestepTextProjEmbeddings:
-    def __init__(self, embedding_dim, pooled_projection_dim, mesh_device=None):
+    def __init__(self, embedding_dim, pooled_projection_dim, mesh_device=None, init=False):
         self.embedding_dim = embedding_dim
         self.pooled_projection_dim = pooled_projection_dim
         self.mesh_device = mesh_device
 
-        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
-        self.text_embedder = PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device, init=init)
+        self.text_embedder = PixartAlphaTextProjection(
+            pooled_projection_dim, embedding_dim, mesh_device=mesh_device, init=init
+        )
 
         self.time_proj_factor = self._create_time_proj_factor(256)
 
@@ -155,6 +157,7 @@ class PatchEmbed:
         tp_mesh_axis,
         sp_mesh_axis,
         mesh_device=None,
+        init=False,
     ):
         self.height = height // patch_size
         self.width = width // patch_size
@@ -175,6 +178,8 @@ class PatchEmbed:
         # Position embeddings
         self.pos_embed = None
 
+        assert not init, "PatchEmbed does not support initialization"
+
         # Compute kernel config for linear operations
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -193,22 +198,22 @@ class PatchEmbed:
         spatial_pos_embed = spatial_pos_embed[:, top : top + self.height, left : left + self.width, :]
         return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+    def to_cached_state_dict(self, path_prefix):
         cache_dict = {}
 
         # Cache proj_weight
-        proj_weight_path = path_prefix + "proj_weight" + path_suffix
+        proj_weight_path = path_prefix + "proj_weight"
         ttnn.dump_tensor(proj_weight_path, self.proj_weight)
         cache_dict["proj_weight"] = proj_weight_path
 
         # Cache proj_bias if it exists
         if self.proj_bias is not None:
-            proj_bias_path = path_prefix + "proj_bias" + path_suffix
+            proj_bias_path = path_prefix + "proj_bias"
             ttnn.dump_tensor(proj_bias_path, self.proj_bias)
             cache_dict["proj_bias"] = proj_bias_path
 
         # Cache pos_embed
-        pos_embed_path = path_prefix + "pos_embed" + path_suffix
+        pos_embed_path = path_prefix + "pos_embed"
         ttnn.dump_tensor(pos_embed_path, self.pos_embed)
         cache_dict["pos_embed"] = pos_embed_path
 
@@ -321,6 +326,7 @@ class MochiPatchEmbed:
         in_channels,
         embed_dim,
         mesh_device=None,
+        init=False,
     ):
         self.patch_size = patch_size
         self.in_channels = in_channels
@@ -332,6 +338,8 @@ class MochiPatchEmbed:
         conv_in_features = patch_size * patch_size * in_channels
         self.proj_weight = None
         self.proj_bias = None
+
+        assert not init, "MochiPatchEmbed does not support initialization"
 
         # Compute kernel config for linear operations
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(

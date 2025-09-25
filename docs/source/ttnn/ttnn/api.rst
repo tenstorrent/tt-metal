@@ -71,7 +71,6 @@ Tensor Creation
    ttnn.ones_like
    ttnn.full
    ttnn.full_like
-   ttnn.rand
 
 Matrix Multiplication
 =====================
@@ -83,20 +82,6 @@ Matrix Multiplication
 
    ttnn.matmul
    ttnn.linear
-   ttnn.matmul_batched_weights
-   ttnn.addmm
-   ttnn.sparse_matmul
-
-.. autosummary::
-   :toctree: api
-   :nosignatures:
-   :template: class.rst
-
-   ttnn.MatmulMultiCoreReuseProgramConfig
-   ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
-   ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
-   ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
-
 
 Pointwise Unary
 ================

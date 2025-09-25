@@ -20,8 +20,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for printing from ethernet cores.
@@ -53,7 +53,7 @@ HEX/OCT/DEC:
 
 void RunTest(
     DPrintMeshFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
     bool active,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
     auto device = mesh_device->get_devices()[0];
@@ -104,18 +104,18 @@ TEST_F(DPrintMeshFixture, ActiveEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
         auto device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
-        if (device->get_active_ethernet_cores(true).empty()) {
+        if (device->get_active_ethernet_cores(true).size() == 0) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
 
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
             this->RunTestOnDevice(
-                [=](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                [=](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
                     CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, true, dm_processor);
                 },
                 mesh_device);
@@ -130,18 +130,18 @@ TEST_F(DPrintMeshFixture, IdleEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
         auto device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
-        if (device->get_inactive_ethernet_cores().empty()) {
+        if (device->get_inactive_ethernet_cores().size() == 0) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test idle ethernet DM{}", erisc_idx);
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
             this->RunTestOnDevice(
-                [=](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                [=](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
                     CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, false, dm_processor);
                 },
                 mesh_device);

@@ -171,8 +171,7 @@ pip install ttnn-visualizer
 
 | Release | Release Date |
 |---------|--------------|
-| 0.64.0  | ETA Oct 15, 2025 |
-| [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 |
+| 0.63.0  | ETA Sep 15, 2025 |
 | [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
 | 0.61.0  | Skipped |
 | [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 |

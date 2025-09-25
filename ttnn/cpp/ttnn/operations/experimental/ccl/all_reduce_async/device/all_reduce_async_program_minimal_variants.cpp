@@ -104,7 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     std::vector<CoreRange> output_cores;
     for (const auto& cr : sub_device_cores.ranges()) {
         const auto intersection = output_tensor_cores.intersection(cr);
-        if (!intersection.empty()) {
+        if (intersection.size() > 0) {
             output_cores.push_back(intersection.bounding_box());
         }
     }
@@ -289,7 +289,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         "reduction_receiver.cpp",
         output_cores_all,
         reduction_reader_kernel_config);
-    if (!output_cores_unused.empty()) {
+    if (output_cores_unused.size() > 0) {
         tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0, 0});
     }
 
@@ -307,7 +307,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         reduction_kernel_config);
     tt::tt_metal::SetRuntimeArgs(
         program, reduction_kernel_id, output_tensor_cores, {1, ring_size, output_tensor_shard_num_pages});
-    if (!output_cores_unused.empty()) {
+    if (output_cores_unused.size() > 0) {
         tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_cores_unused, {!has_work, 0, 0});
     }
 

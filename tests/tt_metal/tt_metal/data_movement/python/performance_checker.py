@@ -5,15 +5,12 @@ from loguru import logger  # type: ignore
 
 
 class PerformanceChecker:
-    def __init__(
-        self, dm_stats, arch="blackhole", verbose=False, test_bounds=None, test_id_to_name=None, variance=0.05
-    ):
+    def __init__(self, dm_stats, arch="blackhole", verbose=False, test_bounds=None, test_id_to_name=None):
         self.dm_stats = dm_stats
         self.arch = arch
         self.verbose = verbose
         self.test_bounds = test_bounds
         self.test_id_to_name = test_id_to_name
-        self.variance = variance  # Allowed variance as a fraction (e.g., 0.1 for 10% tolerance)
         self.results_bounds = self._calculate_results_bounds()
 
     def _calculate_results_bounds(self):
@@ -71,39 +68,19 @@ class PerformanceChecker:
 
             expected_bw = self.test_bounds[self.arch][test_id][riscv]["bandwidth"]
             actual_bw = riscv_bounds["bandwidth"]
-
-            # Calculate minimum acceptable bandwidth with variance
-            min_acceptable_bw = expected_bw * (1.0 - self.variance)
-            bw_within_bounds = min_acceptable_bw <= actual_bw
+            bw_within_bounds = expected_bw <= actual_bw
 
             if self.verbose:
                 if not bw_within_bounds:
-                    if self.variance > 0:
-                        logger.warning(
-                            f"{riscv} bandwidth not within perf bounds (with {self.variance*100:.1f}% variance). "
-                            f"Expected >= {expected_bw} (min acceptable: {min_acceptable_bw:.2f}), got {actual_bw}"
-                        )
-                    else:
-                        logger.warning(
-                            f"{riscv} bandwidth not within perf bounds. Expected >= {expected_bw}, got {actual_bw}"
-                        )
+                    logger.warning(
+                        f"{riscv} bandwidth not within perf bounds. Expected >= {expected_bw}, got {actual_bw}"
+                    )
                 else:
-                    if self.variance > 0:
-                        logger.info(
-                            f"{riscv} bandwidth within perf bounds (with {self.variance*100:.1f}% variance tolerance)."
-                        )
-                    else:
-                        logger.info(f"{riscv} bandwidth within perf bounds.")
+                    logger.info(f"{riscv} bandwidth within perf bounds.")
 
-            # Update assertion message to include variance information
-            if self.variance > 0:
-                assert (
-                    bw_within_bounds
-                ), f"{riscv} for test {self.test_id_to_name.get(test_id, 'Unknown Test')} ({test_id}) bandwidth not within perf bounds (with {self.variance*100:.1f}% variance). Expected >= {expected_bw} (min acceptable: {min_acceptable_bw:.2f}), got {actual_bw}"
-            else:
-                assert (
-                    bw_within_bounds
-                ), f"{riscv} for test {self.test_id_to_name.get(test_id, 'Unknown Test')} ({test_id}) bandwidth not within perf bounds. Expected >= {expected_bw}, got {actual_bw}"
+            assert (
+                bw_within_bounds
+            ), f"{riscv} for test {self.test_id_to_name.get(test_id, 'Unknown Test')} ({test_id}) bandwidth not within perf bounds. Expected >= {expected_bw}, got {actual_bw}"
 
     def run(self):
         # Performance checks per test

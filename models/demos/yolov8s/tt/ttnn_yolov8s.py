@@ -118,6 +118,7 @@ class TtConv:
         width_shard=False,
         act_blocks=32,
         enable_act_double_buffer=True,
+        enable_split_reader=False,
         reshard_if_not_optimal=False,
         batch_size=1,
     ):
@@ -138,6 +139,7 @@ class TtConv:
         self.width_shard = width_shard
         self.act_blocks = act_blocks
         self.enable_act_double_buffer = enable_act_double_buffer
+        self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
 
@@ -149,12 +151,13 @@ class TtConv:
         self.output_dtype = ttnn.bfloat16
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            activation=None if self.is_detect_cv2 else ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            activation="" if self.is_detect_cv2 else "silu",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_w_div=1,
             transpose_shards=False,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
+            enable_split_reader=self.enable_split_reader,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -601,6 +604,7 @@ class TtDetectionModel:
             "model.0",
             input_params=conv_config["input_params"][0],
             act_block_h=False,
+            enable_split_reader=True,
             deallocate_activation=True,
         )
         self.conv_1 = TtConv(
@@ -609,6 +613,7 @@ class TtDetectionModel:
             "model.1",
             input_params=conv_config["input_params"][1],
             act_block_h=False,
+            enable_split_reader=True,
             block_shard=True,
         )
         self.c2f_2 = TtC2f(

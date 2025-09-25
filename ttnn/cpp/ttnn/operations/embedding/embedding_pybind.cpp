@@ -21,6 +21,7 @@ void py_module(py::module& module) {
 
     const auto doc =
         R"doc(
+
         Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.
 
         Args:
@@ -31,6 +32,7 @@ void py_module(py::module& module) {
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
             padding_idx (int, optional): the padding token. Default to `None`.
             layout (ttnn.Layout): the layout of the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             embeddings_type (ttnn.EmbeddingsType): the type of embeddings. Defaults to `ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC`.
@@ -71,8 +73,10 @@ void py_module(py::module& module) {
                EmbeddingsType embeddings_type,
                const std::optional<const DataType> dtype,
                std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               QueueId queue_id) {
                 return self(
+                    queue_id,
                     input_tensor,
                     weight,
                     padding_idx,
@@ -90,7 +94,8 @@ void py_module(py::module& module) {
             py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::embedding

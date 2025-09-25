@@ -193,7 +193,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    if (!core_range.empty()) {
+    if (core_range.size() > 0) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
 
@@ -299,7 +299,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     // compute
 
-    if (!core_range.empty()) {
+    if (core_range.size() > 0) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
@@ -504,14 +504,14 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block};
     std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
 
-    if (!core_range.ranges().empty()) {
+    if (core_range.ranges().size() > 0) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range,
             ComputeConfig{.compile_args = compute_args});
     }
-    if (!core_range_cliff.empty()) {
+    if (core_range_cliff.size() > 0) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
@@ -520,7 +520,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     }
 
     // 1D distribution of blocks across cores
-    bool has_cliff = !core_range_cliff.empty();
+    bool has_cliff = core_range_cliff.size() > 0;
 
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;

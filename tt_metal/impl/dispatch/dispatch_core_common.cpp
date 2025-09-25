@@ -4,18 +4,15 @@
 
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.h>
+
+enum class CoreType;
 
 namespace tt::tt_metal {
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
-    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
-        if (MetalContext::instance().get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
-            return DispatchCoreAxis::COL;
-        }
-    }
-    return DispatchCoreAxis::ROW;
+    return (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) ? DispatchCoreAxis::COL
+                                                                                  : DispatchCoreAxis::ROW;
 }
 
 DispatchCoreConfig get_dispatch_core_config() {

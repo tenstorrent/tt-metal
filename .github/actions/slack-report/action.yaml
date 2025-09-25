@@ -16,7 +16,8 @@ runs:
       with:
         payload: |
           {
-            "text": "<@${{ inputs.owner }}> just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }} at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            "text": "just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }} at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "owner": "${{ inputs.owner }}"
           }
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}

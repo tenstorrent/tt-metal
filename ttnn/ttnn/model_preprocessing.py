@@ -22,15 +22,15 @@ except ImportError:
     raise ImportError("Torch is not installed. Model preprocessing functions require torch to be installed.")
 
 
-def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=None):
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):
     weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=weights_mesh_mapper)
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout)
     return weight
 
 
-def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=None):
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT):
     bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=weights_mesh_mapper)
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout)
     return bias
 
 

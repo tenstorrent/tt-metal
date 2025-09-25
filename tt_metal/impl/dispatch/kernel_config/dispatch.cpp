@@ -24,7 +24,7 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/xy_pair.h>
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
@@ -223,7 +223,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
         } else {
             // If no dispatch_s, no downstream
-            TT_ASSERT(downstream_kernels_.empty());
+            TT_ASSERT(downstream_kernels_.size() == 0);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         }
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;  // Unused

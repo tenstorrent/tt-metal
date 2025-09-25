@@ -64,15 +64,15 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     void** array = (void**)malloc((sizeof(void*) * size));
     size_t s = ::backtrace(array, size);
     char** strings = backtrace_symbols(array, s);
-    if (strings == nullptr) {
+    if (strings == NULL) {
         std::cout << "backtrace_symbols error." << std::endl;
         return bt;
     }
     for (size_t i = skip; i < s; ++i) {
         bt.push_back(demangle(strings[i]));
     }
-    free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
-    free(array);    // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
+    free(strings);
+    free(array);
 
     return bt;
 }
@@ -165,10 +165,7 @@ void tt_assert(
     } while (0)  // NOLINT(cppcoreguidelines-macro-usage)
 #endif
 #else
-#define TT_ASSERT(condition, ...) \
-    do {                          \
-        (void)(condition);        \
-    } while (0)  // this was done to avoid the compiler flagging unused variables when building Release
+#define TT_ASSERT(condition, ...)
 #endif
 
 #ifndef TT_THROW

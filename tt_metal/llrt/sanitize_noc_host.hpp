@@ -61,14 +61,14 @@ static void print_stack_trace() {
 
     int size = backtrace(array, 15);
     char** strings = backtrace_symbols(array, size);
-    if (strings != nullptr) {
+    if (strings != NULL) {
         fprintf(stderr, "Obtained %d stack frames.\n", size);
         for (int i = 0; i < size; i++) {
             fprintf(stderr, "%s\n", strings[i]);
         }
     }
 
-    free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
+    free(strings);
 }
 // NOLINTEND(cppcoreguidelines-no-malloc)
 

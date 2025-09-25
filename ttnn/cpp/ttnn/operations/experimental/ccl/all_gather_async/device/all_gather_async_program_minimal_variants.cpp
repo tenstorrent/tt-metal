@@ -39,7 +39,7 @@ namespace ttnn {
 
 namespace detail {
 
-uint32_t all_gather_async_core_count_per_link(
+uint32_t all_gather_async_core_count(
     uint32_t num_workers_per_direction,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link) {
@@ -73,8 +73,7 @@ uint32_t default_workers(
     }
     for (auto worker_count : candidate_worker_counts) {
         uint32_t core_count =
-            num_links * all_gather_async_core_count_per_link(
-                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+            all_gather_async_core_count(worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
         if (num_cores >= core_count) {
             log_trace(
                 tt::LogOp,
@@ -149,8 +148,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    const bool reverse_order) {
+    std::optional<uint32_t> num_buffers_per_channel) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_async_minimal_default_helper(
@@ -172,9 +170,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         empty_fused_op_signaler,
         chunks_per_sync,
         num_workers_per_link,
-        num_buffers_per_channel,
-        CoreCoord(0, 0),
-        reverse_order);
+        num_buffers_per_channel);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
@@ -197,8 +193,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset,
-    const bool reverse_order) {
+    const CoreCoord core_grid_offset) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -206,23 +201,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
-    // When reverse_order is enabled, tensor width must be divisible by 32*num_devices for proper sharding
-    if (reverse_order) {
-        uint32_t tensor_width = output_tensor_shape[3];
-        uint32_t required_divisor = 32 * ring_size;
-        TT_FATAL(
-            tensor_width % required_divisor == 0,
-            "When reverse_order=true, tensor width ({}) must be divisible by 32*num_devices (32*{} = {})",
-            tensor_width,
-            ring_size,
-            required_divisor);
-    }
-
     // op hyperparams
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
     // Get worker cores
-    // 2 senders (reader + writer) per direction (forward, reverse_order) per link
+    // 2 senders (reader + writer) per direction (forward, backward) per link
     uint32_t output_data_size_bytes = output_tensor.buffer()->size();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers(
         *mesh_device,
@@ -233,7 +216,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         ring_size,
         num_directions_per_link,
         num_mux_cores_per_direction_per_link));
-    uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
+    uint32_t num_cores_per_link = detail::all_gather_async_core_count(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
@@ -381,14 +364,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
         TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
         uint32_t TILE_WIDTH = 32;
-
         uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
         uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
-        uint32_t input_tensor_C = input_tensor_shape[1];
-
         uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
         uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
-        uint32_t output_tensor_C = output_tensor_shape[1];
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
@@ -479,7 +458,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     dir,                              // direction
                     fuse_op,                          // fused op
                     chunks_per_sync_val,
-                    reverse_order,
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -504,10 +482,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor.buffer()->address(),                        // output_tensor_address
                     input_tensor_Wt,                                          // width in tiles of the output shard
                     input_tensor_Ht,                                          // height in tiles of the output shard
-                    input_tensor_C,                                           // num input channels
                     output_tensor_Wt,                                         // width in tiles of entire output
                     output_tensor_Ht,                                         // height in tiles of entire output
-                    output_tensor_C,                                          // num output channels
                     dim,                                                      // dim to gather on
                     batch_head_size,                                          // product of the first two dims
                     input_tile_id_start,                                      //
@@ -561,7 +537,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     chunks_per_sync_val,
-                    reverse_order,
                 };
                 fabric_mux_connection_ct_args(
                     worker == 0,
@@ -602,10 +577,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor.buffer()->address(),                           // output_tensor_address
                     input_tensor_Wt,                                             // width in tiles of the output shard
                     input_tensor_Ht,                                             // height in tiles of the output shard
-                    input_tensor_C,                                              // num input channels
                     output_tensor_Wt,                                            // width in tiles of entire output
                     output_tensor_Ht,                                            // height in tiles of entire output
-                    output_tensor_C,                                             // num output channels
                     dim,                                                         // dim to gather on
                     batch_head_size,                                             // product of the first two dims
                     input_tile_id_start,                                         //
@@ -681,14 +654,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                         auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();
                         worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                        worker_reader_sender_runtime_args[13] = out_ready_semaphore.address();
+                        worker_reader_sender_runtime_args[11] = out_ready_semaphore.address();
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[14] = out_ready_semaphore.address();
+                        worker_writer_sender_runtime_args[12] = out_ready_semaphore.address();
 
                         if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[18] = barrier_semaphore.value().address();
+                            worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
                         }
 
                         core_idx++;

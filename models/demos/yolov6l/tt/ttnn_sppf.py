@@ -5,14 +5,6 @@
 import ttnn
 from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtSppf:
     def __init__(self, device, parameters, model_params):
@@ -23,7 +15,7 @@ class TtSppf:
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            activation="silu",
             deallocate_activation=True,
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -31,13 +23,11 @@ class TtSppf:
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            deallocate_activation=True,
+            activation="silu",
+            reshape=True,
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtSppf Start")
         conv1 = self.cv1(x)
         y = [conv1]
         for i in range(3):
@@ -57,14 +47,12 @@ class TtSppf:
             y.append(output)
 
         for i in range(len(y)):
-            y[i] = ttnn.sharded_to_interleaved(y[i], memory_config=ttnn.L1_MEMORY_CONFIG)
+            y[i] = ttnn.sharded_to_interleaved(y[i])
             y[i] = ttnn.to_layout(y[i], ttnn.ROW_MAJOR_LAYOUT)
-        concat_output = ttnn.concat(y, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        concat_output = ttnn.concat(y, dim=-1)
 
         for i in range(len(y)):
             ttnn.deallocate(y[i])
 
         conv2 = self.cv2(concat_output)
-        if use_signpost:
-            signpost(header="TtSppf End")
         return conv2

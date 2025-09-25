@@ -14,8 +14,9 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/tt_xy_pair.h>
+
+enum class CoreType;
 
 namespace tt {
 namespace tt_metal {

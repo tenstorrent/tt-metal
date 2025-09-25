@@ -10,12 +10,12 @@
 #include <filesystem>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/multi_mesh_types.hpp>
 #include <impl/context/metal_context.hpp>
 #include "gmock/gmock.h"
 #include <fmt/format.h>
 #include "utils.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_fabric {
 namespace {

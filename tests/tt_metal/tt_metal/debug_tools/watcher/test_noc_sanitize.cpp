@@ -38,7 +38,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -94,7 +94,7 @@ CoreCoord get_core_coord_for_test(const std::shared_ptr<distributed::MeshBuffer>
 
 void RunTestOnCore(
     MeshWatcherFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
     CoreCoord& core,
     bool is_eth_core,
     watcher_features_t feature,
@@ -389,15 +389,13 @@ void RunTestOnCore(
     std::string exception = "";
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
-    } while (exception.empty());
+    } while (exception == "");
     log_info(LogTest, "Reported error: {}", exception);
     EXPECT_EQ(MetalContext::instance().watcher_server()->exception_message(), expected);
 }
 
 void RunTestEth(
-    MeshWatcherFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    watcher_features_t feature) {
+    MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, watcher_features_t feature) {
     auto device = mesh_device->get_devices()[0];
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
@@ -412,9 +410,7 @@ void RunTestEth(
 }
 
 void RunTestIEth(
-    MeshWatcherFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    watcher_features_t feature) {
+    MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, watcher_features_t feature) {
     auto device = mesh_device->get_devices()[0];
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
@@ -429,7 +425,7 @@ void RunTestIEth(
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
-void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+void CheckHostSanitization(std::shared_ptr<distributed::MeshDevice> mesh_device) {
     auto device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {16, 16};
@@ -451,7 +447,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitize) {
 
     // Only run on device 0 because this test takes down the watcher server.
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeAddress);
         },
@@ -460,7 +456,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitize) {
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1Write) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeAlignmentL1Write);
         },
@@ -469,7 +465,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1Write) {
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1Read) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeAlignmentL1Read);
         },
@@ -478,7 +474,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1Read) {
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1ReadNCrisc) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeAlignmentL1Read, true);
         },
@@ -487,7 +483,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1ReadNCrisc) {
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeZeroL1Write) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeZeroL1Write);
         },
@@ -496,7 +492,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeZeroL1Write) {
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMailboxWrite) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeMailboxWrite);
         },
@@ -505,7 +501,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMailboxWrite) {
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeInlineWriteDram) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeInlineWriteDram);
         },
@@ -514,7 +510,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeInlineWriteDram) {
 
 TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEth) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeAddress);
         },
         this->devices_[0]);
@@ -522,7 +518,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEth) {
 
 TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeMailboxWrite) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeMailboxWrite);
         },
         this->devices_[0]);
@@ -530,7 +526,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeMailboxWrite) {
 
 TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeInlineWriteDram) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeInlineWriteDram);
         },
         this->devices_[0]);
@@ -542,7 +538,7 @@ TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeIEth) {
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             RunTestIEth(fixture, mesh_device, SanitizeAddress);
         },
         this->devices_[0]);
@@ -554,7 +550,7 @@ TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeInlineWriteDram) {
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             RunTestIEth(fixture, mesh_device, SanitizeInlineWriteDram);
         },
         this->devices_[0]);
@@ -562,7 +558,7 @@ TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeInlineWriteDram) {
 
 TEST_F(MeshWatcherFixture, DISABLED_SanitizeLinkedTransaction) {
     this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeLinkedTransaction);
         },

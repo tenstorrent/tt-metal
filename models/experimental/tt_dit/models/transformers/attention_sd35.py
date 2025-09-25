@@ -23,6 +23,7 @@ class SD35JointAttention:
         context_pre_only=None,
         eps=1e-5,
         mesh_device=None,
+        init=False,
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
@@ -51,6 +52,7 @@ class SD35JointAttention:
             "norm_elementwise_affine": True,
             "bias": False,
             "mesh_device": mesh_device,
+            "init": init,
         }
 
         self.norm_q = RMSNorm(**rms_kwargs)
@@ -63,6 +65,7 @@ class SD35JointAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            init=init,
         )
 
         # Implementing joint attention
@@ -72,6 +75,7 @@ class SD35JointAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            init=init,
         )
 
         self.to_out = ColParallelLinear(
@@ -80,6 +84,7 @@ class SD35JointAttention:
             bias=out_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            init=init,
         )
 
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -90,6 +95,7 @@ class SD35JointAttention:
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                init=init,
             )
 
         self.norm_added_q = RMSNorm(**rms_kwargs)

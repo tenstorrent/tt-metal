@@ -23,19 +23,18 @@ public:
         Shape tensor_shape,
         Shape shard_shape,
         Shape2D page_shape,
-        const CoreRangeSet& core_range_set,
+        CoreRangeSet core_range_set,
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
     BufferDistributionSpec(
-        const Shape& tensor_shape_in_pages,
-        const Shape& shard_shape_in_pages,
-        const CoreRangeSet& core_range_set,
+        Shape tensor_shape_in_pages,
+        Shape shard_shape_in_pages,
+        CoreRangeSet core_range_set,
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
-    BufferDistributionSpec(
-        const Shape& tensor_shape_in_pages, const Shape& shard_shape_in_pages, std::vector<CoreCoord> cores);
+    BufferDistributionSpec(Shape tensor_shape_in_pages, Shape shard_shape_in_pages, std::vector<CoreCoord> cores);
 
     const Shape& tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
     const Shape& shard_shape_in_pages() const { return shard_shape_in_pages_; }

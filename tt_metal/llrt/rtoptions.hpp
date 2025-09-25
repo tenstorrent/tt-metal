@@ -16,19 +16,29 @@
 #include <map>
 #include <set>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.h>
+
+enum class CoreType;
 
 namespace tt {
 
 namespace llrt {
+
+// TODO: This should come from the HAL
+enum DebugHartFlags : unsigned int {
+    RISCV_NC = 1,
+    RISCV_TR0 = 2,
+    RISCV_TR1 = 4,
+    RISCV_TR2 = 8,
+    RISCV_BR = 16,
+    RISCV_ER0 = 32,
+    RISCV_ER1 = 64
+};
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
@@ -62,7 +72,7 @@ struct TargetSelection {
     bool enabled{};
     std::vector<int> chip_ids;
     bool all_chips = false;
-    tt_metal::HalProcessorSet processors;
+    uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
     bool prepend_device_core_risc{};
@@ -202,9 +212,6 @@ class RunTimeOptions {
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
-    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
-    bool use_mesh_graph_descriptor_2_0 = false;
-
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -283,7 +290,7 @@ public:
         return feature_targets[feature].cores;
     }
     void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
-        feature_targets[feature].cores = std::move(cores);
+        feature_targets[feature].cores = cores;
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
@@ -305,22 +312,20 @@ public:
         return feature_targets[feature].chip_ids;
     }
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
-        feature_targets[feature].chip_ids = std::move(chip_ids);
+        feature_targets[feature].chip_ids = chip_ids;
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
         feature_targets[feature].all_chips = all_chips;
     }
     bool get_feature_all_chips(RunTimeDebugFeatures feature) const { return feature_targets[feature].all_chips; }
-    const tt_metal::HalProcessorSet& get_feature_processors(RunTimeDebugFeatures feature) const {
-        return feature_targets[feature].processors;
-    }
-    void set_feature_processors(RunTimeDebugFeatures feature, tt_metal::HalProcessorSet processors) {
-        feature_targets[feature].processors = processors;
+    uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) const { return feature_targets[feature].riscv_mask; }
+    void set_feature_riscv_mask(RunTimeDebugFeatures feature, uint32_t riscv_mask) {
+        feature_targets[feature].riscv_mask = riscv_mask;
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
-        feature_targets[feature].file_name = std::move(file_name);
+        feature_targets[feature].file_name = file_name;
     }
     bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
@@ -336,7 +341,7 @@ public:
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
-        feature_targets[feature] = std::move(targets);
+        feature_targets[feature] = targets;
     }
 
     bool get_record_noc_transfers() const { return record_noc_transfer_data; }
@@ -482,28 +487,16 @@ public:
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor
-    TargetDevice get_target_device() const { return runtime_target_device_; }
+    inline TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
 
-    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
-    // TODO: This will be removed after MGD 1.0 is deprecated
-    bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
-
-    // Parse all feature-specific environment variables, after hal is initialized.
-    // (Needed because syntax of some env vars is arch-dependent.)
-    void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
-        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-            ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
-        }
-    }
-
 private:
     // Helper functions to parse feature-specific environment vaiables.
-    void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
+    void ParseFeatureEnv(RunTimeDebugFeatures feature);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
-    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal);
+    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);

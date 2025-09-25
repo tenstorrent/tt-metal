@@ -35,8 +35,6 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -94,7 +92,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -181,8 +179,7 @@ int main(int argc, char** argv) {
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
-                tt_metal::detail::WriteToDeviceL1(
-                    device->get_devices()[0], core, activations_addr, packed_tensors[r * num_cores_c + c]);
+                tt_metal::detail::WriteToDeviceL1(device, core, activations_addr, packed_tensors[r * num_cores_c + c]);
             }
         }
 
@@ -191,8 +188,7 @@ int main(int argc, char** argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
                 std::vector<uint32_t> result_vec;
-                tt_metal::detail::ReadFromDeviceL1(
-                    device->get_devices()[0], core, activations_addr, total_tiles_size_bytes, result_vec);
+                tt_metal::detail::ReadFromDeviceL1(device, core, activations_addr, total_tiles_size_bytes, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 if (tensors[r * num_cores_c + c].get_values() != result_bfp16) {
                     log_error(LogTest, "{}/{} - value read from l1 is wrong", r, c);
@@ -225,20 +221,17 @@ int main(int argc, char** argv) {
                     {activations_addr, (uint32_t)phy_core.x, (uint32_t)phy_core.y, num_blocks, cb_n});
             }
         }
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
-        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+
         log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
-        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-        tt_metal::distributed::Finish(device->mesh_command_queue());
+        EnqueueProgram(device->command_queue(), program, false);
+        Finish(device->command_queue());
         auto end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(end - begin).count();
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
         log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
         log_info(LogTest, "Read local to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
-        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -250,7 +243,7 @@ int main(int argc, char** argv) {
                     std::vector<uint32_t> result_vec;
                     CoreCoord core = {(size_t)c, (size_t)r};
                     tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
+                        device, core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto sliced_tensor =
                         slice_vec(tensors[r * num_cores_c + c].get_values(), (Nt - cb_tiles) * 1024, Nt * 1024 - 1);
@@ -278,7 +271,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        pass &= device->close();
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception& e) {
         pass = false;

@@ -8,7 +8,9 @@
 #include <yaml-cpp/yaml.h>
 #include <string>
 
-#include <umd/device/types/arch.hpp>
+#include <umd/device/types/arch.h>
+
+enum BoardType : uint32_t;
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(

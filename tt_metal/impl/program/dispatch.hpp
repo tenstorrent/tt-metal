@@ -6,6 +6,7 @@
 
 #include <circular_buffer.hpp>
 #include <device.hpp>
+#include <kernel.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
+#include "dev_msgs.h"
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
@@ -23,7 +25,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+enum class CoreType;
 
 namespace tt {
 

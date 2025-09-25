@@ -228,7 +228,7 @@ protected:
         this->assertSafeToAdd(To - 1, To - From);
     }
     template <class ItTy, std::enable_if_t<!std::is_same<std::remove_const_t<ItTy>, T*>::value, bool> = false>
-    void assertSafeToAddRange(const ItTy&, const ItTy&) {}
+    void assertSafeToAddRange(ItTy, ItTy) {}
 
     /// Reserve enough space to add one element, and return the updated element
     /// pointer in case it was a reference to the storage.
@@ -510,7 +510,7 @@ protected:
     /// Copy the range [I, E) onto the uninitialized memory
     /// starting with "Dest", constructing elements into it as needed.
     template <typename It1, typename It2>
-    static void uninitialized_copy(const It1& I, const It1& E, It2 Dest) {
+    static void uninitialized_copy(It1 I, It1 E, It2 Dest) {
         // Arbitrary iterator types; just use the basic implementation.
         std::uninitialized_copy(I, E, Dest);
     }
@@ -694,11 +694,11 @@ public:
         return Result;
     }
 
-    void swap(SmallVectorImpl& RHS) noexcept;
+    void swap(SmallVectorImpl& RHS);
 
     /// Add the specified range to the end of the SmallVector.
     template <typename ItTy, typename = EnableIfConvertibleToInputIterator<ItTy>>
-    void append(const ItTy& in_start, const ItTy& in_end) {
+    void append(ItTy in_start, ItTy in_end) {
         this->assertSafeToAddRange(in_start, in_end);
         size_type NumInputs = std::distance(in_start, in_end);
         this->reserve(this->size() + NumInputs);
@@ -959,7 +959,7 @@ public:
 
     SmallVectorImpl& operator=(const SmallVectorImpl& RHS);
 
-    SmallVectorImpl& operator=(SmallVectorImpl&& RHS) noexcept;
+    SmallVectorImpl& operator=(SmallVectorImpl&& RHS);
 
     bool operator==(const SmallVectorImpl& RHS) const {
         if (this->size() != RHS.size()) {
@@ -978,7 +978,7 @@ public:
 };
 
 template <typename T>
-void SmallVectorImpl<T>::swap(SmallVectorImpl<T>& RHS) noexcept {
+void SmallVectorImpl<T>::swap(SmallVectorImpl<T>& RHS) {
     if (this == &RHS) {
         return;
     }
@@ -1068,7 +1068,7 @@ SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(const SmallVectorImpl<T>& RHS)
 }
 
 template <typename T>
-SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(SmallVectorImpl<T>&& RHS) noexcept {
+SmallVectorImpl<T>& SmallVectorImpl<T>::operator=(SmallVectorImpl<T>&& RHS) {
     // Avoid self-assignment.
     if (this == &RHS) {
         return *this;
@@ -1227,7 +1227,7 @@ public:
     SmallVector(size_t Size, const T& Value) : SmallVectorImpl<T>(N) { this->assign(Size, Value); }
 
     template <typename ItTy, typename = EnableIfConvertibleToInputIterator<ItTy>>
-    SmallVector(const ItTy& S, const ItTy& E) : SmallVectorImpl<T>(N) {
+    SmallVector(ItTy S, ItTy E) : SmallVectorImpl<T>(N) {
         this->append(S, E);
     }
 
@@ -1254,7 +1254,7 @@ public:
         return *this;
     }
 
-    SmallVector(SmallVector&& RHS) noexcept : SmallVectorImpl<T>(N) {
+    SmallVector(SmallVector&& RHS) : SmallVectorImpl<T>(N) {
         if (!RHS.empty()) {
             SmallVectorImpl<T>::operator=(::std::move(RHS));
         }
@@ -1266,7 +1266,7 @@ public:
         }
     }
 
-    SmallVector& operator=(SmallVector&& RHS) noexcept {
+    SmallVector& operator=(SmallVector&& RHS) {
         if (N) {
             SmallVectorImpl<T>::operator=(::std::move(RHS));
             return *this;
@@ -1308,7 +1308,6 @@ using ValueTypeFromRangeType =
 /// Given a range of type R, iterate the entire range and return a
 /// SmallVector with elements of the vector.  This is useful, for example,
 /// when you want to iterate a range and then sort the results.
-// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <unsigned Size, typename R>
 SmallVector<ValueTypeFromRangeType<R>, Size> to_vector(R&& Range) {
     return {std::begin(Range), std::end(Range)};
@@ -1327,7 +1326,6 @@ template <typename Out, typename R>
 SmallVector<Out> to_vector_of(R&& Range) {
     return {std::begin(Range), std::end(Range)};
 }
-// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 // Explicit instantiations
 extern template class llvm::SmallVectorBase<uint32_t>;
@@ -1341,13 +1339,13 @@ namespace std {
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T>
-inline void swap(ttsl::detail::llvm::SmallVectorImpl<T>& LHS, ttsl::detail::llvm::SmallVectorImpl<T>& RHS) noexcept {
+inline void swap(ttsl::detail::llvm::SmallVectorImpl<T>& LHS, ttsl::detail::llvm::SmallVectorImpl<T>& RHS) {
     LHS.swap(RHS);
 }
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T, unsigned N>
-inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm::SmallVector<T, N>& RHS) noexcept {
+inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm::SmallVector<T, N>& RHS) {
     LHS.swap(RHS);
 }
 

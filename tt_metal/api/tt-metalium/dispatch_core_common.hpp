@@ -9,7 +9,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <umd/device/types/core_coordinates.hpp>  // CoreType
+#include <umd/device/tt_core_coordinates.h>  // CoreType
 
 namespace tt::tt_metal {
 

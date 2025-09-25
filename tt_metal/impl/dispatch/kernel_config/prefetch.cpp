@@ -25,8 +25,8 @@
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -221,7 +221,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
 void PrefetchKernel::GenerateDependentConfigs() {
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
-        TT_ASSERT(upstream_kernels_.empty());
+        TT_ASSERT(upstream_kernels_.size() == 0);
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
 
@@ -268,7 +268,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         dependent_config_.num_hops = 0;
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, just host so no dispatch core
-        TT_ASSERT(upstream_kernels_.empty());
+        TT_ASSERT(upstream_kernels_.size() == 0);
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
         // May be overwritten below

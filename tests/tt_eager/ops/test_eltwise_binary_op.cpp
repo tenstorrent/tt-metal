@@ -33,8 +33,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
     auto output_buffer = std::vector<bfloat16>(input_tensor_a.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value =
-            BinaryFunction{}(static_cast<float>(input_a_buffer[index]), static_cast<float>(input_b_buffer[index]));
+        auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(

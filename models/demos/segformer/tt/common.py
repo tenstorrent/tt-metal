@@ -17,7 +17,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation=None,
+        activation="",
         groups=1,
         dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
@@ -48,6 +48,7 @@ class Conv:
             deallocate_activation=self.deallocate,
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
+            enable_split_reader=False,
             output_layout=self.output_layout,
         )
         compute_config = ttnn.init_device_compute_kernel_config(

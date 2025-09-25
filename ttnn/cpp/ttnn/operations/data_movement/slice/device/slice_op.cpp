@@ -114,6 +114,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
     if (has_step) {  // if all ones modify before passing in to function
         TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
         TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
+        TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
         TT_FATAL(
             step.size() == this->slice_end.rank(),
             "Number of steps {} must match number of ends/starts {}",

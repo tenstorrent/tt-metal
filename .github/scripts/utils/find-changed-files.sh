@@ -14,7 +14,6 @@ TTMETALIUM_CHANGED=false
 TTNN_CHANGED=false
 TTMETALIUM_OR_TTNN_TESTS_CHANGED=false
 TTTRAIN_CHANGED=false
-TOOLS_CHANGED=false
 ANY_CODE_CHANGED=false
 DOCS_CHANGED=false
 MODEL_CHARTS_CHANGED=false
@@ -52,10 +51,6 @@ while IFS= read -r FILE; do
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tools/**/*.h|tools/**/*.hpp|tools/**/*.c|tools/**/*.cpp)
-            TOOLS_CHANGED=true
-            ANY_CODE_CHANGED=true
-            ;;
         docs/**|**/*.rst|**/*.md)
             DOCS_CHANGED=true
             if [[ "$FILE" == "README.md" || "$FILE" == "models/README.md" ]]; then
@@ -80,9 +75,6 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
     TTNN_CHANGED=true
     TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
     TTTRAIN_CHANGED=true
-    # TODO: Well, this could likely just depend on the UMD submodule changing...
-    # Something to make more efficient in future.
-    TOOLS_CHANGED=true
     ANY_CODE_CHANGED=true
 fi
 
@@ -93,7 +85,6 @@ declare -A changes=(
     [tt-nn-changed]=$TTNN_CHANGED
     [tt-metalium-or-tt-nn-tests-changed]=$TTMETALIUM_OR_TTNN_TESTS_CHANGED
     [tt-train-changed]=$TTTRAIN_CHANGED
-    [tools-changed]=$TOOLS_CHANGED
     [submodule-changed]=$SUBMODULE_CHANGED
     [any-code-changed]=$ANY_CODE_CHANGED
     [docs-changed]=$DOCS_CHANGED

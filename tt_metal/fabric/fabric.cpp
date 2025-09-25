@@ -14,15 +14,15 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <optional>
 #include <set>
 #include <vector>
+#include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/xy_pair.h>
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
@@ -51,7 +51,11 @@ bool is_TG_gateway_connection(
 
     // both of the chips should have the same associated mmio device and
     // one of the chips should be the mmio device itself
-    return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
+    if (mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id)) {
+        return true;
+    }
+
+    return false;
 }
 
 }  // namespace
@@ -265,7 +269,7 @@ void append_routing_plane_connection_manager_rt_args(
             link_idx = connection_link_indices[i];
         } else {
             const auto links = get_forwarding_link_indices(src_fabric_node_id, dst_node);
-            TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
+            TT_FATAL(links.size() > 0, "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
             link_idx = links[0];
         }
 

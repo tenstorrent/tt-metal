@@ -21,6 +21,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
+#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/program.hpp>

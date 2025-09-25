@@ -12,7 +12,9 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include "dev_msgs.h"                    // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
+#include "tt-metalium/kernel.hpp"        // Kernel
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
 #include "tt-metalium/program.hpp"       // KernelGroup
 #include "program_device_map.hpp"        // ProgramTransferInfo
@@ -20,8 +22,8 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>        // CoreType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/tt_core_coordinates.h>             // CoreType
+#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 
 #include <atomic>
 #include <bitset>
@@ -51,19 +53,6 @@ class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
-enum dispatch_core_processor_classes {
-    // Tensix processor classes
-    DISPATCH_CLASS_TENSIX_DM0 = 0,
-    DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
-
-    // Ethernet processor classes
-    DISPATCH_CLASS_ETH_DM0 = 0,
-    DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
-};
-
 namespace experimental {
 class GlobalCircularBuffer;
 }
@@ -87,8 +76,8 @@ struct KernelGroup {
     uint32_t total_rta_size{};
     // kernel_text_offsets is indexed by processor index within core.
     std::vector<uint32_t> kernel_text_offsets;
-    dev_msgs::launch_msg_t launch_msg;
-    dev_msgs::go_msg_t go_msg;
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
 
     KernelGroup(
         const detail::ProgramImpl& program,
@@ -96,8 +85,7 @@ struct KernelGroup {
         std::vector<KernelHandle> kernel_ids,
         uint32_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
-        const CoreRangeSet& new_ranges,
-        const dev_msgs::Factory& dev_msgs_factory);
+        const CoreRangeSet& new_ranges);
 
     CoreType get_core_type() const;
 };
@@ -287,8 +275,7 @@ public:
 
     void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
 
-    // Dispatches detail::collect_kernel_meta, device is nullable
-    std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
+    std::vector<std::shared_ptr<Kernel>> kernels() const;
 
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;

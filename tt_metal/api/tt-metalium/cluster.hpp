@@ -41,7 +41,6 @@ enum class ClusterType : std::uint8_t {
     P150_X8 = 13,                // 8 Blackhole single card, ethernet connected
     P300 = 14,                   // Production P300
     SIMULATOR_QUASAR = 15,       // Simulator Quasar
-    BLACKHOLE_GALAXY = 16,       // Blackhole Galaxy, all chips with mmio
 };
 
 /**

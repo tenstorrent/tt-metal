@@ -40,6 +40,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
+enum class ARCH;
 namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal

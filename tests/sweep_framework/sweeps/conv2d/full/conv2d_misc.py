@@ -38,6 +38,7 @@ TIMEOUT = 30
 # output_layout
 # has_bias
 # enable_act_double_buffer
+# enable_split_reader
 # groups
 # override_sharding_config
 # core_grid
@@ -68,6 +69,7 @@ TIMEOUT = 30
 # output_layout
 # has_bias
 # enable_act_double_buffer
+# enable_split_reader
 # enable_auto_formatting
 # activations_dtype
 # weights_dtype
@@ -102,6 +104,7 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT],
         "has_bias": [True],
         "enable_act_double_buffer": [False],
+        "enable_split_reader": [False],
         # Parameters-to-check starts
         "activations_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "weights_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -138,6 +141,7 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT],
         "has_bias": [True],
         "enable_act_double_buffer": [False],
+        "enable_split_reader": [False],
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
@@ -179,6 +183,7 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "has_bias": [True],
         "enable_act_double_buffer": [True, False],
+        "enable_split_reader": [True, False],
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
@@ -210,6 +215,7 @@ def run(
     output_layout,
     has_bias,
     enable_act_double_buffer,
+    enable_split_reader,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -232,6 +238,7 @@ def run(
         output_layout,
         has_bias,
         enable_act_double_buffer,
+        enable_split_reader,
         activations_dtype,
         weights_dtype,
         math_fidelity,

@@ -70,7 +70,11 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<in
     std::vector<T> result;
     for (int el : xt::arange<int64_t>(start, end, step)) {
         int capped_el = cap ? el % *cap : el;
-        result.push_back(static_cast<T>(capped_el));
+        if constexpr (std::is_same_v<T, ::bfloat16>) {
+            result.push_back(T(static_cast<float>(capped_el)));
+        } else {
+            result.push_back(static_cast<T>(capped_el));
+        }
     }
     return result;
 }
@@ -173,7 +177,7 @@ TEST(FloatVectorConversionTest, Float32Bfloat16Interop) {
         std::vector<float> input_ft;
         input_ft.reserve(input_bf16.size());
         std::transform(input_bf16.begin(), input_bf16.end(), std::back_inserter(input_ft), [](bfloat16 bf) {
-            return static_cast<float>(bf);
+            return bf.to_float();
         });
 
         auto output_bf16 =

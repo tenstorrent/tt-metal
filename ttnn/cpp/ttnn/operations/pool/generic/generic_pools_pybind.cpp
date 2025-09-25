@@ -45,8 +45,7 @@ void bind_max_pool2d_operation(py::module& module) {
             deallocate_input (bool, optional): whether to deallocate the input tensor after the operation. Defaults to `False`.
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
             return_indices (bool, optional): whether to return both values and indices. When True, returns a tuple (values, indices). Defaults to `False`.
-            dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
-            output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
@@ -83,8 +82,6 @@ void bind_max_pool2d_operation(py::module& module) {
                                 in_place_halo=False,
                                 deallocate_input=False,
                                 reallocate_halo_output=True,
-                                dtype=ttnn.bfloat16,
-                                output_layout=ttnn.ROW_MAJOR_LAYOUT,
                             )
 
         )doc",
@@ -106,9 +103,9 @@ void bind_max_pool2d_operation(py::module& module) {
                bool deallocate_input,
                bool reallocate_halo_output,
                bool return_indices,
-               const DataType dtype,
-               const Layout output_layout) -> py::object {
+               QueueId queue_id) -> py::object {
                 auto result = self(
+                    queue_id,
                     input_tensor,
                     batch_size,
                     input_h,
@@ -124,9 +121,7 @@ void bind_max_pool2d_operation(py::module& module) {
                     in_place_halo,
                     deallocate_input,
                     reallocate_halo_output,
-                    return_indices,
-                    dtype,
-                    output_layout);
+                    return_indices);
 
                 // Handle variant return type
                 if (std::holds_alternative<MaxPoolWithIndicesResult>(result)) {
@@ -153,8 +148,7 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("deallocate_input") = false,
             py::arg("reallocate_halo_output") = true,
             py::arg("return_indices") = false,
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("output_layout") = Layout::ROW_MAJOR});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 void bind_avg_pool2d_operation(py::module& module) {
@@ -185,8 +179,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             deallocate_input (bool, optional): whether to deallocate the input tensor after the operation. Defaults to `False`.
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
-            dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
-            output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
@@ -223,8 +216,6 @@ void bind_avg_pool2d_operation(py::module& module) {
                             in_place_halo=False,
                             deallocate_input=False,
                             reallocate_halo_output=True,
-                            dtype=ttnn.bfloat16,
-                            output_layout=ttnn.ROW_MAJOR_LAYOUT,
                         )
         )doc",
         ttnn::pybind_overload_t{
@@ -245,9 +236,9 @@ void bind_avg_pool2d_operation(py::module& module) {
                bool in_place_halo,
                bool deallocate_input,
                bool reallocate_halo_output,
-               const DataType dtype,
-               const Layout output_layout) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
+                    queue_id,
                     input_tensor,
                     batch_size,
                     input_h,
@@ -263,9 +254,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                     applied_shard_scheme,
                     in_place_halo,
                     deallocate_input,
-                    reallocate_halo_output,
-                    dtype,
-                    output_layout);
+                    reallocate_halo_output);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -284,8 +273,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
             py::arg("reallocate_halo_output") = true,
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("output_layout") = Layout::ROW_MAJOR});
+            py::arg("queue_id") = 0});
 }
 
 void py_module(py::module& module) {

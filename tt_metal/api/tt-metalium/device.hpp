@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -149,9 +148,7 @@ public:
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-
-    // If cq_id is not provided, the current command queue is returned from the current thread
-    virtual CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
+    virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
@@ -200,7 +197,7 @@ public:
     virtual SubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
+        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void clear_loaded_sub_device_manager() = 0;

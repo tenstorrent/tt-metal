@@ -16,22 +16,22 @@
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
-#include <fmt/ranges.h>
 #include <metal_soc_descriptor.h>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
 
 #include "control_plane.hpp"
 #include "core_descriptor.hpp"
-#include "llrt.hpp"
-#include "llrt/hal.hpp"
+#include "debug_helpers.hpp"
+#include "dev_msgs.h"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "hw/inc/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
+#include "llrt.hpp"
 #include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
@@ -147,7 +147,7 @@ string get_noc_target_str(
     CoreCoord virtual_coord,
     HalProgrammableCoreType programmable_core_type,
     int noc,
-    dev_msgs::debug_sanitize_noc_addr_msg_t::ConstView san) {
+    const debug_sanitize_noc_addr_msg_t* san) {
     auto get_core_and_mem_type = [](chip_id_t device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = virtual_noc_coordinate(device_id, noc, noc_coord);
@@ -168,20 +168,20 @@ string get_noc_target_str(
     };
     string out = fmt::format(
         "{} using noc{} tried to {} {} {} bytes {} local L1[{:#08x}] {} ",
-        get_riscv_name(programmable_core_type, san.which_risc()),
+        get_riscv_name(programmable_core_type, san->which_risc),
         noc,
-        san.is_multicast() ? "multicast" : "unicast",
-        san.is_write() ? "write" : "read",
-        san.len(),
-        san.is_write() ? "from" : "to",
-        san.l1_addr(),
-        san.is_write() ? "to" : "from");
+        san->is_multicast ? "multicast" : "unicast",
+        san->is_write ? "write" : "read",
+        san->len,
+        san->is_write ? "from" : "to",
+        san->l1_addr,
+        san->is_write ? "to" : "from");
 
-    if (san.is_multicast()) {
+    if (san->is_multicast) {
         CoreCoord target_virtual_noc_core_start = {
-            NOC_MCAST_ADDR_START_X(san.noc_addr()), NOC_MCAST_ADDR_START_Y(san.noc_addr())};
+            NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
         CoreCoord target_virtual_noc_core_end = {
-            NOC_MCAST_ADDR_END_X(san.noc_addr()), NOC_MCAST_ADDR_END_Y(san.noc_addr())};
+            NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
         auto type_and_mem = get_core_and_mem_type(device_id, target_virtual_noc_core_start, noc);
         out += fmt::format(
             "{} core range w/ virtual coords {}-{} {}",
@@ -190,23 +190,22 @@ string get_noc_target_str(
             target_virtual_noc_core_end.str(),
             type_and_mem.second);
     } else {
-        CoreCoord target_virtual_noc_core = {NOC_UNICAST_ADDR_X(san.noc_addr()), NOC_UNICAST_ADDR_Y(san.noc_addr())};
+        CoreCoord target_virtual_noc_core = {NOC_UNICAST_ADDR_X(san->noc_addr), NOC_UNICAST_ADDR_Y(san->noc_addr)};
         auto type_and_mem = get_core_and_mem_type(device_id, target_virtual_noc_core, noc);
         out += fmt::format(
             "{} core w/ virtual coords {} {}", type_and_mem.first, target_virtual_noc_core.str(), type_and_mem.second);
     }
 
-    out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san.noc_addr()));
+    out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san->noc_addr));
     return out;
 }
 
-dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
-    uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
-    if (mbox_data.launch()[launch_msg_read_ptr].kernel_config().enables() == 0) {
-        launch_msg_read_ptr = (launch_msg_read_ptr - 1 + dev_msgs::launch_msg_buffer_num_entries) %
-                              dev_msgs::launch_msg_buffer_num_entries;
+const launch_msg_t* get_valid_launch_message(const mailboxes_t* mbox_data) {
+    uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
+    if (mbox_data->launch[launch_msg_read_ptr].kernel_config.enables == 0) {
+        launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
     }
-    return mbox_data.launch()[launch_msg_read_ptr];
+    return &mbox_data->launch[launch_msg_read_ptr];
 }
 
 }  // anonymous namespace
@@ -241,9 +240,9 @@ private:
     CoreCoord virtual_coord_;
     HalProgrammableCoreType programmable_core_type_;
     std::string core_str_;
-    std::vector<std::byte> l1_read_buf_;
-    dev_msgs::mailboxes_t::ConstView mbox_data_;
-    dev_msgs::launch_msg_t::ConstView launch_msg_;
+    std::vector<uint32_t> l1_read_buf_;
+    const mailboxes_t* mbox_data_;
+    const launch_msg_t* launch_msg_;
     const WatcherDeviceReader& reader_;
     DumpData& dump_data_;
 
@@ -262,25 +261,8 @@ private:
     const std::string& GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
 
-    Core(
-        CoreCoord virtual_coord,
-        HalProgrammableCoreType programmable_core_type,
-        std::string core_str,
-        std::vector<std::byte> l1_read_buf,
-        dev_msgs::Factory dev_msgs_factory,
-        const WatcherDeviceReader& reader,
-        DumpData& dump_data) :
-        virtual_coord_(virtual_coord),
-        programmable_core_type_(programmable_core_type),
-        core_str_(std::move(core_str)),
-        l1_read_buf_(std::move(l1_read_buf)),
-        mbox_data_(dev_msgs_factory.create_view<dev_msgs::mailboxes_t>(l1_read_buf_.data())),
-        launch_msg_(get_valid_launch_message(mbox_data_)),
-        reader_(reader),
-        dump_data_(dump_data) {}
-
 public:
-    static Core Create(
+    Core(
         CoreCoord logical_coord,
         HalProgrammableCoreType programmable_core_type,
         const WatcherDeviceReader& reader,
@@ -309,6 +291,9 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
+
+    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
@@ -379,7 +364,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord coord = {x, y};
             if (storage_only_cores.find(coord) == storage_only_cores.end()) {
-                Core::Create(coord, HalProgrammableCoreType::TENSIX, *this, dump_data).Dump();
+                Core(coord, HalProgrammableCoreType::TENSIX, *this, dump_data).Dump();
             }
         }
     }
@@ -387,11 +372,11 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Dump eth cores
     for (const CoreCoord& eth_core :
          tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
-        Core::Create(eth_core, HalProgrammableCoreType::ACTIVE_ETH, *this, dump_data).Dump();
+        Core(eth_core, HalProgrammableCoreType::ACTIVE_ETH, *this, dump_data).Dump();
     }
     for (const CoreCoord& eth_core :
          tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        Core::Create(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
+        Core(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
     }
 
     for (auto k_id : dump_data.used_kernel_names) {
@@ -451,7 +436,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             paused_cores_str += fmt::format(
                 "{}:{}, ",
                 virtual_core.str(),
-                get_riscv_name(llrt::get_core_type(device_id, virtual_core), processor_index));
+                get_riscv_name(get_programmable_core_type(virtual_core, device_id), processor_index));
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
@@ -464,35 +449,33 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
         // Clear all pause flags
         for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
-            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-            auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
-            auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
             uint64_t addr =
-                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
-                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
+                hal.get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::WATCHER) +
+                offsetof(watcher_msg_t, pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
-            pause_data.view().flags()[processor_index] = 0;
-            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
+            auto pause_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, virtual_core, addr, sizeof(debug_pause_msg_t));
+            auto pause_msg = reinterpret_cast<debug_pause_msg_t*>(&(pause_data[0]));
+            pause_msg->flags[processor_index] = 0;
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, pause_data, addr);
         }
     }
     fflush(f);
 }
 
-WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
+WatcherDeviceReader::Core::Core(
     CoreCoord logical_coord,
     HalProgrammableCoreType programmable_core_type,
     const WatcherDeviceReader& reader,
-    DumpData& dump_data) {
+    DumpData& dump_data) :
+    programmable_core_type_(programmable_core_type), reader_(reader), dump_data_(dump_data) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     const auto& hal = MetalContext::instance().hal();
     CoreType core_type = hal.get_core_type(hal.get_programmable_core_type_index(programmable_core_type));
-    auto virtual_coord =
+    virtual_coord_ =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            reader.device_id, logical_coord, core_type);
+            reader_.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
     string core_type_str = programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? "acteth"
@@ -502,37 +485,25 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_coord.x,
         logical_coord.y,
-        virtual_coord.x,
-        virtual_coord.y);
+        virtual_coord_.x,
+        virtual_coord_.y);
     if (rtoptions.get_watcher_phys_coords()) {
         CoreCoord phys_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_physical_coordinate_from_logical_coordinates(
-                reader.device_id, logical_coord, core_type, true);
+                reader_.device_id, logical_coord, core_type, true);
         core_coord_str += fmt::format(" phys(x={:2},y={:2})", phys_core.x, phys_core.y);
     }
-    auto core_str = fmt::format("Device {} {} {}", reader.device_id, core_type_str, core_coord_str);
-    fprintf(reader.f, "%s: ", core_str.c_str());
+    core_str_ = fmt::format("Device {} {} {}", reader_.device_id, core_type_str, core_coord_str);
+    fprintf(reader_.f, "%s: ", core_str_.c_str());
 
     uint64_t mailbox_addr =
         MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
 
-    auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
-    uint32_t mailbox_read_size =
-        dev_msgs_factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::watcher) +
-        dev_msgs_factory.size_of<dev_msgs::watcher_msg_t>();
-    // Watcher only reads the mailbox up to the end of the watcher struct.
-    // Should be ok if we never access past that.
-    std::vector<std::byte> l1_read_buf(mailbox_read_size);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        l1_read_buf.data(), l1_read_buf.size(), {reader.device_id, virtual_coord}, mailbox_addr);
-    return Core(
-        virtual_coord,
-        programmable_core_type,
-        std::move(core_str),
-        std::move(l1_read_buf),
-        dev_msgs_factory,
-        reader,
-        dump_data);
+    constexpr uint32_t mailbox_read_size = offsetof(mailboxes_t, watcher) + sizeof(watcher_msg_t);
+    l1_read_buf_ = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        reader_.device_id, virtual_coord_, mailbox_addr, mailbox_read_size);
+    mbox_data_ = reinterpret_cast<mailboxes_t*>(l1_read_buf_.data());
+    launch_msg_ = get_valid_launch_message(mbox_data_);
 }
 
 void WatcherDeviceReader::Core::Dump() const {
@@ -544,16 +515,15 @@ void WatcherDeviceReader::Core::Dump() const {
     ValidateKernelIDs();
 
     // Whether or not watcher data is available depends on a flag set on the device.
-    if (mbox_data_.watcher().enable() != dev_msgs::WatcherEnabled and
-        mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
+    if (mbox_data_->watcher.enable != WatcherEnabled and mbox_data_->watcher.enable != WatcherDisabled) {
         TT_THROW(
             "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
             core_str_,
-            mbox_data_.watcher().enable(),
-            dev_msgs::WatcherEnabled,
-            dev_msgs::WatcherDisabled);
+            mbox_data_->watcher.enable,
+            WatcherEnabled,
+            WatcherDisabled);
     }
-    bool enabled = (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled);
+    bool enabled = (mbox_data_->watcher.enable == WatcherEnabled);
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
@@ -592,19 +562,20 @@ void WatcherDeviceReader::Core::Dump() const {
         DumpSyncRegs();
     }
 
-    auto kernel_config = launch_msg_.kernel_config();
+    // Eth core only reports erisc kernel id, uses the brisc field
     fprintf(reader_.f, "k_ids:");
     auto num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         const char* separator = (i > 0) ? "|" : "";
-        fprintf(reader_.f, "%s%3d", separator, kernel_config.watcher_kernel_ids()[i]);
+        fprintf(reader_.f, "%s%3d", separator, launch_msg_->kernel_config.watcher_kernel_ids[i]);
     }
     if (!is_eth_core && rtoptions.get_watcher_text_start()) {
-        uint32_t kernel_config_base = kernel_config.kernel_config_base()[0];
+        uint32_t kernel_config_base = launch_msg_->kernel_config.kernel_config_base[0];
         fprintf(reader_.f, " text_start:");
-        for (size_t i = 0; i < num_processors; i++) {
+        for (size_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
             const char* separator = (i > 0) ? "|" : "";
-            fprintf(reader_.f, "%s0x%x", separator, kernel_config_base + kernel_config.kernel_text_offset()[i]);
+            fprintf(
+                reader_.f, "%s0x%x", separator, kernel_config_base + launch_msg_->kernel_config.kernel_text_offset[i]);
         }
     }
 
@@ -640,68 +611,68 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
 }
 
 void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
-    auto san = mbox_data_.watcher().sanitize_noc()[noc];
+    const debug_sanitize_noc_addr_msg_t* san = &mbox_data_->watcher.sanitize_noc[noc];
     string error_msg;
     string error_reason;
 
-    switch (san.return_code()) {
-        case dev_msgs::DebugSanitizeNocOK:
-            if (san.noc_addr() != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
-                san.l1_addr() != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 || san.len() != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
-                san.which_risc() != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
-                san.is_multicast() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
-                san.is_write() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
-                san.is_target() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
+    switch (san->return_code) {
+        case DebugSanitizeNocOK:
+            if (san->noc_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
+                san->l1_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 || san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
+                san->which_risc != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
+                san->is_multicast != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
+                san->is_write != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
+                san->is_target != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
                 error_msg = fmt::format(
                     "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
                     virtual_coord_.str(),
-                    san.which_risc(),
-                    san.noc_addr(),
-                    san.len());
+                    san->which_risc,
+                    san->noc_addr,
+                    san->len);
                 error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
             }
             break;
-        case dev_msgs::DebugSanitizeNocAddrUnderflow:
+        case DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
-            error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address underflow).";
             break;
-        case dev_msgs::DebugSanitizeNocAddrOverflow:
+        case DebugSanitizeNocAddrOverflow:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
-            error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address overflow).";
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address overflow).";
             break;
-        case dev_msgs::DebugSanitizeNocAddrZeroLength:
+        case DebugSanitizeNocAddrZeroLength:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (zero length transaction).";
             break;
-        case dev_msgs::DebugSanitizeNocTargetInvalidXY:
+        case DebugSanitizeNocTargetInvalidXY:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
             break;
-        case dev_msgs::DebugSanitizeNocMulticastNonWorker:
+        case DebugSanitizeNocMulticastNonWorker:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (multicast to non-worker core).";
             break;
-        case dev_msgs::DebugSanitizeNocMulticastInvalidRange:
+        case DebugSanitizeNocMulticastInvalidRange:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (multicast invalid range).";
             break;
-        case dev_msgs::DebugSanitizeNocAlignment:
+        case DebugSanitizeNocAlignment:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (invalid address alignment in NOC transaction).";
             break;
-        case dev_msgs::DebugSanitizeNocMixedVirtualandPhysical:
+        case DebugSanitizeNocMixedVirtualandPhysical:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
             break;
-        case dev_msgs::DebugSanitizeInlineWriteDramUnsupported:
+        case DebugSanitizeInlineWriteDramUnsupported:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (inline dw writes do not support DRAM destination addresses).";
             break;
-        case dev_msgs::DebugSanitizeNocAddrMailbox:
+        case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
-            error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
-        case dev_msgs::DebugSanitizeNocLinkedTransactionViolation:
+        case DebugSanitizeNocLinkedTransactionViolation:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
@@ -709,7 +680,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
                 virtual_coord_.str(),
-                san.return_code());
+                san->return_code);
             error_msg += " (corrupted noc sanitization state - unknown failure code).";
     }
 
@@ -727,48 +698,48 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 }
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
-    auto assert_status = mbox_data_.watcher().assert_status();
-    if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
-        if (assert_status.line_num() != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
-            assert_status.which() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
+    const debug_assert_msg_t* assert_status = &mbox_data_->watcher.assert_status;
+    if (assert_status->tripped == DebugAssertOK) {
+        if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
+            assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
             TT_THROW(
                 "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
                 virtual_coord_.str(),
-                assert_status.which(),
-                assert_status.line_num());
+                assert_status->which,
+                assert_status->line_num);
         }
         return;  // no assert tripped, nothing to do
     }
     std::string error_msg =
-        fmt::format("{}: {} ", core_str_, get_riscv_name(programmable_core_type_, assert_status.which()));
-    switch (assert_status.tripped()) {
-        case dev_msgs::DebugAssertTripped: {
-            error_msg += fmt::format("tripped an assert on line {}.", assert_status.line_num());
+        fmt::format("{}: {} ", core_str_, get_riscv_name(programmable_core_type_, assert_status->which));
+    switch (assert_status->tripped) {
+        case DebugAssertTripped: {
+            error_msg += fmt::format("tripped an assert on line {}.", assert_status->line_num);
             // TODO: Get rid of this once #6098 is implemented.
             error_msg +=
                 " Note that file name reporting is not yet implemented, and the reported line number for the assert "
                 "may be from a different file.";
             break;
         }
-        case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped: {
+        case DebugAssertNCriscNOCReadsFlushedTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC reads flushed barrier).";
             break;
         }
-        case dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped: {
+        case DebugAssertNCriscNOCNonpostedWritesSentTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC non-posted writes sent barrier).";
             break;
         }
-        case dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
+        case DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC non-posted atomics flushed barrier).";
             break;
         }
-        case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped: {
+        case DebugAssertNCriscNOCPostedWritesSentTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC posted writes sent barrier).";
@@ -779,9 +750,9 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
             TT_THROW(
                 "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
                 virtual_coord_.str(),
-                assert_status.tripped());
+                assert_status->tripped);
     }
-    error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status.which()));
+    error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status->which));
     log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
     log_warning(tt::LogMetal, "{}", error_msg);
     DumpWaypoints(true);
@@ -792,12 +763,12 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
 }
 
 void WatcherDeviceReader::Core::DumpPauseStatus() const {
-    auto pause_status = mbox_data_.watcher().pause_status();
+    const debug_pause_msg_t* pause_status = &mbox_data_->watcher.pause_status;
     const auto& hal = MetalContext::instance().hal();
     // Just record which cores are paused, printing handled at the end.
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (uint32_t processor_index = 0; processor_index < num_processors; processor_index++) {
-        auto pause = pause_status.flags()[processor_index];
+        auto pause = pause_status->flags[processor_index];
         if (pause == 1) {
             dump_data_.paused_cores.insert({virtual_coord_, processor_index});
         } else if (pause > 1) {
@@ -816,8 +787,8 @@ void WatcherDeviceReader::Core::DumpPauseStatus() const {
 }
 
 void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
-    auto eth_link_status = mbox_data_.watcher().eth_status();
-    if (eth_link_status.link_down() == 0) {
+    const debug_eth_link_t* eth_link_status = &mbox_data_->watcher.eth_status;
+    if (eth_link_status->link_down == 0) {
         return;
     }
     auto noc0_core = tt::tt_metal::MetalContext::instance()
@@ -837,23 +808,22 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 }
 
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
-    auto ring_buf_data = mbox_data_.watcher().debug_ring_buf();
+    const debug_ring_buf_msg_t* ring_buf_data = &mbox_data_->watcher.debug_ring_buf;
     string out = "";
-    if (ring_buf_data.current_ptr() != DEBUG_RING_BUFFER_STARTING_INDEX) {
+    if (ring_buf_data->current_ptr != DEBUG_RING_BUFFER_STARTING_INDEX) {
         // Latest written idx is one less than the index read out of L1.
         out += "\n\tdebug_ring_buffer=\n\t[";
-        int curr_idx = ring_buf_data.current_ptr();
-        size_t ring_buffer_elements = ring_buf_data.data().size();
-        for (int count = 1; count <= ring_buffer_elements; count++) {
-            out += fmt::format("0x{:08x},", ring_buf_data.data()[curr_idx]);
+        int curr_idx = ring_buf_data->current_ptr;
+        for (int count = 1; count <= DEBUG_RING_BUFFER_ELEMENTS; count++) {
+            out += fmt::format("0x{:08x},", ring_buf_data->data[curr_idx]);
             if (count % 8 == 0) {
                 out += "\n\t ";
             }
             if (curr_idx == 0) {
-                if (ring_buf_data.wrapped() == 0) {
+                if (ring_buf_data->wrapped == 0) {
                     break;  // No wrapping, so no extra data available
                 } else {
-                    curr_idx = ring_buffer_elements - 1;  // Loop
+                    curr_idx = DEBUG_RING_BUFFER_ELEMENTS - 1;  // Loop
                 }
             } else {
                 curr_idx--;
@@ -877,19 +847,19 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
 
 void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     char code = 'U';
-    if (state == dev_msgs::RUN_MSG_INIT) {
+    if (state == RUN_MSG_INIT) {
         code = 'I';
-    } else if (state == dev_msgs::RUN_MSG_GO) {
+    } else if (state == RUN_MSG_GO) {
         code = 'G';
-    } else if (state == dev_msgs::RUN_MSG_DONE) {
+    } else if (state == RUN_MSG_DONE) {
         code = 'D';
-    } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
+    } else if (state == RUN_MSG_RESET_READ_PTR) {
         code = 'R';
-    } else if (state == dev_msgs::RUN_SYNC_MSG_LOAD) {
+    } else if (state == RUN_SYNC_MSG_LOAD) {
         code = 'L';
-    } else if (state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
+    } else if (state == RUN_SYNC_MSG_WAITING_FOR_RESET) {
         code = 'W';
-    } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+    } else if (state == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
     }
     if (code == 'U') {
@@ -898,58 +868,58 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
             "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
             virtual_coord_.str(),
             state,
-            dev_msgs::RUN_MSG_INIT,
-            dev_msgs::RUN_MSG_GO,
-            dev_msgs::RUN_MSG_DONE,
-            dev_msgs::RUN_SYNC_MSG_LOAD,
-            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET);
+            RUN_MSG_INIT,
+            RUN_MSG_GO,
+            RUN_MSG_DONE,
+            RUN_SYNC_MSG_LOAD,
+            RUN_SYNC_MSG_WAITING_FOR_RESET);
     } else {
         fprintf(reader_.f, "%c", code);
     }
 }
 
 void WatcherDeviceReader::Core::DumpLaunchMessage() const {
-    auto subordinate_sync = mbox_data_.subordinate_sync();
+    const subordinate_sync_msg_t* subordinate_sync = &mbox_data_->subordinate_sync;
     const auto& hal = MetalContext::instance().hal();
     fprintf(reader_.f, "rmsg:");
-    if (launch_msg_.kernel_config().mode() == dev_msgs::DISPATCH_MODE_DEV) {
+    if (launch_msg_->kernel_config.mode == DISPATCH_MODE_DEV) {
         fprintf(reader_.f, "D");
-    } else if (launch_msg_.kernel_config().mode() == dev_msgs::DISPATCH_MODE_HOST) {
+    } else if (launch_msg_->kernel_config.mode == DISPATCH_MODE_HOST) {
         fprintf(reader_.f, "H");
     } else {
         LogRunningKernels();
         TT_THROW(
             "Watcher data corruption, unexpected launch mode on core {}: {} (expected {} or {})",
             virtual_coord_.str(),
-            launch_msg_.kernel_config().mode(),
-            dev_msgs::DISPATCH_MODE_DEV,
-            dev_msgs::DISPATCH_MODE_HOST);
+            launch_msg_->kernel_config.mode,
+            DISPATCH_MODE_DEV,
+            DISPATCH_MODE_HOST);
     }
 
-    if (launch_msg_.kernel_config().brisc_noc_id() == 0 || launch_msg_.kernel_config().brisc_noc_id() == 1) {
-        fprintf(reader_.f, "%d", launch_msg_.kernel_config().brisc_noc_id());
+    if (launch_msg_->kernel_config.brisc_noc_id == 0 || launch_msg_->kernel_config.brisc_noc_id == 1) {
+        fprintf(reader_.f, "%d", launch_msg_->kernel_config.brisc_noc_id);
     } else {
         LogRunningKernels();
         TT_THROW(
             "Watcher data corruption, unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
             virtual_coord_.str(),
-            launch_msg_.kernel_config().brisc_noc_id());
+            launch_msg_->kernel_config.brisc_noc_id);
     }
-    if (mbox_data_.go_message_index() < dev_msgs::go_message_num_entries) {
-        DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal());
+    if (mbox_data_->go_message_index < go_message_num_entries) {
+        DumpRunState(mbox_data_->go_messages[mbox_data_->go_message_index].signal);
     } else {
         LogRunningKernels();
         TT_THROW(
             "Watcher data corruption, unexpected go message index on core {}: {} (expected < {})",
             virtual_coord_.str(),
-            mbox_data_.go_message_index(),
-            dev_msgs::go_message_num_entries);
+            mbox_data_->go_message_index,
+            go_message_num_entries);
     }
 
     fprintf(reader_.f, "|");
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     uint32_t all_enable_mask = (1u << num_processors) - 1;
-    uint32_t enables = launch_msg_.kernel_config().enables();
+    uint32_t enables = launch_msg_->kernel_config.enables;
     if (enables & ~all_enable_mask) {
         LogRunningKernels();
         TT_THROW(
@@ -977,34 +947,35 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
         fputc(c, reader_.f);
     }
 
-    fprintf(reader_.f, " h_id:%3d ", launch_msg_.kernel_config().host_assigned_id());
+    fprintf(reader_.f, " h_id:%3d ", launch_msg_->kernel_config.host_assigned_id);
 
     if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
         fprintf(reader_.f, "smsg:");
-        DumpRunState(subordinate_sync.dm1());
-        DumpRunState(subordinate_sync.trisc0());
-        DumpRunState(subordinate_sync.trisc1());
-        DumpRunState(subordinate_sync.trisc2());
+        DumpRunState(subordinate_sync->dm1);
+        DumpRunState(subordinate_sync->trisc0);
+        DumpRunState(subordinate_sync->trisc1);
+        DumpRunState(subordinate_sync->trisc2);
         fprintf(reader_.f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(reader_.f, "smsg:");
-        DumpRunState(subordinate_sync.dm1());
+        DumpRunState(subordinate_sync->dm1);
         fprintf(reader_.f, " ");
     }
 }
 
 void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
-    auto debug_waypoint = mbox_data_.watcher().debug_waypoint();
-    std::vector<std::string> risc_status;
+    const debug_waypoint_msg_t* debug_waypoint = mbox_data_->watcher.debug_waypoint;
+    string out;
 
-    for (auto cpu : debug_waypoint) {
-        auto& status = risc_status.emplace_back();
-        for (char v : cpu.waypoint()) {
+    for (int cpu = 0; cpu < MAX_RISCV_PER_CORE; cpu++) {
+        string risc_status;
+        for (int byte = 0; byte < num_waypoint_bytes_per_riscv; byte++) {
+            char v = ((char*)&debug_waypoint[cpu])[byte];
             if (v == 0) {
                 break;
             }
             if (isprint(v)) {
-                status += v;
+                risc_status += v;
             } else {
                 LogRunningKernels();
                 TT_THROW(
@@ -1013,12 +984,22 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
                     (int)v);
             }
         }
+        // Pad risc status to 4 chars for alignment
+        string pad(4 - risc_status.length(), ' ');
+        out += (pad + risc_status);
+        if (cpu != MAX_RISCV_PER_CORE - 1) {
+            out += ',';
+        }
     }
-    // Pad riscv status to 4 chars for alignment
+
+    out += " ";
+
+    // This function can either log the waypoint to the log or stdout.
     if (to_stdout) {
-        log_info(tt::LogMetal, "Last waypoint: {:>4}", fmt::join(risc_status, ","));
+        out = string("Last waypoint: ") + out;
+        log_info(tt::LogMetal, "{}", out);
     } else {
-        fmt::print(reader_.f, "{:>4}  ", fmt::join(risc_status, ","));
+        fprintf(reader_.f, "%s ", out.c_str());
     }
 }
 
@@ -1047,18 +1028,18 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 }
 
 void WatcherDeviceReader::Core::DumpStackUsage() const {
-    auto stack_usage_mbox = mbox_data_.watcher().stack_usage();
+    const debug_stack_usage_t* stack_usage_mbox = &mbox_data_->watcher.stack_usage;
     const auto& hal = MetalContext::instance().hal();
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (uint32_t processor_index = 0; processor_index < num_processors; processor_index++) {
-        const auto& usage = stack_usage_mbox.cpu()[processor_index];
-        if (usage.min_free()) {
+        const auto& usage = stack_usage_mbox->cpu[processor_index];
+        if (usage.min_free) {
             auto [processor_class, processor_type] =
                 hal.get_processor_class_and_type_from_index(programmable_core_type_, processor_index);
             HalProcessorIdentifier processor = {programmable_core_type_, processor_class, processor_type};
             auto& slot = dump_data_.highest_stack_usage[processor];
-            if (usage.min_free() <= slot.stack_free) {
-                slot = {virtual_coord_, usage.min_free() - 1, usage.watcher_kernel_id()};
+            if (usage.min_free <= slot.stack_free) {
+                slot = {virtual_coord_, usage.min_free - 1, usage.watcher_kernel_id};
             }
         }
     }
@@ -1068,7 +1049,7 @@ void WatcherDeviceReader::Core::ValidateKernelIDs() const {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
-        uint16_t watcher_kernel_id = launch_msg_.kernel_config().watcher_kernel_ids()[i];
+        uint16_t watcher_kernel_id = launch_msg_->kernel_config.watcher_kernel_ids[i];
         if (watcher_kernel_id >= reader_.kernel_names.size()) {
             TT_THROW(
                 "Watcher data corruption, unexpected {} kernel id on Device {} core {}: {} (last valid {})",
@@ -1087,13 +1068,14 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     log_info(tt::LogMetal, "While running kernels:");
     for (size_t i = 0; i < num_processors; i++) {
-        log_info(tt::LogMetal, " {}: {}", get_riscv_name(programmable_core_type_, i), GetKernelName(i));
+        log_info(
+            tt::LogMetal, " {}: {}", get_riscv_name(programmable_core_type_, i), GetKernelName(i));
     }
 }
 
 const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
-    TT_FATAL(processor_index < launch_msg_.kernel_config().watcher_kernel_ids().size(), "processor_index out of range");
-    return reader_.kernel_names[launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]];
+    TT_FATAL(processor_index < NUM_PROCESSORS_PER_CORE_TYPE, "processor_index out of range");
+    return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[processor_index]];
 }
 
 }  // namespace tt::tt_metal

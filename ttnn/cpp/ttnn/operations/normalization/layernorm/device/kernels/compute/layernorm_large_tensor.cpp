@@ -26,8 +26,6 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -81,21 +79,21 @@ void MAIN {
         reconfig_data_format(cb_in, cb_scaler);
         pack_reconfig_data_format(cb_ex);
         cb_reserve_back(cb_ex, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex);
+        reduce_init(cb_in, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_in, blk);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, j, scaler0, dst0);
+                reduce_tile(cb_in, cb_scaler, j, scaler0, dst0);
             }
             cb_pop_front(cb_in, blk);
         }
 #ifdef FUSE_PRE_ADD
         reconfig_data_format_srca(cb_in, cb_inb);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inb, cb_scaler, cb_ex);
+        reduce_init(cb_inb, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_inb, blk);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inb, cb_scaler, j, scaler0, dst0);
+                reduce_tile(cb_inb, cb_scaler, j, scaler0, dst0);
             }
             cb_pop_front(cb_inb, blk);
         }
@@ -169,10 +167,10 @@ void MAIN {
             }
             cb_wait_front(cb_xmm, blk);
             reconfig_data_format(cb_xmm, cb_scaler);
-            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm, cb_scaler, cb_ex2);
+            reduce_init(cb_xmm, cb_scaler, cb_ex2);
             // accumulates squared residual
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm, cb_scaler, j, scaler0, dst0);
+                reduce_tile(cb_xmm, cb_scaler, j, scaler0, dst0);
             }
             cb_pop_front(cb_xmm, blk);
             cb_reserve_back(cb_ex2, onetile);
@@ -202,8 +200,11 @@ void MAIN {
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        sqrt_tile_init();
+        sqrt_tile(dst0);
+
+        recip_tile_init();
+        recip_tile(dst0);
 
         tile_regs_commit();
 
@@ -341,15 +342,17 @@ void MAIN {
                 cb_push_back(cb_out, blk);
             }
         }
+
+        UNPACK(DPRINT << "-----NCHt val: " << NCHt << "---------- ncht" << ncht << ENDL());
+        cb_xmm = tt::CBIndex::c_24;  // x minus mean
+#ifdef RMSNORM
+        cb_pop_front(cb_ex, 1);
+#endif
         // End of
         // Final Val Calc
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
-
-        cb_xmm = tt::CBIndex::c_24;  // x minus mean
-        cb_pop_front(cb_ex, onetile);
-        cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
 }
 }  // namespace NAMESPACE

@@ -10,26 +10,25 @@ from models.utility_functions import skip_for_blackhole
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, layout, rs_input_dtype",
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
         # Scatter on dim 0
-        ([16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Scatter on dim 1
-        ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Scatter on dim 2
-        ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # # Scatter on dim 3
-        ([1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "tt_training_test_one",
@@ -80,7 +79,8 @@ from models.utility_functions import skip_for_blackhole
     ids=["fabric_2d_dynamic_linear"],
 )
 def test_reduce_scatter_async_training_shapes(
-    mesh_device,
+    t3k_mesh_device,
+    num_devices,
     rs_input_shape,
     dim,
     num_links,
@@ -93,9 +93,12 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
+    if enable_trace:
+        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
+
     run_reduce_scatter_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
+        t3k_mesh_device,
+        num_devices,
         rs_input_shape,
         dim,
         num_links,

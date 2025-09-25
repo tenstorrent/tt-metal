@@ -18,7 +18,7 @@ namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_moe_operation(py::module& module) {
     auto doc =
-        R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt) -> ttnn.Tensor
+        R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
 
             Returns the weight of the zero-th MoE expert.
 
@@ -37,6 +37,7 @@ void bind_reduction_moe_operation(py::module& module) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensors
                 * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
+                * :attr:`queue_id` (Optional[uint8]): command queue id
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -86,9 +87,16 @@ void bind_reduction_moe_operation(py::module& module) {
                const ttnn::Tensor& topk_mask_tensor,
                const uint16_t k,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
+               std::optional<ttnn::Tensor> optional_output_tensor,
+               QueueId queue_id) {
                 return self(
-                    input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
+                    queue_id,
+                    input_tensor,
+                    expert_mask_tensor,
+                    topk_mask_tensor,
+                    k,
+                    memory_config,
+                    optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_mask_tensor").noconvert(),
@@ -96,7 +104,8 @@ void bind_reduction_moe_operation(py::module& module) {
             py::arg("k") = 32,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt});
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::reduction::detail

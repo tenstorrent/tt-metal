@@ -33,28 +33,28 @@ constexpr bool fuse_op = get_compile_time_arg_val(8);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(9));
 constexpr bool direction = get_compile_time_arg_val(10);  // 1 is forward, 0 is backward
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(11);
-constexpr uint32_t reverse = get_compile_time_arg_val(12) == 1;
-constexpr bool is_termination_master = get_compile_time_arg_val(13);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(14);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(15);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(16);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(23);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
+
+constexpr bool is_termination_master = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(13);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(14);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<26>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<25>();
 constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<26 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<25 + ccl_routing_utils::num_line_unicast_args>();
 
 inline constexpr uint32_t sharded_args_start_idx =
-    26 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+    25 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -64,10 +64,8 @@ void kernel_main() {
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tensor_C = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_C = get_arg_val<uint32_t>(arg_idx++);
     uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
@@ -211,21 +209,12 @@ void kernel_main() {
     uint32_t row_offset = start_row_offset;
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
-
-    uint32_t position = my_chip_id;
-    if (reverse) {
-        position = (ring_size - 1) - my_chip_id;
-    }
-    uint32_t tile_id_start;
+    uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
 
     if (gather_dim == 3) {
-        tile_id_start = position * input_tensor_Wt;
-    } else if (gather_dim == 2) {
-        tile_id_start = position * input_tensor_Ht * input_tensor_Wt;
-    } else if (gather_dim == 1) {
-        tile_id_start = position * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
+        tile_id_start = my_chip_id * input_tensor_Wt;
     } else {
-        tile_id_start = position * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
+        tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
     }
 
     // 2. unicast output ready semaphore
@@ -237,7 +226,6 @@ void kernel_main() {
         32});
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
 
-    uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         chunk_count = 0;
@@ -356,17 +344,7 @@ void kernel_main() {
             }
         }
 
-        num_channels_processed_in_current_batch++;
-        if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
-            tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
-        } else {
-            tile_id_start += output_tensor_Wt * output_tensor_Ht;
-        }
-
-        if (num_channels_processed_in_current_batch == input_tensor_C) {
-            num_channels_processed_in_current_batch = 0;
-        }
-
+        tile_id_start += output_tensor_Wt * output_tensor_Ht;
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
         pages_read_in_row = start_pages_read_in_row;
@@ -417,27 +395,19 @@ void kernel_main() {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
         }
-        if (reverse) {
-            actual_slice_chip_id = (ring_size - 1) - actual_slice_chip_id;
-        }
         uint32_t tiles_read = input_tile_id_start;
         uint32_t tiles_to_read = input_tile_id_end;
-        uint32_t tile_id_start;
+        uint32_t tile_id_start = actual_slice_chip_id * input_tensor_Wt;
         uint32_t row_offset = start_row_offset;
         uint32_t pages_read_in_row = start_pages_read_in_row;
         uint32_t slice_Wt = input_tensor_Wt;
         uint32_t stride_Wt = output_tensor_Wt;
+
         if (gather_dim == 3) {
             tile_id_start = actual_slice_chip_id * input_tensor_Wt;
-        } else if (gather_dim == 2) {
-            tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
-        } else if (gather_dim == 1) {
-            tile_id_start = actual_slice_chip_id * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
         } else {
-            tile_id_start = actual_slice_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
+            tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
         }
-
-        num_channels_processed_in_current_batch = 0;
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             chunk_count = 0;
 
@@ -507,17 +477,7 @@ void kernel_main() {
                 tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
             }
 
-            num_channels_processed_in_current_batch++;
-            if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
-                tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
-            } else {
-                tile_id_start += output_tensor_Wt * output_tensor_Ht;
-            }
-
-            if (num_channels_processed_in_current_batch == input_tensor_C) {
-                num_channels_processed_in_current_batch = 0;
-            }
-
+            tile_id_start += output_tensor_Wt * output_tensor_Ht;
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
             row_offset = start_row_offset;

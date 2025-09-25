@@ -12,7 +12,10 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+
+#ifdef TEST_ENABLE_FABRIC_TRACING
 #include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
+#endif
 
 // clang-format on
 
@@ -82,7 +85,12 @@ inline void setup_header_routing_2d(
                 dst_mesh_id,
                 ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
         } else {
-            fabric_set_unicast_route(dst_dev_id, (LowLatencyMeshPacketHeader*)packet_header);
+            fabric_set_unicast_route(
+                (LowLatencyMeshPacketHeader*)packet_header,
+                my_dev_id,
+                dst_dev_id,
+                dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+                ew_dim);
         }
     }
 }
@@ -122,7 +130,9 @@ inline void send_notification(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, tt::tt_fabric::WorkerToFabricEdmSender& connection) {
     // Notify mailbox that the packets have been sent
     connection.wait_for_empty_write_slot();
+#ifdef TEST_ENABLE_FABRIC_TRACING
     RECORD_FABRIC_HEADER(packet_header);
+#endif
     connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -140,7 +150,9 @@ inline void send_packet(
         reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
 #endif
     connection.wait_for_empty_write_slot();
+#ifdef TEST_ENABLE_FABRIC_TRACING
     RECORD_FABRIC_HEADER(packet_header);
+#endif
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
     connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

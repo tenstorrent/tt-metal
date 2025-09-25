@@ -56,6 +56,7 @@ def run_full(
     output_layout,
     has_bias,
     enable_act_double_buffer,
+    enable_split_reader,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -124,6 +125,7 @@ def run_full(
         override_sharding_config=override_sharding_config,
         output_layout=output_layout,
         enable_act_double_buffer=enable_act_double_buffer,
+        enable_split_reader=enable_split_reader,
     )
 
     if override_sharding_config:

@@ -5,7 +5,7 @@
 import torch
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 
 def get_weights_cached(

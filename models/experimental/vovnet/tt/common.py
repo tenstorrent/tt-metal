@@ -5,13 +5,6 @@
 import ttnn
 import math
 
-try:
-    pass
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class Conv:
     def __init__(
@@ -21,20 +14,17 @@ class Conv:
         conv_params,
         *,
         act_block_h=None,
-        activation=None,
+        activation="",
         split_conv=False,
+        seperable_conv_norm_act=False,
         fused_op=True,
         debug=False,
         groups=1,
         effective_se=False,
         parameters=None,
         pw=False,
-        use_1d_systolic_array=False,
-        deallocate_activation=False,
     ) -> None:
         self.fused_op = fused_op
-        self.use_1d_systolic_array = use_1d_systolic_array
-        self.deallocate_activation = deallocate_activation
         path = path
         if fused_op:
             if pw:
@@ -62,7 +52,7 @@ class Conv:
         self.act_block_h = act_block_h
 
         if fused_op:
-            activation = None
+            activation = ""
         self.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         if (
             self.weights.shape[0] == 768
@@ -82,13 +72,13 @@ class Conv:
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
             shard_layout=self.shard_layout,
-            reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
-            deallocate_activation=self.deallocate_activation,
-            reallocate_halo_output=False,
+            reshard_if_not_optimal=True,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
             enable_act_double_buffer=True,
+            act_block_w_div=1,
             enable_weights_double_buffer=True,
         )
-
         if self.act_block_h is not None:
             self.conv_config.act_block_h_override = act_block_h
 
@@ -115,7 +105,6 @@ class Conv:
             in_channel = 3
         else:
             in_channel = input_tensor.shape[-1]
-
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -145,21 +134,14 @@ class Conv:
             return_weights_and_bias=True,
         )
 
-        if self.fused_op:
-            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-            output_tensor = ttnn.reshape(
-                output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
-            )
-            output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
-            output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
-            bn_config = ttnn.init_device_compute_kernel_config(
-                self.device.arch(),
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+        output_tensor = ttnn.reshape(
+            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
+        )
+        output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
+        if self.fused_op:
+            output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
             bn = ttnn.batch_norm(
                 output_tensor,
                 running_mean=self.bn_running_mean,
@@ -167,7 +149,6 @@ class Conv:
                 weight=self.bn_weight,
                 bias=self.bn_bias,
                 training=False,
-                compute_kernel_config=bn_config,
             )
             output_tensor = ttnn.relu(bn, memory_config=ttnn.L1_MEMORY_CONFIG)
 

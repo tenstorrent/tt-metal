@@ -37,7 +37,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include "umd/device/types/arch.h"
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -112,7 +112,7 @@ void set_math_fid_masks(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool single_core_binary(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SingleCoreBinaryConfig& test_config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const SingleCoreBinaryConfig& test_config) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -219,11 +219,11 @@ bool single_core_binary(
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input2 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
@@ -242,17 +242,15 @@ bool single_core_binary(
         temp_golden.begin(),
         [&](const bfloat16& lhs, const bfloat16& rhs) {
             if (test_config.binary_op == "add") {
-                return (static_cast<float>(lhs) + static_cast<float>(rhs));
+                return (lhs.to_float() + rhs.to_float());
             } else if (test_config.binary_op == "sub") {
-                return (static_cast<float>(lhs) - static_cast<float>(rhs));
+                return (lhs.to_float() - rhs.to_float());
             } else if (test_config.binary_op == "mul") {
                 return (
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(rhs) & srcb_fid_mask))));
+                    bfloat16(std::bit_cast<uint32_t>(lhs.to_packed() & srca_fid_mask)).to_float() *
+                    bfloat16(std::bit_cast<uint32_t>(rhs.to_packed() & srcb_fid_mask)).to_float());
             } else if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
-                return static_cast<float>(lhs);
+                return lhs.to_float();
             } else {
                 TT_THROW("Unsupported binary_op={}", test_config.binary_op);
                 return 0.0f;
@@ -264,15 +262,13 @@ bool single_core_binary(
         input2.begin(), input2.end(), temp_golden.begin(), golden.begin(), [&](const bfloat16& lhs, const float& rhs) {
             // acc_to_dest accumulates dest value with binary output, for all binary operations
             if (test_config.acc_to_dest || test_config.binary_op == "add_with_dest_reuse") {
-                return (static_cast<float>(lhs) + rhs);
+                return (lhs.to_float() + rhs);
             } else if (test_config.binary_op == "sub_with_dest_reuse") {
-                return (static_cast<float>(lhs) - rhs);
+                return (lhs.to_float() - rhs);
             } else if (test_config.binary_op == "mul_with_dest_reuse") {
                 return (
-                    static_cast<float>(
-                        std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
-                    static_cast<float>(std::bit_cast<bfloat16>(
-                        static_cast<uint16_t>(std::bit_cast<uint16_t>(bfloat16(rhs)) & srcb_fid_mask))));
+                    bfloat16(std::bit_cast<uint32_t>(lhs.to_packed() & srca_fid_mask)).to_float() *
+                    bfloat16(std::bit_cast<uint32_t>(bfloat16(rhs).to_packed() & srcb_fid_mask)).to_float());
             } else {
                 return rhs;
             }

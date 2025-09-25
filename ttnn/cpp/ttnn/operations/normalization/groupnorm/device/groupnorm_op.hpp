@@ -7,10 +7,12 @@
 #include <optional>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "groupnorm_types.hpp"
+
+using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -27,12 +29,11 @@ Ref: https://pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html
 >>> output = m(input)
 */
 
-tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core(
+operation::ProgramWithCallbacks groupnorm_multi_core(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& input_mask,
-    const std::optional<const Tensor>& reciprocals,
     Tensor& output,
     float eps,
     uint32_t num_groups,
@@ -41,10 +42,9 @@ tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core(
     CoreCoord grid_size,
     bool inplace,
     uint32_t num_out_blocks,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_welford);
+    const DeviceComputeKernelConfig& compute_kernel_config);
 
-tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
+operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -54,11 +54,10 @@ tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     float eps,
     uint32_t num_groups,
     uint32_t num_batches,
-    DataType im_data_format,
+    tt::tt_metal::DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    bool use_welford);
+    const DeviceComputeKernelConfig& compute_kernel_config);
 
 struct GroupNorm {
     float eps;
@@ -66,7 +65,6 @@ struct GroupNorm {
     MemoryConfig output_mem_config;
     GroupNormProgramConfig program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
-    bool use_welford;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

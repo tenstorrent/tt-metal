@@ -18,7 +18,7 @@ class Yolov6l_Conv2D:
         conv_pth,
         bn=None,
         device=None,
-        activation=None,
+        activation="",
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
@@ -59,6 +59,7 @@ class Yolov6l_Conv2D:
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True if shard_layout == BS else False,
+            enable_split_reader=True,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
@@ -180,15 +181,14 @@ class Yolov6x_Conv_T_2D:
             shard_layout=shard_layout,
             deallocate_activation=False,
             enable_act_double_buffer=False,
+            enable_split_reader=False,
             output_layout=ttnn.TILE_LAYOUT,
-            reshard_if_not_optimal=True,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-            math_approx_mode=True,
+            packer_l1_acc=False,
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]

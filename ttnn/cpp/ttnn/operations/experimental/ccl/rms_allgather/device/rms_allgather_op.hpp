@@ -5,7 +5,6 @@
 #pragma once
 
 #include <optional>
-#include <utility>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -98,14 +97,14 @@ struct RMSAllGather {
         uint32_t cluster_axis,
         bool use_noc1_only) :
         eps(eps),
-        output_mem_config(std::move(output_mem_config)),
+        output_mem_config(output_mem_config),
         program_config(program_config),
         compute_kernel_config(compute_kernel_config),
         dtype(dtype),
         topology(topology),
         num_links(num_links),
         ring_size(ring_size),
-        semaphore(std::move(semaphore)),
+        semaphore(semaphore),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         use_noc1_only(use_noc1_only) {}

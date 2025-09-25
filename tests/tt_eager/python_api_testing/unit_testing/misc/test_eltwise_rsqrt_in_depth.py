@@ -16,6 +16,8 @@ def run_eltwise_rsqrt_tests(
 ):
     torch.manual_seed(data_seed)
 
+    fast_and_appx = False
+
     x = torch.Tensor(size=input_shape).uniform_(range_start, range_end)
     x_ref = x.detach().clone()
 
@@ -24,6 +26,7 @@ def run_eltwise_rsqrt_tests(
 
     tt_result = tt_eltwise_rsqrt(
         x=x,
+        fast_and_approx=fast_and_appx,
         device=device,
         device_id=0,
         dtype=[dtype],

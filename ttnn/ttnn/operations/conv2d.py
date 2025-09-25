@@ -155,36 +155,26 @@ def prepare_conv_bias(*args, **kwargs):
     return ttnn._ttnn.operations.conv.prepare_conv_bias(*args, **kwargs)
 
 
-def get_torch_act_func_from_string(activation):
-    """Convert UnaryWithParam activation to corresponding PyTorch function.
-
-    Note: Function name kept for compatibility, but now handles UnaryWithParam objects.
-    """
+def get_torch_act_func_from_string(act_string):
     import torch
 
     act_func_map = {
-        ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
-        ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
-        ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
-        ttnn.UnaryOpType.SIGMOID: torch.nn.functional.sigmoid,
-        ttnn.UnaryOpType.TANH: torch.nn.functional.tanh,
-        ttnn.UnaryOpType.LOG: torch.log,
-        ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
-        ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
-        ttnn.UnaryOpType.SQRT: torch.sqrt,
+        "relu": torch.nn.functional.relu,
+        "silu": torch.nn.functional.silu,
+        "mish": torch.nn.functional.mish,
+        "sigmoid": torch.nn.functional.sigmoid,
+        "sigmoid_approx": torch.nn.functional.sigmoid,
+        "tanh": torch.nn.functional.tanh,
+        "log": torch.log,
+        "softplus": torch.nn.functional.softplus,
+        "gelu": torch.nn.functional.gelu,
+        "sqrt": torch.sqrt,
     }
-
-    # Handle None activation
-    if activation is None:
+    if act_string == "":
         return None
-
-    # Handle UnaryWithParam activation
-    if hasattr(activation, "op_type"):
-        if activation.op_type in act_func_map:
-            return act_func_map[activation.op_type]
-        raise RuntimeError(f"Activation function {activation.op_type} not supported in torch conversion")
-
-    raise RuntimeError(f"Activation function {activation} not supported - expected UnaryWithParam or None")
+    if act_string in act_func_map:
+        return act_func_map[act_string]
+    raise RuntimeError(f"Activation function {act_string} not supported")
 
 
 def _golden_function(
@@ -252,12 +242,7 @@ def _golden_function(
         groups=groups,
     )
 
-    # Get activation from conv_config
-    activation = None
-    if conv_config is not None:
-        activation = conv_config.activation
-
-    act_func = get_torch_act_func_from_string(activation)
+    act_func = get_torch_act_func_from_string(conv_config.activation) if conv_config is not None else None
     output_tensor = act_func(output_tensor) if act_func is not None else output_tensor
 
     N, C, H, W = output_tensor.shape

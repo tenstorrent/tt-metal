@@ -9,12 +9,8 @@ import ttnn
 import pytest
 import math
 
-from models.utility_functions import is_blackhole
+from models.utility_functions import is_wormhole_b0, is_x2_harvested
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
 
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
@@ -44,14 +40,12 @@ def run_max_pool(
     dilation,
     device,
     tensor_map,
-    in_dtype,
+    dtype,
     memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
     in_place=False,
     nightly_skips=True,
-    out_dtype=ttnn.bfloat16,
-    output_layout=ttnn.ROW_MAJOR_LAYOUT,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -73,9 +67,6 @@ def run_max_pool(
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
 
-    if (out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
-
     # skips to avoid unimportant combinations
     if ceil_mode:
         if stride == (1, 1):
@@ -90,7 +81,7 @@ def run_max_pool(
             pytest.skip("Effective kernel size cannot exceed padded input size")
     # skips to speed up nightly test
     if nightly_skips:
-        if in_dtype == ttnn.bfloat8_b:
+        if dtype == ttnn.bfloat8_b:
             if stride == (2, 2) or padding == (1, 1):
                 pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
             if kernel_size == (9, 9):
@@ -125,13 +116,42 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
+    # act = torch.zeros(input_shape, dtype=torch.bfloat16)
+    # for n in range(input_shape[0]):
+    #     for c in range(input_shape[1]):
+    #         for h in range(input_shape[2]):
+    #             for w in range(input_shape[3]):
+    #                 act[n, c, h, w] = h * in_w + w
+    ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
-    if in_dtype == ttnn.bfloat8_b:
-        ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-        torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
+    if dtype == ttnn.bfloat8_b:
+        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
     else:
-        ttnn_input = ttnn.from_torch(torch_input_permuted, in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    pre_shard = shard_scheme == None
+    if pre_shard:
+        parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            batch_size=in_n,
+            input_channels=in_c,
+            output_height=out_h,
+            output_width=out_w,
+            output_channels=in_c,
+            input_channels_alignment=32,
+            compute_grid_size=device.compute_with_storage_grid_size(),
+            block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            enable_channels_padding=False,
+            is_shard_height_tile_multiple=dtype == ttnn.bfloat8_b,
+            is_shard_width_tile_multiple=dtype == ttnn.bfloat8_b,
+        )
+        sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            tensor_shape=ttnn_input.shape,
+            parallel_config=parallel_config,
+            tile_size=32 if dtype == ttnn.bfloat8_b else 1,
+        )
+        ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
 
     # run ttnn maxpool2d
     ttnn_output = ttnn.max_pool2d(
@@ -150,8 +170,6 @@ def run_max_pool(
         in_place_halo=in_place,
         deallocate_input=True,
         reallocate_halo_output=True,
-        dtype=out_dtype,
-        output_layout=output_layout,
     )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -163,7 +181,7 @@ def run_max_pool(
             torch_input,
             (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
             mode="constant",
-            value=float("-inf"),
+            value=0,
         )
         torch_padding = [0, 0]  # use zero padding for torch avg pool since we are padding manually
     else:
@@ -187,20 +205,14 @@ def run_max_pool(
     # test for equivalance
     pcc_thresh = 1.0
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+    if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.997
         atol = 0.35
-    if out_dtype == ttnn.bfloat4_b:
-        pcc_thresh = 0.93
-        atol = 0.5
-        rtol = 1.0
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
-    if out_dtype != ttnn.bfloat16:
-        ttnn_output = ttnn_output.to(torch.bfloat16)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+    isequal = torch.equal(ttnn_output, torch_output)
     assert allclose
-    if in_dtype == ttnn.bfloat16 and out_dtype == ttnn.bfloat16:
-        isequal = torch.equal(ttnn_output, torch_output)
+    if dtype == ttnn.bfloat16:
         assert isequal
 
 
@@ -271,7 +283,7 @@ def run_max_pool(
     ),
 )
 @pytest.mark.parametrize(
-    "in_dtype",
+    "dtype",
     [
         ttnn.bfloat16,
         ttnn.bfloat8_b,
@@ -285,7 +297,7 @@ def run_max_pool(
     ],
 )
 def test_run_max_pool_height_shard(
-    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, in_dtype, ceil_mode
+    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype, ceil_mode
 ):
     run_max_pool(
         input_shape,
@@ -295,7 +307,7 @@ def test_run_max_pool_height_shard(
         dilation,
         device,
         tensor_map,
-        in_dtype,
+        dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
     )
@@ -340,7 +352,7 @@ def test_run_max_pool_height_shard(
     ),
 )
 @pytest.mark.parametrize(
-    "in_dtype",
+    "dtype",
     [
         ttnn.bfloat16,
     ],
@@ -359,7 +371,7 @@ def test_run_max_pool_width_shard(
     dilation,
     device,
     tensor_map,
-    in_dtype,
+    dtype,
     ceil_mode,
 ):
     run_max_pool(
@@ -370,7 +382,7 @@ def test_run_max_pool_width_shard(
         dilation,
         device,
         tensor_map,
-        in_dtype,
+        dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
     )
@@ -415,7 +427,7 @@ def test_run_max_pool_width_shard(
     ),
 )
 @pytest.mark.parametrize(
-    "in_dtype",
+    "dtype",
     [
         ttnn.bfloat16,
     ],
@@ -434,7 +446,7 @@ def test_run_max_pool_block_shard(
     dilation,
     device,
     tensor_map,
-    in_dtype,
+    dtype,
     ceil_mode,
 ):
     run_max_pool(
@@ -445,7 +457,7 @@ def test_run_max_pool_block_shard(
         dilation,
         device,
         tensor_map,
-        in_dtype,
+        dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
     )
@@ -510,7 +522,7 @@ def test_run_max_pool_mem_config(
     "dilation",
     ((1, 1),),
 )
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_run_max_pool_yolov4(
     input_shape,
     kernel_size,
@@ -519,9 +531,9 @@ def test_run_max_pool_yolov4(
     dilation,
     device,
     tensor_map,
-    in_dtype,
+    dtype,
 ):
-    run_max_pool(input_shape, kernel_size, padding, stride, dilation, device, tensor_map, in_dtype)
+    run_max_pool(input_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -542,7 +554,7 @@ def test_run_max_pool_yolov4(
     "dilation",
     ((1, 1),),
 )
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("ceil_mode", [False, True])
 def test_run_max_pool_squeeze_net_model(
     input_shape,
@@ -552,7 +564,7 @@ def test_run_max_pool_squeeze_net_model(
     dilation,
     device,
     tensor_map,
-    in_dtype,
+    dtype,
     ceil_mode,
 ):
     run_max_pool(
@@ -563,150 +575,6 @@ def test_run_max_pool_squeeze_net_model(
         dilation,
         device,
         tensor_map,
-        in_dtype,
+        dtype,
         ceil_mode=ceil_mode,
     )
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize(
-    "input_shape, shard_startegy",
-    (
-        (
-            ([1, 64, 112, 112], HS),
-            ([1, 280, 10, 10], HS),
-            ([1, 384, 32, 32], HS),
-            ([1, 256, 132, 20], BS),
-            ([1, 512, 8, 6], BS),
-            ([2, 4096, 10, 16], WS),
-            ([1, 32768, 10, 10], WS),
-        )
-    ),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    (
-        (3, 3),
-        (5, 5),
-        (9, 9),
-    ),
-)
-@pytest.mark.parametrize(
-    "in_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-def test_max_pool2d_output_formats_and_layouts(
-    device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
-):
-    padding = (0, 0)
-    stride = (1, 1)
-    dilation = (1, 1)
-
-    run_max_pool(
-        input_shape,
-        kernel_size,
-        padding,
-        stride,
-        dilation,
-        device,
-        tensor_map,
-        in_dtype,
-        shard_scheme=shard_startegy,
-        out_dtype=out_dtype,
-        output_layout=output_layout,
-        nightly_skips=False,
-    )
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape_nchw",
-    (([1, 128, 256, 512],)),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    ((3, 3),),
-)
-@pytest.mark.parametrize(
-    "padding",
-    ((1, 1),),
-)
-@pytest.mark.parametrize(
-    "dilation",
-    ((1, 1),),
-)
-@pytest.mark.parametrize(
-    "stride",
-    ((2, 2),),
-)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding, dilation, stride, dtype, tensor_map):
-    num_slices = 4
-
-    batch_size, channels, input_h, input_w = input_shape_nchw
-    assert channels % num_slices == 0, "Channels must be divisible by num_slices"
-    slice_channels = channels // num_slices
-
-    logger.info(f"Running Panoptic MaxPool2D with Channel Slicing (slices={num_slices})")
-
-    torch.manual_seed(0)
-    torch_input_nchw = randomize_torch_tensor(tensor_map, input_shape_nchw)
-
-    torch_output = torch.nn.MaxPool2d(
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        return_indices=False,
-        ceil_mode=False,
-    )(torch_input_nchw)
-
-    out_h, out_w = torch_output.shape[2], torch_output.shape[3]
-
-    ttnn_input_nhwc = ttnn.from_torch(
-        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype
-    )
-    output_slices = []
-    for i in range(num_slices):
-        start_idx = i * slice_channels
-        end_idx = (i + 1) * slice_channels
-
-        x_slice = ttnn.slice(ttnn_input_nhwc, [0, 0, 0, start_idx], [batch_size, input_h, input_w, end_idx])
-
-        x_slice_reshaped = ttnn.reshape(x_slice, (1, 1, batch_size * input_h * input_w, slice_channels))
-        ttnn.deallocate(x_slice)
-
-        x_slice_pooled = ttnn.max_pool2d(
-            x_slice_reshaped,
-            batch_size=batch_size,
-            input_h=input_h,
-            input_w=input_w,
-            channels=slice_channels,
-            kernel_size=list(kernel_size),
-            stride=list(stride),
-            padding=list(padding),
-            dilation=list(dilation),
-            ceil_mode=False,
-        )
-        ttnn.deallocate(x_slice_reshaped)
-
-        x_slice_output_nhwc = ttnn.reshape(x_slice_pooled, (batch_size, out_h, out_w, slice_channels))
-        ttnn.deallocate(x_slice_pooled)
-        x_slice_output_nhwc = ttnn.to_memory_config(x_slice_output_nhwc, ttnn.DRAM_MEMORY_CONFIG)
-        output_slices.append(x_slice_output_nhwc)
-
-    ttnn.deallocate(ttnn_input_nhwc)
-    ttnn_output_nhwc = ttnn.concat(output_slices, dim=3)
-    for s in output_slices:
-        ttnn.deallocate(s)
-
-    ttnn_output_torch = ttnn.to_torch(ttnn_output_nhwc)
-    ttnn_output_torch_nchw = torch.permute(ttnn_output_torch, (0, 3, 1, 2))
-    passed, pcc_score = assert_with_pcc(ttnn_output_torch_nchw, torch_output, pcc=0.999)
-    logger.info(f"PCC Score: {pcc_score}")
-    assert passed, f"PCC check failed. PCC: {pcc_score}"

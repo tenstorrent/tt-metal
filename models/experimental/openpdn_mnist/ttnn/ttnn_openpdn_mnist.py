@@ -16,7 +16,7 @@ class OpenPDNMnistConv2D:
         bn=None,
         device=None,
         cache={},
-        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        activation="relu",
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,

@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     uint32_t output_no_mul_cb_index = src_no_mul_cb_index;
 
-    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
+    const uint16_t bfloat16_scalar = bfloat16(-1.0f).to_uint16();
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();

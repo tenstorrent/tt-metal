@@ -28,7 +28,6 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
-#include "distribution_mode.hpp"
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -157,9 +156,7 @@ void py_module(py::module& module) {
             py::keep_alive<0, 1>())
         .def(
             "__getitem__", [](const MeshCoordinate& mc, int index) { return mc[index]; }, py::arg("index"))
-        .def("dims", &MeshCoordinate::dims)
-        .def("__hash__", [](const MeshCoordinate& mc) { return std::hash<MeshCoordinate>{}(mc); })
-        .def("__eq__", [](const MeshCoordinate& a, const MeshCoordinate& b) { return a == b; });
+        .def("dims", &MeshCoordinate::dims);
 
     static_cast<py::class_<MeshCoordinateRange>>(module.attr("MeshCoordinateRange"))
         .def(
@@ -493,8 +490,8 @@ void py_module(py::module& module) {
                region. Otherwise, the tensor shards are distributed across mesh in row-major order.
            )doc")
         .def(
-            py::init([](std::optional<int> row_dim,
-                        std::optional<int> col_dim,
+            py::init([](std::optional<size_t> row_dim,
+                        std::optional<size_t> col_dim,
                         const std::optional<MeshShape>& mesh_shape_override) {
                 MeshMapperConfig config;
                 config.placements.push_back(
@@ -540,7 +537,7 @@ void py_module(py::module& module) {
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
            )doc")
         .def(
-            py::init([](int row_dim, int col_dim, const std::optional<MeshShape>& mesh_shape_override) {
+            py::init([](size_t row_dim, size_t col_dim, const std::optional<MeshShape>& mesh_shape_override) {
                 MeshComposerConfig config;
                 config.dims.push_back(row_dim);
                 config.dims.push_back(col_dim);
@@ -570,8 +567,7 @@ void py_module(py::module& module) {
         .def("shape", &DistributedHostBuffer::shape, py::return_value_policy::reference_internal);
 
     auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
-    py_tensor_topology
-        .def("distribution_shape", &TensorTopology::distribution_shape, py::return_value_policy::reference_internal)
+    py_tensor_topology.def("mesh_shape", &TensorTopology::mesh_shape, py::return_value_policy::reference_internal)
         .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
         .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
 
@@ -638,29 +634,6 @@ void py_module(py::module& module) {
 
        Returns:
            TensorToMesh: A mapper providing the desired sharding.
-   )doc");
-    module.def(
-        "compute_distribution_to_mesh_mapping",
-        [](const tt::tt_metal::distributed::MeshShape& distribution_shape,
-           const tt::tt_metal::distributed::MeshShape& mesh_shape)
-            -> std::vector<tt::tt_metal::distributed::MeshCoordinate> {
-            return ttnn::distributed::compute_distribution_to_mesh_mapping(distribution_shape, mesh_shape);
-        },
-        py::arg("distribution_shape"),
-        py::arg("mesh_shape"),
-        R"doc(
-       Compute ordered mesh coordinates for distribution coordinate mapping.
-
-       This function computes how distribution coordinates should map to mesh coordinates
-       based on the distribution mode. For ROW_MAJOR mode, it returns mesh coordinates
-       in row-major order. For SUBMESH mode, coordinates map directly.
-
-       Args:
-           distribution_shape (MeshShape): The distribution (override) mesh shape.
-           mesh_shape (MeshShape): The physical device mesh shape.
-
-       Returns:
-           list[MeshCoordinate]: Vector of mesh coordinates in the order they should be mapped to distribution coordinates.
    )doc");
     module.def(
         "concat_mesh_to_tensor_composer",
