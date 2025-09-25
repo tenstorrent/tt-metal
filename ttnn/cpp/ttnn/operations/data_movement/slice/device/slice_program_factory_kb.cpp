@@ -390,7 +390,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
         const auto& src_tensor = input_tensors.at(0);
-        auto dst_tensor = output_tensors.at(0);
+        const auto& dst_tensor = output_tensors.at(0);
 
         // Update buffer addresses in runtime arguments for all cores
         for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
