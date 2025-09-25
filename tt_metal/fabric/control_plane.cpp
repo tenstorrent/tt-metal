@@ -881,9 +881,9 @@ void ControlPlane::order_ethernet_channels() {
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
 
             std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
-                auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::NOC0);
-                auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::NOC0);
-                return translated_coords_a.x < translated_coords_b.x;
+                auto noc0_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::NOC0);
+                auto noc0_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::NOC0);
+                return noc0_coords_a.x < noc0_coords_b.x;
             });
         }
     }
