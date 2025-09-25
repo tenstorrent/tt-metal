@@ -54,7 +54,7 @@ on:
 
 # This needs to be set to a value that is greater than the timeout of the longest running test
 env:
-  TEST_BUDGET_SECONDS: 300
+  TEST_BUDGET_SECONDS: 1
 
 jobs:
   ttnn-conv-tests:
