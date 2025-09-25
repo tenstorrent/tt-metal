@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <string_view>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -15,6 +16,11 @@
 #include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal {
+
+// 341 = (4096/(3 * sizeof(uint32_t)), where
+// - 4096 - packet size in dispatch
+// - 3 - number of kernels per tensix
+constexpr uint32_t max_runtime_args = 341;
 
 using KernelHandle = std::uint32_t;
 
@@ -110,5 +116,35 @@ struct EthernetConfig {
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
+
+// These are only used in op_profiler, are unstable and have not been designed for general use.
+namespace detail {
+
+struct KernelBinaryMeta {
+    // This maps to Kernel::get_kernel_processor_type
+    using ProcessorType = uint32_t;
+    ProcessorType processor_type;
+    std::size_t packed_size;
+};
+
+struct KernelMeta {
+    // Kernel identifiers:
+    // Owner for name and source is the Program class,
+    // (direct owner is the Kernel class internally)
+    std::string_view name, source;
+
+    // Core identifiers:
+    HalProcessorClassType processor_class;
+    HalProgrammableCoreType programmable_core_type;
+
+    // Core configuration:
+    // This optinonal only contains a MathFidelity if the kernel is a compute kernel
+    std::optional<MathFidelity> math_fidelity;
+
+    // Binary metadata:
+    std::vector<KernelBinaryMeta> binary_meta;
+};
+
+}  // namespace detail
 
 }  // namespace tt::tt_metal

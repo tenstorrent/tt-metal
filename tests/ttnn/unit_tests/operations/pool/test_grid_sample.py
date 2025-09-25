@@ -11,7 +11,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
@@ -64,7 +63,6 @@ def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype):
     assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
@@ -122,7 +120,6 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dty
     assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -166,7 +163,6 @@ def test_grid_sample_identity_transform(device, input_shape):
     logger.info(f"Identity check: {identity_message}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
     [

@@ -152,7 +152,7 @@ public:
 
     void process_traffic_config(TestConfig& config) {
         this->allocator_->allocate_resources(config);
-        log_info(tt::LogTest, "Resource allocation complete");
+        log_debug(tt::LogTest, "Resource allocation complete");
 
         if (config.global_sync) {
             // set it only after the test_config is built since it needs set the sync value during expand the high-level
@@ -161,8 +161,8 @@ public:
             this->set_global_sync_val(config.global_sync_val);
             this->set_benchmark_mode(config.benchmark_mode);
 
-            log_info(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
-            log_info(tt::LogTest, "Ubenchmark mode: {}, ", benchmark_mode_);
+            log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
+            log_debug(tt::LogTest, "Ubenchmark mode: {}, ", benchmark_mode_);
 
             for (const auto& sync_sender : config.global_sync_configs) {
                 // currently initializing our sync configs to be on senders local to the current hos
@@ -247,7 +247,7 @@ public:
                             reference_sync_core.y);
                     }
                 }
-                log_info(
+                log_debug(
                     tt::LogTest,
                     "Validated sync core consistency: all {} devices use sync core ({}, {})",
                     device_global_sync_cores_.size(),
@@ -308,7 +308,7 @@ public:
             return;  // Only initialize sync memory if line sync is enabled
         }
 
-        log_info(tt::LogTest, "Initializing sync memory for line sync");
+        log_debug(tt::LogTest, "Initializing sync memory for line sync");
 
         // Initialize sync memory location with 16 bytes of zeros on all devices
         uint32_t global_sync_address = this->sender_memory_map_.get_global_sync_address();
@@ -337,7 +337,7 @@ public:
             }
         }
 
-        log_info(
+        log_debug(
             tt::LogTest,
             "Sync memory initialization complete at address: {} and address: {}",
             global_sync_address,
@@ -641,8 +641,8 @@ private:
             allocation_policies_.receiver_config.max_configs_per_core);
 
         // Create memory maps directly using constructors
-        sender_memory_map_ = tt::tt_fabric::fabric_tests::SenderMemoryMap(
-            l1_unreserved_base, l1_unreserved_size, l1_alignment, max_configs_per_core);
+        sender_memory_map_ =
+            tt::tt_fabric::fabric_tests::SenderMemoryMap(l1_unreserved_base, l1_unreserved_size, l1_alignment);
 
         receiver_memory_map_ = tt::tt_fabric::fabric_tests::ReceiverMemoryMap(
             l1_unreserved_base, l1_unreserved_size, l1_alignment, default_payload_chunk_size, max_configs_per_core);
@@ -782,7 +782,7 @@ private:
         // Clear previous data
         device_core_cycles_.clear();
 
-        log_info(tt::LogTest, "Reading performance results from sender cores");
+        log_debug(tt::LogTest, "Reading performance results from sender cores");
 
         // Process each test device
         for (const auto& [device_coord, test_device] : test_devices_) {
@@ -885,7 +885,7 @@ private:
     }
 
     void calculate_bandwidth(const TestConfig& config) {
-        log_info(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
+        log_debug(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
 
         // Clear previous bandwidth results
         bandwidth_results_.clear();
