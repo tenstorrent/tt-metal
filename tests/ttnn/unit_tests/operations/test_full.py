@@ -37,7 +37,6 @@ def test_full_int(device, input_shape, fill_value):
     assert torch.equal(torch_output, tt_output_cpu)
 
 
-@skip_for_blackhole("Does not work on BH P150. Issue #22274")
 @pytest.mark.parametrize(
     "input_shape",
     [
