@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -143,17 +143,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, worker_core_ranges, cb_sender_config);
 
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
-    static constexpr auto num_packet_headers_storable = 3;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, worker_core_ranges, cb_reserved_packet_header_config);
-
     // KERNEL CREATION
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
@@ -194,9 +183,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             reader_kernel_ids.push_back(worker_reader_kernel_id);
 
             std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),                                         // input_tensor_address
-                output_tensor.buffer()->address(),                                        // output_tensor_address
-                (dim > 0) ? link_offset_start_id * input_halo_dim_size : outer_dim_size,  // link_offset_start_id
+                input_tensor.buffer()->address(),                                             // input_tensor_address
+                output_tensor.buffer()->address(),                                            // output_tensor_address
+                (dim > 0) ? link_offset_start_id * input_halo_dim_size : outer_dim_size - 1,  // link_offset_start_id
                 (dim == 0) ? link_offset_start_id : 0,
                 input_halo_dim_size,                                       // input_halo_dim_size
                 (dim > 0) ? link_dims_to_read : outer_dim_size,            // outer_dim_size
@@ -212,8 +201,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             writer_kernel_config.compile_args = {
                 direction ? is_last_device : is_first_device,
                 direction ? is_first_device : is_last_device,
-                sender_cb_index,                  // cb_forward_id
-                reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
+                sender_cb_index,  // cb_forward_id
                 direction,
                 is_padding_zeros,
                 page_size};
@@ -227,9 +215,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             writer_kernel_ids.push_back(worker_writer_kernel_id);
 
             std::vector<uint32_t> writer_rt_args = {
-                input_tensor.buffer()->address(),                                          // input_tensor_address
-                output_tensor.buffer()->address(),                                         // output_tensor_address
-                (dim > 0) ? link_offset_start_id * output_halo_dim_size : outer_dim_size,  // link_offset_start_id
+                input_tensor.buffer()->address(),                                              // input_tensor_address
+                output_tensor.buffer()->address(),                                             // output_tensor_address
+                (dim > 0) ? link_offset_start_id * output_halo_dim_size : outer_dim_size - 1,  // link_offset_start_id
                 (dim == 0) ? link_offset_start_id : 0,
                 input_halo_dim_size,                                       // input_halo_dim_size
                 output_halo_dim_size,                                      // output_halo_dim_size
