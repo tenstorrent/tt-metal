@@ -193,7 +193,6 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const QueueId queue_id,
     const PadValue& pad_value,
     const bool recreate_mapping_tensor) {
     // squeeze input tensor and requested shape to 3D
@@ -337,7 +336,6 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             tensor,
             logical_shape,
             mem_config,
-            queue_id,
             pad_value.value_or(default_pad_value),
             reshape_map_mode == TileReshapeMapMode::RECREATE);
     }
@@ -349,7 +347,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode) {
-    return invoke(queue_id, tensor, shape, shape, memory_config, pad_value, reshape_map_mode);
+    return invoke(tensor, shape, shape, memory_config, pad_value, reshape_map_mode);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
@@ -359,12 +357,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode) {
     return invoke(
-        queue_id,
-        tensor,
-        tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
-        memory_config,
-        pad_value,
-        reshape_map_mode);
+        tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector), memory_config, pad_value, reshape_map_mode);
 }
 
 }  // namespace ttnn::operations::data_movement
