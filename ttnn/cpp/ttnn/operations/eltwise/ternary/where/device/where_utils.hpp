@@ -33,8 +33,7 @@ enum class KernelName {
     WriterColBcastTTT,
     ComputeNoBcastTTT,  // TTT: no bcast, outer dim and row bcast cases
     ComputeBcastTTT,    // TTT : column and scalar bcast cases
-    ComputeColBcastTTS,
-    ComputeColBcastTST,
+    ComputeColBcastTTSTST,
     ComputeScalarBcastTST,
     ComputeScalarBcastTTS,
     ComputeUnifiedTTSTST,

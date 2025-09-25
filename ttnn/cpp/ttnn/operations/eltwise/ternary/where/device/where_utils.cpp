@@ -51,7 +51,7 @@ static const std::vector<KernelConfigEntry> kernel_config_table = {
     {WhereVariant::TTS,
      WhereBroadcastType::COL_BCAST,
      KernelName::ReaderColBcastTTS,
-     KernelName::ComputeColBcastTTS,
+     KernelName::ComputeColBcastTTSTST,
      KernelName::WriterNoBcast},
     {WhereVariant::TTS,
      WhereBroadcastType::ROW_BCAST,
@@ -83,7 +83,7 @@ static const std::vector<KernelConfigEntry> kernel_config_table = {
     {WhereVariant::TST,
      WhereBroadcastType::COL_BCAST,
      KernelName::ReaderColBcastTST,
-     KernelName::ComputeColBcastTST,
+     KernelName::ComputeColBcastTTSTST,
      KernelName::WriterNoBcast},
     {WhereVariant::TST,
      WhereBroadcastType::ROW_BCAST,
@@ -180,10 +180,9 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_col_scalar_bcast_ttt.cpp";
-        case KernelName::ComputeColBcastTTS:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tts.cpp";
-        case KernelName::ComputeColBcastTST:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tst.cpp";
+        case KernelName::ComputeColBcastTTSTST:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
+                   "where_sfpu_col_bcast_tts_tst.cpp";
         case KernelName::ComputeUnifiedTTSTST:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_no_bcast_tts_tst.cpp";
