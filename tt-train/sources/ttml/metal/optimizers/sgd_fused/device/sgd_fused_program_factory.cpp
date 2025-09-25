@@ -101,7 +101,7 @@ void assign_per_core_runtime_args(
             core,
             {param_in_buffer->address(),
              grad_buffer->address(),
-             momentum_buffer_in->address(),
+             momentum_buffer_in != nullptr ? momentum_buffer_in->address() : 0,
              num_rows_per_core,
              num_rows_written});
 
@@ -117,7 +117,10 @@ void assign_per_core_runtime_args(
             program,
             kernels.writer,
             core,
-            {output_buffer->address(), momentum_buffer_out->address(), num_rows_per_core, num_rows_written});
+            {output_buffer->address(),
+             momentum_buffer_out != nullptr ? momentum_buffer_out->address() : 0,
+             num_rows_per_core,
+             num_rows_written});
 
         num_rows_written += num_rows_per_core;
     }
@@ -139,6 +142,19 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     const auto& dampening = operation_attributes.dampening;
     const auto& weight_decay = operation_attributes.weight_decay;
     const auto& nesterov = operation_attributes.nesterov;
+
+    TT_FATAL(!(nesterov && dampening != 0.0), "Nesterov momentum requires zero dampening");
+    TT_FATAL(!(nesterov && momentum <= 0.0), "Nesterov momentum requires a positive momentum");
+    const bool mom_in_has = momentum_in.has_value();
+    const bool mom_out_has = momentum_out.has_value();
+    TT_FATAL(
+        mom_in_has == mom_out_has,
+        "Momentum in/out must both be provided or both be omitted (got in={}, out={}).",
+        mom_in_has,
+        mom_out_has);
+    const bool use_momentum = (momentum > 0.0F);
+    TT_FATAL(
+        !use_momentum || mom_in_has, "Momentum buffers must be provided when using momentum (momentum={}).", momentum);
 
     auto* device = param_in.device();
 
@@ -174,7 +190,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     uint32_t num_inner = param_in.logical_shape()[-1];
 
     // compile arguments
-    uint32_t block_size = get_block_size(Wt, 1U);
+    uint32_t block_size = get_block_size(Wt, 4U);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -225,17 +241,18 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         "Grad buffer must be in DRAM. Input buffer of type {}",
         enchantum::to_string(grad_buffer->buffer_type()));
 
-    auto* momentum_in_buffer = momentum_in->buffer();
-    TT_FATAL(
-        momentum_in_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Momentum buffer must be in DRAM. Momentum buffer of type {}",
-        enchantum::to_string(momentum_in_buffer->buffer_type()));
-
-    auto* momentum_out_buffer = momentum_out->buffer();
-    TT_FATAL(
-        momentum_out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Momentum buffer must be in DRAM. Momentum buffer of type {}",
-        enchantum::to_string(momentum_out_buffer->buffer_type()));
+    auto* momentum_in_buffer = use_momentum ? momentum_in.value().buffer() : nullptr;
+    auto* momentum_out_buffer = use_momentum ? momentum_out.value().buffer() : nullptr;
+    if (use_momentum) {
+        TT_FATAL(
+            momentum_in_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Momentum in buffer must be in DRAM. Momentum buffer of type {}",
+            enchantum::to_string(momentum_in_buffer->buffer_type()));
+        TT_FATAL(
+            momentum_out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Momentum out buffer must be in DRAM. Momentum buffer of type {}",
+            enchantum::to_string(momentum_out_buffer->buffer_type()));
+    }
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
@@ -243,18 +260,21 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         "Output buffer must be in DRAM. Output buffer of type {}",
         enchantum::to_string(output_buffer->buffer_type()));
 
+    std::map<std::string, std::string> defines;
+    defines["USE_MOMENTUM"] = use_momentum ? "1" : "0";
+
     SGDFusedKernels kernels{};
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(param_in_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(grad_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(momentum_in_buffer).append_to(reader_compile_time_args);
 
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(momentum_out_buffer).append_to(writer_compile_time_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for fused sgd
@@ -270,7 +290,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         static_cast<uint32_t>(nesterov)};
 
     kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {
@@ -282,7 +302,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
             std::bit_cast<uint32_t>(weight_decay),
             static_cast<uint32_t>(nesterov)};
         kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
     }
 
     // -------------------------------------------------------------------------
@@ -340,8 +360,9 @@ void SGDFusedProgramFactory::override_runtime_arguments(
 
     auto* param_in_buffer = tensor_args.param_in.buffer();
     auto* grad_buffer = tensor_args.grad.buffer();
-    auto* momentum_buffer_in = tensor_args.momentum_in->buffer();
-    auto* momentum_buffer_out = tensor_args.momentum_out->buffer();
+    auto* momentum_buffer_in = tensor_args.momentum_in.has_value() ? tensor_args.momentum_in.value().buffer() : nullptr;
+    auto* momentum_buffer_out =
+        tensor_args.momentum_out.has_value() ? tensor_args.momentum_out.value().buffer() : nullptr;
 
     auto lr = operation_attributes.lr;
     auto* output_buffer = tensor_return_value.buffer();
@@ -362,7 +383,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kParamInAddrIdx] = param_in_buffer->address();
             runtime_args[kGradAddrIdx] = grad_buffer->address();
-            runtime_args[kMomentumInAddrIdx] = momentum_buffer_in->address();
+            runtime_args[kMomentumInAddrIdx] = momentum_buffer_in != nullptr ? momentum_buffer_in->address() : 0;
         }
         if (core_group_1.contains(core)) {
             auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
@@ -375,7 +396,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputAddrIdx] = output_buffer->address();
-            runtime_args[kMomentumOutAddrIdx] = momentum_buffer_out->address();
+            runtime_args[kMomentumOutAddrIdx] = momentum_buffer_out != nullptr ? momentum_buffer_out->address() : 0;
         }
     }
 }

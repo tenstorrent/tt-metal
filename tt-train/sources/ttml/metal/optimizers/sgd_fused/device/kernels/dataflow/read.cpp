@@ -49,7 +49,9 @@ void kernel_main() {
 
     const auto param_in_addr_gen = TensorAccessor(param_in_args, param_in_addr, tile_size_bytes);
     const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr, tile_size_bytes);
+#if USE_MOMENTUM
     const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_in_addr, tile_size_bytes);
+#endif
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
@@ -58,11 +60,16 @@ void kernel_main() {
 
             read_tiles(cb_param_in_idx, param_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
             read_tiles(cb_grad_idx, grad_addr_gen, row_tile_idx, block_size, tile_size_bytes);
+
+#if USE_MOMENTUM
             read_tiles(cb_momentum_in_idx, momentum_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
+#endif
             noc_async_read_barrier();
             cb_push_back(cb_param_in_idx, block_size);
             cb_push_back(cb_grad_idx, block_size);
+#if USE_MOMENTUM
             cb_push_back(cb_momentum_in_idx, block_size);
+#endif
         }
     }
 }

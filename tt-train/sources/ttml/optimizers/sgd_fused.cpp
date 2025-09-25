@@ -4,13 +4,10 @@
 
 #include "sgd_fused.hpp"
 
-#include <fmt/format.h>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "fmt/base.h"
 #include "metal/operations.hpp"
 #include "serialization/serializable.hpp"
 
@@ -18,16 +15,18 @@ namespace ttml::optimizers {
 
 SGDFused::SGDFused(ttml::serialization::NamedParameters parameters, const SGDFusedConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    assert(!(m_config.nesterov && m_config.dampening != 0.0) && "Nesterov momentum requires zero dampening");
-    assert(!(m_config.nesterov && m_config.momentum <= 0.0) && "Nesterov momentum requires a positive momentum");
+    TT_FATAL(!(m_config.nesterov && m_config.dampening != 0.0), "Nesterov momentum requires zero dampening");
+    TT_FATAL(!(m_config.nesterov && m_config.momentum <= 0.0), "Nesterov momentum requires a positive momentum");
 
-    for (const auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad()) {
-            m_theta.emplace(
-                name,
-                autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
-                    /* requires_grad */ false));
+    if (m_config.momentum > 0.0) {
+        for (const auto& [name, tensor_ptr] : m_parameters) {
+            if (tensor_ptr->get_requires_grad()) {
+                m_momentum.emplace(
+                    name,
+                    autograd::create_tensor(
+                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                        /* requires_grad */ false));
+            }
         }
     }
 }
@@ -45,56 +44,55 @@ void SGDFused::step() {
         print_stats();
     }
 
-    for (auto& [name, theta_ptr] : m_theta) {
-        auto theta = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
-        const auto& tensor_ptr = m_parameters.at(name);
-        if (!tensor_ptr->is_grad_initialized()) {
+    TT_FATAL(!(m_config.nesterov && m_config.dampening != 0.0), "Nesterov momentum requires zero dampening");
+    TT_FATAL(!(m_config.nesterov && m_config.momentum <= 0.0), "Nesterov momentum requires a positive momentum");
+    const bool use_momentum = (m_config.momentum > 0.0F);
+
+    for (const auto& [name, theta_ptr] : m_parameters) {
+        if (!theta_ptr->is_grad_initialized()) {
             continue;
         }
-        auto gradients = tensor_ptr->get_grad();
-        auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto gradients = theta_ptr->get_grad();
+        auto param_in = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto param_out = param_in;
 
-#ifdef PRINT_SGD_FUSED_DEBUG_INFO
-        fmt::print("{}\n", name);
-        tensor_ptr->get_value(autograd::PreferredPrecision::FULL).print();
-        fmt::print("momentum before\n");
-        theta.print();
-#endif
+        std::optional<ttnn::Tensor> momentum = std::nullopt;
+        // momentum buffers are lazily initialized
+        if (use_momentum) {
+            auto it = m_momentum.find(name);
+            if (it == m_momentum.end()) {
+                auto buf = autograd::create_tensor(
+                    core::zeros_like(param_in),
+                    /* requires_grad */ false);
+                it = m_momentum.emplace(name, std::move(buf)).first;
+            }
+            momentum = it->second->get_value(autograd::PreferredPrecision::FULL);
+        }
 
         ttml::metal::sgd_fused(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+            param_in,
             gradients,
             m_config.lr,
             m_config.momentum,
             m_config.dampening,
             m_config.weight_decay,
             m_config.nesterov,
-            output_tensor,
-            theta,
-            theta);
-#ifdef PRINT_SGD_FUSED_DEBUG_INFO
-        fmt::print("gradient\n");
-        gradients.print();
-        fmt::print("output parameters\n");
-        output_tensor.print();
-        fmt::print("momentum after\n");
-        theta.print();
-        fmt::print("learning rate: {}\n", m_config.lr);
-        fmt::print("===================================\n");
-#endif
+            param_out,
+            momentum,
+            momentum);
     }
     m_steps++;
 }
 
 serialization::StateDict SGDFused::get_state_dict() const {
     serialization::StateDict dict;
-    dict["theta"] = m_theta;
+    dict["momentum"] = m_momentum;
     dict["steps"] = m_steps;
     return dict;
 }
 
 void SGDFused::set_state_dict(const serialization::StateDict& dict) {
-    m_theta = std::get<serialization::NamedParameters>(dict.at("theta"));
+    m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
 }
 

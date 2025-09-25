@@ -38,7 +38,7 @@ public:
 private:
     size_t m_steps{0};
     SGDFusedConfig m_config;
-    ttml::serialization::NamedParameters m_theta;
+    ttml::serialization::NamedParameters m_momentum;
 };
 
 }  // namespace ttml::optimizers
