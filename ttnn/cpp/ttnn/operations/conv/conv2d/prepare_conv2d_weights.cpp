@@ -1112,6 +1112,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto orig_stride = stride;
+    const bool is_conv1d = is_1d_conv(kernel_size[1], input_width);
 
     if (conv_config.enable_kernel_stride_folding) {
         auto folding_result = compute_kernel_stride_folding_params(
@@ -1131,6 +1132,9 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     bool is_dram_conv = (dram_slice_config_.has_value() &&
                          dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) ||
                         (!dram_slice_config_.has_value() && input_memory_config.is_dram());
+
+    // Conv1D doesn't support DRAM
+    is_dram_conv = is_dram_conv && !is_conv1d;
 
     if (is_dram_conv) {
         const uint32_t input_channels_alignment = get_input_channels_alignment(
