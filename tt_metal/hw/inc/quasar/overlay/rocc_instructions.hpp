@@ -2345,7 +2345,7 @@
  * - Bits [63]: Flush flag (`flush`)
  * - Bits [62]: Snoop flag (`snoop`)
  * - Bits [61]: Posted flag (`posted`)
- * - Bits [60]: Has XY flag (`has_xy`)  - if set, will look at cooridants from address in rs2
+ * - Bits [60]: Has XY flag (`has_xy`)  - if set, will look at coordinates from address in rs2
  * - Bits [59:32]: Destination coordinates, created with NOC_XY_COORD macro
  * - Bits [31:0]: Destination address (`dest_addr`)
  * - Format: `(flush << 63) | (snoop << 62) | (posted << 61) | (has_xy << 60) | (dest_coordinate << 32) | dest_addr`

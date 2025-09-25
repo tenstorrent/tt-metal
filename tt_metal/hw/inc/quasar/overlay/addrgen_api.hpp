@@ -146,7 +146,7 @@ struct LoopConfig {
      * If we have 3 banks (common scenario is to define bank 0 as local L1):                                         \
      * (0, 0, 0), (1, 2, 0),(2, 2, 1)                                                                                \
      * Since first bank is local L1 we want to skip it in this example and only iterate trough other 2 banks,        \
-     * this can be done with following configuraiton                                                                 \
+     * this can be done with following configuration                                                                 \
      * size = 2                                                                                                      \
      * skip = 1                                                                                                      \
      * base = 1                                                                                                      \
