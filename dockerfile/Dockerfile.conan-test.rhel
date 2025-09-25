@@ -9,7 +9,7 @@ RUN dnf update -y && dnf install -y \
     git wget patch which pcre2-devel perl-core \
     python3-pip python3-devel \
     gcc-toolset-14-libatomic-devel.x86_64 \
-    clang clang-tools-extra \
+    clang clang-tools-extra vim-common \
     && dnf clean all
 
 # Ensure python3 command exists
