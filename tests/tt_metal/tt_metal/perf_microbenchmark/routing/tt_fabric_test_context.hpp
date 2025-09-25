@@ -1069,7 +1069,7 @@ private:
         }
     }
 
-    void calculate_cycles_mean() {        
+    void calculate_cycles_mean() {
         calculate_mean("Avg Cycles", [](const auto& result) {return result.cycles_vector;});
     }
 
