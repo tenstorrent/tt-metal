@@ -225,10 +225,6 @@ Result conv2d_DRAM(
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
-    Conv2dSliceConfig dram_slice_config = dram_slice_config_.value_or(Conv2dSliceConfig{
-        .slice_type = determine_conv_slice_type(input_height, input_width, conv_config.output_layout),
-        .num_slices = 0});
-
     ttnn::Tensor input_tensor_on_device = input_tensor;
 
     if (conv_config.enable_kernel_stride_folding) {
@@ -331,67 +327,43 @@ Result conv2d_DRAM(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
+    Conv2dSliceConfig dram_slice_config = determine_conv2d_slice_config(
+        dram_slice_config_,
+        ConvDRAMParamters{
+            .in_channels = in_channels,
+            .out_channels = out_channels,
+            .batch_size = batch_size,
+            .input_height = input_height,
+            .input_width = input_width,
+            .output_height = output_height,
+            .output_width = output_width,
+            .kernel_size = kernel_size,
+            .stride = stride,
+            .padding_n4 = padding_n4,
+            .dilation = dilation,
+            .groups = groups,
+            .conv_config = conv_config,
+            .compute_kernel_config = compute_config,
+            .compute_grid = compute_grid_size,
+            .weights_shape = weight_tensor.padded_shape(),
+            .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
+            .input_datatype = input_tensor.dtype(),
+            .output_datatype = output_dtype,
+            .input_layout = input_tensor.layout(),
+            .output_layout = conv_config.output_layout,
+            .enable_bias = bias_tensor.has_value(),
+            .mm_conv = mm_conv,
+        },
+        device);
+    log_info(
+        tt::LogOp,
+        "Conv2D DRAM Slicing: Using slice_config : {}, provided : {}",
+        dram_slice_config,
+        dram_slice_config_);
+    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
+
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
-
-    // If num_slices is not set, automatically determine a value for num_slices that would be functional.
-    if (dram_slice_config.num_slices == 0) {
-        auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
-        uint32_t current_num_slices = 1;
-        log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
-        while (current_num_slices <= output_sliced_dim) {
-            dram_slice_config.num_slices = current_num_slices;
-            auto l1_usage =  calculate_conv_dram_slice_L1_usage(
-                    ConvDRAMParamters{
-                        .in_channels = in_channels,
-                        .out_channels = out_channels,
-                        .batch_size = batch_size,
-                        .input_height = input_height,
-                        .input_width = input_width,
-                        .output_height = output_height,
-                        .output_width = output_width,
-                        .kernel_size = kernel_size,
-                        .stride = stride,
-                        .padding_n4 = padding_n4,
-                        .dilation = dilation,
-                        .groups = groups,
-                        .conv_config = conv_config,
-                        .compute_kernel_config = compute_config,
-                        .compute_grid = compute_grid_size,
-                        .weights_shape = weight_tensor.padded_shape(),
-                        .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
-                        .input_datatype = input_tensor.dtype(),
-                        .output_datatype = output_dtype,
-                        .input_layout = input_tensor.layout(),
-                        .enable_bias = bias_tensor.has_value(),
-                        .mm_conv = mm_conv,
-                    },
-                    device,
-                    dram_slice_config);
-            log_debug(
-                tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
-            if (L1_stats.total_free_bytes >= l1_usage) {
-                break;
-            }
-            current_num_slices++;
-        }
-        if (conv_config.output_layout == tt_metal::Layout::TILE &&
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
-            // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
-            // This can result in more slices than expected, so we need to adjust the number of slices accordingly.
-            const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
-            dram_slice_config.num_slices = std::min(dram_slice_config.num_slices, max_slices);
-        }
-        // assert because the L1 size estimation is not exact, and may overestimate L1 usage.
-        TT_ASSERT(
-            current_num_slices <= output_sliced_dim,
-            "Could not find a suitable number of slices for Conv2D DRAM Slicing. "
-            "Either increase the number of slices or reduce the output dimension being sliced.");
-        log_info(tt::LogOp, "Conv2D DRAM Slicing: Automatically determined slice_config : {}", dram_slice_config);
-    } else {
-        log_info(tt::LogOp, "Conv2D DRAM Slicing with slice_config : {}", dram_slice_config);
-    }
-    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
 
     if (output_sliced_dim == 1) {
         dram_slice_config.num_slices = 1;

@@ -410,7 +410,6 @@ def test_with_prepare_weights(
             groups=groups,
             device=device,
             input_dtype=ttnn.bfloat16,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
     conv_config = ttnn.Conv1dConfig(

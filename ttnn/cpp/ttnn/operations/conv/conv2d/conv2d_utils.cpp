@@ -1119,7 +1119,7 @@ uint32_t estimate_halo_output_elems(
 // very small slice sizes
 // Additionally, for tiled outputs, there is a constraint that each slice's width must be a multiple of TILE_HEIGHT
 // In this case, slicing along height is preferred to avoid this constraint.
-Conv2dSliceConfig::SliceType determine_conv_slice_type(
+static Conv2dSliceConfig::SliceType determine_conv_slice_type(
     uint32_t input_height, uint32_t input_width, Layout output_layout) {
     if (output_layout == Layout::ROW_MAJOR) {
         float threshold_ratio = 3.0;
@@ -1128,8 +1128,6 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
         }
         return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
     } else {
-        // TODO: A more sophisticated logic is needed to balance between the increased size of halo with width slicing
-        // and the smaller slice size of height slicing for tiled layout.
         if (input_width < 200) {
             return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
         } else {
@@ -1140,7 +1138,7 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(
         }
     }
 }
-uint32_t calculate_conv_dram_slice_L1_usage(
+static uint32_t calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
@@ -1428,6 +1426,66 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         tt::LogOp, " Conv2d DRAM AutoSlicing: Max L1 usage at slice {} of {} ", max_memory_index, max_memory_consumed);
     return max_memory_consumed;
 }
+
+Conv2dSliceConfig determine_conv2d_slice_config(
+    std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device) {
+    if (slice_config.has_value() && slice_config.value().num_slices > 0) {
+        return slice_config.value();
+    }
+    auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
+    bool auto_slice_type = false;
+    if (!slice_config.has_value()) {
+        auto_slice_type = true;
+        slice_config = Conv2dSliceConfig{
+            .slice_type = determine_conv_slice_type(params.input_height, params.input_width, params.output_layout),
+            .num_slices = 0};
+    }
+    uint32_t current_num_slices = 1;
+    log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    const uint32_t output_sliced_dim = slice_config->slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
+                                           ? params.output_height
+                                           : params.output_width;
+
+    while (current_num_slices <= output_sliced_dim) {
+        slice_config->num_slices = current_num_slices;
+        auto l1_usage = calculate_conv_dram_slice_L1_usage(params, device, slice_config.value());
+        log_debug(
+            tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
+        if (L1_stats.total_free_bytes >= l1_usage) {
+            break;
+        }
+        current_num_slices++;
+    }
+    if (params.output_layout == tt::tt_metal::Layout::TILE &&
+        slice_config->slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        // This can result in more slices than expected, so we need to adjust the number of slices accordingly.
+        const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
+        slice_config->num_slices = std::min(slice_config->num_slices, max_slices);
+    }
+    if (auto_slice_type && current_num_slices > output_sliced_dim &&
+        params.output_layout == tt::tt_metal::Layout::TILE &&
+        slice_config->slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+        // For Tiled output with width slicing, we may not be able to find a suitable number of slices due to the
+        // TILE_HEIGHT constraint.
+        //  In this case, we switch to height slicing and try again.
+        log_debug(
+            tt::LogOp,
+            "Conv2D DRAM Auto slice could not find suitable number of slices with width slicing, switching to height "
+            "slicing");
+        return determine_conv2d_slice_config(
+            Conv2dSliceConfig{.slice_type = Conv2dSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
+            params,
+            device);
+    }
+    // assert because the L1 size estimation is not exact, and may overestimate L1 usage.
+    TT_ASSERT(
+        current_num_slices <= output_sliced_dim,
+        "Could not find a suitable number of slices for Conv2D DRAM Slicing. "
+        "Either increase the number of slices or reduce the output dimension being sliced.");
+    return slice_config.value();
+}
+
 conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
