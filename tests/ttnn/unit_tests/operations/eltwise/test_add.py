@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_for_slow_dispatch
 
 
 @pytest.mark.parametrize(
@@ -517,6 +518,7 @@ def test_01_volume_tensors(device, data, memory_config):
     assert c.tolist() == c_golden
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize("input_a_sharded", [True, False])
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])

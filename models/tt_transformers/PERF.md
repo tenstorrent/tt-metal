@@ -52,6 +52,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |
 | phi-1.5           | N150        | 10.00     | 50.00     | 57.87         | 108.47    |
 | phi-1.5           | N300        | 10.00     | 50.00     | 68.83         | 84.55     |
+| Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
 
 
 ## Accuracy
@@ -94,6 +95,8 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
 | phi-1.5           | N150        | 55.04     | 72.16     | 52.32         | 115.82    |
 | phi-1.5           | N300        | 8.00      | 38.00     | 64.13         | 83.72     |
+| Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
+
 
 ##  Long-context (64K Tokens)
 

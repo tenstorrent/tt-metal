@@ -2155,6 +2155,12 @@ void py_module(py::module& module) {
         "This will carry out ReLU operation at min value instead of the standard 0",
         R"doc(BFLOAT16)doc",
         R"doc(System memory is not supported.)doc");
+    bind_unary_operation_with_float_parameter(
+        module,
+        ttnn::rpow,
+        "exponent",
+        "exponent value. Non-positive values are not supported.",
+        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc");
     bind_unary_operation_with_float_parameter_default(
         module,
         ttnn::celu,
@@ -2375,16 +2381,6 @@ void py_module(py::module& module) {
         module, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_composite_float_with_default(module, ttnn::logit, "eps", "eps", 0.0f, R"doc(BFLOAT16)doc");
-
-    bind_unary_composite_rpow(
-        module,
-        ttnn::rpow,
-        "exponent",
-        "exponent value. Non-positive values are not supported.",
-        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc",
-        R"doc(Supported for input range upto 28)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(System memory is not supported.)doc");
 
     bind_unary_rdiv(
         module,
