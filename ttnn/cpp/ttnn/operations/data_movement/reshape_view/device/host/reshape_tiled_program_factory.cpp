@@ -292,8 +292,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const auto& input_shape = input_tensor.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
 
-    std::cout << "RESHAPE PF: " << input_shape << " -> " << output_shape << std::endl;
-
     TT_FATAL(input_shape.volume() == output_shape.volume(), "Requested shapes are not of equal volume");
 
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
