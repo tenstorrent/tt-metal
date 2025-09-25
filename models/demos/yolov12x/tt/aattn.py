@@ -22,13 +22,16 @@ class TtnnAattn:
             conv_pth=conv_pt.qkv.conv,
             device=device,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            enable_act_double_buffer=True,
+            enable_split_reader=True,
+            enable_weights_double_buffer=True,
             core_count=64,
         )
         self.proj = TtYOLOv12xConv2D(
             conv=parameter.proj.conv,
             conv_pth=conv_pt.proj.conv,
             device=device,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.pe = TtYOLOv12xConv2D(
             conv=parameter.pe.conv,
@@ -36,8 +39,9 @@ class TtnnAattn:
             device=device,
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            enable_split_reader=True,
+            enable_split_reader=False,
             enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
     def __call__(self, x, i=0, j=0):
@@ -46,6 +50,7 @@ class TtnnAattn:
         qkv_n = qkv_height * qkv_width
         qkv = self.qkv(x)
         # Optimize: Combine memory config and layout conversions
+
         if qkv.is_sharded():
             qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
             # Convert to ROW_MAJOR if currently TILE layout
@@ -123,33 +128,11 @@ class TtnnAattn:
         ttnn.deallocate(k)
         # Note: v_for_pe will be used later, so don't deallocate here
 
-        """
-        # Optimize: Combine permutations to reduce overhead
-        # x_attn is [B, H, S, D], need [B, H, W, C]
-        x = ttnn.permute(x_attn, (0, 2, 1, 3))  # [B, S, H, D]
-        ttnn.deallocate(x_attn)
-
-        # v_for_pe is [B, H, S, D], permute to match
-        v_for_pe = ttnn.permute(v_for_pe, (0, 2, 1, 3))  # [B, S, H, D]
-
-        if self.area > 1:
-            x = ttnn.reshape(x, (batch_size // self.area, qkv_n * self.area, self.num_heads, self.head_dim))
-            v_for_pe = ttnn.reshape(
-                v_for_pe, (batch_size // self.area, qkv_n * self.area, self.num_heads, self.head_dim)
-            )
-            batch_size = batch_size // self.area
-            qkv_n = qkv_n * self.area
-
-        # Reshape to spatial dimensions
-        x = ttnn.reshape(x, (batch_size, qkv_height, qkv_width, qkv_chan))
-        v_for_pe = ttnn.reshape(v_for_pe, (batch_size, qkv_height, qkv_width, qkv_chan))
-        """
-
         # Optimize: Directly reshape without intermediate allocation for concatenate_heads
         # x_attn is [B, H, S, D] -> concatenate to [B, S, H*D] -> reshape to [1, 1, B*S, H*D]
         x = ttnn.transformer.concatenate_heads(x_attn, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[2]))
         ttnn.deallocate(x_attn)
+        x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[2]))
 
         # Same optimization for v_for_pe
         v_for_pe = ttnn.transformer.concatenate_heads(v_for_pe, memory_config=ttnn.L1_MEMORY_CONFIG)
