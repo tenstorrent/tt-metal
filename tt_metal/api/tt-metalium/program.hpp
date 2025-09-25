@@ -14,7 +14,6 @@ namespace tt::tt_metal {
 // Fwd declares
 struct ProgramDescriptor;
 class CircularBuffer;
-class Kernel;
 
 namespace detail {
 class ProgramImpl;
@@ -49,10 +48,6 @@ public:
     // Used in ops.
     std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
-    // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
-    // Return type should be any_range
-    std::vector<std::shared_ptr<Kernel>> kernels() const;
-
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
@@ -61,5 +56,14 @@ private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
 };
+
+// Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
+class IDevice;
+namespace detail {
+struct KernelMeta;
+// Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
+// Note: device is nullable
+std::vector<detail::KernelMeta> collect_kernel_meta(Program const& program, IDevice* device);
+}; //namespace detail
 
 }  // namespace tt::tt_metal

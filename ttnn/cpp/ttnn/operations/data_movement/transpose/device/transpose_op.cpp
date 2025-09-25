@@ -191,7 +191,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
                     MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, output_mem_config.buffer_type(), shard_spec);
             }
         } else if (this->dim == TransposeOpDim::HC) {
-            output_mem_config = output_mem_config.with_shard_spec(input_tensor.shard_spec().value());
+            output_mem_config = output_mem_config.with_shard_spec(input_tensor.shard_spec());
         } else {
             TT_ASSERT(false, "Unsupported sharding");
         }

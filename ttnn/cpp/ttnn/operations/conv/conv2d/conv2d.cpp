@@ -207,6 +207,7 @@ Result conv2d_DRAM(
                         .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
                         .input_datatype = input_tensor.dtype(),
                         .output_datatype = output_dtype,
+                        .input_layout = input_tensor.layout(),
                         .enable_bias = bias_tensor.has_value(),
                         .mm_conv = mm_conv,
                     },
@@ -419,9 +420,8 @@ Result conv2d_DRAM(
             ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
             mm_conv,
             compute_grid_size,
-            // Setting layout to TILE forces input_channels_alignment to 32.
-            //  The padded_slice op needs aligned reads from L1.
-            Layout::TILE));
+            input_tensor_on_device.layout(),
+            BufferType::DRAM));
 
         Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
             input_tensor_on_device,
@@ -612,6 +612,7 @@ Result conv2d_L1(
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor.layout(),
+        input_tensor.memory_config().buffer_type(),
         mm_conv,
         input_tensor_post_tm.memory_config());
     const uint32_t in_channels_padded = tt::round_up(
@@ -699,7 +700,7 @@ Result conv2d_L1(
         }
     }
 
-    // call optimized conv op or matmul micro op
+    // call conv op or matmul micro op
     bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
 
@@ -752,7 +753,7 @@ Result conv2d_L1(
         }
 
         // call conv micro op
-        auto conv_output = optimized_conv_new(
+        auto conv_output = conv2d(
             input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,

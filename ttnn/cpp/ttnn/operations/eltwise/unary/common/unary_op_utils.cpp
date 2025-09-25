@@ -92,6 +92,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::THRESHOLD: return "SFPU_OP_THRESHOLD_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
+        case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -266,6 +267,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RSUB:
             op_init_and_name = {
                 "rsub_tile_init();", fmt::format("rsub_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            break;
+        case UnaryOpType::RPOW:
+            op_init_and_name = {
+                "rpow_tile_init();", fmt::format("rpow_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::SUB_UNARY_SFPU:
             op_init_and_name = {
@@ -752,6 +757,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
+        case UnaryOpType::CBRT: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -903,8 +909,8 @@ template std::map<std::string, std::string> get_defines<std::uint32_t>(
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
-    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
-                             : get_op_init_and_func_default(op_type, idst, input_dtype);
+    return !params.empty() ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
+                           : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
 template std::pair<std::string, std::string> get_op_init_and_func<float>(
@@ -972,6 +978,7 @@ std::string get_compute_kernel_path(
             } else {
                 return fmt::format("{}/{}", compute_root, "hardswish_kernel.cpp");
             }
+        case UnaryOpType::CBRT: return fmt::format("{}/{}", compute_root, "cbrt_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }

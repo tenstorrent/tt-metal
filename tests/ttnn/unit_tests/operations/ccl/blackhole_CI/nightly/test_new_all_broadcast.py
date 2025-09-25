@@ -9,7 +9,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev
+from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev
 
 
 def run_with_trace(

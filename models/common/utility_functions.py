@@ -1003,6 +1003,13 @@ def skip_for_n_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant fo
 def skip_for_n_or_less_dev(n, reason_str="Test_Infrastructure_Skip: Test is not meant for this number of devices"):
     return pytest.mark.skipif(ttnn.get_num_devices() <= n, reason=reason_str)
 
+def is_slow_dispatch():
+    return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
+
+
+def skip_for_slow_dispatch(reason_str="not working for slow dispatch"):
+    return pytest.mark.skipif(is_slow_dispatch(), reason=reason_str)
+
 
 def get_devices_for_t3000(all_devices, num_devices):
     """
