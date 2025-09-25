@@ -12,7 +12,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
