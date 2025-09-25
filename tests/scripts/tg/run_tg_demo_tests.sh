@@ -141,7 +141,7 @@ run_tg_sentence_bert_tests() {
 
 run_tg_whisper_tests() {
 
-  pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generatio --timeout=1500 ; fail+=$?
+  pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=1500 ; fail+=$?
 
 }
 
