@@ -160,7 +160,7 @@ def get_timeout():
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "input_hash"]
+    info_field_names = ["sweep_name", "suite_name", "vector_id", "input_hash"]
     header_info = []
     for vector in test_vectors:
         header = dict()
@@ -347,6 +347,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
     for i, test_vector in enumerate(test_vectors):
         vector_id = header_info[i].get("vector_id", "N/A")
+
         logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
         if config.dry_run:
             logger.info(f"Would have executed test for vector {test_vector}")
@@ -359,6 +360,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         validity = deserialize(test_vector["validity"])
         result["start_time_ts"] = dt.datetime.now()
+        result["input_hash"] = vector_id
         if validity.value == "INVALID":
             invalid_vectors_count += 1
             if not config.keep_invalid:
