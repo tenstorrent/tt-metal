@@ -22,13 +22,72 @@
 
 namespace ttnn::operations::binary {
 
-Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor a_sq = ttnn::square(input_a, output_mem_config);
-    Tensor b_sq = ttnn::square(input_b, output_mem_config);
-    Tensor c_sq = ttnn::add(a_sq, b_sq, std::nullopt, output_mem_config);
-    a_sq.deallocate();
-    b_sq.deallocate();
-    return ttnn::sqrt(c_sq, output_mem_config);
+// hypot - main tensor-tensor implementation
+Tensor ExecuteHypot::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::HYPOT>::invoke(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+// hypot - simple tensor-tensor interface
+Tensor ExecuteHypot::invoke(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return ExecuteHypot::invoke(
+        input_tensor_a, input_tensor_b, std::nullopt, memory_config, std::nullopt, {}, {}, {}, std::nullopt);
+}
+
+// hypot - tensor-scalar interface
+Tensor ExecuteHypot::invoke(
+    const Tensor& input_tensor_a,
+    float input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    // Convert scalar to tensor and call tensor-tensor version
+    auto scalar_tensor = ttnn::full_like(input_tensor_a, input_tensor_b);
+    return ExecuteHypot::invoke(
+        input_tensor_a,
+        scalar_tensor,
+        dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+// hypot - scalar-tensor interface
+Tensor ExecuteHypot::invoke(
+    float input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    // Convert scalar to tensor and call tensor-tensor version
+    auto scalar_tensor = ttnn::full_like(input_tensor_b, input_tensor_a);
+    return ExecuteHypot::invoke(
+        scalar_tensor, input_tensor_b, dtype, memory_config, optional_output_tensor, {}, {}, {}, std::nullopt);
 }
 
 // nextafter

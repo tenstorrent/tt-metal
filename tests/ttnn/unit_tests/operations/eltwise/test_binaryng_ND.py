@@ -63,6 +63,7 @@ import ttnn
         ttnn.bias_gelu,
         ttnn.addalpha,
         ttnn.subalpha,
+        ttnn.hypot,
     ],
 )
 def test_ND_subtile_bcast(device, shapes, ttnn_fn):
