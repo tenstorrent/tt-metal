@@ -18,6 +18,51 @@ namespace operations {
 namespace binary {
 
 /**
+ * @brief Performs element-wise hypot operation: sqrt(a^2 + b^2).
+ * When inputs are Tensors, the supported dtypes are float32 and bfloat16.
+ *
+ * @param input_a The first input tensor
+ * @param input_b The second input tensor
+ * @return The result tensor
+ */
+struct ExecuteHypot {
+    // Main tensor-tensor interface
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt);
+
+    // Simple tensor-tensor interface
+    static Tensor invoke(
+        const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config);
+
+    // Tensor-scalar interfaces for pybind
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        float input_tensor_b,
+        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt);
+
+    static Tensor invoke(
+        float input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+/**
  * @brief Performs element-wise power operation on the input with the exponent.
  * When exponent is Tensor, the supported dtypes are float32 and bfloat16.
  * The tested range for the input is (-30,30) and for the exponent is (-20, 20).
@@ -471,9 +516,7 @@ struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
 }  // namespace binary
 }  // namespace operations
 
-constexpr auto hypot = ttnn::register_operation<
-    "ttnn::hypot",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::HYPOT>>();
+constexpr auto hypot = ttnn::register_operation<"ttnn::hypot", operations::binary::ExecuteHypot>();
 constexpr auto minimum = ttnn::register_operation<"ttnn::minimum", operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation<"ttnn::maximum", operations::binary::ExecuteMaximum>();
 constexpr auto atan2 = ttnn::register_operation<

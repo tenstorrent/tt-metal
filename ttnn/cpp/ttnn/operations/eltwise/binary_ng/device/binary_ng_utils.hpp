@@ -69,6 +69,7 @@ struct OpConfig {
         GT,
         GE,
         LE,
+        HYPOT,
     };
 
     template <class EnumT>
