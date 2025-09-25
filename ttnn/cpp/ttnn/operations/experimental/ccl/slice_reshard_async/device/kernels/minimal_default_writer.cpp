@@ -60,18 +60,19 @@ void kernel_main() {
     // pre-populate packet headers
     auto pkt_hdr = PacketHeaderPool::allocate_header();
     pkt_hdr->to_chip_unicast(1);
+    auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
     fabric_connection.open();
 
     // Barrier semaphore
     if (use_barrier_sem) {
-        auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
+        auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
 
         if (!is_last_chip) {
             // unicast barrier semaphore
             uint64_t barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-            pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            pkt_hdr_barrier_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 barrier_sem_noc_addr_in_pkt,
                 static_cast<uint16_t>(1),  // increment 1
                 32});
@@ -80,16 +81,16 @@ void kernel_main() {
             if (direction) {
                 if (fabric_connection.has_forward_connection()) {
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                    pkt_hdr_sem_inc->to_chip_unicast(1);
+                    pkt_hdr_barrier_sem_inc->to_chip_unicast(1);
                     fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                        (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
                 }
             } else {
                 if (fabric_connection.has_backward_connection()) {
                     fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                    pkt_hdr_sem_inc->to_chip_unicast(1);
+                    pkt_hdr_barrier_sem_inc->to_chip_unicast(1);
                     fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                        (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                        (uint32_t)pkt_hdr_barrier_sem_inc, sizeof(PACKET_HEADER_TYPE));
                 }
             }
             noc_async_writes_flushed();
@@ -143,7 +144,6 @@ void kernel_main() {
         // unicast output ready semaphore
         uint64_t out_ready_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-        auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
         pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             out_ready_sem_noc_addr_in_pkt,
             static_cast<uint16_t>(1),  // increment 1
