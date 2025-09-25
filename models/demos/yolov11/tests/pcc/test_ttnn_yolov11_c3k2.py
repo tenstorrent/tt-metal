@@ -92,17 +92,17 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         #     True,
         #     [1, 192, 40, 40],
         # ),
-        # (
-        #     [384, 384, 128, 128, 128, 64, 64, 64, 64],
-        #     [256, 256, 64, 64, 128, 64, 64, 64, 64],
-        #     [1, 1, 1, 1, 1, 3, 3, 3, 3],
-        #     [1, 1, 1, 1, 1, 1, 1, 1, 1],
-        #     [0, 0, 0, 0, 0, 1, 1, 1, 1],
-        #     [1, 1, 1, 1, 1, 1, 1, 1, 1],
-        #     [1, 1, 1, 1, 1, 1, 1, 1, 1],
-        #     False,
-        #     [1, 384, 20, 20],
-        # ),
+        (
+            [384, 384, 128, 128, 128, 64, 64, 64, 64],
+            [256, 256, 64, 64, 128, 64, 64, 64, 64],
+            [1, 1, 1, 1, 1, 3, 3, 3, 3],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [0, 0, 0, 0, 0, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            False,
+            [1, 384, 20, 20],
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
@@ -137,6 +137,10 @@ def test_yolo_v11_c3k2(
     )
     ttnn_output = ttnn_module(x=ttnn_input, device=device)
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.permute(0, 3, 1, 2)
-    ttnn_output = ttnn_output.reshape(torch_output.shape)
+    print("shaoesa re", ttnn_output.shape, torch_output.shape)
+    # if(ttnn_output.shape[2] != torch_output.shape[2] * torch_output.shape[3]):
+    ttnn_output = ttnn_output[:, :, : torch_output.shape[2] * torch_output.shape[3], :]
+    print("afterrrr", ttnn_output.shape)
+    ttnn_output = ttnn_output.permute(0, 3, 1, 2).reshape(torch_output.shape)
+    print("afterrr111r", ttnn_output.shape)
     assert_with_pcc(torch_output, ttnn_output, 0.99)

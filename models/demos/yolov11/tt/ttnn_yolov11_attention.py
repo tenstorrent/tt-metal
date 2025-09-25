@@ -61,7 +61,7 @@ class TtnnAttention:
         #     # x1 = ttnn.to_layout(x1,ttnn.ROW_MAJOR_LAYOUT)
         #     x1 = x1[:,:,:x2.shape[2],:]
         #     p(x1,"after slice x2 is")
-        x = ttnn.add(x1, x2, memory_config=x1.memory_config(), use_legacy=False)
+        x = ttnn.add(x1, x2, memory_config=x1.memory_config())
         p(x, "after add")
         x = self.proj(device=device, x=x, output_rm_needed=False)
         p(x, "after proj")

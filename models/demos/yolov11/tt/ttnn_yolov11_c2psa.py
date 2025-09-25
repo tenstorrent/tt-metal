@@ -32,17 +32,14 @@ class TtnnC2PSA:
         p(x, "input to c2psa is")
         x = self.cv1(device, x, output_rm_needed=False)
         p(x, "output of c2psa 1st conv is")
-        if x.get_layout() != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        p(x, "after layout change")
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        p(x, "after resahrd")
         a, b = x[:, :, :400, : int(self.out_channel_0 / 2)], x[:, :, :400, int(self.out_channel_0 / 2) :]
         p(a, "a")
         p(b, "b")
         if use_signpost:
             signpost(header="psablock")
         x = self.psablock(device, b)
-        p(x, "psa whole block out")
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.concat((a, x), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv2(device, x)
