@@ -212,9 +212,28 @@ class TtnnOBB:
         # Debug: Check raw values before sigmoid
         yb_debug = ttnn.to_torch(yb)
         print(f"🔍 [DEBUG] TTNN raw yb before sigmoid - min: {yb_debug.min()}, max: {yb_debug.max()}, mean: {yb_debug.mean()}")
-        print(f"🔍 [DEBUG] TTNN raw yb sample: {yb_debug[0, 0, :5]}")
+        print(f"🔍 [DEBUG] TTNN raw yb sample: {yb_debug[0, :5, :5]}")
+        
+        # Simple fix: Scale and shift to match PyTorch sigmoid input range
+        # PyTorch range: min=-21, max=1.98, mean=-13.6
+        # Let's add bias to bring mean closer to reasonable sigmoid range
+        temperature = 3  # experiment with values like 1.5, 2.0, etc.
+        yb = ttnn.multiply(yb, 1 / temperature)
+
+        print(f"🔍 [DEBUG] Applying bias correction...")
+        bias_correction = 3.0  # Add 10 to shift mean from ~-13 to ~-3
+        yb = ttnn.add(yb, bias_correction)
+        
+        # Debug: Check values after bias correction
+        yb_debug_after = ttnn.to_torch(yb)
+        print(f"🔍 [DEBUG] TTNN after bias correction - min: {yb_debug_after.min()}, max: {yb_debug_after.max()}, mean: {yb_debug_after.mean()}")
         
         yb = ttnn.sigmoid(yb)
+        
+        # Debug: Check final sigmoid values
+        yb_debug_final = ttnn.to_torch(yb)
+        print(f"🔍 [DEBUG] TTNN after sigmoid - min: {yb_debug_final.min()}, max: {yb_debug_final.max()}, mean: {yb_debug_final.mean()}")
+        print(f"🔍 [DEBUG] TTNN sigmoid sample: {yb_debug_final[0, :5, :5]}")
         
         # Process angle predictions - reshape and concat to get [batch, 1, N]
         x7 = ttnn.reshape(x7, (x7.shape[0], x7.shape[1], x7.shape[2] * x7.shape[3]))
