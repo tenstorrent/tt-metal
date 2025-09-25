@@ -244,7 +244,7 @@ jobs:
       run: |
         mkdir clang-tidy-result
     - name: Analyze
-      timeout-minutes: 60 # Big PRs will have a LOT to scan, but most should be well under this.
+      timeout-minutes: 90 # Big PRs will have a LOT to scan, but this should be enough for everyone.
       shell: bash
       run: |
         set -euo pipefail
