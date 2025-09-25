@@ -768,6 +768,7 @@ template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_XOR>;
 
 template struct BinaryOperationSfpu<BinaryOpType::POWER>;
+template struct BinaryOperationSfpu<BinaryOpType::HYPOT>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_AND>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;

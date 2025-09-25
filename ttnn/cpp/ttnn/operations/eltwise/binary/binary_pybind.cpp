@@ -2153,12 +2153,12 @@ void py_module(py::module& module) {
         R"doc(Applied binary operation on :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     // new imported
-    detail::bind_binary_composite(
+    detail::bind_binary_operation(
         module,
         ttnn::hypot,
         R"doc(Computes hypot :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{output\_tensor}_i = \sqrt{(\mathrm{input\_tensor\_a}_i^2 + \mathrm{input\_tensor\_b}_i^2)}
-        )doc",
+        R"doc(\mathrm{output\_tensor}_i = \sqrt{(\mathrm{input\_tensor\_a}_i^2 + \mathrm{input\_tensor\_b}_i^2)})doc",
+        ". ",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_composite(
