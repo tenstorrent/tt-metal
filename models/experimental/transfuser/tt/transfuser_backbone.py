@@ -45,8 +45,12 @@ class TtTransfuserBackbone:
         x,
         device,
     ):
+        x = ttnn.permute(x, (0, 2, 3, 1))  # ch last
         # conv1 is stride 2 conv 3x3
         out, shape = self.conv1(device, x, x.shape)
+        # Reshape to spatial dimensions: 80 * 352 = 28160
+        out = ttnn.reshape(out, (1, 80, 352, 32))
+        out = ttnn.permute(out, (0, 3, 1, 2))
         return out
 
 
