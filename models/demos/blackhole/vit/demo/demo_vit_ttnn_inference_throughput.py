@@ -4,7 +4,6 @@
 
 import time
 
-import pytest
 import torch
 from loguru import logger
 from transformers import AutoImageProcessor
@@ -12,47 +11,36 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_bh
 from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_blackhole,
-    torch2tt_tensor,
-)
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, torch2tt_tensor
 
 
 def get_expected_times(functional_vit):
     return {
-        ttnn_optimized_sharded_vit_wh: (11, 0.02),
+        ttnn_optimized_sharded_vit_bh: (11, 0.02),
     }[functional_vit]
 
 
-import os
-
-os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
-
-
-@pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
 def test_vit(device, model_location_generator):
     torch.manual_seed(0)
 
     disable_persistent_kernel_cache()
 
     model_name = "google/vit-base-patch16-224"
-    batch_size = 8
+    batch_size = 10
     sequence_size = 224
 
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
-    config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit_bh.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
-        custom_preprocessor=ttnn_optimized_sharded_vit_wh.custom_preprocessor,
+        custom_preprocessor=ttnn_optimized_sharded_vit_bh.custom_preprocessor,
     )
 
     # cls_token & position embeddings expand to batch_size
@@ -104,11 +92,11 @@ def test_vit(device, model_location_generator):
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 1),
+                    ttnn.CoreCoord(N - 1, 1),
                 ),
             }
         )
-        n_cores = 16
+        n_cores = N * 2
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         output = None
@@ -124,7 +112,7 @@ def test_vit(device, model_location_generator):
             tt_dtype=ttnn.bfloat16,
         )
 
-        output = ttnn_optimized_sharded_vit_wh.vit(
+        output = ttnn_optimized_sharded_vit_bh.vit(
             config,
             pixel_values,
             cls_token,
@@ -139,7 +127,7 @@ def test_vit(device, model_location_generator):
 
     inference_and_compile_time, inference_time, *_ = durations
 
-    expected_compile_time, expected_inference_time = get_expected_times(ttnn_optimized_sharded_vit_wh)
+    expected_compile_time, expected_inference_time = get_expected_times(ttnn_optimized_sharded_vit_bh)
     prep_perf_report(
         model_name="vit_ttnn_optim_sharded",
         batch_size=batch_size,

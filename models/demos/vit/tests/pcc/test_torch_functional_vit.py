@@ -7,9 +7,9 @@ import torch
 import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.vit.common import load_torch_model
 from models.demos.vit.reference import torch_functional_vit
+from models.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py
@@ -64,7 +64,7 @@ def test_vit_embeddings(model_name, batch_size, image_size, image_channels):
         custom_preprocessor=torch_functional_vit.custom_preprocessor,
     )
 
-    # TODO: integrate within parameters
+    # TODO: integrate within paramters
     model_state_dict = model.state_dict()
     torch_cls_token = torch.nn.Parameter(model_state_dict["cls_token"])
     torch_position_embeddings = torch.nn.Parameter(model_state_dict["position_embeddings"])
@@ -249,7 +249,7 @@ def test_vit(model_name, batch_size, image_size, image_channels, model_location_
         custom_preprocessor=torch_functional_vit.custom_preprocessor,
     )
 
-    # TODO: integrate within parameters
+    # TODO: integrate within paramters
     model_state_dict = model.state_dict()
     torch_cls_token = torch.nn.Parameter(model_state_dict["vit.embeddings.cls_token"])
     torch_position_embeddings = torch.nn.Parameter(model_state_dict["vit.embeddings.position_embeddings"])
