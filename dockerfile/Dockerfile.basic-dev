@@ -57,3 +57,6 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 # Add PyTorch CPU wheels to pip config
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+
+# Enable Inspector RPC by default for users of this docker image
+ENV TT_INSPECTOR_RPC_ENABLED=1

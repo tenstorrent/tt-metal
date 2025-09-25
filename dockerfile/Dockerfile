@@ -223,3 +223,6 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
+
+# Enable Inspector RPC by default for users of this docker image
+ENV TT_INSPECTOR_RPC_ENABLED=1

@@ -20,9 +20,9 @@ Configure the Inspector by setting the following environment variables:
    export TT_METAL_INSPECTOR_LOG_PATH=logging_path          # optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`
    export TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=1  # optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `0` (disabled).
    export TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS=0     # optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).
-   export TT_METAL_INSPECTOR_RPC_SERVER_HOST=127.0.0.1      # optional: set the host of the Inspector RPC server. Default is `127.0.0.1`.
+   export TT_METAL_INSPECTOR_RPC_SERVER_HOST=localhost      # optional: set the host of the Inspector RPC server. Default is `localhost`.
    export TT_METAL_INSPECTOR_RPC_SERVER_PORT=50051          # optional: set the port of the Inspector RPC server. Default is `50051`.
-   export TT_METAL_INSPECTOR_RPC=1                          # optional: enable/disable the Inspector RPC server. Default is `1` (enabled).
+   export TT_METAL_INSPECTOR_RPC=1                          # optional: enable/disable the Inspector RPC server. Default is `0` (disabled).
 
 Enabling the Inspector will override `TT_METAL_RISCV_DEBUG_INFO` and debugging info will be generated for riscv elfs.
 
