@@ -150,6 +150,7 @@ jobs:
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
       # name clashes.
       build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
+      build-wheel: true
       publish-artifact: false
       skip-tt-train: true
       distributed: false
@@ -180,7 +181,9 @@ jobs:
     if: ${{
         (github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-changed == 'true') &&
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true') &&
         github.event.pull_request.head.repo.fork == false
       }}
     strategy:
@@ -188,9 +191,10 @@ jobs:
     uses: ./.github/workflows/ttsim.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
-      product: tt-metalium
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   docker-image:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft

@@ -5,10 +5,10 @@
 import pytest
 from loguru import logger
 
-from models.utility_functions import comp_pcc, tt2torch_tensor
+from models.common.utility_functions import comp_pcc, tt2torch_tensor
 import torch
-from models.utility_functions import is_wormhole_b0
-from models.utility_functions import is_grayskull
+from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_grayskull
 import ttnn
 
 

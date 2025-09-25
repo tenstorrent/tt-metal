@@ -165,7 +165,7 @@ bool check_connection_requested(
     }
 }
 
-std::string create_port_tag(port_id_t port_id) {
+[[maybe_unused]] std::string create_port_tag(port_id_t port_id) {
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
 
@@ -2361,8 +2361,8 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
 
     TT_FATAL(
-        !requested_intermesh_connections.empty() || !requested_intermesh_ports.empty(),
-        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections.");
+        requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
+        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
 
     bool strict_binding = !requested_intermesh_ports.empty();
 
@@ -2645,6 +2645,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
 
     const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
+
+    TT_FATAL(
+        requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
+        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
 
     bool strict_binding = !requested_intermesh_ports.empty();
 
