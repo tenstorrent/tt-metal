@@ -91,7 +91,7 @@ struct BandwidthResultSummary {
     uint32_t num_packets;
     std::vector<uint32_t> num_devices;
     uint32_t packet_size;
-    std::vector<uint64_t> cycles_vector;
+    std::vector<double> cycles_vector;
     std::vector<double> bandwidth_vector_GB_s;
     std::vector<double> packets_per_second_vector;
     std::vector<double> statistics_vector; // Stores the calculated statistics for each test
@@ -858,8 +858,9 @@ private:
 
     unsigned int get_device_frequency_mhz(const FabricNodeId& device_id) {
         if (!device_freq_mhz_map_.contains(device_id)) {
-            auto physical_chip_id = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
-            device_freq_mhz_map_[device_id] = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
+            auto& metal_context = tt::tt_metal::MetalContext::instance();
+            auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
+            device_freq_mhz_map_[device_id] = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
         }
         auto freq_mhz = device_freq_mhz_map_.at(device_id);
         TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
@@ -941,9 +942,9 @@ private:
 
                     // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
                     std::string cache_key = std::to_string(device_id.chip_id) + "_" +
-                                          std::to_string(static_cast<int>(direction)) + "_" +
-                                          std::to_string(link_id);
-                    
+                                            std::to_string(static_cast<int>(direction)) + "_" +
+                                            std::to_string(link_id);
+
                     TT_FATAL(
                         config_cache.contains(cache_key),
                         "Config not found in cache for device {} direction {} link {}",
@@ -1008,7 +1009,7 @@ private:
         // Generate a new entry for the test, grouping multi-iteration tests into the same entry
         if (config.parametrized_name.find("_iter_0") != std::string::npos || config.parametrized_name.find("_iter_") == std::string::npos) {
             // Use base name for test name, rather than name with _iter_0 suffix
-            std::string test_name = config.name;
+            const std::string& test_name = config.name;
             // Find test parameters based on the test's first test pattern
             std::string ftype_str = "None";
             std::string ntype_str = "None";
@@ -1041,7 +1042,7 @@ private:
                 .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
                 .packet_size = packet_size_first_pattern,
                 // Push in results for the first iteration
-                .cycles_vector = {max_cycles},
+                .cycles_vector = {static_cast<double>(max_cycles)},
                 .bandwidth_vector_GB_s = {bandwidth_GB_s},
                 .packets_per_second_vector = {packets_per_second},
             });
@@ -1050,150 +1051,69 @@ private:
         // Multi-iteration tests are executed sequentially, so we can just append to the last-created test entry
         else {
             BandwidthResultSummary& test_result = bandwidth_results_summary_.back();
-            test_result.cycles_vector.push_back(max_cycles);
+            test_result.cycles_vector.push_back(static_cast<double>(max_cycles));
             test_result.bandwidth_vector_GB_s.push_back(bandwidth_GB_s);
             test_result.packets_per_second_vector.push_back(packets_per_second);
             test_result.num_iterations++;
         }
     }
 
-    void calculate_cycles_mean() {
+    void calculate_mean(const std::string& stat_name, const auto& lambda_measurement_vector) {
         // Push statistics name into results summary csv header
-        stat_names_.push_back("Avg Cycles");
-        uint64_t sum = 0;
-        double mean = 0.0;
+        stat_names_.push_back(stat_name);
         for (auto& result : bandwidth_results_summary_) {
-            // Case 1: Test was only run for 1 iteration
-            if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(static_cast<double>(result.cycles_vector[0]));
-            }
-            // Case 2: Test was run for multiple iterations
-            else {
-                sum = 0;
-                for (auto& cycles : result.cycles_vector) {
-                    sum += cycles;
-                }
-                mean = static_cast<double>(sum) / result.num_iterations;
-                result.statistics_vector.push_back(mean);
-            }
+            const std::vector<double>& measurements_vector = lambda_measurement_vector(result);
+            double sum = std::accumulate(measurements_vector.begin(), measurements_vector.end(), 0.0);
+            double mean = sum / result.num_iterations;
+            result.statistics_vector.push_back(mean);
         }
+    }
+
+    void calculate_cycles_mean() {        
+        calculate_mean("Avg Cycles", [](const auto& result) {return result.cycles_vector;});
     }
 
     void calculate_packets_per_second_mean() {
-        // Push statistics name into results summary csv header
-        stat_names_.push_back("Avg Packets/s");
-        double sum = 0.0;
-        double mean = 0.0;
-        for (auto& result : bandwidth_results_summary_) {
-            // Case 1: Test was only run for 1 iteration
-            if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(result.packets_per_second_vector[0]);
-            }
-            // Case 2: Test was run for multiple iterations
-            else {
-                sum = 0.0;
-                for (auto& packets_per_second : result.packets_per_second_vector) {
-                    sum += packets_per_second;
-                }
-                mean = sum / result.num_iterations;
-                result.statistics_vector.push_back(mean);
-            }
-        }
+        calculate_mean("Avg Packets/s", [](const auto& result) {return result.packets_per_second_vector;});
     }
 
     void calculate_bandwidth_mean() {
-        // Push statistics name into results summary csv header
-        stat_names_.push_back("Avg Bandwidth (GB/s)");
-        double sum = 0.0;
-        double mean = 0.0;
-        for (auto& result : bandwidth_results_summary_) {
-            // Case 1: Test was only run for 1 iteration
-            if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(result.bandwidth_vector_GB_s[0]);
-            }
-            // Case 2: Test was run for multiple iterations
-            else {
-                sum = 0.0;
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
-                    sum += bandwidth_gb_s;
-                }
-                mean = sum / result.num_iterations;
-                result.statistics_vector.push_back(mean);
-            }
-        }
+        calculate_mean("Avg Bandwidth (GB/s)", [](const auto& result) {return result.bandwidth_vector_GB_s;});
     }
 
     void calculate_bandwidth_min() {
         // Push statistics name into results summary csv header
         stat_names_.push_back("BW Min (GB/s)");
-        double min;
         for (auto& result : bandwidth_results_summary_) {
-            // Case 1: Test was only run for 1 iteration
-            if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(result.bandwidth_vector_GB_s[0]);
-            }
-            // Case 2: Test was run for multiple iterations
-            else {
-                min = std::numeric_limits<double>::max();
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
-                    min = std::min(min, bandwidth_gb_s);
-                }
-                result.statistics_vector.push_back(min);
-            }
+            result.statistics_vector.push_back(
+                *std::min_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end())
+            );
         }
     }
 
     void calculate_bandwidth_max() {
         // Push statistics name into results summary csv header
         stat_names_.push_back("BW Max (GB/s)");
-        double max;
         for (auto& result : bandwidth_results_summary_) {
-            // Case 1: Test was only run for 1 iteration
-            if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(result.bandwidth_vector_GB_s[0]);
-            }
-            // Case 2: Test was run for multiple iterations
-            else {
-                max = std::numeric_limits<double>::min();
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
-                    max = std::max(max, bandwidth_gb_s);
-                }
-                result.statistics_vector.push_back(max);
-            }
+            result.statistics_vector.push_back(
+                *std::max_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end())
+            );
         }
     }
 
     void calculate_bandwidth_std_dev() {
         // Push statistics name into results summary csv header
         stat_names_.push_back("BW Std Dev (GB/s)");
-
-        double sum = 0.0;
-        double mean = 0.0;
-        double variance = 0.0;
-        double std_dev = 0.0;
         for (auto& result : bandwidth_results_summary_) {
-            // Case 1: Test was only run for 1 iteration
-            if (result.num_iterations == 1) {
-                result.statistics_vector.push_back(0.0);
+            double sum = std::accumulate(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end(), 0.0);
+            double mean = sum / result.num_iterations;
+            double variance = 0.0;
+            for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
+                variance += std::pow(bandwidth_gb_s - mean, 2);
             }
-            // Case 2: Test was run for multiple iterations
-            else {
-                // First, calculate bandwidth mean
-                sum = 0.0;
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
-                    sum += bandwidth_gb_s;
-                }
-                mean = sum / result.num_iterations;
-                // Next, calculate variance
-                variance = 0.0;
-                for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
-                    variance += std::pow(bandwidth_gb_s - mean, 2);
-                }
-                variance /= result.num_iterations;
-                // Finally, calculate standard deviation
-                std_dev = std::sqrt(variance);
-                result.statistics_vector.push_back(std_dev);
-            }
+            variance /= result.num_iterations;
+            double std_dev = std::sqrt(variance);
+            result.statistics_vector.push_back(std_dev);
         }
     }
 
@@ -1275,8 +1195,6 @@ private:
         }
 
         // Write detailed header
-        // summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,cycles,bandwidth_gb_s,"
-        //                       "packets_per_second,tolerance_percent\n";
         summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
         for (std::string stat_name : stat_names_) {
             summary_csv_stream << "," << stat_name;
@@ -1536,11 +1454,18 @@ private:
                     test_result_avg_packets_per_second = test_result.statistics_vector[packets_per_second_stat_index];
                 }
                 std::string csv_format_string =
-                    test_result.test_name + "," + test_result.ftype + "," + test_result.ntype + "," + test_result.topology + ",\"" + num_devices_str +
-                    "\"," + std::to_string(test_result.num_links) + "," +
-                    std::to_string(test_result.packet_size) + "," + std::to_string(test_result.num_iterations) + "," + std::to_string(test_result_avg_cycles) + "," +
-                    std::to_string(test_result_avg_bandwidth) + "," +
-                    std::to_string(test_result_avg_packets_per_second) + "," + tolerance_stream.str();
+                    test_result.test_name + ","
+                  + test_result.ftype + ","
+                  + test_result.ntype + ","
+                  + test_result.topology
+                  + ",\"" + num_devices_str + "\","
+                  + std::to_string(test_result.num_links) + ","
+                  + std::to_string(test_result.packet_size) + ","
+                  + std::to_string(test_result.num_iterations) + ","
+                  + std::to_string(test_result_avg_cycles) + ","
+                  + std::to_string(test_result_avg_bandwidth) + ","
+                  + std::to_string(test_result_avg_packets_per_second) + ","
+                  + tolerance_stream.str();
                 all_failed_tests_.push_back(csv_format_string);
             }
         }
