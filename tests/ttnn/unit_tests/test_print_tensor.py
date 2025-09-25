@@ -201,7 +201,6 @@ ADVANCED_GOLDEN_TENSOR_STRINGS = {
 @pytest.mark.parametrize("precision", [2, 4])
 def test_advanced_print_options(device, profile, sci_mode, precision):
     ttnn.set_printoptions(profile=profile, sci_mode=sci_mode, precision=precision)
-    torch.set_printoptions(profile=profile, sci_mode=sci_mode, precision=precision)
 
     torch.manual_seed(0)
     torch_tensor = torch.randn((4, 5), dtype=torch.bfloat16)
