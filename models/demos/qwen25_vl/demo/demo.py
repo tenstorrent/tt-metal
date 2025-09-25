@@ -167,15 +167,41 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-32 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
+        (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             16384,  # max_seq_len, allow for image tokens
-            32,  # batch_size -- samples to load from the prompt JSON
+            4,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 16384},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-2 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            32768,  # max_seq_len, allow for image tokens
+            2,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-1 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            65536,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -187,7 +213,9 @@ def create_tt_model(
         "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
         "real-world-test",  # real-world test for 300DPI scanned document
-        "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context
+        "long-context-16k",  # real-world test for 300DPI scanned document with 32k long context
+        "long-context-32k",  # real-world test for 300DPI scanned document with 64k long context
+        "long-context-64k",  # real-world test for 300DPI scanned document with 128k long context
     ],
 )
 @pytest.mark.parametrize(
