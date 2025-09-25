@@ -28,25 +28,9 @@ def create_yolov11_input_tensors(
                 ttnn_input_tensor.shape[-1],
             ),
         )
-        # Debug: Check diversity before ttnn.from_torch conversion
-        pre_conversion_flat = ttnn_input_tensor.flatten()
-        pre_conversion_unique = torch.unique(pre_conversion_flat)
-        print(f"🔍 [PREPROCESSING DEBUG] BEFORE ttnn.from_torch: {len(pre_conversion_unique)} unique values out of {len(pre_conversion_flat)} total")
-        print(f"    Range: [{pre_conversion_flat.min()}, {pre_conversion_flat.max()}], Mean: {pre_conversion_flat.mean()}")
-        print(f"    Dtype: {ttnn_input_tensor.dtype}")
-        
         ttnn_input_tensor = ttnn.from_torch(
             ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, mesh_mapper=inputs_mesh_mapper
         )
-        
-        # Debug: Check diversity after ttnn.from_torch conversion
-        post_conversion_debug = ttnn.to_torch(ttnn_input_tensor)
-        post_conversion_flat = post_conversion_debug.flatten()
-        post_conversion_unique = torch.unique(post_conversion_flat)
-        print(f"🔍 [PREPROCESSING DEBUG] AFTER ttnn.from_torch: {len(post_conversion_unique)} unique values out of {len(post_conversion_flat)} total")
-        print(f"    Range: [{post_conversion_flat.min()}, {post_conversion_flat.max()}], Mean: {post_conversion_flat.mean()}")
-        print(f"    Dtype: {post_conversion_debug.dtype}")
-        print(f"🔍 [PREPROCESSING DEBUG] DIVERSITY LOSS: {len(pre_conversion_unique)} → {len(post_conversion_unique)} ({100*(len(pre_conversion_unique)-len(post_conversion_unique))/len(pre_conversion_unique):.2f}% loss)")
     else:
 
         
@@ -57,13 +41,11 @@ def create_yolov11_input_tensors(
         
         # CRITICAL FIX: Do permute in PyTorch to avoid TTNN's 94% quantization loss
         # Convert NCHW → NHWC in high-precision PyTorch instead of lossy TTNN
-        torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))  # [N,C,H,W] → [N,H,W,C]
+        torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))  # [N,C,H,W] → [N,H,W,C]
         
-        # Debug: Check that PyTorch permute preserves full precision
-        torch_permuted_flat = torch_input_tensor.flatten()
-        torch_permuted_unique = torch.unique(torch_permuted_flat)
-        print(f"🔍 [PYTORCH PERMUTE] After PyTorch permute: {len(torch_permuted_unique)} unique values out of {len(torch_permuted_flat)} total")
-        print(f"    Range: [{torch_permuted_flat.min()}, {torch_permuted_flat.max()}], Mean: {torch_permuted_flat.mean()}")
+        # ✅ CHECKPOINT: Verify PyTorch permute preserves full precision
+        pre_conversion_unique = len(torch.unique(torch_input_tensor_nhwc.flatten()))
+        print(f"✅ [CHECKPOINT] PyTorch permute preserved: {pre_conversion_unique} unique values")
         
         # Update memory config for NHWC format [n, h, w, c]
         input_mem_config = ttnn.create_sharded_memory_config(
@@ -71,15 +53,9 @@ def create_yolov11_input_tensors(
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        # Debug: Check diversity after PyTorch permute, before ttnn.from_torch conversion
-        pre_conversion_flat = torch_input_tensor.flatten()
-        pre_conversion_unique = torch.unique(pre_conversion_flat)
-        print(f"🔍 [PREPROCESSING DEBUG - ELSE] AFTER PyTorch permute, BEFORE ttnn.from_torch: {len(pre_conversion_unique)} unique values out of {len(pre_conversion_flat)} total")
-        print(f"    Range: [{pre_conversion_flat.min()}, {pre_conversion_flat.max()}], Mean: {pre_conversion_flat.mean()}")
-        print(f"    Dtype: {torch_input_tensor.dtype}, Shape: {torch_input_tensor.shape}")
         
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
+            torch_input_tensor_nhwc,  # Use NHWC version for TTNN
             dtype=ttnn.float32,  # Changed from bfloat16 to preserve input diversity
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -87,14 +63,10 @@ def create_yolov11_input_tensors(
             mesh_mapper=inputs_mesh_mapper,
         )
         
-        # Debug: Check diversity after ttnn.from_torch conversion (ELSE branch)
-        post_conversion_debug = ttnn.to_torch(ttnn_input_tensor)
-        post_conversion_flat = post_conversion_debug.flatten()
-        post_conversion_unique = torch.unique(post_conversion_flat)
-        print(f"🔍 [PREPROCESSING DEBUG - ELSE] AFTER ttnn.from_torch: {len(post_conversion_unique)} unique values out of {len(post_conversion_flat)} total")
-        print(f"    Range: [{post_conversion_flat.min()}, {post_conversion_flat.max()}], Mean: {post_conversion_flat.mean()}")
-        print(f"    Dtype: {post_conversion_debug.dtype}")
-        print(f"🔍 [PREPROCESSING DEBUG - ELSE] DIVERSITY LOSS: {len(pre_conversion_unique)} → {len(post_conversion_unique)} ({100*(len(pre_conversion_unique)-len(post_conversion_unique))/len(pre_conversion_unique):.2f}% loss)")
+        # ✅ CHECKPOINT: Verify ttnn.from_torch preserves diversity
+        post_conversion_unique = len(torch.unique(ttnn.to_torch(ttnn_input_tensor).flatten()))
+        loss_pct = 100*(pre_conversion_unique-post_conversion_unique)/pre_conversion_unique
+        print(f"✅ [CHECKPOINT] TTNN conversion: {pre_conversion_unique} → {post_conversion_unique} ({loss_pct:.1f}% loss)")
     return torch_input_tensor, ttnn_input_tensor
 
 
