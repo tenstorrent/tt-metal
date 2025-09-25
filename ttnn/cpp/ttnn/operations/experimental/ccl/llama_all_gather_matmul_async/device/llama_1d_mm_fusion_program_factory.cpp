@@ -90,7 +90,7 @@ process_agmm_fusion_program_and_create_override_variables(
     }
     for (auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        if (intersection.size() > 0) {
+        if (!intersection.empty()) {
             non_idle_cores_vec.push_back(intersection.bounding_box());
         }
     }
@@ -895,7 +895,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         global_cb,
         num_global_cb_receivers,
         sub_device_id,
-        restricted_cores,
+        std::move(restricted_cores),
         fused_op_signaler);
 }
 
@@ -948,10 +948,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion(
         per_core_M,
         per_core_N,
         fuse_batch,
-        std::move(fused_activation),
+        fused_activation,
         mcast_in0,
         gather_in0,
-        std::move(hop_cores),
+        hop_cores,
         untilize_out,
         empty_fused_op_signaler,
         global_cb,
@@ -1023,7 +1023,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
-        restricted_cores);
+        std::move(restricted_cores));
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(

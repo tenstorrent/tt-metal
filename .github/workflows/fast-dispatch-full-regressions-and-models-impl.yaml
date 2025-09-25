@@ -58,6 +58,7 @@ jobs:
             {"model":"vgg_unet"},
             {"model":"yolov10x"},
             {"model":"yolov11"},
+            {"model":"yolov11m"},
             {"model":"yolov8s"},
             {"model":"yolov8s_world"},
             {"model":"yolov8x"},
@@ -70,7 +71,8 @@ jobs:
             {"model":"yolov12x"},
             {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout":45}
+            {"model":"stable_diffusion_xl_base","timeout":45},
+            {"model":"stable_diffusion","timeout":45}
           ]'
 
           # Stable set (CIv2)
@@ -81,7 +83,6 @@ jobs:
 
           # Unstable set (explicit commands)
           UNSTABLE='[
-            {"model":"stable_diffusion","cmd":"TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion"},
             {"model":"mamba 1","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1"},
             {"model":"mamba 2","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2"},
             {"model":"mamba 3","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3"},
@@ -117,7 +118,6 @@ jobs:
 
             # Skipping due to issue 15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
             UNSTABLE_OUT='[
-              {"model":"stable_diffusion","cmd":"TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion"},
               {"model":"mamba 5","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5"}
             ]'
 
@@ -189,7 +189,9 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home -e TT_MM_THROTTLE_PERF=5' || '' }}
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+            ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
+            ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |

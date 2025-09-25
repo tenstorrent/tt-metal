@@ -26,7 +26,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/semaphore.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -41,7 +41,7 @@ using namespace tt::tt_metal;
 namespace unit_tests::initialize_semaphores {
 
 void initialize_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload& workload,
     const CoreRange& core_range) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -142,7 +142,7 @@ void try_creating_more_than_max_num_semaphores(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    create_and_read_max_num_semaphores(mesh_device, workload, core_range);
+    create_and_read_max_num_semaphores(std::move(mesh_device), workload, core_range);
     std::cout << "created max num semaphores" << std::endl;
     constexpr static uint32_t val = 5;
     ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));

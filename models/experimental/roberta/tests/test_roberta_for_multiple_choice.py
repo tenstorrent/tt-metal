@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, RobertaForMultipleChoice
 
 
 from models.experimental.roberta.tt.roberta_for_multiple_choice import TtRobertaForMultipleChoice
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,

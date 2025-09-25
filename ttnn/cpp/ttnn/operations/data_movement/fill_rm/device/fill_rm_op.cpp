@@ -68,8 +68,8 @@ operation::ProgramWithCallbacks fill_rm_single_core(
          uint32_t(W),
          uint32_t(hFill),
          uint32_t(wFill),
-         uint32_t(bfloat16(val_hi).to_uint16()),
-         uint32_t(bfloat16(val_lo).to_uint16())});
+         uint32_t(std::bit_cast<uint16_t>(bfloat16(val_hi))),
+         uint32_t(std::bit_cast<uint16_t>(bfloat16(val_lo)))});
 
     auto override_runtime_args_callback = [kernel_id = binary_reader_kernel_id](
                                               const void* operation,

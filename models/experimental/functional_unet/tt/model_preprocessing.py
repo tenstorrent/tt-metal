@@ -63,24 +63,21 @@ def create_unet_model_parameters(
         parameters[key].module = getattr(model, key)
 
     parameters.c1["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c1["use_split_reader"] = True
     parameters.c1["use_activation_double_buffer"] = True
+    parameters.c1["enable_activation_reuse"] = True
     parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
-    parameters.c1_2["use_split_reader"] = True
     parameters.c1_2["use_activation_double_buffer"] = True
 
     parameters.c2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c2["use_split_reader"] = True
     parameters.c2["use_activation_double_buffer"] = True
+    parameters.c2["enable_activation_reuse"] = True
     parameters.c2_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c2_2["use_split_reader"] = True
     parameters.c2_2["use_activation_double_buffer"] = True
+    parameters.c2_2["enable_activation_reuse"] = True
 
     parameters.c3["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c3["use_split_reader"] = True
     parameters.c3["use_activation_double_buffer"] = True
     parameters.c3_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c3_2["use_split_reader"] = True
     parameters.c3_2["use_activation_double_buffer"] = True
 
     parameters.c4["conv_blocking_and_parallelization_config_override"] = None
@@ -101,38 +98,30 @@ def create_unet_model_parameters(
     parameters.c5_3["use_activation_double_buffer"] = False
 
     parameters.c6["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c6["use_split_reader"] = True
     parameters.c6["use_activation_double_buffer"] = True
     parameters.c6_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c6_2["use_split_reader"] = True
     parameters.c6_2["use_activation_double_buffer"] = True
     parameters.c6_3["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c6_3["use_split_reader"] = True
     parameters.c6_3["use_activation_double_buffer"] = True
 
     parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 3 * 32}
     parameters.c7["use_activation_double_buffer"] = True
-    parameters.c7["use_split_reader"] = False
     parameters.c7_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c7_2["use_split_reader"] = True
     parameters.c7_2["use_activation_double_buffer"] = True
+    parameters.c7_2["enable_activation_reuse"] = True
     parameters.c7_3["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c7_3["use_split_reader"] = True
     parameters.c7_3["use_activation_double_buffer"] = True
+    parameters.c7_3["enable_activation_reuse"] = True
 
     parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 4 * 32}
     parameters.c8["use_activation_double_buffer"] = True
-    parameters.c8["use_split_reader"] = False
     parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c8_2["use_activation_double_buffer"] = True
-    parameters.c8_2["use_split_reader"] = True
     parameters.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
 
     parameters.c8_3["use_activation_double_buffer"] = True
-    parameters.c8_3["use_split_reader"] = True
 
     parameters.output_layer["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 42 * 32}
     parameters.output_layer["use_activation_double_buffer"] = True
-    parameters.output_layer["use_split_reader"] = True
 
     return parameters

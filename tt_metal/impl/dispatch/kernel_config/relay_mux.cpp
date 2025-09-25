@@ -13,7 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_align.hpp"
 #include "tt_metal.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <algorithm>
 #include <tt-metalium/fabric.hpp>
 
@@ -80,7 +80,8 @@ void RelayMux::GenerateStaticConfigs() {
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
         mux_config_core);
-    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
+
+    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args_for_relay_mux();
 
     uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
     TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);

@@ -224,7 +224,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         reallocate_halo_output=False,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=True,
-        enable_split_reader=False,
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=64,

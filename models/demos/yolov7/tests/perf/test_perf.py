@@ -8,8 +8,8 @@ from loguru import logger
 
 import models.demos.yolov7.reference.yolov7_model as yolov7_model
 import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
+from models.common.utility_functions import run_for_wormhole_b0
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.utility_functions import run_for_wormhole_b0
 
 sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model
@@ -19,7 +19,7 @@ sys.modules["models.yolo"] = yolov7_model
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 119.35],
+        [1, 135.17],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
