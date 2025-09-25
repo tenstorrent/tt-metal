@@ -18,11 +18,11 @@ NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2760704}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2770704}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, iterations",
-    ((10, 100),),
+    ((10, 1000),),
 )
 def test_run_vit_trace_2cqs_inference(
     mesh_device,

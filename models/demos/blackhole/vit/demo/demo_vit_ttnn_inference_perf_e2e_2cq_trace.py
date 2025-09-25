@@ -118,7 +118,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 # @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2760704}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2770704}], indirect=True
 )
 @pytest.mark.parametrize("batch_size", [10])
 def test_vit(device, batch_size):
