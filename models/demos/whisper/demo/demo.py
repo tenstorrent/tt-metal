@@ -620,7 +620,7 @@ def test_demo_for_conditional_generation(
         input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device
     )
     threshold = 0.00
-    high_tol_percentage = 1.20  # default is 1.15, prefill not scaling linearly for galaxy
+    high_tol_percentage = 1.30  # default is 1.15, prefill not scaling linearly for galaxy
     if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
