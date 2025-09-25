@@ -291,7 +291,7 @@ struct EdmChannelWorkerInterface {
     template <bool enable_deadlock_avoidance>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
+        noc_inline_dw_write<InlineWriteDst::REG, true>(
             this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
     }
 

@@ -677,8 +677,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
-inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
     uint32_t val,
@@ -686,71 +686,8 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
-    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has back-pressure then the transaction will hang because there is no
-    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
-    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
-    ASSERT((dest_addr & 0x3) == 0);
-    uint32_t src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
-
-    // Flush to make sure write left L1 before updating it. Both posted and non-posted counters
-    // need to be checked because we don't know, in the moment, the history of spoofed writes and
-    // if they were posted or non-posted.
-    //
-    // An alternative to this is to force the spoofed write to be posted. However this breaks some
-    // niche user code cases. For example, when a user wants to send some data via an inline write
-    // (say if they need to send data where src/dest are not aligned), and they need to signal to
-    // a consumer when the write has completed (when the data and consumer are on different cores -
-    // a completion ack is needed to avoid race). Forcing posted removes this as a supported use
-    // case; it was not chosen as an approach.
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
-    } else {
-        while (!ncrisc_noc_nonposted_writes_sent(noc));
-        while (!ncrisc_noc_posted_writes_sent(noc));
-    }
-
-    volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
-    *interim_addr_ptr = val;
-
-// Copied from dataflow_cmd_bufs.h
-#if defined(COMPILE_FOR_BRISC)
-    constexpr uint32_t write_cmd_buf = noc_mode == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
-#elif defined(COMPILE_FOR_NCRISC)
-    constexpr uint32_t write_cmd_buf = noc_mode == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
-#else
-    constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
-#endif
-
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    ncrisc_noc_fast_write<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_addr,
-        dest_addr,
-        4,
-        static_vc,
-        false,  // mcast
-        false,  // linked
-        1,      // num_dests
-        true,   // multicast_path_reserve
-        posted  // posted
-    );
-}
-
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
-inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
-    uint32_t noc,
-    uint32_t cmd_buf,
-    uint32_t val,
-    uint64_t dest_addr,
-    uint32_t be,
-    uint32_t static_vc,
-    bool mcast,
-    bool posted = false) {
-    ASSERT(be == 0xF);
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -766,19 +703,18 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
                              (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
-    // If we're given a misaligned address, don't write to the bytes in the word below the address
     uint32_t be_shift = (dest_addr & (NOC_WORD_BYTES - 1));
+    // If we're given a misaligned address, don't write to the bytes in the word below the address
     be32 = (be32 << be_shift);
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(dest_addr));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr & 0xFFFFFFFF);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
             noc_posted_writes_num_issued[noc] += 1;
@@ -786,30 +722,6 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;
         }
-    }
-}
-
-template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
-inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
-    uint32_t noc,
-    uint32_t cmd_buf,
-    uint32_t val,
-    uint64_t dest_addr,
-    uint32_t be,
-    uint32_t static_vc,
-    bool mcast,
-    bool posted = false) {
-    if constexpr (dst_type == InlineWriteDst::DEFAULT) {
-        if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
-            noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
-        } else {
-            noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
-        }
-    } else if constexpr (dst_type == InlineWriteDst::L1) {
-        noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
-    } else {
-        ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
-        noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
     }
 }
 
