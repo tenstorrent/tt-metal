@@ -49,25 +49,6 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
     }
 }
 
-FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
-    const auto& dim_types = topology.dim_types();
-
-    TT_FATAL(dim_types.size() == 2, "Torus topology must have 2 dimensions");
-
-    if (dim_types[0] == proto::TorusTopology::RING && dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_XY;
-    } else if (dim_types[0] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_Y;
-    } else if (dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_X;
-    } else if (dim_types[0] == proto::TorusTopology::LINE && dim_types[1] == proto::TorusTopology::LINE) {
-        return FabricType::MESH;
-    }
-
-    TT_THROW("Invalid torus topology");
-    return FabricType::MESH;
-}
-
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
     cluster_type_to_mesh_graph_descriptor =
         tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
