@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include <utility>

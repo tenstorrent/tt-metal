@@ -4,6 +4,7 @@
 
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tt_stl/math.hpp>
 
 namespace tt::tt_metal {
 
@@ -35,7 +36,7 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
             "Shard width {} must match physical width {} for height sharded",
             physical_shard_width,
             physical_width);
-        uint32_t num_shards = div_up(physical_height, physical_shard_height);
+        uint32_t num_shards = ttsl::math::div_up(physical_height, physical_shard_height);
         TT_FATAL(
             num_shards <= num_cores,
             "Number of shards along height {} must not exceed number of cores {}",
@@ -47,7 +48,7 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
             "Shard height {} must match physical height {} for width sharded",
             physical_shard_height,
             physical_height);
-        uint32_t num_shards = div_up(physical_width, physical_shard_width);
+        uint32_t num_shards = ttsl::math::div_up(physical_width, physical_shard_width);
         TT_FATAL(
             num_shards <= num_cores,
             "Number of shards along width {} must not exceed number of cores {}",

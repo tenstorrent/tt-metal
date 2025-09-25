@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "slice_write.hpp"
 #include "device/slice_write_op.hpp"
 #include <tt_stl/assert.hpp>

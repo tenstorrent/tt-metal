@@ -9,6 +9,7 @@
 #include <variant>
 
 #include <tt-metalium/command_queue.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"

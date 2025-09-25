@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tt_stl/math.hpp>
 #include "chunk.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"

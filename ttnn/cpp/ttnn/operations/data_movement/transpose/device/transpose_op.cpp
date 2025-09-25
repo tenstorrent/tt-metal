@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "transpose_op.hpp"
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/data_movement/permute/permute.hpp"

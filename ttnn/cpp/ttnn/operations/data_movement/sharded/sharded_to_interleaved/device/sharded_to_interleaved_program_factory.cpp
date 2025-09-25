@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include <tt_stl/math.hpp>
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -71,12 +72,12 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     // re-calculate end_core in the case shard grid is larger than used grid
     if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-        num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
+        num_cores_unpadded = ttsl::math::div_up(num_units_height, num_units_per_shard_height);
     } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
         if (output.layout() == Layout::TILE) {
-            num_cores_unpadded = div_up(num_units_per_row, num_units_per_shard_width);
+            num_cores_unpadded = ttsl::math::div_up(num_units_per_row, num_units_per_shard_width);
         } else {
-            num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
+            num_cores_unpadded = ttsl::math::div_up(num_units_per_row, output_unit_size);
         }
     }
     end_core = cores[num_cores_unpadded - 1];

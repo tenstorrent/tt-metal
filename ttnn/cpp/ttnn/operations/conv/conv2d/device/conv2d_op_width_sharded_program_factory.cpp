@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"

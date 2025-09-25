@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "layernorm_op.hpp"
 #include "layernorm_types.hpp"
 #include "ttnn/run_operation.hpp"

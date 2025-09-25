@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt_stl/overloaded.hpp>

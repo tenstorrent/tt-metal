@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "untilize_with_unpadding_program_factory.hpp"
 
 #include <math.h>

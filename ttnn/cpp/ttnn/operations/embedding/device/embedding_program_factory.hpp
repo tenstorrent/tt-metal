@@ -5,6 +5,7 @@
 #pragma once
 
 #include <enchantum/enchantum.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/operations/math.hpp"

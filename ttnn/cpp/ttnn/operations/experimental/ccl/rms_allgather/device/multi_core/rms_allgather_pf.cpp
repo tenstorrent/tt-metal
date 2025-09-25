@@ -7,6 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
