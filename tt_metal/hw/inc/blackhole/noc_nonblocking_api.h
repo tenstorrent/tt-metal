@@ -815,7 +815,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
                 noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
         }
     } else if constexpr (dst_type == InlineWriteDst::L1) {
-        noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
+        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
     } else {
         ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
         noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
