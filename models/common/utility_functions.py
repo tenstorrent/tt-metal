@@ -992,6 +992,14 @@ def run_for_grayskull(reason_str="only runs for Grayskull"):
     return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
 
 
+def is_slow_dispatch():
+    return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
+
+
+def skip_for_slow_dispatch(reason_str="not working for slow dispatch"):
+    return pytest.mark.skipif(is_slow_dispatch(), reason=reason_str)
+
+
 def get_devices_for_t3000(all_devices, num_devices):
     """
     all_devices comes from fixture which devices in order from 0 to 7.
