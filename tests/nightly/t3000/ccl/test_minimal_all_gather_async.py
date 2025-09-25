@@ -9,7 +9,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tracy import signpost
@@ -43,6 +43,7 @@ def run_all_gather_impl(
     allowed_pcc=1,
     skip_check=False,
     all_gather_function=ttnn.experimental.all_gather_async,
+    num_l1_banks=64,
 ):
     torch.manual_seed(0)
 
@@ -50,7 +51,16 @@ def run_all_gather_impl(
 
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
-        ag_output_shape, dim, mem_config_ag, num_devices, num_links, ag_input_dtype, layout, tile
+        ag_output_shape,
+        dim,
+        mem_config_ag,
+        num_devices,
+        num_links,
+        ag_input_dtype,
+        layout,
+        tile,
+        num_l1_banks,
+        mem_config_input,
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -331,10 +341,12 @@ def test_all_gather_async(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
         # Gather on dim 0
+        ([24, 3, 128, 96], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Gather on dim 1
+        ([3, 24, 128, 96], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -360,6 +372,8 @@ def test_all_gather_async(
         "tt_training_test_ten",
         "tt_training_test_eleven",
         "tt_training_test_twelve",
+        "tt_training_test_thirteen",
+        "tt_training_test_fourteen",
     ],
 )
 @pytest.mark.parametrize(

@@ -48,7 +48,6 @@
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
-#include "kernel.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -401,14 +400,16 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<std::shared_ptr<Kernel>> Program::kernels() const { return internal_->kernels(); }
+std::vector<detail::KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
+    return program.impl().collect_kernel_meta(device);
+}
 
-std::vector<std::shared_ptr<Kernel>> ProgramImpl::kernels() const {
-    std::vector<std::shared_ptr<Kernel>> result;
+std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
+    std::vector<detail::KernelMeta> result;
     result.reserve(this->num_kernels());
     for (const auto& m : this->kernels_) {
         for (const auto& [id, kernel] : m) {
-            result.push_back(kernel);
+            result.push_back(kernel->meta(device));
         }
     }
     return result;
@@ -436,7 +437,8 @@ KernelGroup::KernelGroup(
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        kernel_config.kernel_config_base()[index] = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
+        kernel_config.kernel_config_base()[index] =
+            hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
     }
 
     std::set<NOC_MODE> noc_modes;
@@ -512,7 +514,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
 }
 
 void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_index) {
-    if (core_to_kernel_group_index_table_[programmable_core_type_index].size() == 0) {
+    if (core_to_kernel_group_index_table_[programmable_core_type_index].empty()) {
         // Get the extent of the kernels in x, y
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[programmable_core_type_index] = {0, 0};
@@ -918,8 +920,9 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
+    const auto& hal = MetalContext::instance().hal();
     uint64_t kernel_config_base =
-        MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
+        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
@@ -1126,7 +1129,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         }
     }
 
-    if (binaries_data.size() > 0) {
+    if (!binaries_data.empty()) {
         this->program_transfer_info.binary_data = binaries_data;
     }
 
@@ -1253,7 +1256,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
                         const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
-                        if (intersection.size() > 0) {
+                        if (!intersection.empty()) {
                             used_sub_device_ids.insert(SubDeviceId{i});
                             num_intersections += intersection.num_cores();
                         }

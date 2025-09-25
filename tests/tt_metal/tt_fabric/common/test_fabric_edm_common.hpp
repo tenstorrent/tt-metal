@@ -10,7 +10,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "tt-metalium/kernel_types.hpp"
