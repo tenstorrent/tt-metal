@@ -639,7 +639,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         tt_metal::distributed::AddProgramToMeshWorkload(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 

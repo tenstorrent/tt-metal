@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     auto& cq = mesh_device->mesh_command_queue();
 
     distributed::MeshWorkload mesh_workloads[] = {
-        distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload()};
+        distributed::MeshWorkload(), distributed::MeshWorkload(), distributed::MeshWorkload()};
     auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
         log_info(LogTest, "====================================================================");

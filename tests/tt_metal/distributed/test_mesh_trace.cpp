@@ -169,21 +169,21 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     // Create first workload: running addition on top row and multiplication on bottom row
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, intermed_bufs_0);
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), row_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), row_1);
     // Create second workload: running addition on top row (src1 + intermed0) and multiplication on
     // bottom row (src1 * intermed0)
     auto programs_1 = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, intermed_bufs_0, src1_bufs, intermed_bufs_1);
-    auto mesh_workload_1 = CreateMeshWorkload();
+    auto mesh_workload_1 = MeshWorkload();
     AddProgramToMeshWorkload(mesh_workload_1, std::move(*programs_1[1]), row_0);
     AddProgramToMeshWorkload(mesh_workload_1, std::move(*programs_1[0]), row_1);
     // Create third workload: running addition on 1st col (src1 + intermed1), multiplication on
     // second col (src1 * intermed1) and subtraction on the third col( src1 - intermed1)
     auto programs_2 = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, intermed_bufs_1, src1_bufs, output_bufs);
-    auto mesh_workload_2 = CreateMeshWorkload();
+    auto mesh_workload_2 = MeshWorkload();
     AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[0]), col_0);
     AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[1]), col_1);
     AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[2]), col_2);
@@ -269,17 +269,17 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     MeshCoordinateRange all_devices(mesh_device_->shape());
 
     // Initialize and construct all MeshWorkloads running on different SubDevices
-    auto waiter_0 = CreateMeshWorkload();
-    auto syncer_0 = CreateMeshWorkload();
-    auto incrementer_0 = CreateMeshWorkload();
+    auto waiter_0 = MeshWorkload();
+    auto syncer_0 = MeshWorkload();
+    auto incrementer_0 = MeshWorkload();
 
-    auto waiter_1 = CreateMeshWorkload();
-    auto syncer_1 = CreateMeshWorkload();
-    auto incrementer_1 = CreateMeshWorkload();
+    auto waiter_1 = MeshWorkload();
+    auto syncer_1 = MeshWorkload();
+    auto incrementer_1 = MeshWorkload();
 
-    auto waiter_2 = CreateMeshWorkload();
-    auto syncer_2 = CreateMeshWorkload();
-    auto incrementer_2 = CreateMeshWorkload();
+    auto waiter_2 = MeshWorkload();
+    auto syncer_2 = MeshWorkload();
+    auto incrementer_2 = MeshWorkload();
 
     AddProgramToMeshWorkload(waiter_0, std::move(waiter_program_0), left_col);
     AddProgramToMeshWorkload(syncer_0, std::move(syncer_program_0), left_col);
@@ -442,9 +442,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     // Create and initialize MeshWorkloads
-    auto syncer_mesh_workload = CreateMeshWorkload();
-    auto datacopy_mesh_workload = CreateMeshWorkload();
-    auto add_mesh_workload = CreateMeshWorkload();
+    auto syncer_mesh_workload = MeshWorkload();
+    auto datacopy_mesh_workload = MeshWorkload();
+    auto add_mesh_workload = MeshWorkload();
     // Sync program goes to entire Mesh
     AddProgramToMeshWorkload(syncer_mesh_workload, std::move(sync_and_incr_program), devices);
     // Datacopy goes to top row

@@ -209,8 +209,8 @@ int main() {
         SUBTRACT_OP_ID);
     // Create MeshWorkloads and add programs to them. A MeshWorkload allows a program to target
     // multiple Physical Devices in the Virtual Mesh.
-    auto add_mesh_workload = CreateMeshWorkload();
-    auto multiply_and_subtract_mesh_workload = CreateMeshWorkload();
+    auto add_mesh_workload = MeshWorkload();
+    auto multiply_and_subtract_mesh_workload = MeshWorkload();
     AddProgramToMeshWorkload(
         add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
     AddProgramToMeshWorkload(
