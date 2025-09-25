@@ -338,26 +338,64 @@ class FileResultDestination(ResultDestination):
             except Exception:
                 return TestStatus("error")
 
-        def _coerce_device_perf(device_perf_raw: Any) -> Optional[set[PerfMetric]]:
-            if device_perf_raw is None:
-                return None
-            # If list of dicts, merge or take first
-            if isinstance(device_perf_raw, list):
-                device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
-                if device_perf_raw is None:
-                    return None
-            if not isinstance(device_perf_raw, dict):
-                return None
+        def _collect_all_metrics(raw: Dict[str, Any]) -> Optional[set[PerfMetric]]:
+            """Collect both e2e performance and device performance metrics into PerfMetric set"""
             metrics: set[PerfMetric] = set()
 
             def _to_float(v):
                 try:
+                    if v is None:
+                        return None
                     return float(v)
                 except Exception:
                     return None
 
-            for k, v in device_perf_raw.items():
-                metrics.add(PerfMetric(metric_name=str(k), metric_value=_to_float(v)))
+            # Collect e2e performance metrics
+            e2e_perf = raw.get("e2e_perf")
+            if e2e_perf is not None:
+                if isinstance(e2e_perf, dict):
+                    # Cache performance measurement - has both cached and uncached
+                    uncached_val = _to_float(e2e_perf.get("uncached"))
+                    cached_val = _to_float(e2e_perf.get("cached"))
+
+                    if uncached_val is not None:
+                        metrics.add(PerfMetric(metric_name="e2e_perf_uncached_ms", metric_value=uncached_val))
+                    if cached_val is not None:
+                        metrics.add(PerfMetric(metric_name="e2e_perf_cached_ms", metric_value=cached_val))
+                else:
+                    # Standard single performance measurement
+                    perf_val = _to_float(e2e_perf)
+                    if perf_val is not None:
+                        metrics.add(PerfMetric(metric_name="e2e_perf_ms", metric_value=perf_val))
+
+            # Also collect separate cached/uncached fields if available
+            e2e_perf_uncached = raw.get("e2e_perf_uncached")
+            if e2e_perf_uncached is not None:
+                uncached_val = _to_float(e2e_perf_uncached)
+                if uncached_val is not None:
+                    metrics.add(PerfMetric(metric_name="e2e_perf_uncached_ms", metric_value=uncached_val))
+
+            e2e_perf_cached = raw.get("e2e_perf_cached")
+            if e2e_perf_cached is not None:
+                cached_val = _to_float(e2e_perf_cached)
+                if cached_val is not None:
+                    metrics.add(PerfMetric(metric_name="e2e_perf_cached_ms", metric_value=cached_val))
+
+            # Collect device performance metrics
+            device_perf_raw = raw.get("device_perf")
+            if device_perf_raw is not None:
+                # If list of dicts, merge or take first
+                if isinstance(device_perf_raw, list):
+                    device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
+
+                if isinstance(device_perf_raw, dict):
+                    for k, v in device_perf_raw.items():
+                        float_val = _to_float(v)
+                        if float_val is not None:
+                            # Prefix device metrics to distinguish from e2e metrics
+                            metric_name = f"device_{k}" if not k.startswith("device_") else k
+                            metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
+
             return metrics if metrics else None
 
         def _coerce_to_optional_string(value: Any) -> Optional[str]:
@@ -465,7 +503,7 @@ class FileResultDestination(ResultDestination):
                 input_hash=header.get("input_hash"),
                 message=_coerce_to_optional_string(raw.get("message", None)),
                 exception=_coerce_to_optional_string(raw.get("exception", None)),
-                metrics=raw.get("device_perf", None),
+                metrics=_collect_all_metrics(raw),
                 op_params_set=op_param_list,
             )
 
