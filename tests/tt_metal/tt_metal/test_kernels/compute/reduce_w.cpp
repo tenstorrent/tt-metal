@@ -13,7 +13,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
-    reduce_max_row_init();
+    // reduce_max_row_init();
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -23,10 +23,20 @@ void MAIN {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
+            if (nc == 0 && ht == 0) {
+                reduce_max_row_init();
+            } else {
+                reduce_max_row_init<false>();
+            }
             acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_wait_front(tt::CBIndex::c_0, onetile);
-                reduce_tile_max_row(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, reduce_dst_idx);
+                if (nc == 0 && ht == 0 && wt == 0) {
+                    reduce_tile_max_row<true>(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, reduce_dst_idx);
+                } else {
+                    reduce_tile_max_row<false>(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, reduce_dst_idx);
+                }
+
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
             // dprint_tensix_dest_reg(0);

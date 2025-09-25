@@ -62,11 +62,19 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
         // Use specialized functions for MAX row reduction
-        reduce_max_row_init();
+        if (i == 0) {
+            reduce_max_row_init();
+        } else {
+            reduce_max_row_init<false>();
+        }
+        acquire_dst();
         for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
+            if (j == 0) {
+                reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
+            } else {
+                reduce_tile_max_row<false>(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
+            }
         }
 
         if (do_eltwise_max) {

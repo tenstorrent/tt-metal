@@ -53,4 +53,7 @@ inline void llk_math_reduce_init(
 inline void llk_math_reduce_max_row_init() { _llk_math_reduce_max_row_init_(); }
 
 // OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
-inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max_row_(dst_index); }
+template <bool first = true>
+inline void llk_math_reduce_max_row(const uint dst_index) {
+    _llk_math_reduce_max_row_<first>(dst_index);
+}

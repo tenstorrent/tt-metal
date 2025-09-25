@@ -65,10 +65,13 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
+template <bool first = true>
 ALWI void reduce_max_row_init() {
-    UNPACK((llk_unpack_AB_reduce_row_max_init()));
+    UNPACK((llk_unpack_AB_reduce_row_max_init<first>()));
     MATH((llk_math_reduce_max_row_init()));
-    PACK((llk_pack_reduce_max_row_mask_config()));
+    if constexpr (first) {
+        PACK((llk_pack_reduce_max_row_mask_config()));
+    }
 }
 
 // clang-format off
@@ -162,9 +165,10 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
+template <bool first = true>
 ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t idst) {
-    UNPACK((llk_unpack_AB_reduce_row_max(icb, icb_scaler, itile)));
-    MATH((llk_math_reduce_max_row(idst)));
+    UNPACK((llk_unpack_AB_reduce_row_max<first>(icb, icb_scaler, itile)));
+    MATH((llk_math_reduce_max_row<first>(idst)));
 }
 
 // clang-format off
@@ -178,6 +182,9 @@ ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile,
  * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
  */
 // clang-format on
-ALWI void reduce_tile_max_row_math(uint32_t idst) { MATH((llk_math_reduce_max_row(idst))); }
+template <bool first = true>
+ALWI void reduce_tile_max_row_math(uint32_t idst) {
+    MATH((llk_math_reduce_max_row<first>(idst)));
+}
 
 }  // namespace ckernel
