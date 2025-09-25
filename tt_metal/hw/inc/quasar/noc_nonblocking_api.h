@@ -703,18 +703,19 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
                              (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
-    uint32_t be_shift = (dest_addr & (NOC_WORD_BYTES - 1));
     // If we're given a misaligned address, don't write to the bytes in the word below the address
+    uint32_t be_shift = (dest_addr & (NOC_WORD_BYTES - 1));
     be32 = (be32 << be_shift);
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr & 0xFFFFFFFF);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(dest_addr));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
             noc_posted_writes_num_issued[noc] += 1;
