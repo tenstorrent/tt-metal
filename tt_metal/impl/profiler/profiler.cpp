@@ -8,6 +8,7 @@
 #include <distributed.hpp>
 #include "device_pool.hpp"
 #include "llrt/hal.hpp"
+#include "thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
@@ -34,6 +35,7 @@
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "profiler_state_manager.hpp"
+#include "profiler_analysis.hpp"
 #include "tools/profiler/noc_event_profiler_utils.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt-metalium/profiler_types.hpp"
@@ -845,6 +847,9 @@ void dumpDeviceResultsToCSV(
     tt::ARCH device_arch,
     int device_core_frequency,
     const std::filesystem::path& log_path) {
+    TT_ASSERT(std::filesystem::exists(log_path.parent_path()));
+    TT_ASSERT(log_path.extension() == ".csv");
+
     // open CSV log file
     std::ofstream log_file_ofs;
 
@@ -1197,9 +1202,9 @@ void DeviceProfiler::readRiscProfilerResults(
         }
         tracy::RiscType riscType;
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = tracy::RiscType::CORE_AGG;
+            riscType = tracy::RiscType::TENSIX_RISC_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            riscType = static_cast<tracy::RiscType>(1 << riscEndIndex);
         } else {
             riscType = tracy::RiscType::ERISC;
         }
@@ -1218,7 +1223,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     device_id,
                     worker_core.x,
                     worker_core.y,
-                    enchantum::to_string(static_cast<tracy::RiscType>(riscEndIndex)),
+                    enchantum::to_string(static_cast<tracy::RiscType>(1 << riscEndIndex)),
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
@@ -1453,28 +1458,16 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
         if (isMarkerAZoneEndpoint(marker)) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() &&
-                marker.risc == tracy::RiscType::CORE_AGG) {
+                marker.risc == tracy::RiscType::TENSIX_RISC_AGG) {
                 if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
-                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::NCRISC_FW)] ||
-                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::TRISC_FW)] ||
-                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::ERISC_FW)]) {
+                        tracy::MarkerDetails::MarkerNameKeyword::_FW)]) {
                     marker.marker_name = "TRACE-FW";
                     const auto& ret = updateDeviceMarker(marker, device_marker_it);
                     device_marker_it = ret.first;
                     next_device_marker_it = ret.second;
                 }
                 if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL)] ||
-                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::NCRISC_KERNEL)] ||
-                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL)] ||
-                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL)]) {
+                        tracy::MarkerDetails::MarkerNameKeyword::_KERNEL)]) {
                     marker.marker_name = "TRACE-KERNEL";
                     const auto& ret = updateDeviceMarker(marker, device_marker_it);
                     device_marker_it = ret.first;
@@ -1607,12 +1600,16 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
     this->device_arch = device->arch();
     this->device_core_frequency =
         tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id);
-    this->output_dir = std::filesystem::path(get_profiler_logs_dir());
-    std::filesystem::create_directories(this->output_dir);
-    std::filesystem::path log_path = this->output_dir / DEVICE_SIDE_LOG;
+
+    this->device_logs_output_dir = std::filesystem::path(get_profiler_logs_dir());
+    std::filesystem::create_directories(this->device_logs_output_dir);
 
     if (new_logs) {
+        std::filesystem::path log_path = this->device_logs_output_dir / DEVICE_SIDE_LOG;
         std::filesystem::remove(log_path);
+
+        std::filesystem::path ops_perf_report_path = this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME;
+        std::filesystem::remove(ops_perf_report_path);
     }
 
     const std::string noc_events_report_path =
@@ -1620,12 +1617,37 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
     if (!noc_events_report_path.empty()) {
         this->noc_trace_data_output_dir = std::filesystem::path(noc_events_report_path);
     } else {
-        this->noc_trace_data_output_dir = this->output_dir;
+        this->noc_trace_data_output_dir = this->device_logs_output_dir;
     }
 
     this->is_last_fd_read_done = false;
     this->device_tracy_contexts.reserve(
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
+#endif
+}
+
+void generateAnalysesForDeviceMarkers(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
+    const std::filesystem::path& report_path,
+    ThreadPool& thread_pool) {
+#if defined(TRACY_ENABLE)
+    const std::filesystem::path analysis_configs_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tools/tracy/cpp_device_analyses.json";
+    std::vector<AnalysisConfig> analysis_configs = loadAnalysisConfigsFromJSON(analysis_configs_path);
+
+    uint32_t i = 0;
+    std::vector<std::unique_ptr<const AnalysisResults>> analysis_results(analysis_configs.size());
+    for (const auto& analysis_config : analysis_configs) {
+        thread_pool.enqueue([&analysis_config, &device_markers, &analysis_results, i]() {
+            analysis_results[i] = generateAnalysisForDeviceMarkers(analysis_config, device_markers);
+        });
+        i++;
+    }
+
+    thread_pool.wait();
+
+    writeAnalysisResultsToCSV(analysis_results, report_path);
 #endif
 }
 
@@ -1658,6 +1680,12 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
 
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
+
+    if (!is_mid_run_dump && tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
+        generateAnalysesForDeviceMarkers(
+            device_markers_vec, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME, *this->thread_pool);
+    }
+
     pushTracyDeviceResults(device_markers_vec);
 
     this->thread_pool->wait();
@@ -1668,15 +1696,18 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
 void DeviceProfiler::freshDeviceLog() {
 #if defined(TRACY_ENABLE)
-    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+    std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     std::filesystem::remove(log_path);
+
+    std::filesystem::path ops_perf_report_path = device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME;
+    std::filesystem::remove(ops_perf_report_path);
 #endif
 }
 
 void DeviceProfiler::setOutputDir(const std::string& new_output_dir) {
 #if defined(TRACY_ENABLE)
     std::filesystem::create_directories(new_output_dir);
-    output_dir = new_output_dir;
+    device_logs_output_dir = new_output_dir;
 #endif
 }
 
@@ -1804,9 +1835,9 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
-    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->file_write_mutex);
+    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->log_file_write_mutex);
 
-    const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+    const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(device_markers_per_core_risc_map, device_arch, device_core_frequency, log_path);
 
     if (!noc_trace_data.empty()) {
