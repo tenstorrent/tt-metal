@@ -19,7 +19,7 @@ struct ReadCoreDataDescriptor {
     uint32_t size_bytes = 0;
 };
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type);
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 
