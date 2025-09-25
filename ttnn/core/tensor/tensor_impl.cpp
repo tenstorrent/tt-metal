@@ -32,28 +32,6 @@
 
 using namespace tt::tt_metal;
 
-namespace {
-
-// Threshold for switch for mmap-based allocations to regular allocations.
-// Determined empirically using a microbenchmark; see https://github.com/tenstorrent/tt-metal/pull/22959 for details.
-constexpr size_t kMmapThresholdBytes = 1 << 20;
-
-// Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
-using SharedMemoryPtr = std::shared_ptr<void>;
-SharedMemoryPtr allocate_host_data(size_t size_bytes) {
-    if (size_bytes >= kMmapThresholdBytes) {
-        ZoneScopedN("AllocateBufferMmap");
-        void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        TT_FATAL(ptr != MAP_FAILED, "Failed to allocate {} bytes of memory", size_bytes);
-        return SharedMemoryPtr(ptr, [size_bytes](void* p) { madvise(p, size_bytes, MADV_FREE); });
-    } else {
-        auto vec = std::make_shared<std::vector<std::byte>>(size_bytes);
-        return SharedMemoryPtr(vec, vec->data());
-    }
-}
-
-}  // unnamed namespace
-
 namespace tt {
 
 namespace tt_metal {
@@ -845,17 +823,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
     const auto& logical_shape = tensor_spec.logical_shape();
     const auto& padded_shape = tensor_spec.padded_shape();
-
-    // TODO: get_logical_shard_shape always returns shard shape from shard spec, which is not correct in physical mode
-    // if there is padding
-    if (tensor_spec.memory_config().is_sharded() &&
-        ((tensor_spec.memory_config().shard_spec().has_value() &&
-          tensor_spec.memory_config().shard_spec().value().mode == ShardMode::LOGICAL) ||
-         logical_shape == padded_shape)) {
-        return {
-            tensor_spec.tensor_layout().get_logical_shard_shape(),
-            tensor_spec.tensor_layout().get_physical_shard_shape()};
-    }
 
     Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
     Shape2D physical_shard_shape = {padded_shape[-2], padded_shape[-1]};
