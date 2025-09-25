@@ -557,7 +557,6 @@ public:
                 );
             } catch (const std::filesystem::filesystem_error& e) {
                 log_debug(tt::LogTest, "Failed to copy CSV file {} to CI artifacts directory: {}", csv_filepath.filename().string(), e.what());
-                return;
             }
         }
         log_trace(tt::LogTest, "Copied CSV files to CI artifacts directory: {}", ci_artifacts_path.string());
