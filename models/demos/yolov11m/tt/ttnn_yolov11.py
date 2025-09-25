@@ -66,13 +66,29 @@ class TtnnYoloV11:
             x = input
             min_channels = c  # Update min_channels to actual channels
             
-        # Debug: After padding/reshaping
+        # Debug: After padding, before permute
+        x_pre_permute_debug = ttnn.to_torch(x)
+        x_pre_permute_flat = x_pre_permute_debug.flatten()
+        x_pre_permute_unique = torch.unique(x_pre_permute_flat)
+        print(f"🔍 [RESHAPE DEBUG] BEFORE PERMUTE: {len(x_pre_permute_unique)} unique values out of {len(x_pre_permute_flat)} total")
+        print(f"    Range: [{x_pre_permute_flat.min()}, {x_pre_permute_flat.max()}], Mean: {x_pre_permute_flat.mean()}")
+        
         x = ttnn.permute(x, (0, 2, 3, 1))
+        
+        # Debug: After permute, before reshape
+        x_post_permute_debug = ttnn.to_torch(x)
+        x_post_permute_flat = x_post_permute_debug.flatten()
+        x_post_permute_unique = torch.unique(x_post_permute_flat)
+        print(f"🔍 [RESHAPE DEBUG] AFTER PERMUTE: {len(x_post_permute_unique)} unique values out of {len(x_post_permute_flat)} total")
+        print(f"    Range: [{x_post_permute_flat.min()}, {x_post_permute_flat.max()}], Mean: {x_post_permute_flat.mean()}")
+        
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
+        
+        # Debug: After reshape
         x_reshaped_debug = ttnn.to_torch(x)
         x_reshaped_flat = x_reshaped_debug.flatten()
         x_reshaped_unique = torch.unique(x_reshaped_flat)
-        print(f"🔍 [EARLY DEBUG] AFTER RESHAPE: {len(x_reshaped_unique)} unique values out of {len(x_reshaped_flat)} total")
+        print(f"🔍 [RESHAPE DEBUG] AFTER RESHAPE: {len(x_reshaped_unique)} unique values out of {len(x_reshaped_flat)} total")
         print(f"    Range: [{x_reshaped_flat.min()}, {x_reshaped_flat.max()}], Mean: {x_reshaped_flat.mean()}")
         
         x = self.conv1(self.device, x)

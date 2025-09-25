@@ -15,8 +15,8 @@ class Yolov11Conv2D:
         bn=None,
         device=None,
         activation="",
-        activation_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat8_b,
+        activation_dtype=ttnn.bfloat16,  # Upgraded from bfloat8_b for better precision
+        weights_dtype=ttnn.bfloat16,    # Upgraded from bfloat8_b for better precision
         reshard=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_detect=False,
