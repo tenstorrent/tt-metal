@@ -24,12 +24,6 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
