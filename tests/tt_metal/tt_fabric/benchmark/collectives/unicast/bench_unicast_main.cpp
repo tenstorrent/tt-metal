@@ -88,16 +88,6 @@ static bool parse_xy(const std::string& s, int& x, int& y) {
 // Fills RunOptions + PerfParams + raw src/dst strings. Returns false on bad args.
 static bool parse_cli_or_usage(
     int argc, char** argv, RunOptions& run, PerfParams& p, std::string& src_dev_str, std::string& dst_dev_str) {
-    // Workload defaults
-    p.mesh_id = 0;
-    p.src_chip = 0;
-    p.dst_chip = 1;
-    p.page_size = 2048;
-    p.tensor_bytes = 128 * p.page_size;
-    p.use_dram_dst = false;
-    p.sender_core = {0, 0};
-    p.trace_iters = 1;
-
     std::string src_type = "dram";  // reserved
     std::string dst_type = "l1";    // reserved
 
