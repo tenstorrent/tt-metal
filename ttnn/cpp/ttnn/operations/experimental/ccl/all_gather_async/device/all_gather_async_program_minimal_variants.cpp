@@ -265,16 +265,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     uint32_t page_size = input_tensor.buffer()->page_size();
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device, forward_device, backward_device, input_tensor);
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
     auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         topology,
         sender_device,
         forward_device,
         backward_device,
         topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
-        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1,
-        input_tensor);
+        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
 
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
@@ -729,13 +728,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [forward_args, backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology,
-        sender_device,
-        forward_device,
-        backward_device,
-        num_targets_forward,
-        num_targets_backward,
-        input_tensor);
+        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;

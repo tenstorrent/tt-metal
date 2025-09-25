@@ -351,10 +351,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device, forward_device, backward_device, input_tensor);
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1, input_tensor);
+        topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -861,18 +861,12 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device, forward_device, backward_device, input_tensor);
+    auto [unicast_forward_args, unicast_backward_args] =
+        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology,
-        sender_device,
-        forward_device,
-        backward_device,
-        num_targets_forward,
-        num_targets_backward,
-        input_tensor);
+        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
     uint32_t num_cores_per_link =
         operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count_per_link(
