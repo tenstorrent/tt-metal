@@ -10,7 +10,7 @@
 #include "ttnn/distributed/api.hpp"
 
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/utils.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt::tt_metal;
 

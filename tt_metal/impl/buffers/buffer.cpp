@@ -27,7 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
-#include <tt-metalium/utils.hpp>
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
 namespace {

@@ -5,7 +5,7 @@
 #include "bank_manager.hpp"
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/utils.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <limits>
 #include <string_view>
 #include <utility>

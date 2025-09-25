@@ -8,7 +8,6 @@
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
-#include <utils.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
 #include <algorithm>
 #include <cstring>

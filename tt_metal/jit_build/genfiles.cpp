@@ -8,7 +8,7 @@
 #include <data_format.hpp>
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
-#include <utils.hpp>
+#include <data_format.hpp>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
