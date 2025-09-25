@@ -32,7 +32,7 @@ jobs:
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"always_compat_sampling\": true}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -44,7 +44,7 @@ jobs:
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200, \"always_compat_sampling\": true}",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           },
           {
@@ -55,7 +55,7 @@ jobs:
             runner-label: BH-DeskBox,
             mesh-device: P150x2,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 2}",
+            override-tt-config: "{\"data_parallel\": 2, \"always_compat_sampling\": true}",
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
           {
@@ -66,7 +66,7 @@ jobs:
             runner-label: bh-LLMBox,
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 4}",
+            override-tt-config: "{\"data_parallel\": 4, \"always_compat_sampling\": true}",
             owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           # {
@@ -89,7 +89,7 @@ jobs:
             runner-label: topology-6u,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824, \"always_compat_sampling\": true}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -100,7 +100,7 @@ jobs:
             benchmark-timeout: 5,
             runner-label: topology-6u,
             mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\", \"always_compat_sampling\": true}",
             tt-llama-text-ver: tt_transformers,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
@@ -112,7 +112,7 @@ jobs:
             benchmark-timeout: 5,
             runner-label: config-t3000,
             mesh-device: T3K,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768, \"always_compat_sampling\": true}",
             tt-llama-text-ver: tt_transformers,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
