@@ -31,19 +31,6 @@ static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoo
     return false;
 }
 
-static bool coord_found_p(const std::vector<CoreCoord>& coords, CoreCoord core) {
-    for (const CoreCoord& item : coords) {
-        if (item == core) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool coord_found_p(CoreCoord range, CoreCoord core) {
-    return core.x >= 1 && core.x <= range.x && core.y >= 1 && core.y <= range.y;
-}
-
 static bool coord_found_p(std::unordered_set<CoreCoord> coords, CoreCoord core) {
     return coords.find(core) != coords.end();
 }

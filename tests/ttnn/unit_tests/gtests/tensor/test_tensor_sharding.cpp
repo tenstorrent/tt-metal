@@ -38,48 +38,6 @@
 #include "ttnn_test_fixtures.hpp"
 
 namespace {
-
-void pretty_print_data_as_shards(
-    const std::vector<float>& data, const Shape2D& shape, const Shape2D& shard_shape, const size_t char_count = 3) {
-    TT_FATAL(
-        data.size() == shape.height() * shape.width(),
-        "Data size {} should be same as shape size {}",
-        data.size(),
-        shape.height() * shape.width());
-
-    const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
-        tt::tt_metal::compute_shard_division_spec(shape, shard_shape);
-
-    std::cout << "2D shape: " << shape << std::endl;
-    for (size_t shard_height_idx = 0; shard_height_idx < num_shards_height; shard_height_idx++) {
-        const auto num_shard_rows =
-            shard_height_idx == num_shards_height - 1 ? last_shard_height : shard_shape.height();
-        for (size_t shard_row_idx = 0; shard_row_idx < num_shard_rows; shard_row_idx++) {
-            for (size_t shard_width_idx = 0; shard_width_idx < num_shards_width; shard_width_idx++) {
-                const auto num_shard_cols =
-                    shard_width_idx == num_shards_width - 1 ? last_shard_width : shard_shape.width();
-                for (size_t shard_col_idx = 0; shard_col_idx < num_shard_cols; shard_col_idx++) {
-                    const auto data_idx = (shard_height_idx * shard_shape.height() + shard_row_idx) * shape.width() +
-                                          shard_width_idx * shard_shape.width() + shard_col_idx;
-                    std::cout << fmt::format("{:>{}}", data[data_idx], char_count);
-                    if (shard_col_idx < num_shard_cols - 1) {
-                        std::cout << ", ";
-                    } else if (shard_width_idx < num_shards_width - 1) {
-                        std::cout << fmt::format("{:>{}}", "|", char_count);
-                    }
-                }
-                std::cout << " ";
-            }
-            std::cout << std::endl;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
-}  // namespace
-
-namespace {
 struct ShardWithAlignmentInputs {
     Shape shape;
     Shape2D logical_shard_shape;
@@ -144,8 +102,6 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     }
 
     // auto shape_2d = tensor_spec.logical_2d_shape();
-    // pretty_print_data_as_shards(params.inputs.logical_data, shape_2d, logical_shard_shape);
-    // pretty_print_data_as_shards(physical_data, physical_shape, physical_shard_shape);
 
     ASSERT_EQ(physical_data.size(), expected_physical_data.size());
     for (size_t i = 0; i < physical_data.size(); i++) {
@@ -195,8 +151,6 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
     auto logical_data = tensor_impl::decode_tensor_data(tt::stl::make_const_span(physical_data), tensor_spec);
 
     // auto shape_2d = tensor_spec.logical_2d_shape();
-    // pretty_print_data_as_shards(params.expected.physical_data, physical_shape, physical_shard_shape);
-    // pretty_print_data_as_shards(logical_data, shape_2d, logical_shard_shape);
 
     ASSERT_EQ(logical_data.size(), expected_data.size());
     for (size_t i = 0; i < logical_data.size(); i++) {

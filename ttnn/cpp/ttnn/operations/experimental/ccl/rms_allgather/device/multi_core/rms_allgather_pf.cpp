@@ -43,18 +43,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::fused::normalization {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 // computes layernorm(a+*b)*gamma
 // if b is nullptr it's treated as zero (no addition)
 
@@ -80,7 +68,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool use_noc1_only) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
 
