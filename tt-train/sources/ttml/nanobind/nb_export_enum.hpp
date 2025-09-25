@@ -7,10 +7,13 @@
 
 #include <enchantum/enchantum.hpp>
 
-namespace nanobind {
+#include "nb_fwd.hpp"
+
+namespace ttml::nanobind {
+
 template <typename E, typename... Extra>
-inline nanobind::enum_<E> export_enum(const nanobind::handle& scope, const std::string& name = "", Extra&&... extra) {
-    nanobind::enum_<E> enum_type(
+inline nb::enum_<E> export_enum(const nb::handle& scope, const std::string& name = "", Extra&&... extra) {
+    nb::enum_<E> enum_type(
         scope, name.empty() ? enchantum::type_name<E>.data() : name.c_str(), std::forward<Extra>(extra)...);
     for (const auto [value, name] : enchantum::entries_generator<E>) {
         enum_type.value(name.data(), value);
@@ -18,4 +21,5 @@ inline nanobind::enum_<E> export_enum(const nanobind::handle& scope, const std::
 
     return enum_type;
 }
-}  // namespace nanobind
+
+}  // namespace ttml::nanobind

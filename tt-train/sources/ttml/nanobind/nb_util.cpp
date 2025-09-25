@@ -13,7 +13,10 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
+namespace ttml::nanobind {
+
 namespace UnsupportedMessages {
+
 constexpr auto BFLOAT8_B = "Unsupported type: BFLOAT8_B";
 constexpr auto BFLOAT4_B = "Unsupported type: BFLOAT4_B";
 constexpr auto UINT8 = "Unsupported type: UINT8";
@@ -23,6 +26,7 @@ constexpr auto UNKNOWN = "Unsupported type: unknown";
 constexpr auto COMPLEX = "Unsupported type: Complex";
 constexpr auto BOOL = "Unsupported type: Bool";
 constexpr auto BFLOAT = "Unsupported type: Bfloat";
+
 }  // namespace UnsupportedMessages
 
 [[noreturn]] void throw_exception(
@@ -366,3 +370,5 @@ tt::tt_metal::Tensor make_metal_tensor(
 
     NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
 }
+
+}  // namespace ttml::nanobind

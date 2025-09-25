@@ -27,13 +27,13 @@ namespace ttml::models {
 void py_module_types(nb::module_& m, nb::module_& m_modules) {
     ttml::modules::py_module_types(m_modules);
 
-    nb::export_enum<models::common::transformer::RunnerType>(m);
-    nb::export_enum<models::common::transformer::WeightTyingType>(m);
+    ttml::nanobind::export_enum<models::common::transformer::RunnerType>(m);
+    ttml::nanobind::export_enum<models::common::transformer::WeightTyingType>(m);
 
     nb::class_<models::BaseTransformer, modules::ModuleBase>(m, "BaseTransformer");
 
     auto py_gpt2_module = m.def_submodule("gpt2");
-    nb::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
+    ttml::nanobind::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
     nb::class_<models::gpt2::TransformerConfig::Experimental>(py_gpt2_module, "GPT2TransformerConfigExperimental");
     nb::class_<models::gpt2::TransformerConfig>(py_gpt2_module, "GPT2TransformerConfig");
     nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");

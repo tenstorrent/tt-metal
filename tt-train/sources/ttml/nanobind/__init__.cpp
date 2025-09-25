@@ -19,7 +19,7 @@
 #include "ttnn/api/ttnn/tensor/layout/layout.hpp"
 
 NB_MODULE(_ttml, m) {
-    nb::export_enum<tt::tt_metal::Layout>(m);
+    ttml::nanobind::export_enum<tt::tt_metal::Layout>(m);
     auto m_autograd = m.def_submodule("autograd", "autograd");
     auto m_models = m.def_submodule("models", "models");
     auto m_modules = m.def_submodule("modules", "modules");

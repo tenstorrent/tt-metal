@@ -25,7 +25,7 @@
 namespace ttml::ops {
 
 void py_module_types(nb::module_& m) {
-    nb::export_enum<ReduceType>(m);
+    ttml::nanobind::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
     m.def_submodule("dropout");

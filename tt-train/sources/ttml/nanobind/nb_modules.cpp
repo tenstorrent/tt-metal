@@ -19,7 +19,7 @@
 namespace ttml::modules {
 
 void py_module_types(nb::module_& m) {
-    nb::export_enum<RunMode>(m);
+    ttml::nanobind::export_enum<RunMode>(m);
 
     nb::class_<ModuleBase>(m, "ModuleBase");
     nb::class_<LinearLayer, ModuleBase>(m, "LinearLayer");
@@ -54,7 +54,7 @@ void py_module(nb::module_& m) {
         py_linear_layer.def("get_weight", &LinearLayer::get_weight);
         py_linear_layer.def("get_weight_numpy", [](const LinearLayer& layer) {
             auto const w = layer.get_weight();
-            return make_numpy_tensor(w->get_value(autograd::PreferredPrecision::FULL));
+            return ttml::nanobind::make_numpy_tensor(w->get_value(autograd::PreferredPrecision::FULL));
         });
     }
 }

@@ -23,9 +23,9 @@
 namespace ttml::autograd {
 
 void py_module_types(nb::module_& m) {
-    nb::export_enum<ttnn::DataType>(m);
-    nb::export_enum<GradMode>(m);
-    nb::export_enum<PreferredPrecision>(m);
+    ttml::nanobind::export_enum<ttnn::DataType>(m);
+    ttml::nanobind::export_enum<GradMode>(m);
+    ttml::nanobind::export_enum<PreferredPrecision>(m);
 
     nb::class_<AutoContext>(m, "AutoContext");
     nb::class_<AutocastTensor>(m, "AutocastTensor");
@@ -75,7 +75,7 @@ void py_module(nb::module_& m) {
             [](nb::ndarray<> numpy_tensor,
                tt::tt_metal::Layout layout,
                std::optional<tt::tt_metal::DataType> new_type) {
-                return create_tensor(make_metal_tensor(numpy_tensor, layout, new_type));
+                return create_tensor(ttml::nanobind::make_metal_tensor(numpy_tensor, layout, new_type));
             },
             nb::arg("numpy_tensor"),
             nb::arg("layout") = tt::tt_metal::Layout::TILE,
@@ -83,7 +83,7 @@ void py_module(nb::module_& m) {
         py_tensor.def(
             "to_numpy",
             [](const Tensor& tensor, std::optional<tt::tt_metal::DataType> new_type) {
-                return make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL), new_type);
+                return ttml::nanobind::make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL), new_type);
             },
             nb::arg("new_type") = std::nullopt);
         py_tensor.def("to_string", [](const Tensor& tensor) {
