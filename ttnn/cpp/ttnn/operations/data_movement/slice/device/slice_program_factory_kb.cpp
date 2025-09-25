@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -274,7 +274,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
 
     tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
     uint32_t element_size = get_element_size_kb(input_tensor.dtype());
 

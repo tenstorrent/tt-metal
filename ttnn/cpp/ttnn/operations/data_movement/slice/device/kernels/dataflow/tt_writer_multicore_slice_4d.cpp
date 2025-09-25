@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,6 @@
  * - Sequential access patterns optimized for DRAM controllers
  * - Parallel processing with load balancing across multiple cores
  *
- * Author: claude (based on pad operation template and single-core 4D slice)
  * Compatible with: TTNN framework, ROW_MAJOR_LAYOUT tensors, 1D-4D dimensions, multi-core execution
  */
 
