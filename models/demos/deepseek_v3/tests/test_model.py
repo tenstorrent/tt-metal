@@ -75,7 +75,9 @@ def test_forward_pass(
     if use_real_weights:
         torch.use_deterministic_algorithms(False)
 
+        logger.info(f"Loading state dict from {model_path}")
         state_dict = load_state_dict(model_path, "")
+        logger.info(f"State dict loaded")
         state_dict = {
             k: v
             for k, v in state_dict.items()
@@ -83,8 +85,19 @@ def test_forward_pass(
             if not layer_idx_str or int(layer_idx_str) < hf_config_short.num_hidden_layers
         }  # Trim the loaded state dict to not run out of memory
 
-        reference_model = DeepseekV3ForCausalLM(hf_config_short).eval().to(torch.bfloat16)
+        logger.info(f"Creating reference model")
+        # Create model on meta device (no weight initialization or memory allocation)
+        with torch.device("meta"):
+            reference_model = DeepseekV3ForCausalLM(hf_config_short).eval()
+
+        # Move to target device without allocating memory for parameters
+        reference_model = reference_model.to_empty(device=torch.device("cpu"))
+
+        logger.info(f"Loading state dict into reference model")
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config_short))
+
+        # Convert to bfloat16 after loading weights
+        reference_model = reference_model.to(torch.bfloat16)
 
         torch_input = torch.randint(0, hf_config_short.vocab_size - 1, (batch_size, seq_len), dtype=torch.long)
         if mode == "prefill":
@@ -96,9 +109,13 @@ def test_forward_pass(
             )  # TODO: investigate the PCC issue with real weights
 
         logger.info("Running the reference model")
+        logger.info(
+            f"Running reference model with torch_input shape: {torch_input.shape} and position_ids shape: {position_ids.shape}"
+        )
         reference_output, input_cache, output_cache = run_reference_with_attention(
             reference_model, torch_input, position_ids, None, hf_config_short, mode, False
         )
+        logger.info(f"Reference model output shape: {reference_output.shape}")
         input_cache = torch_cache_from_transformers(input_cache)
         output_cache = torch_cache_from_transformers(output_cache)
     else:
