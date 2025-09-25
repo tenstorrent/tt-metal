@@ -65,7 +65,7 @@ class TTTransformerDecoderLayer(LightweightModule):
         d_model,
         nhead=4,
         dim_feedforward=256,
-        dropout=0.1,
+        dropout=0.0,
         normalize_before=True,
         model_config=None,
         parameters=None,
@@ -132,99 +132,6 @@ class TTTransformerDecoderLayer(LightweightModule):
                 setattr(self, f"norm{i}_weights", parameters[norm_name]["weight"])
                 setattr(self, f"norm{i}_bias", parameters[norm_name].get("bias"))
 
-    # def self_attention(self, x, query_pos=None, attn_mask=None):
-    #     """Perform self-attention using preprocessed weights"""
-    #     q_input = k_input = self.with_pos_embed(x, query_pos)
-
-    #     # Apply QKV projections
-    #     q = ttnn.linear(q_input, self.self_attn_q_weight)
-    #     k = ttnn.linear(k_input, self.self_attn_k_weight)
-    #     v = ttnn.linear(x, self.self_attn_v_weight)
-
-    #     # Scaled dot-product attention
-    #     attn_output = ttnn.transformer.scaled_dot_product_attention(
-    #         q, k, v, attn_mask=attn_mask, is_causal=attn_mask is None
-    #     )
-
-    #     # Output projection
-    #     if self.self_attn_out_weight is not None:
-    #         attn_output = ttnn.linear(attn_output, self.self_attn_out_weight,
-    #                                 bias=self.self_attn_out_bias)
-
-    #     return attn_output
-
-    # def self_attention(self, x, query_pos=None, attn_mask=None):
-    #     """Perform self-attention using preprocessed weights"""
-    #     q_input = k_input = self.with_pos_embed(x, query_pos)
-
-    #     # Apply QKV projections
-    #     q = ttnn.linear(q_input, self.self_attn_q_weight)
-    #     k = ttnn.linear(k_input, self.self_attn_k_weight)
-    #     v = ttnn.linear(x, self.self_attn_v_weight)
-
-    #     # Reshape for multi-head attention: [batch, seq_len, d_model] -> [batch, num_heads, seq_len, head_dim]
-    #     batch_size, seq_len, _ = q.shape
-    #     head_dim = self.d_model // self.nhead
-
-    #     q = ttnn.reshape(q, [batch_size, seq_len, self.nhead, head_dim])
-    #     q = ttnn.transpose(q, 1, 2)  # [batch, num_heads, seq_len, head_dim]
-
-    #     k = ttnn.reshape(k, [batch_size, seq_len, self.nhead, head_dim])
-    #     k = ttnn.transpose(k, 1, 2)
-
-    #     v = ttnn.reshape(v, [batch_size, seq_len, self.nhead, head_dim])
-    #     v = ttnn.transpose(v, 1, 2)
-
-    #     # Scaled dot-product attention
-    #     attn_output = ttnn.transformer.scaled_dot_product_attention(
-    #         q, k, v, attn_mask=attn_mask, is_causal=attn_mask is None
-    #     )
-
-    #     # Reshape back: [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, d_model]
-    #     attn_output = ttnn.transpose(attn_output, 1, 2)
-    #     attn_output = ttnn.reshape(attn_output, [batch_size, seq_len, self.d_model])
-
-    #     # Output projection
-    #     if self.self_attn_out_weight is not None:
-    #         attn_output = ttnn.linear(attn_output, self.self_attn_out_weight, bias=self.self_attn_out_bias)
-
-    #     return attn_output
-
-    # def cross_attention(self, tgt, memory, query_pos=None, pos=None, attn_mask=None):
-    #     """Perform cross-attention using preprocessed weights"""
-    #     q_input = self.with_pos_embed(tgt, query_pos)
-    #     k_input = v_input = self.with_pos_embed(memory, pos)
-
-    #     # Apply QKV projections
-    #     q = ttnn.linear(q_input, self.cross_attn_q_weight)
-    #     k = ttnn.linear(k_input, self.cross_attn_k_weight)
-    #     v = ttnn.linear(v_input, self.cross_attn_v_weight)
-
-    #     # Reshape for multi-head attention: [batch, seq_len, d_model] -> [batch, num_heads, seq_len, head_dim]
-    #     batch_size, seq_len, _ = q.shape
-    #     head_dim = self.d_model // self.nhead
-
-    #     q = ttnn.reshape(q, [batch_size, seq_len, self.nhead, head_dim])
-    #     q = ttnn.transpose(q, 1, 2)  # [batch, num_heads, seq_len, head_dim]
-
-    #     k = ttnn.reshape(k, [batch_size, seq_len, self.nhead, head_dim])
-    #     k = ttnn.transpose(k, 1, 2)
-
-    #     v = ttnn.reshape(v, [batch_size, seq_len, self.nhead, head_dim])
-    #     v = ttnn.transpose(v, 1, 2)
-
-    #     # Scaled dot-product attention
-    #     attn_output = ttnn.transformer.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=False)
-
-    #     # Reshape back: [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, d_model]
-    #     attn_output = ttnn.transpose(attn_output, 1, 2)
-    #     attn_output = ttnn.reshape(attn_output, [batch_size, seq_len, self.d_model])
-    #     # Output projection
-    #     if self.cross_attn_out_weight is not None:
-    #         attn_output = ttnn.linear(attn_output, self.cross_attn_out_weight)
-
-    #     return attn_output
-
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else ttnn.add(tensor, pos)
 
@@ -286,7 +193,6 @@ class TTTransformerDecoderLayer(LightweightModule):
         tgt = ttnn.layer_norm(tgt, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
 
         # Cross-attention using proper QKV projections
-        tgt2 = self.multihead_attn(tgt, memory, query_pos, pos, memory_mask)
         tgt2 = self.multihead_attn(
             query=self.with_pos_embed(tgt, query_pos),
             key=self.with_pos_embed(memory, pos),

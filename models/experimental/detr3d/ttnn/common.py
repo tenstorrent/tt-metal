@@ -82,11 +82,13 @@ class TtnnConv2D:
         conv_pth,
         device=None,
         cache={},
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout=None,
+        # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_dealloc_act=False,
+        return_dims=False,
     ):
         self.conv = conv
         self.device = device
@@ -110,17 +112,17 @@ class TtnnConv2D:
             shard_layout=shard_layout,
             deallocate_activation=self.is_dealloc_act,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
+            # enable_split_reader=False,
             # enable_subblock_padding=False,
             reshard_if_not_optimal=False,
             activation=activation,
         )
-        if self.conv_config.shard_layout is None:
-            self.input_memory_config = ttnn.L1_MEMORY_CONFIG
-        elif self.conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        elif self.conv_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-            self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        # if self.conv_config.shard_layout is None:
+        #     self.input_memory_config = ttnn.L1_MEMORY_CONFIG
+        # elif self.conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        #     self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        # elif self.conv_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        #     self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
 
         if conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
@@ -128,9 +130,20 @@ class TtnnConv2D:
         else:
             self.bias = None
 
+        self.return_dims = return_dims
+
         self.weight = ttnn.from_device(conv_pth.weight)
 
-    def __call__(self, x):
+    def __call__(self, x, shape=None):
+        if shape is not None:
+            batch_size = shape[0]
+            input_height = shape[1]
+            input_width = shape[2]
+        else:
+            batch_size = x.shape[0]
+            input_height = x.shape[1]
+            input_width = x.shape[2]
+
         # self.conv_kwargs = {
         #     "in_channels": self.conv.in_channels,
         #     "out_channels": self.conv.out_channels,
@@ -164,7 +177,7 @@ class TtnnConv2D:
         #     self.weight = ttnn.to_device(self.weight, self.device)
         #     self.bias = ttnn.to_device(self.bias, self.device)
 
-        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
+        [x, shape, [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -177,13 +190,16 @@ class TtnnConv2D:
             padding=self.conv.padding,
             dilation=self.conv.dilation,
             groups=self.conv.groups,
-            batch_size=x.shape[0],
-            input_height=x.shape[1],
-            input_width=x.shape[2],
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        del output_height, output_width
-        return x
+        if self.return_dims:
+            return x, shape
+        else:
+            del shape
+            return x
