@@ -15,7 +15,6 @@ import tqdm
 import ttnn
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
-from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPTokenizerFast, T5EncoderModel, T5Tokenizer, T5TokenizerFast
 
@@ -95,7 +94,6 @@ def create_pipeline(
     image_h=1024,
     guidance_scale=3.5,
     num_images_per_prompt=1,
-    max_t5_sequence_length=256,
     cfg_config=None,
     sp_config=None,
     tp_config=None,
@@ -151,7 +149,6 @@ def create_pipeline(
         width=image_w,
         height=image_h,
         guidance_scale=guidance_scale,
-        max_t5_sequence_length=max_t5_sequence_length,
     )
 
     return pipeline
@@ -440,14 +437,12 @@ class StableDiffusion3Pipeline:
         width: int = 1024,
         height: int = 1024,
         guidance_scale: float = 4.5,
-        max_t5_sequence_length: int = 256,
     ) -> None:
         self._prepared_batch_size = batch_size
         self._prepared_num_images_per_prompt = num_images_per_prompt
         self._prepared_width = width
         self._prepared_height = height
         self._prepared_guidance_scale = guidance_scale
-        self._prepared_max_t5_sequence_length = max_t5_sequence_length
 
     def run_single_prompt(self, prompt, negative_prompt, num_inference_steps, seed):
         return self.__call__(
@@ -487,24 +482,12 @@ class StableDiffusion3Pipeline:
             width = self._prepared_width
             height = self._prepared_height
             guidance_scale = self._prepared_guidance_scale
-            max_t5_sequence_length = self._prepared_max_t5_sequence_length
 
             assert height % (self._vae_scale_factor * self._patch_size) == 0
             assert width % (self._vae_scale_factor * self._patch_size) == 0
-            assert max_t5_sequence_length <= 512  # noqa: PLR2004
             assert batch_size == len(prompt_1)
 
             do_classifier_free_guidance = guidance_scale > 1
-            # TODO: pass the patch_size value
-            patch_size = 2
-            latents_shape = (
-                batch_size * num_images_per_prompt,
-                height // self._vae_scale_factor,
-                width // self._vae_scale_factor,
-                self._num_channels_latents,
-            )
-
-            print(f"Latents shape: {latents_shape}")
 
             logger.info("encoding prompts...")
 
@@ -521,7 +504,7 @@ class StableDiffusion3Pipeline:
                     negative_prompt_2=negative_prompt_2,
                     negative_prompt_3=negative_prompt_3,
                     num_images_per_prompt=num_images_per_prompt,
-                    max_t5_sequence_length=max_t5_sequence_length,
+                    max_t5_sequence_length=256,
                     do_classifier_free_guidance=do_classifier_free_guidance,
                     clip_skip=clip_skip,
                 )
@@ -547,7 +530,18 @@ class StableDiffusion3Pipeline:
 
             if seed is not None:
                 torch.manual_seed(seed)
-            latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
+
+            # We let randn generate a permuted latent tensor, so that the generated noise matches the
+            # reference implementation.
+            shape = [
+                batch_size * num_images_per_prompt,
+                self._num_channels_latents,
+                height // self._vae_scale_factor,
+                width // self._vae_scale_factor,
+            ]
+            latents = MotifTransformer.pack_latents(
+                torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1), patch_size=self._patch_size
+            )
 
             tt_prompt_embeds_list = []
             tt_pooled_prompt_embeds_list = []
@@ -679,6 +673,13 @@ class StableDiffusion3Pipeline:
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
 
+                torch_latents = MotifTransformer.unpack_latents(
+                    latents.permute(0, 2, 3, 1),
+                    height=height // self._vae_scale_factor,
+                    width=width // self._vae_scale_factor,
+                    patch_size=self._patch_size,
+                )
+
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
                     # If reshaping, vae device is same as encoder device
@@ -737,11 +738,9 @@ class StableDiffusion3Pipeline:
 
             return self.transformers[cfg_index](
                 spatial=latent_model_input,
-                prompt_embed=prompt,
-                pooled_projections=pooled_projection,
+                prompt=prompt,
+                pooled=pooled_projection,
                 timestep=timestep,
-                N=spatial_sequence_length,
-                L=prompt_sequence_length,
             )
 
         if traced and self._trace is None:
@@ -952,7 +951,7 @@ class StableDiffusion3Pipeline:
                 max_sequence_length=max_t5_sequence_length,
                 tokenizer=self._tokenizer_3,
                 text_encoder=self._text_encoder_3,
-                tokenizer_max_length=tokenizer_max_length,
+                tokenizer_max_length=tokenizer_max_length,  # TODO: why?
                 joint_attention_dim=self._prompt_embedding_dim,
             )
 

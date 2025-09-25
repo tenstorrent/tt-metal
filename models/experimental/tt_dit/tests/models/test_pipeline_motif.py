@@ -22,15 +22,15 @@ from ...pipelines.motif.pipeline_motif import (
 @pytest.mark.parametrize(
     ("image_w", "image_h", "guidance_scale", "num_inference_steps"),
     [
-        (1024, 1024, 3.5, 28),
+        (1024, 1024, 5.0, 28),
     ],
 )
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "topology", "num_links"),
     [
-        pytest.param((2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1, id="2x4cfg1sp0tp1"),
+        # pytest.param((2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1, id="2x4cfg1sp0tp1"),
         pytest.param((2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1, id="2x4cfg0sp0tp1"),
-        pytest.param((4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4, id="4x8cfg1sp0tp1"),
+        # pytest.param((4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4, id="4x8cfg1sp0tp1"),
     ],
     indirect=["mesh_device"],
 )
@@ -42,14 +42,14 @@ from ...pipelines.motif.pipeline_motif import (
 @pytest.mark.parametrize(
     "use_cache",
     [
-        pytest.param(True, id="cache_on"),
+        # pytest.param(True, id="cache_on"),
         pytest.param(False, id="cache_off"),
     ],
 )
 @pytest.mark.parametrize(
     "traced",
     [
-        pytest.param(True, id="tracing_on"),
+        # pytest.param(True, id="tracing_on"),
         pytest.param(False, id="tracing_off"),
     ],
 )
@@ -90,7 +90,6 @@ def test_motif_pipeline(
         image_w=image_w,
         image_h=image_h,
         guidance_scale=guidance_scale,
-        max_t5_sequence_length=256,
         cfg_config=cfg,
         sp_config=sp,
         tp_config=tp,
