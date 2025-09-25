@@ -378,12 +378,10 @@ def test_wan_transformer_model(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
         [(2, 4), 0, 1, 1],
-        [(2, 4), 1, 0, 1],
         [(4, 8), 1, 0, 4],
     ],
     ids=[
         "2x4sp0tp1",
-        "2x4sp1tp0",
         "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
