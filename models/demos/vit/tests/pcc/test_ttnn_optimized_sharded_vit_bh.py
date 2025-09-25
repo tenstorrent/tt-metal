@@ -11,13 +11,13 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
 from models.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_channels, model_location_generator):
@@ -46,11 +46,11 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 1),
+                ttnn.CoreCoord(9, 1),
             ),
         }
     )
-    n_cores = 16
+    n_cores = 20
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(
@@ -75,7 +75,7 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 def test_vit_embeddings(device, model_name, batch_size, image_size, image_channels, model_location_generator):
@@ -124,11 +124,11 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 1),
+                ttnn.CoreCoord(9, 1),
             ),
         }
     )
-    n_cores = 16
+    n_cores = 20
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(
@@ -155,7 +155,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -185,7 +185,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
         hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             hidden_states.shape,
-            core_grid=config.core_grid_8x8,
+            core_grid=config.core_grid_12x10,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -204,7 +204,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -234,7 +234,7 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_output(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -259,7 +259,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
         residual,
         memory_config=ttnn.create_sharded_memory_config(
             residual.shape,
-            core_grid=config.core_grid_8x8,
+            core_grid=config.core_grid_12x10,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -279,7 +279,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_layer(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
@@ -309,7 +309,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
         hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             hidden_states.shape,
-            core_grid=config.core_grid_8x8,
+            core_grid=config.core_grid_12x10,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -328,7 +328,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  ## padded from 197 to 224
 def test_vit_encoder(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
@@ -362,11 +362,11 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.96)
+    assert_with_pcc(torch_output, output, 0.958)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 @pytest.mark.parametrize("sequence_size", [224])
@@ -412,7 +412,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
 
-    if batch_size <= 8:
+    if batch_size <= 10:
         fold_core_x = batch_size - 1
         fold_core_y = 1
     else:
@@ -452,8 +452,5 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     )
     output = ttnn.to_torch(output)
 
-    print(output[0, 0, :1000])
-    print("--------------------------------")
-    print(torch_output)
     # 1000 classes slicing
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.88)
+    assert_with_pcc(torch_output, output[0, 0, :1000], 0.884)

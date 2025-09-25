@@ -10,20 +10,19 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
+from models.demos.blackhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
-from models.utility_functions import profiler, run_for_wormhole_b0
+from models.utility_functions import profiler
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
-# @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2760704}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, iterations",
-    ((8, 100),),
+    ((10, 100),),
 )
 def test_run_vit_trace_2cqs_inference(
     mesh_device,
@@ -122,13 +121,12 @@ def test_run_vit_trace_2cqs_inference(
     logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1700000, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, iterations",
-    ((8, 100),),
+    ((10, 100),),
 )
 @pytest.mark.parametrize("entire_imagenet_dataset", [True])
 @pytest.mark.parametrize("expected_accuracy", [0.80])
