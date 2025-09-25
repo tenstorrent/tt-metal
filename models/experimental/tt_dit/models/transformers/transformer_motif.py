@@ -104,6 +104,7 @@ class FlattenedPatchEmbed(Module):
         out_channels: int,
         patch_count_y: int,
         patch_count_x: int,
+        sequence_padding: tuple[int, int] = (0, 0),
         mesh_device: ttnn.MeshDevice,
         parallel_config: DiTParallelConfig,
     ) -> None:
@@ -111,6 +112,7 @@ class FlattenedPatchEmbed(Module):
 
         self.patch_count_y = patch_count_y
         self.patch_count_x = patch_count_x
+        self.sequence_padding = sequence_padding
 
         sp_axis = parallel_config.sequence_parallel.mesh_axis
         tp_axis = parallel_config.tensor_parallel.mesh_axis
@@ -123,7 +125,7 @@ class FlattenedPatchEmbed(Module):
         )
 
         self.pos_embed = Parameter(
-            shape=[1, patch_count_y * patch_count_x, out_channels],
+            shape=[1, patch_count_y * patch_count_x + sequence_padding[0] + sequence_padding[1], out_channels],
             device=mesh_device,
             mesh_mapping={sp_axis: 1, tp_axis: 2},
         )
@@ -142,14 +144,16 @@ class FlattenedPatchEmbed(Module):
         if "pos_embed" in state:
             state["pos_embed"] = self._crop_pos_embed(state.pop("pos_embed"))
 
-    def _crop_pos_embed(self, pos_embed: torch.Tensor) -> torch.Tensor:
-        pos_embed_max_size = math.isqrt(pos_embed.shape[1])
+    def _crop_pos_embed(self, x: torch.Tensor) -> torch.Tensor:
+        pos_embed_max_size = math.isqrt(x.shape[1])
         top = (pos_embed_max_size - self.patch_count_y) // 2
         left = (pos_embed_max_size - self.patch_count_x) // 2
 
-        spatial_pos_embed = pos_embed.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
-        spatial_pos_embed = spatial_pos_embed[:, top : top + self.patch_count_y, left : left + self.patch_count_x, :]
-        return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
+        x = x.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
+        x = x[:, top : top + self.patch_count_y, left : left + self.patch_count_x, :]
+        x = x.reshape([1, -1, x.shape[-1]])
+
+        return torch.nn.functional.pad(x, (0, 0, *self.sequence_padding))
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -189,15 +193,25 @@ class MotifTransformer(Module):
         self.latents_width = latents_width
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
+        self.register_token_num = register_token_num
         self.ccl_manager = ccl_manager
 
+        sp_axis = parallel_config.sequence_parallel.mesh_axis
+        sp_factor = parallel_config.sequence_parallel.factor
         tp_axis = parallel_config.tensor_parallel.mesh_axis
 
+        raw_spatial_sequence_length = (latents_height // patch_size) * (latents_width // patch_size)
+        spatial_sequence_length = raw_spatial_sequence_length + register_token_num
+        self.spatial_sequence_padding = TransformerBlock.spatial_sequence_padding_length(
+            length=spatial_sequence_length, sp_factor=sp_factor
+        )
+
         self.pos_embed = FlattenedPatchEmbed(
-            in_channels=in_channels,
+            in_channels=in_channels * patch_size * patch_size,
             out_channels=inner_dim,
             patch_count_x=latents_width // patch_size,
             patch_count_y=latents_height // patch_size,
+            sequence_padding=(register_token_num, self.spatial_sequence_padding),
             mesh_device=mesh_device,
             parallel_config=parallel_config,
         )
@@ -247,7 +261,16 @@ class MotifTransformer(Module):
         )
 
         self.register_tokens = Parameter(
-            shape=[1, register_token_num, inner_dim], device=mesh_device, mesh_mapping={tp_axis: 2}
+            shape=[1, spatial_sequence_length + self.spatial_sequence_padding, inner_dim],
+            device=mesh_device,
+            mesh_mapping={sp_axis: 1, tp_axis: 2},
+        )
+
+        self.register_tokens_mask = Parameter(
+            shape=[1, spatial_sequence_length + self.spatial_sequence_padding, inner_dim],
+            dtype=ttnn.bfloat4_b,
+            device=mesh_device,
+            mesh_mapping={sp_axis: 1, tp_axis: 2},
         )
 
         self.t_token_proj = ColParallelLinear(
@@ -276,7 +299,8 @@ class MotifTransformer(Module):
             pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
         """
-        batch_size, _, _ = spatial.shape
+
+        batch_size, spatial_sequence_length, _ = spatial.shape
         assert len(prompt.shape) == 3
         assert len(pooled.shape) == 2
         assert timestep.shape == [batch_size, 1]
@@ -294,16 +318,15 @@ class MotifTransformer(Module):
         spatial = self.pos_embed.forward(spatial)
         prompt = self.context_embedder(prompt)
 
-        # prepend register tokens
-        register_tokens = ttnn.repeat(self.register_tokens.data, [batch_size, 1, 1])
-        spatial = ttnn.concat([register_tokens, spatial], dim=1)
+        # the sequence already includes space for register tokens
+        # register_tokens = ttnn.repeat(self.register_tokens.data, [batch_size, 1, 1])
+        # spatial = ttnn.concat([register_tokens, spatial], dim=1)
+        spatial = spatial * self.register_tokens_mask.data + self.register_tokens.data
 
         # append time token
         t_token = self.t_token_proj(time_embed)
         t_token = ttnn.clone(t_token, dtype=prompt.dtype)
         prompt = ttnn.concat([prompt, t_token], dim=1)
-
-        _, spatial_sequence_length, _ = spatial.shape
 
         for i, block in enumerate(self.transformer_blocks, start=1):
             spatial, prompt = block.forward(
@@ -317,7 +340,8 @@ class MotifTransformer(Module):
             if i % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
 
-        spatial = spatial[:, self.register_tokens.shape[1] :]
+        # we keep the register tokens in the sequence
+        # spatial = spatial[:, self.register_tokens.shape[1] :]
 
         # spatial = self.ccl_manager.all_gather(spatial, dim=1, mesh_axis=sp_axis)
         spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
@@ -336,22 +360,37 @@ class MotifTransformer(Module):
         rename_substate(state, "norm_out.linear", "time_embed_out")  # chunks=2 if sharded
         rename_substate(state, "norm_out.norm", "norm_out")
 
-    @staticmethod
-    def pack_latents(t: torch.Tensor, *, patch_size: int) -> torch.Tensor:
+        tokens = state.pop("register_tokens", None)
+        if tokens is not None:
+            mask = torch.zeros_like(tokens)
+
+            padding = (self.latents_height // self.patch_size) * (
+                self.latents_width // self.patch_size
+            ) + self.spatial_sequence_padding
+
+            state["register_tokens"] = torch.nn.functional.pad(tokens, (0, 0, 0, padding))
+            state["register_tokens_mask"] = torch.nn.functional.pad(mask, (0, 0, 0, padding), value=1)
+
+    def patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), P * P * C
-        batch_size, height, width, channels = t.shape
+        batch_size, height, width, channels = latents.shape
+        patch = self.patch_size
 
-        t = t.reshape([batch_size, height // patch_size, patch_size, width // patch_size, patch_size, channels])
-        return t.transpose(2, 3).flatten(3, 5).flatten(1, 2)
+        latents = latents.reshape([batch_size, height // patch, patch, width // patch, patch, channels])
+        spatial = latents.transpose(2, 3).flatten(3, 5).flatten(1, 2)
 
-    @staticmethod
-    def unpack_latents(t: torch.Tensor, *, height: int, width: int, patch_size: int) -> torch.Tensor:
+        return torch.nn.functional.pad(spatial, [0, 0, self.register_token_num, self.spatial_sequence_padding])
+
+    def unpatchify(self, spatial: torch.Tensor, *, height: int, width: int) -> torch.Tensor:
         # N, (H / P) * (W / P), P * P * C -> N, H, W, C
-        batch_size, sequence_len, _ = t.shape
-        assert sequence_len == (height // patch_size) * (width // patch_size)
+        batch_size, _, _ = spatial.shape
+        patch = self.patch_size
+        sequence_length = (height // patch) * (width // patch)
 
-        t = t.reshape([batch_size, height // patch_size, width // patch_size, patch_size, patch_size, -1])
-        return t.transpose(2, 3).flatten(3, 4).flatten(1, 2)
+        spatial = spatial[:, self.register_token_num : self.register_token_num + sequence_length, :]
+
+        spatial = spatial.reshape([batch_size, height // patch, width // patch, patch, patch, -1])
+        return spatial.transpose(2, 3).flatten(3, 4).flatten(1, 2)
 
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:

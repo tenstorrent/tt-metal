@@ -539,7 +539,7 @@ class StableDiffusion3Pipeline:
                 height // self._vae_scale_factor,
                 width // self._vae_scale_factor,
             ]
-            latents = MotifTransformer.pack_latents(
+            latents = self.transformers[0].patchify(
                 torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1), patch_size=self._patch_size
             )
 
@@ -673,7 +673,7 @@ class StableDiffusion3Pipeline:
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
 
-                torch_latents = MotifTransformer.unpack_latents(
+                torch_latents = self.transformers[0].unpatchify(
                     latents.permute(0, 2, 3, 1),
                     height=height // self._vae_scale_factor,
                     width=width // self._vae_scale_factor,

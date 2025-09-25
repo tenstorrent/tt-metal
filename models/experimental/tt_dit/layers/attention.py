@@ -316,16 +316,17 @@ class Attention(Module):
 
         return spatial, prompt
 
-    @staticmethod
-    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
+    @classmethod
+    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int) -> int:
         if sp_factor == 1:
-            return x
-
-        seq_len = x.shape[-2]
+            return 0
 
         divisor = 512 * sp_factor
-        padding_len = -seq_len % divisor
+        return -length % divisor
 
+    @classmethod
+    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
+        padding_len = cls.spatial_sequence_padding_length(sequence_length=x.shape[-2], sp_factor=sp_factor)
         return torch.nn.functional.pad(x, (0, 0, 0, padding_len))
 
 

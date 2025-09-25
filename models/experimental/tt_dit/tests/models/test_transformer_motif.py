@@ -22,12 +22,12 @@ from ...utils.tensor import bf16_tensor, to_torch
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
     [
         pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        # pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        # pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        # pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        # pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        # pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        # pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
+        pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
+        pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],
 )
@@ -166,7 +166,7 @@ def test_transformer_motif(
     ]
     prompt = _combine_prompt_embeddings(*prompt_embeddings)
 
-    spatial = MotifTransformer.pack_latents(latents.permute(0, 2, 3, 1), patch_size=patch_size)
+    spatial = tt_model.patchify(latents.permute(0, 2, 3, 1))
 
     tt_spatial = bf16_tensor(spatial, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
     tt_prompt = bf16_tensor(prompt, device=submesh_device)
@@ -188,13 +188,10 @@ def test_transformer_motif(
     )
 
     tt_output_torch = to_torch(tt_output, device=submesh_device, mesh_mapping={sp_axis: 1})
-    tt_output_unpacked = MotifTransformer.unpack_latents(
-        tt_output_torch,
-        patch_size=patch_size,
-        height=height // vae_scale_factor,
-        width=width // vae_scale_factor,
+    tt_output_torch = tt_model.unpatchify(
+        tt_output_torch, height=height // vae_scale_factor, width=width // vae_scale_factor
     ).permute(0, 3, 1, 2)
-    assert_quality(torch_output, tt_output_unpacked, pcc=0.9985, relative_rmse=5.7)
+    assert_quality(torch_output, tt_output_torch, pcc=0.9985, relative_rmse=5.7)
 
 
 def _combine_prompt_embeddings(t5: torch.Tensor, clip_a: torch.Tensor, clip_b: torch.Tensor) -> torch.Tensor:

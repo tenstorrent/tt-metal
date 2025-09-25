@@ -283,6 +283,10 @@ class TransformerBlock(Module):
 
         return spatial, prompt
 
+    @classmethod
+    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int) -> int:
+        return Attention.spatial_sequence_padding_length(length=length, sp_factor=sp_factor)
+
     @staticmethod
     def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
         return Attention.pad_spatial_sequence(x, sp_factor=sp_factor)
