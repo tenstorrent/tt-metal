@@ -435,8 +435,12 @@ process_mcast_in0_program_and_create_override_variables(
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(
-                get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(get_defines(
+                fused_activation.value().op_type,
+                fused_activation.value().params,
+                "ACTIVATION",
+                "i",
+                tt_metal::dataformat_to_datatype_converter(output_data_format)));
         }
     }
     if (packer_l1_acc_en) {
