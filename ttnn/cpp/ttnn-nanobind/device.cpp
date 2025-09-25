@@ -39,6 +39,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
+namespace nb = nanobind;
 
 namespace {
 
@@ -529,7 +530,7 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "get_arch_name",
-        &tt::tt_metal::detail::get_physical_architecture_name,
+        &tt::tt_metal::detail::get_platform_architecture_name,
         "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = nb::int_(DEFAULT_L1_SMALL_SIZE);

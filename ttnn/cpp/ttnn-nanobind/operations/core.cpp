@@ -205,6 +205,7 @@ void py_module(nb::module_& mod) {
             tensor (ttnn.Tensor): the input tensor to be converted.
             memory_config (ttnn.MemoryConfig): the desired memory configuration for the tensor.
             dtype (ttnn.DataType, optional): the optional `ttnn` data type. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): the optional output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the converted tensor.
@@ -215,7 +216,11 @@ void py_module(nb::module_& mod) {
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("tensor"), nb::arg("memory_config"), nb::arg("dtype") = nb::none()});
+        ttnn::nanobind_arguments_t{
+            nb::arg("tensor"),
+            nb::arg("memory_config"),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
 
     bind_registered_operation(
         mod,
