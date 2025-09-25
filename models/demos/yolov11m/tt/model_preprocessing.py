@@ -35,21 +35,31 @@ def create_yolov11_input_tensors(
 
         
         n, c, h, w = torch_input_tensor.shape
+        original_c = c
         if c == 3:
             c = 16
         n = n // num_devices if n // num_devices != 0 else n
         
-        # CRITICAL FIX: Do permute in PyTorch to avoid TTNN's 94% quantization loss
-        # Convert NCHW → NHWC in high-precision PyTorch instead of lossy TTNN
-        torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))  # [N,C,H,W] → [N,H,W,C]
+        # CRITICAL FIX: Do padding AND permute in PyTorch to avoid TTNN's 94% quantization loss
+        # Step 1: Pad channels in PyTorch if needed (to match memory config)
+        if original_c == 3:
+            # Pad from 3 to 16 channels
+            padding = torch.zeros(n, 13, h, w, dtype=torch_input_tensor.dtype, device=torch_input_tensor.device)
+            torch_input_tensor_padded = torch.cat([torch_input_tensor, padding], dim=1)  # [1, 16, 320, 320]
+        else:
+            torch_input_tensor_padded = torch_input_tensor
+            
+        # Step 2: Convert NCHW → NHWC in high-precision PyTorch instead of lossy TTNN  
+        torch_input_tensor_nhwc = torch.permute(torch_input_tensor_padded, (0, 2, 3, 1))  # [N,C,H,W] → [N,H,W,C]
         
         # ✅ CHECKPOINT: Verify PyTorch permute preserves full precision
         pre_conversion_unique = len(torch.unique(torch_input_tensor_nhwc.flatten()))
         print(f"✅ [CHECKPOINT] PyTorch permute preserved: {pre_conversion_unique} unique values")
         
-        # Update memory config for NHWC format [n, h, w, c]
+        # Keep original sharding strategy but adapt for NHWC tensor dimensions
+        # The tensor is now [n, h, w, c] but we need compatible sharding
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, h, w, c],  # Changed from [n, c, h, w] to [n, h, w, c] for NHWC format
+            [n, c, h, w],  # Keep original dimension order for sharding compatibility  
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )

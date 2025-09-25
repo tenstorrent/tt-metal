@@ -53,15 +53,9 @@ class TtnnYoloV11:
         input_unique = len(torch.unique(ttnn.to_torch(input).flatten()))
         print(f"✅ [CHECKPOINT] TTNN backbone input: {input_unique} unique values")
         
-        # Only pad if we need more channels
-        if channel_padding_needed > 0:
-            x = ttnn.pad(input, [[0, 0], [0, channel_padding_needed], [0, 0], [0, 0]], value=0.0)
-            ttnn.deallocate(input)
-        else:
-            x = input
-            min_channels = c
-            
+        # Skip padding - already done in PyTorch preprocessing
         # Skip TTNN permute - input already NHWC from PyTorch preprocessing
+        x = input
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         
         x = self.conv1(self.device, x)
