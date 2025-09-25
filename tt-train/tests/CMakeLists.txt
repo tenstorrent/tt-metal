@@ -58,6 +58,7 @@ set(SOURCES
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
     ops/slice_repeat_ops_test.cpp
+    ops/binary_ops_test.cpp
     ops/scaled_dot_product_attention_test.cpp
 )
 
