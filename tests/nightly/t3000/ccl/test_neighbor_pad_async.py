@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -203,7 +203,7 @@ def run_neighbor_pad_impl(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -215,20 +215,12 @@ def run_neighbor_pad_impl(
     [
         ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
         ([82, 120, 212, 512], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        #        ([163, 240, 424, 256], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        #        ([163, 480, 848, 128], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        #        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1),
-        #        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
         ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
         ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 0),
     ],
     ids=[
         "mochi_vae_1",
         "mochi_vae_2",
-        #        "mochi_vae_3",
-        #        "mochi_vae_4",
-        #        "left_and_right",
-        #        "cluster_axis",
         "replicate_width_dim",
         "zeros_width_dim",
     ],
