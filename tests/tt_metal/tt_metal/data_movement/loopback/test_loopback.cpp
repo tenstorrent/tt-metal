@@ -115,7 +115,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // Launch program and record outputs
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);

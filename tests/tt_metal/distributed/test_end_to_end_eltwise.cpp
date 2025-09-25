@@ -149,7 +149,7 @@ TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
     auto rt_args_out = GetRuntimeArgs(example_program, compute_kernel_id);
     EXPECT_EQ(rt_args_out.size(), 2);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
 
     auto target_devices = MeshCoordinateRange(mesh_device_->shape());
 
@@ -231,7 +231,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
 
     auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
@@ -289,7 +289,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
@@ -353,7 +353,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kMulOpId);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
@@ -467,8 +467,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
         kSubOpId,
         sub_device_2);  // Subtraction runs on the second SubDevice
 
-    auto add_mesh_workload = CreateMeshWorkload();
-    auto multiply_and_subtract_mesh_workload = CreateMeshWorkload();
+    auto add_mesh_workload = MeshWorkload();
+    auto multiply_and_subtract_mesh_workload = MeshWorkload();
     AddProgramToMeshWorkload(
         add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
     AddProgramToMeshWorkload(

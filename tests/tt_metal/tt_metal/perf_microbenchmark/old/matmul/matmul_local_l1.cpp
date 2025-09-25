@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
 
         std::chrono::duration<double, std::nano> duration{};
         // took from run_operation.cpp
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);

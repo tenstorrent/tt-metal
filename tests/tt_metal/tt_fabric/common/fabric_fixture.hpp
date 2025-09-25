@@ -116,7 +116,7 @@ public:
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program
             auto& program_copy = program;
-            auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+            auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
             tt::tt_metal::distributed::AddProgramToMeshWorkload(
                 mesh_workload,
                 std::move(program_copy),

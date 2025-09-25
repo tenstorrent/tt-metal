@@ -257,7 +257,7 @@ void test_single_connection_single_device_socket(
                     static_cast<uint32_t>(data_size)}});
     }
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(md0->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(send_recv_program), devices);
@@ -548,7 +548,7 @@ void test_single_device_socket_with_workers(
         }
     }
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(md0->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(send_recv_program), devices);
@@ -746,11 +746,11 @@ void test_single_connection_multi_device_socket(
         recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
     tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_logical_coord, recv_rtas);
 
-    auto sender_mesh_workload = CreateMeshWorkload();
+    auto sender_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(md0->shape());
     AddProgramToMeshWorkload(sender_mesh_workload, std::move(sender_program), devices);
 
-    auto recv_mesh_workload = CreateMeshWorkload();
+    auto recv_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_recv(md1->shape());
     AddProgramToMeshWorkload(recv_mesh_workload, std::move(recv_program), devices_recv);
 
@@ -924,11 +924,11 @@ void test_single_connection_multi_device_socket_with_workers(
     };
     tt_metal::SetRuntimeArgs(recv_program, worker_kernel, worker_logical_coord, worker_rtas);
 
-    auto sender_mesh_workload = CreateMeshWorkload();
+    auto sender_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(md0->shape());
     AddProgramToMeshWorkload(sender_mesh_workload, std::move(sender_program), devices);
 
-    auto recv_mesh_workload = CreateMeshWorkload();
+    auto recv_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_recv(md1->shape());
     AddProgramToMeshWorkload(recv_mesh_workload, std::move(recv_program), devices_recv);
 
@@ -1448,24 +1448,24 @@ void test_multi_sender_single_recv(
         receiver_physical_device_id,
         0);
 
-    auto sender_0_mesh_workload = CreateMeshWorkload();
+    auto sender_0_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(sender_0->shape());
     AddProgramToMeshWorkload(sender_0_mesh_workload, std::move(*sender_program_0), devices_0);
 
-    auto sender_1_mesh_workload = CreateMeshWorkload();
+    auto sender_1_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_1(sender_1->shape());
     AddProgramToMeshWorkload(sender_1_mesh_workload, std::move(*sender_program_1), devices_1);
 
-    auto reduce_mesh_workload = CreateMeshWorkload();
+    auto reduce_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_reduce(reducer->shape());
     AddProgramToMeshWorkload(reduce_mesh_workload, std::move(*reduce_program), devices_reduce);
     MeshWorkload sender_2_mesh_workload;
     if (split_reducer) {
-        sender_2_mesh_workload = CreateMeshWorkload();
+        sender_2_mesh_workload = MeshWorkload();
         AddProgramToMeshWorkload(sender_2_mesh_workload, std::move(*sender_program_2), devices_reduce);
     }
 
-    auto recv_mesh_workload = CreateMeshWorkload();
+    auto recv_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_recv(receiver->shape());
     AddProgramToMeshWorkload(recv_mesh_workload, std::move(*recv_program), devices_recv);
 
@@ -1558,8 +1558,8 @@ void test_multi_connection_multi_device_data_copy(
 
     EnqueueWriteMeshBuffer(sender_mesh->mesh_command_queue(), sender_data_buffer, src_vec);
 
-    auto sender_mesh_workload = CreateMeshWorkload();
-    auto recv_mesh_workload = CreateMeshWorkload();
+    auto sender_mesh_workload = MeshWorkload();
+    auto recv_mesh_workload = MeshWorkload();
 
     for (const auto& connection : socket_connections) {
         auto sender_physical_id = sender_mesh->get_device(connection.sender_core.device_coord)->id();
