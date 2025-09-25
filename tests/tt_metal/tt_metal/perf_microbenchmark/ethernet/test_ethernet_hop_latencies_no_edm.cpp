@@ -365,7 +365,7 @@ void build_and_run_roundtrip_latency_test(
         tt::tt_metal::distributed::MeshCoordinateRange device_range =
             tt::tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        tt::tt_metal::distributed::MeshWorkload mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+        tt::tt_metal::distributed::MeshWorkload mesh_workload;
         tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(*program_ptr), device_range);
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_ptr->mesh_command_queue(), mesh_workload, false);
     }

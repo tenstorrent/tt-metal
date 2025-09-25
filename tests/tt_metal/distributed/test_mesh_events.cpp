@@ -129,7 +129,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
     uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
         MeshCoordinate{0, 0},
         MeshCoordinate{
