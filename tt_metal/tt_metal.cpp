@@ -63,173 +63,182 @@ namespace tt_metal {
 enum class FabricConfig : uint32_t;
 struct RuntimeArgsData;
 struct TraceDescriptor;
-alsdkfhasdlkfja;
-lsdjf;
-ladsfja;
-sldfj;
-lasdfjas;
-ldfjd;
-lkdasjfl;
-ksd
 
-    namespace {
-    CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
-        ZoneScoped;
-        return std::visit(
-            ttsl::overloaded{
-                [](const CoreCoord& core_spec) { return CoreRangeSet(CoreRange(core_spec, core_spec)); },
-                [](const CoreRange& core_spec) { return CoreRangeSet(core_spec); },
-                [](const CoreRangeSet& core_spec) { return core_spec; },
-            },
-            specified_core_spec);
-    }
+namespace {
 
-    struct DataMovementConfigStatus {
-        bool riscv0_in_use;
-        bool riscv1_in_use;
-        bool noc0_in_use;
-        bool noc1_in_use;
-    };
+CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
+    ZoneScoped;
+    return std::visit(
+        ttsl::overloaded{
+            [](const CoreCoord& core_spec) { return CoreRangeSet(CoreRange(core_spec, core_spec)); },
+            [](const CoreRange& core_spec) { return CoreRangeSet(core_spec); },
+            [](const CoreRangeSet& core_spec) { return core_spec; },
+        },
+        specified_core_spec);
+}
 
-    DataMovementConfigStatus CheckDataMovementConfig(
-        const HalProgrammableCoreType& programmable_core, Program& program, const CoreRangeSet& core_ranges) {
-        DataMovementConfigStatus data_movement_config_status{
-            .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
+struct DataMovementConfigStatus {
+    bool riscv0_in_use;
+    bool riscv1_in_use;
+    bool noc0_in_use;
+    bool noc1_in_use;
+};
 
-        auto set_global_and_local_noc_usage =
-            [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
-                int noc_value;
-                switch (programmable_core) {
-                    case HalProgrammableCoreType::TENSIX:
-                        noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
-                        break;
-                    case HalProgrammableCoreType::ACTIVE_ETH:
-                    case HalProgrammableCoreType::IDLE_ETH:
-                        noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
-                        break;
-                    default:
-                        TT_THROW(
-                            "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                            enchantum::to_string(programmable_core));
-                }
-                local_noc0_usage = noc_value == 0;
-                local_noc1_usage = noc_value == 1;
-                data_movement_config_status.noc0_in_use = local_noc0_usage;
-                data_movement_config_status.noc1_in_use = local_noc1_usage;
-            };
+DataMovementConfigStatus CheckDataMovementConfig(
+    const HalProgrammableCoreType& programmable_core, Program& program, const CoreRangeSet& core_ranges) {
+    DataMovementConfigStatus data_movement_config_status{
+        .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
-        const auto& hal = MetalContext::instance().hal();
-        for (const auto& core_range : core_ranges.ranges()) {
-            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                    const KernelGroup* kernel_group = program.impl().kernels_on_core(
-                        CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
-                    if (kernel_group != nullptr) {
-                        bool local_noc0_in_use = false;
-                        bool local_noc1_in_use = false;
-                        bool has_dm0 = false;
-                        bool has_dm1 = false;
-                        for (auto kernel_id : kernel_group->kernel_ids) {
-                            const auto kernel = program.impl().get_kernel(kernel_id);
-                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                                switch (kernel->get_kernel_processor_type(0)) {
-                                    case 0:
-                                        has_dm0 = true;
-                                        data_movement_config_status.riscv0_in_use = true;
-                                        set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
-                                        break;
-                                    case 1:
-                                        has_dm1 = true;
-                                        data_movement_config_status.riscv1_in_use = true;
-                                        set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
-                                        break;
-                                    default: TT_THROW("Unknown DataMovementProcessor type"); break;
-                                }
+    auto set_global_and_local_noc_usage =
+        [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
+            int noc_value;
+            switch (programmable_core) {
+                case HalProgrammableCoreType::TENSIX:
+                    noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
+                    break;
+                case HalProgrammableCoreType::ACTIVE_ETH:
+                case HalProgrammableCoreType::IDLE_ETH:
+                    noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
+                    break;
+                default:
+                    TT_THROW(
+                        "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
+                        enchantum::to_string(programmable_core));
+            }
+            local_noc0_usage = noc_value == 0;
+            local_noc1_usage = noc_value == 1;
+            data_movement_config_status.noc0_in_use = local_noc0_usage;
+            data_movement_config_status.noc1_in_use = local_noc1_usage;
+        };
+
+    const auto& hal = MetalContext::instance().hal();
+    for (const auto& core_range : core_ranges.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                const KernelGroup* kernel_group = program.impl().kernels_on_core(
+                    CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
+                if (kernel_group != nullptr) {
+                    bool local_noc0_in_use = false;
+                    bool local_noc1_in_use = false;
+                    bool has_dm0 = false;
+                    bool has_dm1 = false;
+                    for (auto kernel_id : kernel_group->kernel_ids) {
+                        const auto kernel = program.impl().get_kernel(kernel_id);
+                        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+                            switch (kernel->get_kernel_processor_type(0)) {
+                                case 0:
+                                    has_dm0 = true;
+                                    data_movement_config_status.riscv0_in_use = true;
+                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
+                                    break;
+                                case 1:
+                                    has_dm1 = true;
+                                    data_movement_config_status.riscv1_in_use = true;
+                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
+                                    break;
+                                default: TT_THROW("Unknown DataMovementProcessor type"); break;
                             }
                         }
-                        if (has_dm0 and has_dm1) {
-                            TT_FATAL(
-                                local_noc0_in_use and local_noc1_in_use,
-                                "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
-                                "doing so results in hangs!",
-                                CoreCoord(x, y).str());
-                        }
+                    }
+                    if (has_dm0 and has_dm1) {
+                        TT_FATAL(
+                            local_noc0_in_use and local_noc1_in_use,
+                            "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
+                            "doing so results in hangs!",
+                            CoreCoord(x, y).str());
                     }
                 }
             }
         }
-
-        return data_movement_config_status;
     }
 
-    void ConfigureKernelGroup(
-        Program & program,
-        uint32_t programmable_core_type_index,
-        const KernelGroup* kernel_group,
-        IDevice* device,
-        const CoreCoord& logical_core) {
-        const auto& hal = MetalContext::instance().hal();
-        uint32_t kernel_config_base = hal.get_dev_addr(
-            hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
-        for (auto kernel_id : kernel_group->kernel_ids) {
-            // Need the individual offsets of each bin
-            // TODO: make configure take a std::span
-            program.impl().get_kernel(kernel_id)->configure(
-                device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
-        }
+    return data_movement_config_status;
+}
+
+void ConfigureKernelGroup(
+    Program& program,
+    uint32_t programmable_core_type_index,
+    const KernelGroup* kernel_group,
+    IDevice* device,
+    const CoreCoord& logical_core) {
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t kernel_config_base =
+        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
+    for (auto kernel_id : kernel_group->kernel_ids) {
+        // Need the individual offsets of each bin
+        // TODO: make configure take a std::span
+        program.impl().get_kernel(kernel_id)->configure(
+            device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
     }
+}
 
-    std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
-        std::optional<uint32_t> semaphore_id = std::nullopt;
-        std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                CoreCoord logical_core(x, y);
-                auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
-                if (semaphores.size() == NUM_SEMAPHORES) {
-                    TT_THROW(
-                        "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
-                        logical_core.str(),
-                        NUM_SEMAPHORES);
-                }
+std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
+    std::optional<uint32_t> semaphore_id = std::nullopt;
+    std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
+    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+            CoreCoord logical_core(x, y);
+            auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
+            if (semaphores.size() == NUM_SEMAPHORES) {
+                TT_THROW(
+                    "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
+                    logical_core.str(),
+                    NUM_SEMAPHORES);
+            }
 
-                for (const auto& semaphore : semaphores) {
-                    semaphore_histogram[semaphore.get().id()]++;
-                }
+            for (const auto& semaphore : semaphores) {
+                semaphore_histogram[semaphore.get().id()]++;
             }
         }
+    }
 
-        std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
-        for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
-            if (semaphore_histogram.at(sem_id) == 0) {
-                uninitialized_sem_id = sem_id;
-                break;
+    std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
+    for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
+        if (semaphore_histogram.at(sem_id) == 0) {
+            uninitialized_sem_id = sem_id;
+            break;
+        }
+    }
+
+    if (uninitialized_sem_id.has_value()) {
+        semaphore_id = uninitialized_sem_id;
+    } else {
+        TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
+    }
+
+    return semaphore_id;
+}
+
+inline void SetRuntimeArgsImpl(
+    const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
+    if (!runtime_args.empty()) {
+        program.impl().get_kernel(kernel_id)->set_runtime_args(c, runtime_args);
+    }
+}
+
+inline void SetRuntimeArgsImpl(
+    const Program& program,
+    KernelHandle kernel_id,
+    const CoreRange& core_range,
+    stl::Span<const uint32_t> runtime_args) {
+    if (!runtime_args.empty()) {
+        auto kernel = program.impl().get_kernel(kernel_id);
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
+                kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
             }
         }
-
-        if (uninitialized_sem_id.has_value()) {
-            semaphore_id = uninitialized_sem_id;
-        } else {
-            TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
-        }
-
-        return semaphore_id;
     }
+}
 
-    inline void SetRuntimeArgsImpl(
-        const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
-        if (!runtime_args.empty()) {
-            program.impl().get_kernel(kernel_id)->set_runtime_args(c, runtime_args);
-        }
-    }
-
-    inline void SetRuntimeArgsImpl(
-        const Program& program,
-        KernelHandle kernel_id,
-        const CoreRange& core_range,
-        stl::Span<const uint32_t> runtime_args) {
-        if (!runtime_args.empty()) {
-            auto kernel = program.impl().get_kernel(kernel_id);
+inline void SetRuntimeArgsImpl(
+    const Program& program,
+    KernelHandle kernel_id,
+    const CoreRangeSet& core_range_set,
+    stl::Span<const uint32_t> runtime_args) {
+    if (!runtime_args.empty()) {
+        auto kernel = program.impl().get_kernel(kernel_id);
+        for (const auto& core_range : core_range_set.ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                     kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
@@ -237,23 +246,7 @@ ksd
             }
         }
     }
-
-    inline void SetRuntimeArgsImpl(
-        const Program& program,
-        KernelHandle kernel_id,
-        const CoreRangeSet& core_range_set,
-        stl::Span<const uint32_t> runtime_args) {
-        if (!runtime_args.empty()) {
-            auto kernel = program.impl().get_kernel(kernel_id);
-            for (const auto& core_range : core_range_set.ranges()) {
-                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
-                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
-                        kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
-                    }
-                }
-            }
-        }
-    }
+}
 
 }  // namespace
 
