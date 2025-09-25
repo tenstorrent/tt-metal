@@ -21,10 +21,11 @@ std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) 
     return tensor.memory_config();
 }
 
-void set_printoptions(const std::string& profile, SciMode sci_mode) {
-    tt::tt_metal::tensor_impl::TTNN_TENSOR_PRINT_PROFILE =
+void set_printoptions(const std::string& profile, SciMode sci_mode, int precision) {
+    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.profile =
         enchantum::cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, ttsl::ascii_caseless_comp).value();
-    tt::tt_metal::tensor_impl::TTNN_TENSOR_SCI_MODE = sci_mode;
+    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.sci_mode = sci_mode;
+    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.precision = precision;
 }
 
 void segfault_handler(int sig) {

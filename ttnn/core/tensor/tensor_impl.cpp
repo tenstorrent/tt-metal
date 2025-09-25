@@ -60,8 +60,7 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
-TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
-SciMode TTNN_TENSOR_SCI_MODE = SciMode::Default;
+PrintOptions TTNN_PRINT_OPTIONS;
 
 std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     switch (dtype) {
@@ -293,11 +292,11 @@ struct DimensionShortener {
 };
 
 inline DimensionShortener get_dimension_shortener(std::size_t size) {
-    switch (TTNN_TENSOR_PRINT_PROFILE) {
+    switch (TTNN_PRINT_OPTIONS.profile) {
         case TensorPrintProfile::Empty: return DimensionShortener{size, 0};
         case TensorPrintProfile::Short: return DimensionShortener{size, 4};
         case TensorPrintProfile::Full: return DimensionShortener{size, std::nullopt};
-        default: TT_THROW("Unrecognized TTNN_TENSOR_PRINT_PROFILE {}", TTNN_TENSOR_PRINT_PROFILE);
+        default: TT_THROW("Unrecognized TTNN_TENSOR_PRINT_PROFILE {}", TTNN_PRINT_OPTIONS.profile);
     }
 }
 
@@ -312,11 +311,12 @@ inline void print_datum(std::ostream& ss, T datum, bool use_scientific = false) 
     if (std::is_integral<T>::value) {
         ss << std::setw(5) << datum;
     } else {
+        int precision = TTNN_PRINT_OPTIONS.precision;
         if (use_scientific) {
             // Note: scientific required fixed width + 4 (e+/-AB, e.g. 1.23456e+08)
-            ss << std::scientific << std::setw(12) << std::setprecision(5) << datum;
+            ss << std::scientific << std::setw(precision + 7) << std::setprecision(precision) << datum;
         } else {
-            ss << std::fixed << std::setw(8) << std::setprecision(5) << datum;
+            ss << std::fixed << std::setw(precision + 3) << std::setprecision(precision) << datum;
         }
     }
 }
@@ -334,10 +334,10 @@ inline void print_datum(std::ostream& ss, uint8_t datum, bool use_scientific) {
 // Helper function to determine if scientific notation should be used
 template <typename T>
 bool should_use_scientific_notation(tt::stl::Span<const T> buffer) {
-    if (TTNN_TENSOR_SCI_MODE == SciMode::Enable) {
+    if (TTNN_PRINT_OPTIONS.sci_mode == SciMode::Enable) {
         return true;
     }
-    if (TTNN_TENSOR_SCI_MODE == SciMode::Disable) {
+    if (TTNN_PRINT_OPTIONS.sci_mode == SciMode::Disable) {
         return false;
     }
 
@@ -444,7 +444,7 @@ void to_string(
     Layout layout) {
     ss << TENSOR_TYPE_STRING << "(";
 
-    if (TTNN_TENSOR_PRINT_PROFILE == TensorPrintProfile::Empty) {
+    if (TTNN_PRINT_OPTIONS.profile == TensorPrintProfile::Empty) {
         ss << "...";
     } else {
         bool use_scientific = should_use_scientific_notation<T>(buffer);

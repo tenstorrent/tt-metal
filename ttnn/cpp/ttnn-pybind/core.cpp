@@ -69,7 +69,7 @@ void py_module(py::module& module) {
 
     module.def(
         "set_printoptions",
-        [](const std::string& profile, const py::object& sci_mode) {
+        [](const std::string& profile, const py::object& sci_mode, const py::object& precision) {
             tt::tt_metal::tensor_impl::SciMode sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Default;
             if (!sci_mode.is_none()) {
                 if (py::isinstance<py::bool_>(sci_mode)) {
@@ -93,11 +93,22 @@ void py_module(py::module& module) {
                     throw std::invalid_argument("sci_mode must be None, bool, or str (true, false, default)");
                 }
             }
-            ttnn::set_printoptions(profile, sci_mode_enum);
+
+            int precision_value = 4;
+            if (!precision.is_none()) {
+                if (py::isinstance<py::int_>(precision)) {
+                    precision_value = precision.cast<int>();
+                } else {
+                    throw std::invalid_argument("precision must be None or int");
+                }
+            }
+
+            ttnn::set_printoptions(profile, sci_mode_enum, precision_value);
         },
         py::kw_only(),
         py::arg("profile"),
         py::arg("sci_mode") = py::none(),
+        py::arg("precision") = py::none(),
         R"doc(
 
         Set print options for tensor output.
@@ -106,6 +117,7 @@ void py_module(py::module& module) {
             profile (const std::string): the profile to use for print options.
             sci_mode (Optional[str]): scientific notation mode. Can be None (auto-detect),
                                       True/False (force enable/disable), or "default" (auto-detect).
+            precision (Optional[int]): number of digits after decimal point for floating point values.
 
         Returns:
             `None`: modifies print options.
@@ -114,6 +126,7 @@ void py_module(py::module& module) {
             >>> ttnn.set_printoptions(profile="short")
             >>> ttnn.set_printoptions(profile="short", sci_mode=True)
             >>> ttnn.set_printoptions(profile="short", sci_mode=None)
+            >>> ttnn.set_printoptions(profile="short", precision=6)
         )doc");
 
     module.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);

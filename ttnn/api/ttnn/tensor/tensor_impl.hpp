@@ -240,8 +240,13 @@ enum class SciMode {
     Default,
 };
 
-extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
-extern SciMode TTNN_TENSOR_SCI_MODE;
+struct PrintOptions {
+    TensorPrintProfile profile = TensorPrintProfile::Short;
+    SciMode sci_mode = SciMode::Default;
+    int precision = 4;
+};
+
+extern PrintOptions TTNN_PRINT_OPTIONS;
 
 template <typename T>
 std::string to_string(const Tensor& tensor);

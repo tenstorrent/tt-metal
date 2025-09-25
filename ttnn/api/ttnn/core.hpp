@@ -34,7 +34,7 @@ bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& st
 
 std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor);
 
-void set_printoptions(const std::string& profile, SciMode sci_mode = SciMode::Default);
+void set_printoptions(const std::string& profile, SciMode sci_mode = SciMode::Default, int precision = 4);
 
 void segfault_handler(int sig);
 
