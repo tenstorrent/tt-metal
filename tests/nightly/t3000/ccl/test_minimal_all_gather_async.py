@@ -811,4 +811,5 @@ def test_all_gather_async_2x4(
         num_iters=num_iters,
         use_barrier=True,
         use_persistent_buffers=False,
+        cluster_axis=1,
     )

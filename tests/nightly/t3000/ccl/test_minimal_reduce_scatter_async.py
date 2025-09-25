@@ -866,6 +866,7 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     indirect=["device_params"],
     ids=["fabric_linear"],
 )
+@pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_axis_1"])
 def test_reduce_scatter_async_2x4(
     mesh_device,
     num_links,
@@ -880,6 +881,7 @@ def test_reduce_scatter_async_2x4(
     use_barrier,
     use_persistent_buffers,
     rs_topology,
+    cluster_axis,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
     run_reduce_scatter_impl(
@@ -898,4 +900,5 @@ def test_reduce_scatter_async_2x4(
         ones_tensor=False,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
+        cluster_axis=cluster_axis,
     )
