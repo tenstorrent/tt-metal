@@ -3,16 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 import ttnn
+from ttnn.distributed.distributed import ConcatMeshToTensor
 
-from ...utils.tensor import bf16_tensor
-from ...utils.substate import substate, indexed_substates
-from ...parallel.manager import CCLManager
-from ...parallel.config import EncoderParallelConfig
 from ...layers.feedforward import ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear
-from ttnn.distributed.distributed import ConcatMeshToTensor
+from ...parallel.config import EncoderParallelConfig
+from ...parallel.manager import CCLManager
+from ...utils.substate import indexed_substates, substate
+from ...utils.tensor import bf16_tensor
+
+if TYPE_CHECKING:
+    from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 
 class CLIPConfig:
@@ -94,6 +99,39 @@ class CLIPEncoder:
         self.eos_token_id = eos_token_id
         self.encoder = CLIPStack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.text_projection = None
+
+    @classmethod
+    def from_torch(
+        cls,
+        torch_model: CLIPTextModel | CLIPTextModelWithProjection,
+        *,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+    ) -> CLIPEncoder:
+        config = CLIPConfig(
+            vocab_size=torch_model.config.vocab_size,
+            embed_dim=torch_model.config.hidden_size,
+            ff_dim=torch_model.config.intermediate_size,
+            num_heads=torch_model.config.num_attention_heads,
+            num_hidden_layers=torch_model.config.num_hidden_layers,
+            max_prompt_length=77,
+            layer_norm_eps=torch_model.config.layer_norm_eps,
+            attention_dropout=torch_model.config.attention_dropout,
+            hidden_act=torch_model.config.hidden_act,
+        )
+
+        model = cls(
+            config=config,
+            mesh_device=device,
+            ccl_manager=ccl_manager,  # use CCL manager for submesh 0
+            parallel_config=parallel_config,
+            eos_token_id=2,  # default EOS token ID for CLIP
+        )
+
+        model.load_state_dict(torch_model.state_dict())
+
+        return model
 
     def load_state_dict(self, state_dict):
         self.embeddings.load_state_dict(substate(state_dict, "text_model.embeddings"))

@@ -2,16 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING
+
 import torch
 import ttnn
 
-from ...utils.tensor import bf16_tensor
-from ...utils.substate import substate, indexed_substates
-from ...parallel.manager import CCLManager
-from ...parallel.config import EncoderParallelConfig
 from ...layers.linear import ColParallelLinear, RowParallelLinear
-import math
 from ...layers.normalization import RMSNorm
+from ...parallel.config import EncoderParallelConfig
+from ...parallel.manager import CCLManager
+from ...utils.substate import indexed_substates, substate
+from ...utils.tensor import bf16_tensor
+
+if TYPE_CHECKING:
+    from transformers import T5EncoderModel
 
 
 class T5Config:
@@ -89,6 +96,40 @@ class T5Encoder:
             bias=False,
             mesh_device=self.mesh_device,
         )
+
+    @classmethod
+    def from_torch(
+        cls,
+        torch_model: T5EncoderModel,
+        *,
+        max_prompt_length: int = 256,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+    ) -> T5Encoder:
+        config = T5Config(
+            vocab_size=torch_model.config.vocab_size,
+            embed_dim=torch_model.config.d_model,
+            ff_dim=torch_model.config.d_ff,
+            kv_dim=torch_model.config.d_kv,
+            num_heads=torch_model.config.num_heads,
+            num_hidden_layers=torch_model.config.num_layers,
+            max_prompt_length=max_prompt_length,
+            layer_norm_eps=torch_model.config.layer_norm_epsilon,
+            relative_attention_num_buckets=torch_model.config.relative_attention_num_buckets,
+            relative_attention_max_distance=torch_model.config.relative_attention_max_distance,
+        )
+
+        model = cls(
+            config=config,
+            mesh_device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
+
+        model.load_state_dict(torch_model.state_dict())
+
+        return model
 
     def load_state_dict(self, state_dict):
         self.token_embeddings.load_state_dict(state_dict)
