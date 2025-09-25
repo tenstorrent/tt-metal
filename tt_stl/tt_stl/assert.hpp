@@ -4,10 +4,14 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include <cxxabi.h>
 #include <execinfo.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdexcept>
+#include <string>
 
 #include <iostream>
 #include <sstream>
@@ -15,42 +19,11 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt {
-template <typename A, typename B>
-struct OStreamJoin {
-    OStreamJoin(A const& a, B const& b, char const* delim = " ") : a(a), b(b), delim(delim) {}
-    A const& a;
-    B const& b;
-    char const* delim;
-};
-
-template <typename A, typename B>
-std::ostream& operator<<(std::ostream& os, tt::OStreamJoin<A, B> const& join) {
-    os << join.a << join.delim << join.b;
-    return os;
-}
-}  // namespace tt
-
 namespace tt::assert {
 
-// NOLINTBEGIN(cppcoreguidelines-no-malloc)
-static std::string demangle(const char* str) {
-    size_t size = 0;
-    int status = 0;
-    std::string rt(256, '\0');
-    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", &rt[0])) {
-        char* v = abi::__cxa_demangle(&rt[0], nullptr, &size, &status);
-        if (v) {
-            std::string result(v);
-            free(v);
-            return result;
-        }
-    }
-    return str;
+namespace detail {
+    static std::string demangle(const char* str);
 }
-// NOLINTEND(cppcoreguidelines-no-malloc)
-
-// https://www.fatalerrors.org/a/backtrace-function-and-assert-assertion-macro-encapsulation.html
 
 /**
  * @brief Get the current call stack
@@ -61,6 +34,7 @@ static std::string demangle(const char* str) {
 // NOLINTBEGIN(cppcoreguidelines-no-malloc)
 inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     std::vector<std::string> bt;
+    bt.reserve(size - skip);
     void** array = (void**)malloc((sizeof(void*) * size));
     size_t s = ::backtrace(array, size);
     char** strings = backtrace_symbols(array, s);
@@ -69,7 +43,7 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
         return bt;
     }
     for (size_t i = skip; i < s; ++i) {
-        bt.push_back(demangle(strings[i]));
+        bt.push_back(detail::demangle(strings[i]));
     }
     free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
     free(array);    // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
@@ -87,15 +61,33 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
 inline std::string backtrace_to_string(int size = 64, int skip = 2, const std::string& prefix = "") {
     std::vector<std::string> bt = backtrace(size, skip);
     std::stringstream ss;
-    for (size_t i = 0; i < bt.size(); ++i) {
-        ss << prefix << bt[i] << std::endl;
+    for (const auto& line : bt) {
+        ss << prefix << line << '\n';
     }
     return ss.str();
 }
 
+namespace detail {
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
+static std::string demangle(const char* str) {
+    size_t size = 0;
+    int status = 0;
+    std::string rt(256, '\0');
+    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", &rt[0])) {
+        char* v = abi::__cxa_demangle(&rt[0], nullptr, &size, &status);
+        if (v) {
+            std::string result(v);
+            free(v);
+            return result;
+        }
+    }
+    return str;
+}
+// NOLINTEND(cppcoreguidelines-no-malloc)
+
 template <typename... Args>
 [[noreturn]] void tt_throw_impl(
-    char const* file, int line, char const* assert_type, char const* condition_str, Args const&... args) {
+    const char* file, int line, const char* assert_type, const char* condition_str, const Args&... args) {
     if (std::getenv("TT_ASSERT_ABORT")) {
         if constexpr (sizeof...(args) > 0) {
             log_critical(tt::LogAlways, args...);
@@ -122,12 +114,12 @@ template <typename... Args>
 
 template <typename... Args>
 [[noreturn]] void tt_throw(
-    char const* file,
+    const char* file,
     int line,
-    char const* assert_type,
-    char const* condition_str,
-    fmt::format_string<Args const&...> fmt,
-    Args const&... args) {
+    const char* assert_type,
+    const char* condition_str,
+    fmt::format_string<const Args&...> fmt,
+    const Args&... args) {
     tt_throw_impl(file, line, assert_type, condition_str, fmt, args...);
 }
 
@@ -138,7 +130,7 @@ inline void tt_assert(char const* file, int line, char const* assert_type, bool 
 }
 
 template <typename... Args>
-void tt_assert(
+inline void tt_assert(
     char const* file,
     int line,
     char const* assert_type,
@@ -150,7 +142,7 @@ void tt_assert(
         tt_throw(file, line, assert_type, condition_str, fmt, args...);
     }
 }
-
+}  // namespace detail
 }  // namespace tt::assert
 
 // Adding do while around TT_ASSERT to allow flexible usage of the macro. More details can be found in Stack Overflow
@@ -161,7 +153,7 @@ void tt_assert(
 #define TT_ASSERT(condition, ...)                                                                           \
     do {                                                                                                    \
         if (not(condition)) [[unlikely]]                                                                    \
-            tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition, ##__VA_ARGS__); \
+            tt::assert::detail::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition, ##__VA_ARGS__); \
     } while (0)  // NOLINT(cppcoreguidelines-macro-usage)
 #endif
 #else
@@ -172,14 +164,14 @@ void tt_assert(
 #endif
 
 #ifndef TT_THROW
-#define TT_THROW(...) tt::assert::tt_throw(__FILE__, __LINE__, "TT_THROW", "tt::exception", ##__VA_ARGS__)
+#define TT_THROW(...) tt::assert::detail::tt_throw(__FILE__, __LINE__, "TT_THROW", "tt::exception", ##__VA_ARGS__)
 #endif
 
 #ifndef TT_FATAL
 #define TT_FATAL(condition, message, ...)                                                             \
     do {                                                                                              \
         if (not(condition)) [[unlikely]] {                                                            \
-            tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, message, ##__VA_ARGS__); \
+            tt::assert::detail::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, message, ##__VA_ARGS__); \
             __builtin_unreachable();                                                                  \
         }                                                                                             \
     } while (0)  // NOLINT(cppcoreguidelines-macro-usage)

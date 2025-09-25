@@ -10,7 +10,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include <tt_stl/small_vector.hpp>

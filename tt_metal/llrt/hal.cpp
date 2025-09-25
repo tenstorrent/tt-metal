@@ -4,7 +4,7 @@
 
 #include "llrt/hal.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <cstdint>
 #include <enchantum/iostream.hpp>

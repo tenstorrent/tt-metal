@@ -7,7 +7,7 @@
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "control_plane.hpp"
 #include "dispatch_settings.hpp"

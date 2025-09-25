@@ -6,7 +6,7 @@
 
 #include <vector>
 #include <cstdint>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 

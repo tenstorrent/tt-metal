@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "buffer_test_utils.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>

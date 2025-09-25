@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>

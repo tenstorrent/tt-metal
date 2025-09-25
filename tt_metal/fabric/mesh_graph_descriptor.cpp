@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include "tt-metalium/mesh_graph_descriptor.hpp"

@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <unordered_set>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"

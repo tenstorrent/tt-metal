@@ -22,7 +22,7 @@
 #include <filesystem>
 #include <iostream>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"

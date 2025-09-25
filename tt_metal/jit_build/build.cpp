@@ -20,7 +20,7 @@
 #include <fmt/ranges.h>
 #include <taskflow/core/async.hpp>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"

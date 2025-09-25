@@ -10,7 +10,7 @@
 #include <fstream>
 #include <string>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"

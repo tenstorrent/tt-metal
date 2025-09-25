@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <core_coord.hpp>

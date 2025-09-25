@@ -4,7 +4,7 @@
 
 #include "tt_memory.h"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <span>

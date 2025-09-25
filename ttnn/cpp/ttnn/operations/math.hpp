@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 namespace tt::tt_metal {
 
 template <typename T>
