@@ -11,6 +11,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
@@ -22,8 +23,7 @@ using ttnn::ccl::Topology;
 constexpr bool is_first_chip = get_compile_time_arg_val(0);
 constexpr bool is_last_chip = get_compile_time_arg_val(1);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
-constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(3);
-constexpr bool direction = get_compile_time_arg_val(4);
+constexpr bool direction = get_compile_time_arg_val(3);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -53,33 +53,24 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    constexpr auto dst_args = TensorAccessorArgs<4>();
     uint32_t read_size = stick_size;
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
-    // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_barriersem = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
     // pre-populate packet headers
-    volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
+    auto pkt_hdr = PacketHeaderPool::allocate_header();
     pkt_hdr->to_chip_unicast(1);
 
     fabric_connection.open();
 
     // Barrier semaphore
     if (use_barrier_sem) {
+        auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
+
         if (!is_last_chip) {
             // unicast barrier semaphore
             uint64_t barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-            auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_barriersem);
             pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 barrier_sem_noc_addr_in_pkt,
                 static_cast<uint16_t>(1),  // increment 1
@@ -91,14 +82,14 @@ void kernel_main() {
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     pkt_hdr_sem_inc->to_chip_unicast(1);
                     fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                        packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
+                        (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
                 }
             } else {
                 if (fabric_connection.has_backward_connection()) {
                     fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                     pkt_hdr_sem_inc->to_chip_unicast(1);
                     fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                        packet_header_buffer_barriersem, sizeof(PACKET_HEADER_TYPE));
+                        (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
                 }
             }
             noc_async_writes_flushed();
@@ -152,7 +143,7 @@ void kernel_main() {
         // unicast output ready semaphore
         uint64_t out_ready_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-        auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+        auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
         pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             out_ready_sem_noc_addr_in_pkt,
             static_cast<uint16_t>(1),  // increment 1
@@ -162,12 +153,12 @@ void kernel_main() {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
             pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+                (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
         } else {
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+                (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
         }
     } else {
         // If we need extend beyond the original input tensor, pad
@@ -215,6 +206,4 @@ void kernel_main() {
     }
 
     fabric_connection.close();
-
-    noc_async_write_barrier();
 }

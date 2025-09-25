@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -118,17 +118,6 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, worker_core_ranges, cb_sender_config);
 
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
-    static constexpr auto num_packet_headers_storable = 3;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, worker_core_ranges, cb_reserved_packet_header_config);
-
     // KERNEL CREATION
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
@@ -184,8 +173,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
             writer_kernel_config.compile_args = {
                 direction ? is_first_device : is_last_device,
                 direction ? is_last_device : is_first_device,
-                sender_cb_index,                  // cb_forward_id
-                reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
+                sender_cb_index,  // cb_forward_id
                 direction,
             };
             TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
