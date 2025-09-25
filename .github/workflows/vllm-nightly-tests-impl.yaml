@@ -141,7 +141,7 @@ jobs:
         LOGURU_LEVEL: INFO
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         HF_DATASETS_CACHE: /mnt/MLPerf/huggingface/datasets
-        HF_HOME: /mnt/MLPerf/huggingface
+        TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
@@ -202,7 +202,7 @@ jobs:
           # Keep TT cache separate from HF hub
           export HF_MODEL="${{ matrix.test-group.model }}"
           MODEL_NAME="${HF_MODEL/\//--}"
-          export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
+          export TT_CACHE_PATH="$TT_CACHE_HOME/$MODEL_NAME"
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
