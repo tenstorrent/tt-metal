@@ -233,14 +233,11 @@ struct ConvDRAMParamters {
     uint32_t groups;
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    Conv2dSliceConfig dram_slice_config;
     CoreCoord compute_grid;
-    ttnn::Shape weights_shape;
     DataType weights_datatype;
     DataType input_datatype;
     DataType output_datatype;
     Layout input_layout;
-    Layout output_layout;
     bool enable_bias;
     bool mm_conv;
 };

@@ -1428,27 +1428,31 @@ static uint32_t calculate_conv_dram_slice_L1_usage(
 }
 
 Conv2dSliceConfig determine_conv2d_slice_config(
-    std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device) {
-    if (slice_config.has_value() && slice_config.value().num_slices > 0) {
-        return slice_config.value();
+    std::optional<Conv2dSliceConfig> slice_config_, const ConvDRAMParamters& params, MeshDevice* device) {
+    if (slice_config_.has_value() && slice_config_.value().num_slices > 0) {
+        return slice_config_.value();
     }
     auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
+    Conv2dSliceConfig return_slice_config;
     bool auto_slice_type = false;
-    if (!slice_config.has_value()) {
+    if (!slice_config_.has_value()) {
         auto_slice_type = true;
-        slice_config = Conv2dSliceConfig{
-            .slice_type = determine_conv_slice_type(params.input_height, params.input_width, params.output_layout),
+        return_slice_config = Conv2dSliceConfig{
+            .slice_type =
+                determine_conv_slice_type(params.input_height, params.input_width, params.conv_config.output_layout),
             .num_slices = 0};
+    } else {
+        return_slice_config = slice_config_.value();
     }
     uint32_t current_num_slices = 1;
     log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
-    const uint32_t output_sliced_dim = slice_config->slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
+    const uint32_t output_sliced_dim = return_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
                                            ? params.output_height
                                            : params.output_width;
 
     while (current_num_slices <= output_sliced_dim) {
-        slice_config->num_slices = current_num_slices;
-        auto l1_usage = calculate_conv_dram_slice_L1_usage(params, device, slice_config.value());
+        return_slice_config.num_slices = current_num_slices;
+        auto l1_usage = calculate_conv_dram_slice_L1_usage(params, device, return_slice_config);
         log_debug(
             tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
         if (L1_stats.total_free_bytes >= l1_usage) {
@@ -1456,16 +1460,16 @@ Conv2dSliceConfig determine_conv2d_slice_config(
         }
         current_num_slices++;
     }
-    if (params.output_layout == tt::tt_metal::Layout::TILE &&
-        slice_config->slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+    if (params.conv_config.output_layout == tt::tt_metal::Layout::TILE &&
+        return_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         // This can result in more slices than expected, so we need to adjust the number of slices accordingly.
         const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
-        slice_config->num_slices = std::min(slice_config->num_slices, max_slices);
+        return_slice_config.num_slices = std::min(return_slice_config.num_slices, max_slices);
     }
     if (auto_slice_type && current_num_slices > output_sliced_dim &&
-        params.output_layout == tt::tt_metal::Layout::TILE &&
-        slice_config->slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+        params.conv_config.output_layout == tt::tt_metal::Layout::TILE &&
+        return_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
         // For Tiled output with width slicing, we may not be able to find a suitable number of slices due to the
         // TILE_HEIGHT constraint.
         //  In this case, we switch to height slicing and try again.
@@ -1478,12 +1482,15 @@ Conv2dSliceConfig determine_conv2d_slice_config(
             params,
             device);
     }
-    // assert because the L1 size estimation is not exact, and may overestimate L1 usage.
-    TT_ASSERT(
-        current_num_slices <= output_sliced_dim,
-        "Could not find a suitable number of slices for Conv2D DRAM Slicing. "
-        "Either increase the number of slices or reduce the output dimension being sliced.");
-    return slice_config.value();
+    if (current_num_slices > output_sliced_dim) {
+        log_warning(
+            tt::LogOp,
+            "Conv2D DRAM Auto slice could not find suitable number of slices with params {}. Slice config = {}",
+            params,
+            return_slice_config);
+    }
+    log_info(tt::LogOp, "Conv2D DRAM Auto slice config is {}", return_slice_config);
+    return return_slice_config;
 }
 
 conv_op_l1_usage conv2d::calculate_L1_usage(

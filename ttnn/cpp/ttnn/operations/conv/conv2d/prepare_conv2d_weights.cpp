@@ -1137,6 +1137,31 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     is_dram_conv = is_dram_conv && !is_conv1d;
 
     if (is_dram_conv) {
+        Conv2dSliceConfig dram_slice_config = determine_conv2d_slice_config(
+            dram_slice_config_,
+            ConvDRAMParamters{
+                .in_channels = in_channels,
+                .out_channels = out_channels,
+                .batch_size = batch_size,
+                .input_height = input_height,
+                .input_width = input_width,
+                .output_height = output_height,
+                .output_width = output_width,
+                .kernel_size = kernel_size,
+                .stride = stride,
+                .padding_n4 = padding_n4,
+                .dilation = dilation,
+                .groups = groups,
+                .conv_config = conv_config,
+                .compute_kernel_config = compute_config,
+                .compute_grid = device->compute_with_storage_grid_size(),
+                .weights_datatype = conv_config.weights_dtype.value(),
+                .input_datatype = input_dtype,
+                .output_datatype = output_dtype.value_or(input_dtype),
+                .input_layout = input_layout,
+                .enable_bias = has_bias,
+                .mm_conv = mm_conv},
+            device);
         const uint32_t input_channels_alignment = get_input_channels_alignment(
             TensorMemoryLayout::INTERLEAVED,
             input_layout,
@@ -1164,10 +1189,6 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                 orig_stride,
                 padding_n4);
         }
-        if (!dram_slice_config_.has_value()) {
-            TT_THROW("Prepare weights must have slice_config set for DRAM conv");
-        }
-        Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
         uint32_t slice_rounding_value = 1;
         if (conv_config.output_layout == tt_metal::Layout::TILE &&
             dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
@@ -1177,11 +1198,12 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
         const uint32_t output_sliced_dim =
             dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+
         TT_FATAL(
-            dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
-        TT_FATAL(
-            dram_slice_config.num_slices < output_sliced_dim,
-            " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
+            dram_slice_config.num_slices <= output_sliced_dim,
+            " Number of slices {} should be less or equal than the dimension being sliced {} in Conv2D DRAM Slicing",
+            dram_slice_config.num_slices,
+            output_sliced_dim);
 
         const uint32_t min_output_slice_size =
             tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
