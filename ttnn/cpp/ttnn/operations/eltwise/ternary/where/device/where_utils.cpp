@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "where_utils.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
 #include <fmt/format.h>

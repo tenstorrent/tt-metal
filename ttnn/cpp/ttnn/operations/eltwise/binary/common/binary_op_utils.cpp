@@ -4,7 +4,7 @@
 
 #include "binary_op_utils.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 

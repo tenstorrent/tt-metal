@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/utils.hpp>
 #include <tt-metalium/maybe_remote.hpp>

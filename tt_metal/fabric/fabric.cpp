@@ -9,7 +9,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>

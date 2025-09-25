@@ -11,7 +11,7 @@
 #include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <vector>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"

@@ -7,7 +7,7 @@
  * https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/ARCTile/Telemetry.md
  */
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
  #include <telemetry/arc/arc_metrics.hpp>
 
 #include <chrono>

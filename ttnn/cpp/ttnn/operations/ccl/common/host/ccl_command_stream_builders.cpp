@@ -5,7 +5,7 @@
 
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 

@@ -10,7 +10,7 @@
 #include <string>
 
 #include <hostdevcommon/kernel_structs.h>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/utils.hpp>

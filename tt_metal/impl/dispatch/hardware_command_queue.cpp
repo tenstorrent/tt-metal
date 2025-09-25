@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffers/dispatch.hpp"
 #include "cq_shared_state.hpp"
 #include "device/dispatch.hpp"

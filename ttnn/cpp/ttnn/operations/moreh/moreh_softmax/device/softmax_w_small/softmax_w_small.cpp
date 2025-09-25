@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"

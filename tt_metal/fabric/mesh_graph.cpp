@@ -11,7 +11,7 @@
 #include <iomanip>
 #include <optional>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>

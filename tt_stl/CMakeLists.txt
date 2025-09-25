@@ -27,6 +27,7 @@ target_sources(
             tt_stl/strong_type.hpp
             tt_stl/type_name.hpp
             tt_stl/unique_any.hpp
+            tt_stl/assert.hpp
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/llvm/llvm_small_vector.cpp
 )
