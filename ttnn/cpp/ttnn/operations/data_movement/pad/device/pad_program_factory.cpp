@@ -1464,7 +1464,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-static inline int advance_tensor_index(std::vector<uint32_t>& idx, ttnn::Shape& dims, uint32_t ndims) {
+static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::Shape& dims, uint32_t ndims) {
     // increment least-significant dim first
     for (int32_t d = ndims - 1; d >= 0; d--) {
         uint32_t v = idx[d] + 1;
@@ -1568,10 +1568,10 @@ operation::ProgramWithCallbacks pad_tile_multicore(
     // instantiate the input and output tensor padded shapes
     auto input_page_shape = a.padded_shape();
     auto output_page_shape = output_padded_shape;
-    input_page_shape[-1] /= 32;
-    input_page_shape[-2] /= 32;
-    output_page_shape[-1] /= 32;
-    output_page_shape[-2] /= 32;
+    input_page_shape[-1] /= tt::constants::TILE_HEIGHT;
+    input_page_shape[-2] /= tt::constants::TILE_HEIGHT;
+    output_page_shape[-1] /= tt::constants::TILE_HEIGHT;
+    output_page_shape[-2] /= tt::constants::TILE_HEIGHT;
     bool within_input_region;
     uint32_t input_page_offset = 0;
     uint32_t output_page_offset = 0;
@@ -1596,8 +1596,12 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             num_pages_per_core,
             input_page_offset,
         };
+
+        // Every core should get the same input and output tile shapes
         all_runtime_args.insert(all_runtime_args.end(), input_page_shape.cbegin(), input_page_shape.cend());
         all_runtime_args.insert(all_runtime_args.end(), output_page_shape.cbegin(), output_page_shape.cend());
+
+        // As well as where the core should start writing in the output tensor
         all_runtime_args.insert(all_runtime_args.end(), input_id_per_dim.begin(), input_id_per_dim.end());
         all_runtime_args.insert(all_runtime_args.end(), output_id_per_dim.begin(), output_id_per_dim.end());
 
@@ -1608,6 +1612,8 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             output_page_offset;  // change input page offset to output page offset before setting writer args
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args);
 
+        // We now need to increment the input and output id_per_dims by the number of pages this core is processing
+        // Similarly to in the kernel, we only increment the input id_per_dim if we are within the input region
         for (uint32_t p = 0; p < num_pages_per_core; p++) {
             within_input_region = true;
             for (uint32_t d = 0; d < input_id_per_dim.size(); d++) {
@@ -1623,6 +1629,7 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             advance_tensor_index(output_id_per_dim, output_page_shape, output_id_per_dim.size());
             output_page_offset++;
         }
+        // The input and output id_per_dim should now be set correctly for the next core
     }
 
     auto override_runtime_args_callback =
