@@ -198,6 +198,7 @@ jobs:
           export VLLM_RPC_TIMEOUT=300000
 
           python3 vllm/examples/server_example_tt.py \
+            --num_scheduler_steps 1 \
             --model ${{ matrix.test-group.model }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
