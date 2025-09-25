@@ -516,6 +516,8 @@ def test_line_all_reduce_on_TG_cols_post_commit(
         (32, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT),
         (32, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT),
         (32, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 33, 66], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
