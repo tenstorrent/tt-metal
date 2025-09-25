@@ -56,7 +56,6 @@ TtDeiTPatchEmbeddings::TtDeiTPatchEmbeddings(
 torch::Tensor TtDeiTPatchEmbeddings::forward(const torch::Tensor& pixel_values) {
     // Validate input dimensions
     auto input_shape = pixel_values.sizes();
-    int batch_size = input_shape[0];
     int num_channels = input_shape[1];
     int height = input_shape[2];
     int width = input_shape[3];
