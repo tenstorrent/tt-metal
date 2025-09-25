@@ -49,6 +49,13 @@ class TtnnYoloV11:
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
         
+        # Debug: Check input diversity
+        input_debug = ttnn.to_torch(input)
+        input_flat = input_debug.flatten()
+        input_unique = torch.unique(input_flat)
+        print(f"🔍 [EARLY DEBUG] RAW INPUT: {len(input_unique)} unique values out of {len(input_flat)} total")
+        print(f"    Range: [{input_flat.min()}, {input_flat.max()}], Mean: {input_flat.mean()}")
+        
         # Only pad if we need more channels
         if channel_padding_needed > 0:
             # Use list format instead of tuples for ttnn.pad API compatibility
@@ -58,13 +65,59 @@ class TtnnYoloV11:
             # No padding needed, use input as is
             x = input
             min_channels = c  # Update min_channels to actual channels
+            
+        # Debug: After padding/reshaping
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
+        x_reshaped_debug = ttnn.to_torch(x)
+        x_reshaped_flat = x_reshaped_debug.flatten()
+        x_reshaped_unique = torch.unique(x_reshaped_flat)
+        print(f"🔍 [EARLY DEBUG] AFTER RESHAPE: {len(x_reshaped_unique)} unique values out of {len(x_reshaped_flat)} total")
+        print(f"    Range: [{x_reshaped_flat.min()}, {x_reshaped_flat.max()}], Mean: {x_reshaped_flat.mean()}")
+        
         x = self.conv1(self.device, x)
+        
+        # Debug: After conv1
+        x_conv1_debug = ttnn.to_torch(x)
+        x_conv1_flat = x_conv1_debug.flatten()
+        x_conv1_unique = torch.unique(x_conv1_flat)
+        print(f"🔍 [EARLY DEBUG] AFTER CONV1: {len(x_conv1_unique)} unique values out of {len(x_conv1_flat)} total")
+        print(f"    Range: [{x_conv1_flat.min()}, {x_conv1_flat.max()}], Mean: {x_conv1_flat.mean()}")
         x = self.conv2(self.device, x)
+        
+        # Debug: After conv2
+        x_conv2_debug = ttnn.to_torch(x)
+        x_conv2_flat = x_conv2_debug.flatten()
+        x_conv2_unique = torch.unique(x_conv2_flat)
+        print(f"🔍 [EARLY DEBUG] AFTER CONV2: {len(x_conv2_unique)} unique values out of {len(x_conv2_flat)} total")
+        print(f"    Range: [{x_conv2_flat.min()}, {x_conv2_flat.max()}], Mean: {x_conv2_flat.mean()}")
+        
         x = self.c3k2_1(self.device, x)
+        
+        # Debug: After c3k2_1 (first major block)
+        x_c3k2_1_debug = ttnn.to_torch(x)
+        x_c3k2_1_flat = x_c3k2_1_debug.flatten()
+        x_c3k2_1_unique = torch.unique(x_c3k2_1_flat)
+        print(f"🔍 [EARLY DEBUG] AFTER C3K2_1: {len(x_c3k2_1_unique)} unique values out of {len(x_c3k2_1_flat)} total")
+        print(f"    Range: [{x_c3k2_1_flat.min()}, {x_c3k2_1_flat.max()}], Mean: {x_c3k2_1_flat.mean()}")
+        
         x = self.conv3(self.device, x)
+        
+        # Debug: After conv3
+        x_conv3_debug = ttnn.to_torch(x)
+        x_conv3_flat = x_conv3_debug.flatten()
+        x_conv3_unique = torch.unique(x_conv3_flat)
+        print(f"🔍 [EARLY DEBUG] AFTER CONV3: {len(x_conv3_unique)} unique values out of {len(x_conv3_flat)} total")
+        print(f"    Range: [{x_conv3_flat.min()}, {x_conv3_flat.max()}], Mean: {x_conv3_flat.mean()}")
+        
         x = self.c3k2_2(self.device, x)
+        
+        # Debug: After c3k2_2
+        x_c3k2_2_debug = ttnn.to_torch(x)
+        x_c3k2_2_flat = x_c3k2_2_debug.flatten()
+        x_c3k2_2_unique = torch.unique(x_c3k2_2_flat)
+        print(f"🔍 [EARLY DEBUG] AFTER C3K2_2: {len(x_c3k2_2_unique)} unique values out of {len(x_c3k2_2_flat)} total")
+        print(f"    Range: [{x_c3k2_2_flat.min()}, {x_c3k2_2_flat.max()}], Mean: {x_c3k2_2_flat.mean()}")
         x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
