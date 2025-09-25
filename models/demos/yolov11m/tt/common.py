@@ -18,7 +18,7 @@ class Yolov11Conv2D:
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         reshard=False,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
         is_detect=False,
         is_dfl=False,
         config_override=None,

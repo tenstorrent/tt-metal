@@ -242,10 +242,17 @@ class TtnnOBB:
             count = mask.sum()
             print(f"    [{low}, {high}): {count} values")
         
-        # With bfloat16 precision, we should have much better value distribution
-        # Apply modest bias correction to improve sigmoid range
-        bias_correction = 10.0  # Conservative correction
-        yb = ttnn.add(yb, bias_correction)
+        # Optimal mapping for bfloat8_b's 26 unique values
+        # We must strategically place these 26 values in sigmoid's effective range
+        # Range: [-17.75, -12.625] → Need to map to [-4, +4] for maximum differentiation
+        
+        # Step 1: Center at 0 (current center is ~-15.19)
+        bias_correction = 15.2
+        yb = ttnn.add(yb, bias_correction)  # Now range: [-2.55, +2.57]
+        
+        # Step 2: Expand to fill sigmoid's effective range [-4, +4]
+        scale_factor = 1.5  # Maps to [-3.8, +3.9] - good sigmoid sensitivity
+        yb = ttnn.multiply(yb, scale_factor)
 
         # Debug: Check values after bias correction
         yb_debug_after = ttnn.to_torch(yb)
