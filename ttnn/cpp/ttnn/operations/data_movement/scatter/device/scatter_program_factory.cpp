@@ -21,7 +21,6 @@ uint64_t ceil32(const uint64_t& number) {
     return ((number & BIT_MASK_32) == 0) ? number : ((number | BIT_MASK_32) + 1);
 }
 
-bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
 }  // namespace
 
 // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:

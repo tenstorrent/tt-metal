@@ -32,28 +32,6 @@
 
 using namespace tt::tt_metal;
 
-namespace {
-
-// Threshold for switch for mmap-based allocations to regular allocations.
-// Determined empirically using a microbenchmark; see https://github.com/tenstorrent/tt-metal/pull/22959 for details.
-constexpr size_t kMmapThresholdBytes = 1 << 20;
-
-// Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
-using SharedMemoryPtr = std::shared_ptr<void>;
-SharedMemoryPtr allocate_host_data(size_t size_bytes) {
-    if (size_bytes >= kMmapThresholdBytes) {
-        ZoneScopedN("AllocateBufferMmap");
-        void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        TT_FATAL(ptr != MAP_FAILED, "Failed to allocate {} bytes of memory", size_bytes);
-        return SharedMemoryPtr(ptr, [size_bytes](void* p) { madvise(p, size_bytes, MADV_FREE); });
-    } else {
-        auto vec = std::make_shared<std::vector<std::byte>>(size_bytes);
-        return SharedMemoryPtr(vec, vec->data());
-    }
-}
-
-}  // unnamed namespace
-
 namespace tt {
 
 namespace tt_metal {

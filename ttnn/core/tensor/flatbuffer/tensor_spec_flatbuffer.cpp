@@ -7,15 +7,6 @@
 namespace ttnn {
 namespace {
 
-CoreCoord from_flatbuffer(const flatbuffer::CoreCoord* core_coord) {
-    return CoreCoord{core_coord->x(), core_coord->y()};
-}
-
-CoreRange from_flatbuffer(const flatbuffer::CoreRange* core_range) {
-    return CoreRange{
-        {core_range->start()->x(), core_range->start()->y()}, {core_range->end()->x(), core_range->end()->y()}};
-}
-
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     std::vector<CoreRange> ranges;
     for (const auto* range : *core_range_set->ranges()) {
@@ -23,18 +14,6 @@ CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
             CoreCoord{range->start()->x(), range->start()->y()}, CoreCoord{range->end()->x(), range->end()->y()});
     }
     return CoreRangeSet{ranges};
-}
-
-flatbuffers::Offset<flatbuffer::CoreCoord> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const CoreCoord& core_coord) {
-    return flatbuffer::CreateCoreCoord(builder, core_coord.x, core_coord.y);
-}
-
-flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const CoreRange& core_range) {
-    auto start = flatbuffer::CreateCoreCoord(builder, core_range.start_coord.x, core_range.start_coord.y);
-    auto end = flatbuffer::CreateCoreCoord(builder, core_range.end_coord.x, core_range.end_coord.y);
-    return flatbuffer::CreateCoreRange(builder, start, end);
 }
 
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
