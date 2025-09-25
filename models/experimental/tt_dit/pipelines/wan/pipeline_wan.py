@@ -33,7 +33,10 @@ import ttnn
 from loguru import logger
 from ...parallel.manager import CCLManager
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
+from ...models.vae.vae_wan2_1 import WanDecoder
 from ...utils.cache import get_and_create_cache_path, cache_dict_exists, save_cache_dict, load_cache_dict
+from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
+from ...utils.tensor import bf16_tensor_2dshard
 
 
 EXAMPLE_DOC_STRING = """
@@ -124,10 +127,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self,
         mesh_device,
         parallel_config,
+        vae_parallel_config,
         num_links,
         use_cache,
         boundary_ratio: Optional[float] = None,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
+        dynamic_load=False,
     ):
         super().__init__()
 
@@ -156,9 +161,29 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=ttnn.Topology.Linear,
         )
         self.parallel_config = parallel_config
+        self.vae_parallel_config = vae_parallel_config
         self.use_cache = use_cache
         self.mesh_device = mesh_device
-        self._load_transformer1()
+        self.dynamic_load = dynamic_load
+        if not self.dynamic_load:
+            self._load_transformer1()
+            self._load_transformer2()
+
+        self.tt_vae = WanDecoder(
+            base_dim=self.vae.config.base_dim,
+            z_dim=self.vae.config.z_dim,
+            dim_mult=self.vae.config.dim_mult,
+            num_res_blocks=self.vae.config.num_res_blocks,
+            attn_scales=self.vae.config.attn_scales,
+            temperal_downsample=self.vae.config.temperal_downsample,
+            out_channels=self.vae.config.out_channels,
+            is_residual=self.vae.config.is_residual,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.ccl_manager,
+            parallel_config=self.vae_parallel_config,
+        )
+
+        self.tt_vae.load_state_dict(self.vae.state_dict())
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
@@ -668,20 +693,22 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 self._current_timestep = t
 
                 if boundary_timestep is None or t >= boundary_timestep:
-                    if hasattr(self, "transformer_2"):
-                        del self.transformer_2
-                    if not hasattr(self, "transformer"):
-                        self._load_transformer1()
+                    if self.dynamic_load:
+                        if hasattr(self, "transformer_2"):
+                            del self.transformer_2
+                        if not hasattr(self, "transformer"):
+                            self._load_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
                     current_guidance_scale = guidance_scale
                 else:
                     # low-noise stage in wan2.2
-                    if hasattr(self, "transformer"):
-                        # Offload transformer1 to make space for transformer2
-                        del self.transformer
-                    if not hasattr(self, "transformer_2"):
-                        self._load_transformer2()
+                    if self.dynamic_load:
+                        if hasattr(self, "transformer"):
+                            # Offload transformer1 to make space for transformer2
+                            del self.transformer
+                        if not hasattr(self, "transformer_2"):
+                            self._load_transformer2()
                     current_model = self.transformer_2
                     current_guidance_scale = guidance_scale_2
 
@@ -752,8 +779,36 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 latents.device, latents.dtype
             )
             latents = latents / latents_std + latents_mean
-            video = self.vae.decode(latents, return_dict=False)[0]
-            video = self.video_processor.postprocess_video(video, output_type=output_type)
+
+            # VAE on device
+            tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
+            tt_latents_BTHWC = conv_pad_in_channels(tt_latents_BTHWC)
+            tt_latents_BTHWC, logical_h = conv_pad_height(
+                tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
+            )
+            tt_latents_BTHWC = bf16_tensor_2dshard(
+                tt_latents_BTHWC,
+                self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                shard_mapping={
+                    self.vae_parallel_config.height_parallel.mesh_axis: 2,
+                    self.vae_parallel_config.width_parallel.mesh_axis: 3,
+                },
+            )
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+
+            concat_dims = [None, None]
+            concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+            concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+            video_torch = ttnn.to_torch(
+                tt_video_BCTHW,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
+                ),
+            )
+            video_torch = video_torch[:, :, :, :new_logical_h, :]
+
+            video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
             video = latents
 
