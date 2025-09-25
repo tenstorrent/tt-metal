@@ -78,7 +78,7 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
             device_coords.at(0).dims());
         uint32_t ring_size = 0;
         for (const auto& device_coord : device_coords) {
-            ring_size = std::max(ring_size, device_coord[cluster_axis.value()]);
+            ring_size = std::max(ring_size, device_coord[cluster_axis.value()] + 1);
         }
         TT_FATAL(ring_size > 0, "ring_size is 0");
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
