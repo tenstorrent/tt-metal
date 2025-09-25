@@ -80,10 +80,6 @@ int main(int argc, char** argv) {
 
     // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
     if (benchmark_mode) {
-        test_context.initialize_csv_file();
-    }
-    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
-    if (benchmark_mode) {
         test_context.initialize_bandwidth_results_csv_file();
     }
 
