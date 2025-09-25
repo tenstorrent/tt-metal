@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
