@@ -35,7 +35,6 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
     return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
 }
 
-namespace {
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
 RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
@@ -113,7 +112,6 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
             });
-}  // namespace
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
