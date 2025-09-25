@@ -4,6 +4,7 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_op.hpp"
+#include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -97,6 +98,26 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
+    ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
+    if (!input_mask.has_value()) {
+        // create input mask
+        int64_t num_channel = input_tensor.padded_shape()[-1];
+        int64_t num_cores_across_channel = core_grid.has_value() ? core_grid.value().y : 1;
+        int64_t out_num_groups, out_tile_height, out_mask_width;
+        std::vector<float> mask_vec = create_group_norm_input_mask_impl(
+            num_channel, num_groups, num_cores_across_channel,
+            out_num_groups, out_tile_height, out_mask_width);
+
+        // create ttnn::Tensor from mask_vec
+        const ttnn::Shape tensor_shape{1, out_num_groups, out_tile_height, out_mask_width};
+        const tt::tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG);
+        const ttnn::TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        mask = ttnn::Tensor::from_vector(
+            mask_vec,
+            tensor_spec,
+            input_tensor.device());
+    }
+
     if (input_tensor.is_sharded()) {
         const ttnn::operations::normalization::GroupNormShardedMultiCoreProgramConfig& program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
@@ -113,7 +134,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .compute_kernel_config = kernel_config_val,
                        .use_welford = use_welford},
                    {input_tensor},
-                   {gamma, beta, input_mask, negative_mask, reciprocals})
+                   {gamma, beta, mask, negative_mask, reciprocals})
             .at(0);
     } else {
         const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
@@ -132,7 +153,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .compute_kernel_config = kernel_config_val,
                        .use_welford = use_welford},
                    {input_tensor},
-                   {gamma, beta, input_mask, negative_mask, reciprocals})
+                   {gamma, beta, mask, negative_mask, reciprocals})
             .at(0);
     }
 }
