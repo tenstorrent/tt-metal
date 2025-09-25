@@ -24,9 +24,11 @@ struct KernelLookupKey {
 // Hash function for KernelLookupKey
 struct KernelLookupKeyHash {
     std::size_t operator()(const KernelLookupKey& key) const {
-        // Combine the two enum values into a single hash
-        return std::hash<size_t>()(static_cast<size_t>(key.variant)) ^
-               (std::hash<size_t>()(static_cast<size_t>(key.broadcast_type)) << 1);
+        // Collision-free hash for enum combination
+        // WhereVariant (0-3) << 4 gives: 0, 16, 32, 48
+        // OR with WhereBroadcastType (0-7) gives unique keys 0-55
+        // No collisions possible since ranges are small and disjoint
+        return (static_cast<size_t>(key.variant) << 4) | static_cast<size_t>(key.broadcast_type);
     }
 };
 
