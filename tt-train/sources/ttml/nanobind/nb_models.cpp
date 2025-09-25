@@ -9,8 +9,6 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
-#include <ttnn/operations/experimental/dropout/dropout.hpp>
-
 #include "models/base_transformer.hpp"
 #include "models/gpt2.hpp"
 #include "models/linear_regression.hpp"
@@ -33,23 +31,31 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
     nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>(m, "BaseTransformer");
 
-    auto py_gpt2_module = m.def_submodule("gpt2");
-    ttml::nanobind::util::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
-    nb::class_<models::gpt2::TransformerConfig::Experimental>(py_gpt2_module, "GPT2TransformerConfigExperimental");
-    nb::class_<models::gpt2::TransformerConfig>(py_gpt2_module, "GPT2TransformerConfig");
-    nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");
+    {
+        auto py_gpt2_module = m.def_submodule("gpt2");
+        ttml::nanobind::util::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
+        nb::class_<models::gpt2::TransformerConfig::Experimental>(py_gpt2_module, "GPT2TransformerConfigExperimental");
+        nb::class_<models::gpt2::TransformerConfig>(py_gpt2_module, "GPT2TransformerConfig");
+        nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");
+    }
 
-    auto py_linear_regression_model = m.def_submodule("linear_regression");
+    m.def_submodule("linear_regression");
 
-    auto py_llama_module = m.def_submodule("llama");
-    nb::class_<models::llama::LlamaConfig>(py_llama_module, "LlamaConfig");
-    nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "Llama");
-    py_llama_module.def(
-        "create_llama_model", [](const models::llama::LlamaConfig& config) { return models::llama::create(config); });
+    {
+        auto py_llama_module = m.def_submodule("llama");
+        nb::class_<models::llama::LlamaConfig>(py_llama_module, "LlamaConfig");
+        nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "Llama");
+        py_llama_module.def("create_llama_model", [](const models::llama::LlamaConfig& config) {
+            return models::llama::create(config);
+        });
+    }
 
-    auto py_mlp_module = m.def_submodule("mlp");
-    nb::class_<ttml::modules::MultiLayerPerceptronParameters>(py_mlp_module, "MultiLayerPerceptronParameters");
-    nb::class_<ttml::modules::MultiLayerPerceptron, ttml::modules::ModuleBase>(py_mlp_module, "MultiLayerPerceptron");
+    {
+        auto py_mlp_module = m.def_submodule("mlp");
+        nb::class_<ttml::modules::MultiLayerPerceptronParameters>(py_mlp_module, "MultiLayerPerceptronParameters");
+        nb::class_<ttml::modules::MultiLayerPerceptron, ttml::modules::ModuleBase>(
+            py_mlp_module, "MultiLayerPerceptron");
+    }
 }
 
 void py_module(nb::module_& m, nb::module_& m_modules) {
