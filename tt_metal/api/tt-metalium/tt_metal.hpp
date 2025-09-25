@@ -14,7 +14,7 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>

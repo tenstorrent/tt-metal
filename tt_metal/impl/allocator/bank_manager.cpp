@@ -13,7 +13,7 @@
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include "allocator_types.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>

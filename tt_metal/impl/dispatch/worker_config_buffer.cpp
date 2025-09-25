@@ -4,7 +4,7 @@
 
 #include "worker_config_buffer.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <stdint.h>
 #include <stdio.h>
 #include <algorithm>

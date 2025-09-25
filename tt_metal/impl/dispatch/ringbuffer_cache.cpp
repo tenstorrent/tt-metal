@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 // #include "tt_metal/hw/inc/dataflow_api.h"
 
 namespace tt::tt_metal {

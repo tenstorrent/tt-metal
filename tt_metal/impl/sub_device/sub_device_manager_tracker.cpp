@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"

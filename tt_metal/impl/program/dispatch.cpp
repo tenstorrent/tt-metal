@@ -28,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "circular_buffer.hpp"
 #include "circular_buffer_constants.h"

@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "device_impl.hpp"

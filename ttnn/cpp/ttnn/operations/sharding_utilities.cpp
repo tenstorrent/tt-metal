@@ -6,7 +6,7 @@
 // Contains utility functions for partitioning shards work between multiple cores.
 //
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/tensor/types.hpp"

@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build_options.hpp"

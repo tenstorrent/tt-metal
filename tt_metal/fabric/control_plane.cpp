@@ -22,7 +22,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"

@@ -17,7 +17,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "data_types.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"

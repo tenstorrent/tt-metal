@@ -9,7 +9,7 @@
 #include <list>
 #include <unordered_set>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"

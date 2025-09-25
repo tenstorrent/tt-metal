@@ -12,7 +12,7 @@
 #include <string>
 #include <tuple>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"

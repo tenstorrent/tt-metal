@@ -12,7 +12,7 @@
 #include <ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp>
 #include <utility>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "cumprod.hpp"
 
 namespace ttnn::operations::reduction::accumulation {

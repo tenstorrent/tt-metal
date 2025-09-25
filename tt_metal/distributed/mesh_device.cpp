@@ -25,7 +25,7 @@
 #include <utility>
 
 #include "allocator.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
