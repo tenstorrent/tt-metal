@@ -91,40 +91,30 @@ function getNeedleTail(needle) {
 
 function findOwnerForLabel(label) {
   try {
-    const mapping = loadOwnersMapping();
-    if (!mapping) return undefined;
-    const lbl = typeof label === 'string' ? label : '';
-    const labelTokens = extractSignificantTokens(lbl);
-    // Prefer exact keys (label may contain the key as a substring)
-    if (mapping.exact && typeof mapping.exact === 'object') {
-      for (const key of Object.keys(mapping.exact)) {
-        if (lbl.includes(key)) return normalizeOwners(mapping.exact[key]);
-        const tail = getNeedleTail(key);
-        if (tail && labelTokens.includes(tail)) {
-          return normalizeOwners(mapping.exact[key]);
-        }
-      }
-    }
-    // Fallback to contains list
-    if (Array.isArray(mapping.contains)) {
+    const mapping = loadOwnersMapping(); // Load mapping
+    if (!mapping) return undefined; // If the mapping is not loaded, return undefined
+    const lbl = typeof label === 'string' ? label : ''; // If the label is not a string, return an empty string
+    const labelTokens = extractSignificantTokens(lbl); // Extract significant tokens from the label
+
+    if (Array.isArray(mapping.contains)) { // If the mapping's contains parameter is an array
       for (const entry of mapping.contains) {
-        if (!entry || typeof entry.needle !== 'string') continue;
+        if (!entry || typeof entry.needle !== 'string') continue; // If the entry is not an object or the needle is not a string, continue
         const needle = entry.needle;
-        if (lbl.includes(needle)) {
-          return normalizeOwners(entry.owner);
+        if (lbl.includes(needle)) { // If the label includes the needle
+          return normalizeOwners(entry.owner); // Return the normalized owners
         }
         // Fuzzy match: try last token from needle
-        const tail = getNeedleTail(needle);
-        if (tail && labelTokens.includes(tail)) {
+        const tail = getNeedleTail(needle); // Get the last token from the needle
+        if (tail && labelTokens.includes(tail)) { // If the tail is not empty and the label tokens include the tail
           return normalizeOwners(entry.owner);
         }
         // Additional heuristic: if label tokens end with the last two tokens of the needle
         const needleTokens = extractSignificantTokens(needle);
-        if (needleTokens.length >= 2 && labelTokens.length >= 2) {
-          const needleTailPair = needleTokens.slice(-2).join(' ');
-          const labelTailPair = labelTokens.slice(-2).join(' ');
-          if (needleTailPair === labelTailPair) {
-            return normalizeOwners(entry.owner);
+        if (needleTokens.length >= 2 && labelTokens.length >= 2) { // If the needle tokens are at least 2 and the label tokens are at least 2
+          const needleTailPair = needleTokens.slice(-2).join(' '); // Get the last two tokens from the needle
+          const labelTailPair = labelTokens.slice(-2).join(' '); // Get the last two tokens from the label
+          if (needleTailPair === labelTailPair) { // If the needle tail pair is the same as the label tail pair
+            return normalizeOwners(entry.owner); // Basically, if the last two pieces of the label and the needle are the same, define a match. This heuristic may be flawed
           }
         }
       }
