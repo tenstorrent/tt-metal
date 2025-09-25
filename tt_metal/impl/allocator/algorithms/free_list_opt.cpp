@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <array>
 #include <cstddef>
