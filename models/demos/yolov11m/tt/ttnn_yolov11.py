@@ -72,6 +72,8 @@ class TtnnYoloV11:
         x_pre_permute_unique = torch.unique(x_pre_permute_flat)
         print(f"🔍 [RESHAPE DEBUG] BEFORE PERMUTE: {len(x_pre_permute_unique)} unique values out of {len(x_pre_permute_flat)} total")
         print(f"    Range: [{x_pre_permute_flat.min()}, {x_pre_permute_flat.max()}], Mean: {x_pre_permute_flat.mean()}")
+        print(f"    Dtype: {x_pre_permute_debug.dtype}, Shape: {x_pre_permute_debug.shape}")
+        print(f"    TTNN Tensor - Layout: {x.layout}, Memory Config: {x.memory_config()}")
         
         x = ttnn.permute(x, (0, 2, 3, 1))
         
@@ -81,6 +83,9 @@ class TtnnYoloV11:
         x_post_permute_unique = torch.unique(x_post_permute_flat)
         print(f"🔍 [RESHAPE DEBUG] AFTER PERMUTE: {len(x_post_permute_unique)} unique values out of {len(x_post_permute_flat)} total")
         print(f"    Range: [{x_post_permute_flat.min()}, {x_post_permute_flat.max()}], Mean: {x_post_permute_flat.mean()}")
+        print(f"    Dtype: {x_post_permute_debug.dtype}, Shape: {x_post_permute_debug.shape}")
+        print(f"    TTNN Tensor - Layout: {x.layout}, Memory Config: {x.memory_config()}")
+        print(f"🔍 [PERMUTE KILLER] DIVERSITY LOSS: {len(x_pre_permute_unique)} → {len(x_post_permute_unique)} ({100*(len(x_pre_permute_unique)-len(x_post_permute_unique))/len(x_pre_permute_unique):.2f}% loss)")
         
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         
