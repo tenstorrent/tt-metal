@@ -425,7 +425,8 @@ class GroupNorm(Module):
         if "bias" in state:
             state["bias"] = self._prepare_param(state["bias"])
 
-        state["mask"] = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
+        input_mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
+        state["mask"] = ttnn.to_torch(input_mask)
 
     def _prepare_param(self, param: torch.Tensor) -> torch.Tensor:
         expected_shape = (self.num_channels * self.num_devices,)
