@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <limits>
 #include <mutex>
 #include <reflect>
 #include <stack>
@@ -196,8 +198,20 @@ inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
     return callStackWasEmpty;
 }
 
+inline constexpr size_t tracy_max_message_length =
+    static_cast<size_t>(std::numeric_limits<uint16_t>::max());  // Tracy hard limit is 64KiB including null terminator
+
 inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
-    TracyMessageC(source.c_str(), source.size(), color);
+    const auto truncated_size = std::min(source.size(), tracy_max_message_length - 1);
+    if (source.size() > truncated_size) {
+        log_warning(
+            tt::LogMetal,
+            "Tracy profiler message truncated from {} to {} bytes to honor tracy_max_message_length. Perf op report "
+            "generation might break due to corrupted json message data",
+            source.size(),
+            truncated_size);
+    }
+    TracyMessageC(source.c_str(), truncated_size, color);
 }
 
 inline void tracy_frame() { FrameMark; }
@@ -488,7 +502,7 @@ inline std::string op_meta_data_serialized_json(
         operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
     std::string op_text = fmt::format("id:{}", operation_id);                                                 \
     ZoneText(op_text.c_str(), op_text.size());                                                                \
-    TracyMessage(op_message.c_str(), op_message.size());
+    tt::tt_metal::op_profiler::tracy_message(op_message);
 
 #define TracyOpTTNNExternal(op, input_tensors, base_op_id)                                                      \
     /* This op runs entirely on host, but its ID must be generated using the same data-path as device-side */   \
@@ -497,7 +511,7 @@ inline std::string op_meta_data_serialized_json(
     std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
     std::string op_text = fmt::format("id:{}", op_id);                                                          \
     ZoneText(op_text.c_str(), op_text.size());                                                                  \
-    TracyMessage(op_message.c_str(), op_message.size());
+    tt::tt_metal::op_profiler::tracy_message(op_message);
 
 #define TracyOpMeshWorkload(                                                                                   \
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)             \
@@ -517,7 +531,7 @@ inline std::string op_meta_data_serialized_json(
                 operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
             std::string op_text = fmt::format("id:{}", op_id);                                                 \
             ZoneText(op_text.c_str(), op_text.size());                                                         \
-            TracyMessage(op_message.c_str(), op_message.size());                                               \
+            tt::tt_metal::op_profiler::tracy_message(op_message);                                              \
         }                                                                                                      \
     }
 
