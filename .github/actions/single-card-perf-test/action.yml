@@ -33,6 +33,7 @@ runs:
         install_wheel: true
         run_args: |
           ${{ inputs.commands }}
+          false && true
           status=$?
           env python3 models/perf/merge_perf_results.py REPORT
           exit $status
