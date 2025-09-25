@@ -66,26 +66,14 @@ class TtnnYoloV11:
             x = input
             min_channels = c  # Update min_channels to actual channels
             
-        # Debug: After padding, before permute
-        x_pre_permute_debug = ttnn.to_torch(x)
-        x_pre_permute_flat = x_pre_permute_debug.flatten()
-        x_pre_permute_unique = torch.unique(x_pre_permute_flat)
-        print(f"🔍 [RESHAPE DEBUG] BEFORE PERMUTE: {len(x_pre_permute_unique)} unique values out of {len(x_pre_permute_flat)} total")
-        print(f"    Range: [{x_pre_permute_flat.min()}, {x_pre_permute_flat.max()}], Mean: {x_pre_permute_flat.mean()}")
-        print(f"    Dtype: {x_pre_permute_debug.dtype}, Shape: {x_pre_permute_debug.shape}")
-        print(f"    TTNN Tensor - Layout: {x.layout}, Memory Config: {x.memory_config()}")
-        
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        
-        # Debug: After permute, before reshape
-        x_post_permute_debug = ttnn.to_torch(x)
-        x_post_permute_flat = x_post_permute_debug.flatten()
-        x_post_permute_unique = torch.unique(x_post_permute_flat)
-        print(f"🔍 [RESHAPE DEBUG] AFTER PERMUTE: {len(x_post_permute_unique)} unique values out of {len(x_post_permute_flat)} total")
-        print(f"    Range: [{x_post_permute_flat.min()}, {x_post_permute_flat.max()}], Mean: {x_post_permute_flat.mean()}")
-        print(f"    Dtype: {x_post_permute_debug.dtype}, Shape: {x_post_permute_debug.shape}")
-        print(f"    TTNN Tensor - Layout: {x.layout}, Memory Config: {x.memory_config()}")
-        print(f"🔍 [PERMUTE KILLER] DIVERSITY LOSS: {len(x_pre_permute_unique)} → {len(x_post_permute_unique)} ({100*(len(x_pre_permute_unique)-len(x_post_permute_unique))/len(x_pre_permute_unique):.2f}% loss)")
+        # CRITICAL FIX: Skip TTNN permute since we already did high-precision permute in PyTorch preprocessing
+        # Input is already in NHWC format [N, H, W, C] from preprocessing
+        x_pre_reshape_debug = ttnn.to_torch(x)
+        x_pre_reshape_flat = x_pre_reshape_debug.flatten()
+        x_pre_reshape_unique = torch.unique(x_pre_reshape_flat)
+        print(f"🔍 [NO PERMUTE] Input already NHWC: {len(x_pre_reshape_unique)} unique values out of {len(x_pre_reshape_flat)} total")
+        print(f"    Range: [{x_pre_reshape_flat.min()}, {x_pre_reshape_flat.max()}], Mean: {x_pre_reshape_flat.mean()}")
+        print(f"    Dtype: {x_pre_reshape_debug.dtype}, Shape: {x_pre_reshape_debug.shape}")
         
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         

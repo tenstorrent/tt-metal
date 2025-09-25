@@ -54,17 +54,29 @@ def create_yolov11_input_tensors(
         if c == 3:
             c = 16
         n = n // num_devices if n // num_devices != 0 else n
+        
+        # CRITICAL FIX: Do permute in PyTorch to avoid TTNN's 94% quantization loss
+        # Convert NCHW → NHWC in high-precision PyTorch instead of lossy TTNN
+        torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))  # [N,C,H,W] → [N,H,W,C]
+        
+        # Debug: Check that PyTorch permute preserves full precision
+        torch_permuted_flat = torch_input_tensor.flatten()
+        torch_permuted_unique = torch.unique(torch_permuted_flat)
+        print(f"🔍 [PYTORCH PERMUTE] After PyTorch permute: {len(torch_permuted_unique)} unique values out of {len(torch_permuted_flat)} total")
+        print(f"    Range: [{torch_permuted_flat.min()}, {torch_permuted_flat.max()}], Mean: {torch_permuted_flat.mean()}")
+        
+        # Update memory config for NHWC format [n, h, w, c]
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, h, w],
+            [n, h, w, c],  # Changed from [n, c, h, w] to [n, h, w, c] for NHWC format
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        # Debug: Check diversity before ttnn.from_torch conversion (ELSE branch)
+        # Debug: Check diversity after PyTorch permute, before ttnn.from_torch conversion
         pre_conversion_flat = torch_input_tensor.flatten()
         pre_conversion_unique = torch.unique(pre_conversion_flat)
-        print(f"🔍 [PREPROCESSING DEBUG - ELSE] BEFORE ttnn.from_torch: {len(pre_conversion_unique)} unique values out of {len(pre_conversion_flat)} total")
+        print(f"🔍 [PREPROCESSING DEBUG - ELSE] AFTER PyTorch permute, BEFORE ttnn.from_torch: {len(pre_conversion_unique)} unique values out of {len(pre_conversion_flat)} total")
         print(f"    Range: [{pre_conversion_flat.min()}, {pre_conversion_flat.max()}], Mean: {pre_conversion_flat.mean()}")
-        print(f"    Dtype: {torch_input_tensor.dtype}")
+        print(f"    Dtype: {torch_input_tensor.dtype}, Shape: {torch_input_tensor.shape}")
         
         ttnn_input_tensor = ttnn.from_torch(
             torch_input_tensor,
