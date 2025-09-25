@@ -40,8 +40,8 @@ jobs:
           {
             name: "[WH-T3K] Qwen2.5-VL-72B-Instruct",
             model: "Qwen/Qwen2.5-VL-72B-Instruct",
-            server-timeout: 20,
-            benchmark-timeout: 15,
+            server-timeout: 30,
+            benchmark-timeout: 20,
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
