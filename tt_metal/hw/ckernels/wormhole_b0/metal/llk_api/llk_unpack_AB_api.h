@@ -95,7 +95,7 @@ inline void llk_unpack_AB_reduce_row_max(
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
     // Always tile index 0 for operandB
-    _llk_unpack_AB_(address_a, base_address_b);
+    _llk_unpack_AB_<BroadcastType::NONE>(address_a, base_address_b);
 }
 
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
@@ -134,7 +134,7 @@ inline void llk_unpack_AB_reduce_row_max_init() {
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
-    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
-
-    _llk_unpack_AB_reduce_row_max_mop_config_();  // Use specialized function
+    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);        // Unpack a single face of a scaler
+    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);  // Unpack a whole tile of an operand
+    _llk_unpack_AB_reduce_row_max_mop_config_();  // Unpack operand and scaler
 }

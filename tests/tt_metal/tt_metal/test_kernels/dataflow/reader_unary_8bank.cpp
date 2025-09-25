@@ -32,8 +32,9 @@ void generate_bcast_scaler() {
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles =
-        get_arg_val<uint32_t>(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
+    uint32_t Ht = get_arg_val<uint32_t>(1);  // Number of rows (height in tiles)
+    uint32_t Wt = get_arg_val<uint32_t>(2);  // Number of cols (width in tiles)
+    uint32_t NC = get_arg_val<uint32_t>(3);  // Number of channels
 
     constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
 
@@ -59,12 +60,10 @@ void kernel_main() {
 #endif
     // DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
 
-    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    uint32_t i_tile = 0;
-    for (uint32_t i = 0; i < num_tiles; i += blk) {
-        uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
-        cb_reserve_back(cb_id_in0, rem);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+    // Read all Ht*Wt tiles for all NC channels at once (like reduce_c pattern)
+    uint32_t total_tiles = NC * Ht * Wt;
+    cb_reserve_back(cb_id_in0, total_tiles);
+    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
         for (uint32_t r = 0; r < rem; r++) {
             uint64_t src_noc_addr =
@@ -72,7 +71,7 @@ void kernel_main() {
             auto addr = l1_write_addr + (r * tile_bytes);
             noc_async_read(src_noc_addr, addr, tile_bytes);  // TODO(AP): data type size
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, rem);
     }
+    noc_async_read_barrier();
+    cb_push_back(cb_id_in0, total_tiles);
 }
