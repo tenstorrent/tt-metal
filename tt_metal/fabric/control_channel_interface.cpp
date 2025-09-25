@@ -14,7 +14,10 @@ ControlChannelInterface::ControlChannelInterface(HostToRouterCommInterface* host
 }
 
 ControlChannelResult ControlChannelInterface::request_heartbeat_check(
-    FabricNodeId& initiator_node, chan_id_t initiator_channel, FabricNodeId& target_node, chan_id_t target_channel) {
+    FabricNodeId& initiator_node,
+    chan_id_t initiator_channel,
+    FabricNodeId& target_node,
+    chan_id_t target_channel) const {
     if (!host_to_router_comm_interface_ptr_) {
         return ControlChannelResult::OPERATION_FAILED;
     }
@@ -26,7 +29,7 @@ ControlChannelResult ControlChannelInterface::request_heartbeat_check(
 }
 
 ControlChannelResult ControlChannelInterface::send_control_packet(
-    ControlPacketHeader& packet, FabricNodeId& target_node, chan_id_t target_channel) {
+    ControlPacketHeader& packet, FabricNodeId& target_node, chan_id_t target_channel) const {
     if (!host_to_router_comm_interface_ptr_) {
         return ControlChannelResult::OPERATION_FAILED;
     }

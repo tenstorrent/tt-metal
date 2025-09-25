@@ -68,11 +68,12 @@ public:
 
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
+    void initialize_router_comm_context(chip_id_t chip_id, chan_id_t chan_id);
     size_t get_control_channel_num_buffer_slots() const;
     size_t get_control_channel_buffer_base_address() const;
     size_t get_control_channel_remote_write_counter_address() const;
     size_t get_control_channel_remote_read_counter_address() const;
-    RouterCommContext& get_router_comm_context(FabricNodeId& node_id, chan_id_t eth_chan_id);
+    RouterCommContext& get_router_comm_context(FabricNodeId& node_id, chan_id_t chan_id);
 
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;

@@ -192,15 +192,6 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->control_channel_remote_write_counter_address_ =
         control_channel_config.host_buffer_remote_write_counter_address;
     this->control_channel_remote_read_counter_address_ = control_channel_config.host_buffer_remote_read_counter_address;
-
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    for (const auto& device : tt::DevicePool::instance().get_all_active_devices()) {
-        const auto node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
-        for (const auto& [chan_id, _] : control_plane.get_active_fabric_eth_channels(node_id)) {
-            this->router_comm_contexts_[node_id].emplace(
-                chan_id, RouterCommContext(this->control_channel_num_buffer_slots_));
-        }
-    }
 }
 
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
@@ -355,6 +346,12 @@ void FabricContext::initialize_tensix_config() {
     }
 }
 
+void FabricContext::initialize_router_comm_context(chip_id_t chip_id, chan_id_t chan_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+    this->router_comm_contexts_[node_id].emplace(chan_id, RouterCommContext(this->control_channel_num_buffer_slots_));
+}
+
 size_t FabricContext::get_control_channel_num_buffer_slots() const { return this->control_channel_num_buffer_slots_; }
 
 size_t FabricContext::get_control_channel_buffer_base_address() const {
@@ -369,17 +366,17 @@ size_t FabricContext::get_control_channel_remote_read_counter_address() const {
     return this->control_channel_remote_read_counter_address_;
 }
 
-RouterCommContext& FabricContext::get_router_comm_context(FabricNodeId& node_id, chan_id_t eth_chan_id) {
+RouterCommContext& FabricContext::get_router_comm_context(FabricNodeId& node_id, chan_id_t chan_id) {
     const auto it = this->router_comm_contexts_.find(node_id);
     TT_FATAL(
         it != this->router_comm_contexts_.end(),
         "Error, querying router comm context for an unknown node id {}",
         node_id);
 
-    const auto it2 = it->second.find(eth_chan_id);
-    TT_FATAL(it2 != it->second.end(), "Error, querying router comm context for an unknown eth chan id {}", eth_chan_id);
+    const auto it2 = it->second.find(chan_id);
+    TT_FATAL(it2 != it->second.end(), "Error, querying router comm context for an unknown eth chan id {}", chan_id);
 
-    return this->router_comm_contexts_[node_id][eth_chan_id];
+    return this->router_comm_contexts_[node_id][chan_id];
 }
 
 }  // namespace tt::tt_fabric

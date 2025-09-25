@@ -29,11 +29,14 @@ public:
 
     // Host-initiated control protocols
     ControlChannelResult request_heartbeat_check(
-        FabricNodeId& initiator_node, chan_id_t initiator_channel, FabricNodeId& target_node, chan_id_t target_channel);
+        FabricNodeId& initiator_node,
+        chan_id_t initiator_channel,
+        FabricNodeId& target_node,
+        chan_id_t target_channel) const;
 
     // Low-level packet sending (for advanced users)
     ControlChannelResult send_control_packet(
-        ControlPacketHeader& packet, FabricNodeId& target_node, chan_id_t target_channel);
+        ControlPacketHeader& packet, FabricNodeId& target_node, chan_id_t target_channel) const;
 
 private:
     // Packet construction helpers
