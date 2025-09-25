@@ -222,7 +222,7 @@ class TtnnOBB:
         values = [torch.quantile(yb_flat, p/100.0) for p in percentiles]
         print(f"🔍 [DEBUG] TTNN Raw distribution percentiles:")
         for p, v in zip(percentiles, values):
-            print(f"    {p:3d}%: {v:.6f}")
+            print(f"    {p}%: {v}")
         
         # 2. Unique value analysis (reveals quantization)
         unique_vals, counts = torch.unique(yb_flat, return_counts=True)
@@ -231,7 +231,7 @@ class TtnnOBB:
         sorted_indices = torch.argsort(counts, descending=True)
         for i in range(min(10, len(unique_vals))):
             idx = sorted_indices[i]
-            print(f"      {unique_vals[idx]:.6f}: {counts[idx]:5d} times")
+            print(f"      {unique_vals[idx]}: {counts[idx]} times")
         
         # 3. Range analysis
         ranges = [(-25, -20), (-20, -15), (-15, -10), (-10, -5), (-5, 0), (0, 5)]
@@ -239,7 +239,7 @@ class TtnnOBB:
         for low, high in ranges:
             mask = (yb_flat >= low) & (yb_flat < high)
             count = mask.sum()
-            print(f"    [{low:4.0f}, {high:4.0f}): {count:5d} values ({100*count/len(yb_flat):.1f}%)")
+            print(f"    [{low}, {high}): {count} values")
         
         # Simple fix: Scale and shift to match PyTorch sigmoid input range
         # PyTorch range: min=-21, max=1.98, mean=-13.6
@@ -268,7 +268,7 @@ class TtnnOBB:
         values = [torch.quantile(yb_final_flat, p/100.0) for p in percentiles]
         print(f"🔍 [DEBUG] TTNN Sigmoid distribution percentiles:")
         for p, v in zip(percentiles, values):
-            print(f"    {p:3d}%: {v:.6f}")
+            print(f"    {p}%: {v}")
         
         # Unique value analysis for sigmoid outputs
         unique_vals, counts = torch.unique(yb_final_flat, return_counts=True)
@@ -277,7 +277,7 @@ class TtnnOBB:
         sorted_indices = torch.argsort(counts, descending=True)
         for i in range(min(10, len(unique_vals))):
             idx = sorted_indices[i]
-            print(f"      {unique_vals[idx]:.6f}: {counts[idx]:5d} times")
+            print(f"      {unique_vals[idx]}: {counts[idx]} times")
         
         # Process angle predictions - reshape and concat to get [batch, 1, N]
         x7 = ttnn.reshape(x7, (x7.shape[0], x7.shape[1], x7.shape[2] * x7.shape[3]))
