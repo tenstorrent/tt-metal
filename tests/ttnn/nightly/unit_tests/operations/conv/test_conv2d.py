@@ -11,7 +11,7 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
-from models.common.utility_functions import skip_for_blackhole, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
@@ -125,6 +125,7 @@ def run_conv(
     throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
     enable_activation_reuse=False,
     config_tensors_in_dram=False,
+    custom_pcc=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -328,21 +329,24 @@ def run_conv(
 
     ref = torch.permute(ref, (0, 2, 3, 1))
 
-    if not fp32_accum:
-        pcc = 0.985
-        if input_channels * filter_height * filter_width > 10000:
-            pcc = 0.97
-    elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
-        pcc = 0.996
+    if custom_pcc is not None:
+        pcc = custom_pcc
     else:
-        pcc = 0.997
+        if not fp32_accum:
+            pcc = 0.985
+            if input_channels * filter_height * filter_width > 10000:
+                pcc = 0.97
+        elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
+            pcc = 0.996
+        else:
+            pcc = 0.997
 
-    # Check if activation is tanh
-    is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
-    if is_tanh:
-        # Scale down PCC for tanh.
-        # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
-        pcc = pcc * 0.99
+        # Check if activation is tanh
+        is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
+        if is_tanh:
+            # Scale down PCC for tanh.
+            # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
+            pcc = pcc * 0.99
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
@@ -4727,7 +4731,8 @@ def test_conv2d_activation_reuse(
         enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
         input_dtype = input_dtype,
         enable_activation_reuse=enable_activation_reuse,
-        config_tensors_in_dram=config_in_dram
+        config_tensors_in_dram=config_in_dram,
+        custom_pcc=0.999
     )
 
 
