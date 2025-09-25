@@ -10,9 +10,9 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.demos.blackhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
-from models.utility_functions import profiler
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 

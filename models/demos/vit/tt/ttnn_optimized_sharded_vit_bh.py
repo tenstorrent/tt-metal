@@ -273,40 +273,6 @@ def vit_attention(
     if config.should_reallocate_in_attention:
         value = ttnn.reallocate(value)
 
-    """
-    # SDPA code
-    query = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
-    key = ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG)
-    value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
-
-    program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(config.core_grid_12x10.x, config.core_grid_12x10.y),
-        q_chunk_size=128,
-        k_chunk_size=128,
-        exp_approx_mode=False,  # NOTE: False is more correct
-    )
-
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
-    context_layer = ttnn.transformer.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        is_causal=False,
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    # ttnn.deallocate(query)
-    # ttnn.deallocate(key)
-    # ttnn.deallocate(value)
-
-    """
     attention_scores = ttnn.matmul(
         query,
         key,
