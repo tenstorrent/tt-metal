@@ -37,9 +37,9 @@ void add_ternary_sharding_defines(
 // Helper function to add binary-style broadcast defines
 void add_binary_broadcast_defines(
     std::map<std::string, std::string>& defines, bool pred_is_bcast, bool true_is_bcast, bool false_is_bcast = false) {
-    defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-    defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
-    defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+    defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";
+    defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";
+    defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";
 }
 
 // Helper function to add ternary-style broadcast defines
@@ -1077,33 +1077,33 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     if (variant == WhereVariant::TTT &&
         (broadcast_type == WhereBroadcastType::COL_BCAST || broadcast_type == WhereBroadcastType::SCALAR_BCAST)) {
         // 3-tensor broadcast configuration - set defines for each tensor independently
-        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
-        kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
-        kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_B"] = true_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_C"] = false_is_bcast ? "1" : "0";
     } else if (
         (variant == WhereVariant::TTS || variant == WhereVariant::TST) &&
         broadcast_type == WhereBroadcastType::COL_BCAST) {
         // Unified TTS/TST column broadcast configuration
-        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";
         if (variant == WhereVariant::TTS) {
-            kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
-            kernel_defines["BCAST_FALSE"] = "0";  // False is scalar for TTS
+            kernel_defines["BCAST_B"] = true_is_bcast ? "1" : "0";
+            kernel_defines["BCAST_C"] = "0";      // False is scalar for TTS
         } else {                                  // TST
-            kernel_defines["BCAST_TRUE"] = "0";   // True is scalar for TST
-            kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+            kernel_defines["BCAST_B"] = "0";      // True is scalar for TST
+            kernel_defines["BCAST_C"] = false_is_bcast ? "1" : "0";
         }
     }
     if ((variant == WhereVariant::TTS || variant == WhereVariant::TST) &&
         (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
          broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
         // Unified TTS/TST scalar broadcast configuration
-        kernel_defines["BCAST_PRED"] = (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";
+        kernel_defines["BCAST_A"] = (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";
         if (variant == WhereVariant::TTS) {
-            kernel_defines["BCAST_TRUE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
-            kernel_defines["BCAST_FALSE"] = "0";  // False is scalar for TTS
+            kernel_defines["BCAST_B"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
+            kernel_defines["BCAST_C"] = "0";      // False is scalar for TTS
         } else {                                  // TST
-            kernel_defines["BCAST_TRUE"] = "0";   // True is scalar for TST
-            kernel_defines["BCAST_FALSE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
+            kernel_defines["BCAST_B"] = "0";      // True is scalar for TST
+            kernel_defines["BCAST_C"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
         }
     }
 

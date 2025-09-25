@@ -24,22 +24,22 @@ ALWI void process_tile(
 
     // 2-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
     // (scalar is not in a CB)
-#if BCAST_PRED
+#if BCAST_A
     cb_wait_front(predicate_cb, num_tiles_per_cycle);  // predicate_cb is broadcast
 #endif
-#if BCAST_TRUE && !BCAST_FALSE  // TTS case: true tensor is broadcast
+#if BCAST_B && !BCAST_C  // TTS case: true tensor is broadcast
     cb_wait_front(tensor_cb, num_tiles_per_cycle);
 #endif
-#if BCAST_FALSE && !BCAST_TRUE  // TST case: false tensor is broadcast
+#if BCAST_C && !BCAST_B  // TST case: false tensor is broadcast
     cb_wait_front(tensor_cb, num_tiles_per_cycle);
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
-#if !BCAST_PRED
+#if !BCAST_A
         cb_wait_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if !(BCAST_TRUE && !BCAST_FALSE) && !(BCAST_FALSE && !BCAST_TRUE)  // Neither or both broadcast
+#if !(BCAST_B && !BCAST_C) && !(BCAST_C && !BCAST_B)  // Neither or both broadcast
         cb_wait_front(tensor_cb, num_tiles_per_cycle);
 #endif
 
@@ -95,22 +95,22 @@ ALWI void process_tile(
         cb_push_back(cb_out, num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
-#if !BCAST_PRED
+#if !BCAST_A
         cb_pop_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if !(BCAST_TRUE && !BCAST_FALSE) && !(BCAST_FALSE && !BCAST_TRUE)  // Neither or both broadcast
+#if !(BCAST_B && !BCAST_C) && !(BCAST_C && !BCAST_B)  // Neither or both broadcast
         cb_pop_front(tensor_cb, num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
-#if BCAST_PRED
+#if BCAST_A
     cb_pop_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if BCAST_TRUE && !BCAST_FALSE  // TTS case: true tensor is broadcast
+#if BCAST_B && !BCAST_C  // TTS case: true tensor is broadcast
     cb_pop_front(tensor_cb, num_tiles_per_cycle);
 #endif
-#if BCAST_FALSE && !BCAST_TRUE  // TST case: false tensor is broadcast
+#if BCAST_C && !BCAST_B  // TST case: false tensor is broadcast
     cb_pop_front(tensor_cb, num_tiles_per_cycle);
 #endif
 }
