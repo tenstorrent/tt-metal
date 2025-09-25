@@ -788,6 +788,7 @@ class TtnnDetect:
 
         ya = ttnn.permute(ya, (0, 2, 1))
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
+        ya = ttnn.permute(ya, (0, 1, 3, 2))
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -795,8 +796,7 @@ class TtnnDetect:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
-        ya = ttnn.softmax(ya, dim=2, compute_kernel_config=compute_kernel_config)
-        ya = ttnn.permute(ya, (0, 1, 3, 2))
+        ya = ttnn.softmax_in_place(ya, numeric_stable=False, compute_kernel_config=compute_kernel_config)
 
         c = self.dfl(ya)
 
