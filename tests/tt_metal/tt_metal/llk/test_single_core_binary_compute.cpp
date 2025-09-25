@@ -220,35 +220,21 @@ bool single_core_binary(
     ////////////////////////////////////////////////////////////////////////////
 
     constexpr uint32_t repeat_tiles = 2;
+    std::vector<float> values_to_repeat = {
+        1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};  // Specify which numbers to repeat
 
     std::vector<bfloat16> input0_values;
 
-    for (uint32_t j = 0; j < repeat_tiles; j++) {
+    // for (uint32_t j = 0; j < repeat_tiles; j++) {
+    for (const auto& value : values_to_repeat) {
         for (size_t i = 0; i < 16; i++) {
-            input0_values.push_back(bfloat16(1.0f));
-        }
-        for (size_t i = 0; i < 240; i++) {
-            input0_values.push_back(bfloat16(0.0f));
-        }
-        for (size_t i = 0; i < 16; i++) {
-            input0_values.push_back(bfloat16(2.0f));
-        }
-        for (size_t i = 0; i < 240; i++) {
-            input0_values.push_back(bfloat16(0.0f));
-        }
-        for (size_t i = 0; i < 16; i++) {
-            input0_values.push_back(bfloat16(3.0f));
-        }
-        for (size_t i = 0; i < 240; i++) {
-            input0_values.push_back(bfloat16(0.0f));
-        }
-        for (size_t i = 0; i < 16; i++) {
-            input0_values.push_back(bfloat16(4.0f));
+            input0_values.push_back(bfloat16(value));
         }
         for (size_t i = 0; i < 240; i++) {
             input0_values.push_back(bfloat16(0.0f));
         }
     }
+    // }
 
     // Create a vector of 1024 bfloat16 values (all 5s)
 
