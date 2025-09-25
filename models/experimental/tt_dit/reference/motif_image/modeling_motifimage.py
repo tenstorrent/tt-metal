@@ -435,54 +435,48 @@ class MotifImage(nn.Module):
                 pooled_text_embeddings = torch.cat(
                     [cond_pooled_text_embeddings, negative_pooled_text_embeddings], dim=0
                 )
+            elif use_dynamic_negative_switch:
+                # Precompute both negative variants; concatenate per step in the sampling loop
+                empty_text_embeddings, empty_pooled_text_embeddings = self.prompt_embedding(
+                    ["" for _ in range(len(prompts))],
+                    latents.device,
+                    get_rare_negative_token=get_rare_negative_token,
+                )
+                empty_text_embeddings = [emb.to(device=latents.device) for emb in empty_text_embeddings]
+                empty_pooled_text_embeddings = empty_pooled_text_embeddings.to(device=latents.device)
+
+                zero_text_embeddings = [
+                    torch.zeros_like(text_embedding, device=text_embedding.device)
+                    for text_embedding in cond_text_embeddings
+                ]
+                zero_pooled_text_embeddings = torch.zeros_like(
+                    cond_pooled_text_embeddings, device=cond_pooled_text_embeddings.device
+                )
             else:
-                if use_dynamic_negative_switch:
-                    # Precompute both negative variants; concatenate per step in the sampling loop
-                    empty_text_embeddings, empty_pooled_text_embeddings = self.prompt_embedding(
+                # Single-strategy negatives for all steps
+                if zero_embedding_for_cfg:
+                    negative_text_embeddings = [
+                        torch.zeros_like(text_embedding, device=text_embedding.device)
+                        for text_embedding in cond_text_embeddings
+                    ]
+                    negative_pooled_text_embeddings = torch.zeros_like(
+                        cond_pooled_text_embeddings, device=cond_pooled_text_embeddings.device
+                    )
+                else:
+                    negative_text_embeddings, negative_pooled_text_embeddings = self.prompt_embedding(
                         ["" for _ in range(len(prompts))],
                         latents.device,
                         get_rare_negative_token=get_rare_negative_token,
                     )
-                    empty_text_embeddings = [emb.to(device=latents.device) for emb in empty_text_embeddings]
-                    empty_pooled_text_embeddings = empty_pooled_text_embeddings.to(device=latents.device)
+                    negative_text_embeddings = [emb.to(device=latents.device) for emb in negative_text_embeddings]
+                    negative_pooled_text_embeddings = negative_pooled_text_embeddings.to(device=latents.device)
 
-                    zero_text_embeddings = [
-                        torch.zeros_like(text_embedding, device=text_embedding.device)
-                        for text_embedding in cond_text_embeddings
-                    ]
-                    zero_pooled_text_embeddings = torch.zeros_like(
-                        cond_pooled_text_embeddings, device=cond_pooled_text_embeddings.device
-                    )
-
-                    # Keep conditionals; per-step concatenation happens in the loop
-                    text_embeddings = cond_text_embeddings
-                    pooled_text_embeddings = cond_pooled_text_embeddings
-                else:
-                    # Single-strategy negatives for all steps
-                    if zero_embedding_for_cfg:
-                        negative_text_embeddings = [
-                            torch.zeros_like(text_embedding, device=text_embedding.device)
-                            for text_embedding in cond_text_embeddings
-                        ]
-                        negative_pooled_text_embeddings = torch.zeros_like(
-                            cond_pooled_text_embeddings, device=cond_pooled_text_embeddings.device
-                        )
-                    else:
-                        negative_text_embeddings, negative_pooled_text_embeddings = self.prompt_embedding(
-                            ["" for _ in range(len(prompts))],
-                            latents.device,
-                            get_rare_negative_token=get_rare_negative_token,
-                        )
-                        negative_text_embeddings = [emb.to(device=latents.device) for emb in negative_text_embeddings]
-                        negative_pooled_text_embeddings = negative_pooled_text_embeddings.to(device=latents.device)
-
-                    text_embeddings = [
-                        torch.cat([cond, neg], dim=0)
-                        for cond, neg in zip(cond_text_embeddings, negative_text_embeddings)
-                    ]
-                    pooled_text_embeddings = torch.cat(
-                        [cond_pooled_text_embeddings, negative_pooled_text_embeddings], dim=0
-                    )
+                text_embeddings = [
+                    torch.cat([cond, neg], dim=0) for cond, neg in zip(cond_text_embeddings, negative_text_embeddings)
+                ]
+                pooled_text_embeddings = torch.cat(
+                    [cond_pooled_text_embeddings, negative_pooled_text_embeddings], dim=0
+                )
         else:
             # CFG disabled: use zeros
             text_embeddings = [
@@ -526,7 +520,7 @@ class MotifImage(nn.Module):
             timestep = timestep.expand(input_latents.shape[0])
 
             # Choose per-step text embeddings if dynamic switching is enabled
-            if do_classifier_free_guidance and use_dynamic_negative_switch:
+            if use_dynamic_negative_switch:
                 t_scalar = float(t.item()) if torch.is_tensor(t) else float(t)
                 if t_scalar >= float(negative_strategy_switch_t):
                     neg_step_text_embeddings = empty_text_embeddings
