@@ -488,12 +488,11 @@ void ControlPlane::init_control_plane(
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
     const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    constexpr bool using_mock_cluster_descriptor = false;
-    constexpr bool run_discovery = true;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, using_mock_cluster_descriptor, run_discovery);
+    this->physical_system_descriptor_ =
+        std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(driver, distributed_context, rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
