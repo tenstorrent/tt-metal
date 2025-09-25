@@ -44,23 +44,52 @@ struct RunOptions {
 };
 
 static void usage(const char* argv0) {
-    log_error(
-        tt::LogTest,
-        "{}",
-        fmt::format(
-            R"(Usage:
-  {} --src-dev <mesh:chip|chip> --dst-dev <mesh:chip|chip> --size <bytes>
-         [--page <bytes>] [--src-type <l1|dram|single_bank>] [--dst-type <l1|dram|single_bank>]
+    std::string bin = std::filesystem::path(argv0).filename().string();
+    if (bin.empty()) {
+        bin = "build/test/tt_metal/tt_fabric/bench_unicast";
+    }
+
+    const std::string text = fmt::format(
+        R"(Usage:
+  {bin} --src-dev <mesh:chip|chip> --dst-dev <mesh:chip|chip> --size <bytes>
+         [--page <bytes>] [--src-type <l1|dram>] [--dst-type <l1|dram>]
          [--send-core x,y] [--recv-core x,y]
          [--iters N] [--warmup N] [--trace-iters N]
          [--no-trace] [--enable-sync]
          [--csv <path>]
 
 Notes:
-- This binary runs ONE configuration. For sweeps, call it in a loop from a script.
-- --src-type/--dst-type are accepted for future use; current code uses DRAM src and L1/DRAM dst as in your kernels.
+- This binary runs ONE configuration per invocation. For sweeps, invoke it repeatedly (see examples below).
+- --src-type/--dst-type are accepted for future use; current code uses DRAM src and L1/DRAM dst.
+- Trace semantics: each measured iteration does
+    1) warm-up (outside trace),
+    2) BeginTraceCapture → enqueue the workload N=--trace-iters times → EndTraceCapture,
+    3) ReplayTrace once and time it, then divides by N to get per-iter time.
+  Thus:
+    * --trace-iters controls how many enqueues are captured per trace.
+    * --iters controls how many times the capture+replay cycle is repeated to collect stats (p50/mean, etc.).
+
+Examples:
+
+# Single run, 1 MiB tensor, 4 KiB pages, capture 64 enqueues per trace, repeat 10 times for stats:
+  {bin} --src-dev 0:0 --dst-dev 0:1 --size 1048576 --page 4096 \
+        --send-core 0,0 --recv-core 0,0 \
+        --iters 10 --warmup 1 --trace-iters 64 \
+        --csv artifacts/unicast.csv
+
+# Sweep multiple sizes via helper script:
+  python tests/tt_metal/tt_fabric/benchmark/collectives/unicast/run_unicast_sweep.py \
+        --src 0:0 --dst 0:1 --sizes 4096,32768,1048576 \
+        --recv-core 0,0 --iters 10 --warmup 1 --trace-iters 64 \
+        --out-dir artifacts
+
+Legend:
+  <mesh:chip|chip>   e.g., "0:1" (mesh 0, chip 1) or just "1" if single mesh.
+  cores              x,y in logical worker-core coordinates (e.g., 0,0).
 )",
-            argv0));
+        fmt::arg("bin", bin));
+
+    log_error(tt::LogTest, "{}", text);
 }
 
 static bool parse_mesh_chip(const std::string& s, uint32_t& mesh, int& chip) {
