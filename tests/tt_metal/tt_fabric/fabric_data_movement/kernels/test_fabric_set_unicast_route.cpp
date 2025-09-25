@@ -17,14 +17,18 @@ void kernel_main() {
     uint32_t ew_dim = get_arg_val<uint32_t>(4);
 
     volatile tt_l1_ptr uint32_t* result_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_addr);
-    auto expected_packet_header = PacketHeaderPool::allocate_header();
-    auto actual_packet_header = PacketHeaderPool::allocate_header();
+    uint8_t expected_buffer[64];
+    uint8_t actual_buffer[64];
 
 #ifdef FABRIC_2D
+    auto expected_packet_header = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(expected_buffer);
+    auto actual_packet_header = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(actual_buffer);
     constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = 32;  // 2D: store 32 bytes (32 packed command bytes)
     volatile uint8_t* actual_route_buffer = actual_packet_header->route_buffer;
     volatile uint8_t* expected_route_buffer = expected_packet_header->route_buffer;
 #else
+    auto expected_packet_header = reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(expected_buffer);
+    auto actual_packet_header = reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(actual_buffer);
     constexpr uint32_t MAX_ROUTE_BUFFER_SIZE = 4;  // 1D: store only 4 bytes (single 32-bit routing field)
     volatile uint8_t* actual_route_buffer = (uint8_t*)&actual_packet_header->routing_fields.value;
     volatile uint8_t* expected_route_buffer = (uint8_t*)&expected_packet_header->routing_fields.value;

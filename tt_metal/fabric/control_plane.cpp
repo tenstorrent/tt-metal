@@ -1842,14 +1842,6 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
                 CoreCoord virtual_idle_eth_core =
                     tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                         physical_chip_id, idle_eth_chan);
-                // print channel, and core's x,y
-                fprintf(
-                    stderr,
-                    "Writing 1D routing path to IDLE_ETH core on chip %d, channel %d, core (%zu,%zu)\n",
-                    physical_chip_id,
-                    idle_eth_chan,
-                    virtual_idle_eth_core.x,
-                    virtual_idle_eth_core.y);
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     (void*)&routing_path,
                     sizeof(routing_path),
