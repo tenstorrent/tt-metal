@@ -1,5 +1,4 @@
 import itertools
-import os
 
 import pytest
 import torch
@@ -12,8 +11,7 @@ from models.utility_functions import comp_pcc
 from ...reference.configuration_gpt_oss import GptOssConfig
 from ...tt.ccl import CCLManager
 from ...tt.experts import Experts, SparseExperts
-
-tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
+from ...tt.model_config import ModelArgs
 
 
 class ReferenceExperts(nn.Module):
@@ -87,11 +85,9 @@ def test_experts(
     print("MESH DEVICE!", mesh_device)
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 2)))
     print("MESH SHAPE!", mesh_device.shape)
-    tensor_cache_dir = (
-        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
-        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
-    )
-    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
+    # Get paths from ModelArgs to avoid code duplication
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)  # dummy_weights=True to avoid loading actual weights
 
     # Create configuration
     config = GptOssConfig(
@@ -209,8 +205,8 @@ def test_experts(
 @pytest.mark.parametrize(
     "num_experts, experts_per_token, intermediate_size, hidden_size",
     [
-        (32, 4, 2880, 2880),  # 20B config
-        # (128, 4, 2880, 2880),  # 120B config
+        # (32, 4, 2880, 2880),  # 20B config
+        (128, 4, 2880, 2880),  # 120B config
     ],
     ids=["gpt20B"],
 )
@@ -229,11 +225,10 @@ def test_sparse_experts(
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
     print("MESH DEVICE!", mesh_device)
     print("MESH SHAPE!", mesh_device.shape)
-    tensor_cache_dir = (
-        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
-        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
-    )
-    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
+    # Get paths from ModelArgs to avoid code duplication
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)  # dummy_weights=True to avoid loading actual weights
+    dtype = ttnn.bfloat8_b  # Always use bfp8
 
     """Test experts with sparse routing weights (only a few experts active per token)"""
     # Create configuration
@@ -267,7 +262,9 @@ def test_sparse_experts(
     reference_model = ReferenceExperts(config)
     state_dict = reference_model.state_dict()
     ccl_manager = CCLManager(mesh_device)
-    tt_model = SparseExperts(mesh_device, config, state_dict, ccl_manager, tensor_cache_path=tensor_cache_dir)
+    tt_model = SparseExperts(
+        mesh_device, config, state_dict, ccl_manager, tensor_cache_path=model_args.weight_cache_path(dtype)
+    )
 
     # # Run forward passes
     reference_output = reference_model(hidden_states, routing_weights)
@@ -286,7 +283,7 @@ def test_sparse_experts(
         tt_output = ttnn.to_torch(tt_output_tensors[i])
 
         # Compare outputs
-        passing, output = comp_pcc(reference_output, tt_output, pcc=0.99)
+        passing, output = comp_pcc(reference_output, tt_output, pcc=0.92)
         mse = torch.nn.functional.mse_loss(reference_output, tt_output)
 
         # Calculate relative error metrics

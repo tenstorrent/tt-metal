@@ -1,6 +1,6 @@
 import torch
 
-MAX_SEQ_LEN = 1024
+MAX_SEQ_LEN = 4 * 1024
 
 
 def get_cache_file_name(tensor_cache_path, name):

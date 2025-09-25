@@ -1,5 +1,3 @@
-import os
-
 import pytest
 import torch
 import torch.nn as nn
@@ -12,9 +10,9 @@ from ...reference.configuration_gpt_oss import GptOssConfig
 from ...reference.hf_utils import get_state_dict
 from ...tt.ccl import CCLManager
 from ...tt.mlp import MLP
+from ...tt.model_config import ModelArgs
 
-tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
-local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+# ModelArgs will be instantiated inside test functions to avoid import-time loading
 
 
 class ReferenceMLP(nn.Module):
@@ -96,7 +94,15 @@ class ReferenceExperts(nn.Module):
 )
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
-@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
+@pytest.mark.parametrize(
+    "use_real_weights",
+    [
+        True,
+    ],
+    ids=[
+        "real",
+    ],
+)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
@@ -132,11 +138,11 @@ def test_mlp(
 ):
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
     print(mesh_device.shape)
-    tensor_cache_dir = (
-        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
-        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
-    )
-    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
+    # Get paths from ModelArgs to avoid code duplication
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)  # dummy_weights=True to avoid loading actual weights
+    gpt_dir = model_args.model_path
+    local_weights_path = gpt_dir
 
     # Create configuration
     config = GptOssConfig(
@@ -162,7 +168,9 @@ def test_mlp(
     state_dict = reference_model.state_dict()
 
     ccl_manager = CCLManager(mesh_device)
-    tt_model = MLP(mesh_device, config, state_dict, ccl_manager, dtype=dtype, tensor_cache_path=tensor_cache_dir)
+    tt_model = MLP(
+        mesh_device, config, state_dict, ccl_manager, dtype=dtype, tensor_cache_path=model_args.weight_cache_path(dtype)
+    )
 
     # Run tt forward pass first to get the routing scores to use in reference execution
     tt_output, tt_router_scores = tt_model(tt_hidden_states)

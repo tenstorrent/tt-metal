@@ -38,61 +38,78 @@ class ModelArgs:
         self.optimizations = optimizations
         self.cache_hf = cache_hf
 
-        # GPT-OSS specific paths - use environment variables or auto-detect from cache
-        # Check for available GPT-OSS models in HuggingFace cache
-        hf_cache_dir = "/home/models-team/.cache/huggingface/hub"
-        available_models = [
-            # f"{hf_cache_dir}/models--unsloth--gpt-oss-20b-BF16",
-            f"{hf_cache_dir}/models--unsloth--gpt-oss-120b-BF16/snapshots/e7523373bc44b42296b43202e265a1eebf2ee16f",
+        # GPT-OSS specific paths - use single GPT_DIR environment variable
+        # Default paths for available models
+        default_models = [
+            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B",
+            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B",
         ]
 
-        # Use first available model as default, or environment variable override
+        # Use first available model as default, or GPT_DIR environment variable override
         default_path = None
-        for model_path in available_models:
+        for model_path in default_models:
             if os.path.exists(model_path):
                 default_path = model_path
                 break
 
         if default_path is None:
-            default_path = available_models[-1]  # Fallback to last in list
+            default_path = default_models[-1]  # Fallback to first in list
 
-        self.model_path = os.getenv("GPT_OSS_MODEL_PATH", default_path)
-        self.weights_path = os.getenv("GPT_OSS_WEIGHTS_PATH", self.model_path)
+        # Use single GPT_DIR environment variable for all paths
+        gpt_dir = os.getenv("GPT_DIR", default_path)
+        self.model_path = gpt_dir
+        self.weights_path = gpt_dir
 
         logger.info(f"Using GPT-OSS model from: {self.model_path}")
 
-        # Load HF config to get model parameters
-        self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-        logger.debug(f"HF config: {self.hf_config}")
+        if self.dummy_weights:
+            # Skip loading HF config for testing - use default values
+            logger.info("Using dummy weights mode - skipping HuggingFace config loading")
+            # Default GPT-OSS config values for testing
+            self.hf_config = None
+            self.vocab_size = 201088  # GPT-OSS vocab size
+            self.n_layers = 32  # Default layer count
+            self.head_dim = 64  # hidden_size // num_attention_heads = 2048 // 32
+            self.rope_theta = 10000.0
+            self.rope_scaling = None
+        else:
+            # Load HF config to get model parameters
+            self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+            logger.debug(f"HF config: {self.hf_config}")
 
-        # Set key attributes that tt_transformers expects
-        self.vocab_size = self.hf_config.vocab_size
-        self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
-        self.head_dim = self.hf_config.hidden_size // self.hf_config.num_attention_heads
-        self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
-        self.rope_scaling = None  # Keep simple like original GPT-OSS
+            # Set key attributes that tt_transformers expects
+            self.vocab_size = self.hf_config.vocab_size
+            self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
+            self.head_dim = self.hf_config.hidden_size // self.hf_config.num_attention_heads
+            self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
+            self.rope_scaling = None  # Keep simple like original GPT-OSS
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 2048  # Standard chunk size for prefill
-        self.model_name = "GPT-OSS"  # Model identifier
+        self.model_name = "GPT-OSS-120B" if "GPT-OSS-120B" in self.model_path else "GPT-OSS-20B"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
-        # Load tokenizer
-        self.tokenizer = load_tokenizer(self.weights_path)
-        self.processor = None  # GPT-OSS doesn't use vision processor
+        if self.dummy_weights:
+            # Skip tokenizer loading for testing
+            self.tokenizer = None
+            self.processor = None
+        else:
+            # Load tokenizer
+            self.tokenizer = load_tokenizer(self.weights_path)
+            self.processor = None  # GPT-OSS doesn't use vision processor
 
-        # Add meta-compatible stop token list to the HF tokenizer (like tt_transformers does)
-        if not "stop_tokens" in self.tokenizer.__dict__:
-            self.tokenizer.stop_tokens = [self.tokenizer.eos_token_id]
-            # Add common stop tokens for GPT-OSS
-            if hasattr(self.tokenizer, "encode"):
-                try:
-                    # Try to add <|eot_id|> if it exists (common in instruction models)
-                    eot_tokens = self.tokenizer.encode("<|eot_id|>", add_special_tokens=False)
-                    if eot_tokens:
-                        self.tokenizer.stop_tokens.extend(eot_tokens)
-                except:
-                    pass  # Not all tokenizers have <|eot_id|>
+            # Add meta-compatible stop token list to the HF tokenizer (like tt_transformers does)
+            if not "stop_tokens" in self.tokenizer.__dict__:
+                self.tokenizer.stop_tokens = [self.tokenizer.eos_token_id]
+                # Add common stop tokens for GPT-OSS
+                if hasattr(self.tokenizer, "encode"):
+                    try:
+                        # Try to add <|eot_id|> if it exists (common in instruction models)
+                        eot_tokens = self.tokenizer.encode("<|eot_id|>", add_special_tokens=False)
+                        if eot_tokens:
+                            self.tokenizer.stop_tokens.extend(eot_tokens)
+                    except:
+                        pass  # Not all tokenizers have <|eot_id|>
 
     def encode_prompt(self, prompt_text, instruct=True, system_prompt_text=None):
         """
@@ -121,7 +138,7 @@ class ModelArgs:
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
-        cache_dir = Path("/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS")
+        cache_dir = Path(self.model_path)  # Use same directory as model
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
 
         if self.instruct:

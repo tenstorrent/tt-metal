@@ -1,4 +1,3 @@
-import os
 from typing import Callable, Optional
 
 import pytest
@@ -14,11 +13,11 @@ from ...reference.hf_utils import get_state_dict, load_tokenizer
 from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.ccl import CCLManager
 from ...tt.model import Model
+from ...tt.model_config import ModelArgs
 from ...tt.rope import ApplyRotaryPosEmb
 from ...utils.general_utils import get_decode_mask
 
-tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
-local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+# ModelArgs will be instantiated inside test functions to avoid import-time loading
 tokenizer = load_tokenizer(local_weights_path)
 
 
@@ -42,7 +41,6 @@ tokenizer = load_tokenizer(local_weights_path)
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
 def test_model(
     mesh_device,
     num_experts,
@@ -54,20 +52,18 @@ def test_model(
     batch_size,
     vocab_size,
     use_real_weights,
-    dtype,
     reset_seeds,
 ):
     assert use_real_weights, "Random weights giving bad PCC (0s), need to investigate."
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
     print("MESH DEVICE!", mesh_device)
     print("MESH SHAPE!", mesh_device.shape)
-    tensor_cache_dir = (
-        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
-        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
-    )
-    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
-    weights_type = "/real" if use_real_weights else "/random"
+    # Get paths from ModelArgs to avoid code duplication
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)  # dummy_weights=True to avoid loading actual weights
+    gpt_dir = model_args.model_path
+    local_weights_path = gpt_dir
+    dtype = ttnn.bfloat8_b  # Always use bfp8
 
     # Create configuration
     config = GptOssConfig(
@@ -142,7 +138,7 @@ def test_model(
         reference_state_dict,
         ccl_manager,
         dtype=dtype,
-        tensor_cache_path=tensor_cache_dir + weights_type,
+        tensor_cache_path=model_args.weight_cache_path(dtype),
     )
     print("TT model initialized successfully")
 

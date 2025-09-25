@@ -282,7 +282,9 @@ class SparseExperts(Experts):
 
         routing_weights_rm = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
         output_tile = ttnn.Tile([32, 32])
-
+        # print("routing_weights_rm", routing_weights_rm)
+        # routing_weights_torch = ttnn.to_torch(routing_weights_rm, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=(1, 8)))
+        # print("routing_weights_torch", routing_weights_torch[0, 0, :, :])
         # [batch_size, seq_len, 1, hidden_size]
         gate = ttnn.sparse_matmul(
             hidden_states_4D,

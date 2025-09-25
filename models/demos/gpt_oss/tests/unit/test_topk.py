@@ -1,5 +1,3 @@
-import os
-
 import pytest
 import torch
 import torch.nn as nn
@@ -12,7 +10,7 @@ from ...reference.configuration_gpt_oss import GptOssConfig
 from ...reference.hf_utils import get_state_dict
 from ...tt.topk import TopKRouter, topk_router
 
-local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+# ModelArgs will be instantiated inside test functions to avoid import-time loading
 
 
 def reference_topk(g, experts_per_token):

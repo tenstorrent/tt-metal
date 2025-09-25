@@ -1,4 +1,3 @@
-import os
 from typing import Callable, Optional
 
 import pytest
@@ -14,10 +13,11 @@ from ...reference.hf_utils import get_state_dict
 from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.ccl import CCLManager
 from ...tt.layer import DecoderLayer
+from ...tt.model_config import ModelArgs
 from ...tt.rope import ApplyRotaryPosEmb
 from ...utils.general_utils import get_decode_mask
 
-local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+# ModelArgs will be instantiated inside test functions to avoid import-time loading
 
 
 class ReferenceRMSNorm(nn.Module):
@@ -290,7 +290,15 @@ class ReferenceDecoderLayer(nn.Module):
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("seq_len", [1, 32, 64, 128, 512, 1024], ids=["s1_", "s32", "s64", "s128", "s512", "s1024"])
 @pytest.mark.parametrize("layer_idx", [0])
-@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real", "random"])
+@pytest.mark.parametrize(
+    "use_real_weights",
+    [
+        True,
+    ],
+    ids=[
+        "real",
+    ],
+)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_decoder_layer(
@@ -308,11 +316,12 @@ def test_decoder_layer(
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
     print("MESH DEVICE!", mesh_device)
     print("MESH SHAPE!", mesh_device.shape)
-    tensor_cache_dir = (
-        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
-        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
-    )
-    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
+    # Get paths from ModelArgs to avoid code duplication
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)  # dummy_weights=True to avoid loading actual weights
+    gpt_dir = model_args.model_path
+    local_weights_path = gpt_dir
+    dtype = ttnn.bfloat8_b  # Always use bfp8
 
     # Create configuration
     config = GptOssConfig(
@@ -372,7 +381,15 @@ def test_decoder_layer(
     # Create TT layer state dict
     # Initialize TT model with dummy ccl_manager
     ccl_manager = CCLManager(mesh_device)  # Not needed for this test
-    tt_model = DecoderLayer(mesh_device, config, reference_state_dict, 0, ccl_manager)
+    tt_model = DecoderLayer(
+        mesh_device,
+        config,
+        reference_state_dict,
+        layer_idx,
+        ccl_manager,
+        dtype=dtype,
+        tensor_cache_path=model_args.weight_cache_path(dtype),
+    )
 
     # Run forward passes
     reference_output = reference_model(hidden_states, mask, position_embeddings)

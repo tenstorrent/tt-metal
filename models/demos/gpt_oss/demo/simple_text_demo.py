@@ -99,15 +99,15 @@ def prepare_gpt_oss_generator_args(
 )
 def test_gpt_oss_demo(mesh_device):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
-    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
 
     # Data parallel configuration (can be adjusted for testing)
-    data_parallel = 4  # Set to > 1 to test data parallel (e.g., 2, 4, 8)
+    data_parallel = 1  # Set to > 1 to test data parallel (e.g., 2, 4, 8)
     batch_size = 1  # Batch size per data parallel group
-    repeat_batches = 2  # Number of consecutive batches to run
+    repeat_batches = 1  # Number of consecutive batches to run
     paged_attention = True
     global_batch_size = batch_size * data_parallel  # Total batch across all devices
 
@@ -121,7 +121,7 @@ def test_gpt_oss_demo(mesh_device):
 
     page_params = {
         "page_block_size": 64,
-        "page_max_num_blocks_per_dp": 1024 // 64,  # Total blocks available per data parallel unit
+        "page_max_num_blocks_per_dp": max_seq_len // 64,  # Total blocks available per data parallel unit
     }
 
     sampling_params = {

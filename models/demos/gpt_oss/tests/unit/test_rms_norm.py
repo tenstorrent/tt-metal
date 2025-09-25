@@ -6,8 +6,11 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssRMSNorm
+from models.demos.gpt_oss.tt.model_config import ModelArgs
 from models.demos.gpt_oss.tt.rms_norm import RMSNorm
 from tests.ttnn.utils_for_testing import comp_pcc
+
+# ModelArgs will be instantiated inside test functions to avoid import-time loading
 
 
 @pytest.fixture
@@ -56,11 +59,10 @@ def test_rms_norm(
 ):
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
     print(mesh_device.shape)
-    tensor_cache_dir = (
-        os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
-        + f"/ttnn_cache_{mesh_device.shape[0]}_{mesh_device.shape[1]}"
-    )
-    local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
+
+    # Get paths from ModelArgs to avoid code duplication
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)  # dummy_weights=True to avoid loading actual weights
+    gpt_dir = model_args.model_path
 
     torch.manual_seed(0)
     mesh_shape = tuple(mesh_device.shape)
