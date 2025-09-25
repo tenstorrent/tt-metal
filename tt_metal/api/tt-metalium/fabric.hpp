@@ -72,12 +72,12 @@ void append_fabric_connection_rt_args(
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
-    CoreType core_type = CoreType::WORKER,
-    const std::vector<uint32_t>& connection_link_indices = std::vector<uint32_t>{});
+    CoreType core_type = CoreType::WORKER);
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
