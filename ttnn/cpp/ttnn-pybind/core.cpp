@@ -76,7 +76,7 @@ void py_module(py::module& module) {
                     sci_mode_enum = sci_mode.cast<bool>() ? tt::tt_metal::tensor_impl::SciMode::Enable
                                                           : tt::tt_metal::tensor_impl::SciMode::Disable;
                 } else if (py::isinstance<py::str>(sci_mode)) {
-                    auto cmp = [](const auto a, const auto b) -> bool {
+                    auto cmp = [](const auto& a, const auto& b) -> bool {
                         return ttsl::ascii_caseless_comp(std::string_view(a), std::string_view(b));
                     };
                     const std::string sci_mode_str = sci_mode.cast<std::string>();
