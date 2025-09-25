@@ -217,7 +217,7 @@ class TtnnOBB:
         # Simple fix: Scale and shift to match PyTorch sigmoid input range
         # PyTorch range: min=-21, max=1.98, mean=-13.6
         # Let's add bias to bring mean closer to reasonable sigmoid range
-        temperature = 3  # experiment with values like 1.5, 2.0, etc.
+        temperature = 2  # experiment with values like 1.5, 2.0, etc.
         yb = ttnn.multiply(yb, 1 / temperature)
 
         print(f"🔍 [DEBUG] Applying bias correction...")
