@@ -349,11 +349,11 @@ def all_devices(request, device_params):
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
-def reset_fabric(fabric_config, reliability_mode):
+def reset_fabric(fabric_config):
     import ttnn
 
     if fabric_config:
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED, reliability_mode)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # Set fabric config to passed in value
@@ -440,7 +440,7 @@ def mesh_device(request, silicon_arch_name, device_params):
         ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config, reliability_mode)
+    reset_fabric(fabric_config)
     del mesh_device
 
 
