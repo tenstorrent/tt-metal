@@ -2298,7 +2298,7 @@ private:
 public:
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
 
-    uint32_t get_noc_id() const { return noc_id_; }
+    uint8_t get_noc_id() const { return noc_id_; }
 
     template <
         typename Src,
