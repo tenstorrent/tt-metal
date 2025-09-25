@@ -12,6 +12,8 @@
 #include <variant>
 #include <vector>
 
+#include "base_types.hpp"
+#include "circular_buffer_constants.h"
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -160,7 +162,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
 
     // Create specially configured unpack_to_dest_mode
     ComputeConfig config_fp32(config_default);
-    config_fp32.unpack_to_dest_mode[0] = UnpackToDestMode::UnpackToDestFp32;  // Change CB 0 to FP32 mode
+    config_fp32.unpack_to_dest_mode.push_back(UnpackToDestMode::UnpackToDestFp32);  // Change CB 0 to FP32 mode
 
     // Create programs (needed for kernel creation context)
     auto program_default = CreateProgram();
