@@ -208,6 +208,13 @@ class TtnnOBB:
         
         # Process class predictions - transpose to [batch, 15, N] for concat
         yb = ttnn.permute(yb, (0, 2, 1))  # [batch, H*W, 15] -> [batch, 15, H*W]
+        
+        # Debug: Check raw values before sigmoid
+        yb_debug = ttnn.to_torch(yb)
+        print(f"🔍 [DEBUG] Raw yb before sigmoid - shape: {yb_debug.shape}")
+        print(f"🔍 [DEBUG] Raw yb stats: min={yb_debug.min():.6f}, max={yb_debug.max():.6f}, mean={yb_debug.mean():.6f}")
+        print(f"🔍 [DEBUG] Raw yb sample values: {yb_debug[0, 0, :10].tolist()}")
+        
         yb = ttnn.sigmoid(yb)
         
         # Process angle predictions - reshape and concat to get [batch, 1, N]

@@ -1160,6 +1160,12 @@ class OBB(nn.Module):
         z2 = z2 / 2
         z = torch.concat((z2, z1), 1)
         z = z * strides
+        
+        # Debug: Check raw values before sigmoid
+        print(f"🔍 [DEBUG] PyTorch raw yb before sigmoid - shape: {yb.shape}")
+        print(f"🔍 [DEBUG] PyTorch raw yb stats: min={yb.min():.6f}, max={yb.max():.6f}, mean={yb.mean():.6f}")
+        print(f"🔍 [DEBUG] PyTorch raw yb sample values: {yb[0, :, :10].tolist()}")
+        
         yb = torch.sigmoid(yb)
 
         # Process angle predictions from cv4
