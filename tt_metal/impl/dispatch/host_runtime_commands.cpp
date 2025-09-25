@@ -4,7 +4,7 @@
 
 #include "host_runtime_commands.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <event.hpp>
 #include <host_api.hpp>
