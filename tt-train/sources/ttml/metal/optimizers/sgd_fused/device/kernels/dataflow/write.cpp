@@ -39,18 +39,23 @@ void kernel_main() {
     constexpr auto momentum_output_args = TensorAccessorArgs<param_out_args.next_compile_time_args_offset()>();
 
     const auto param_out_addr_generator = TensorAccessor(param_out_args, param_out_addr, tile_size_bytes);
+#ifdef USE_MOMENTUM
     const auto momentum_out_addr_generator = TensorAccessor(momentum_output_args, momentum_out_addr, tile_size_bytes);
-
+#endif
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t start_idx = (r * Wt) + c;
 
+#if USE_MOMENTUM
             write_cb_block_to_dram(
                 cb_momentum_to_dram_idx, momentum_out_addr_generator, start_idx, block_size, tile_size_bytes);
+#endif
             write_cb_block_to_dram(cb_param_out_idx, param_out_addr_generator, start_idx, block_size, tile_size_bytes);
             noc_async_write_barrier();
+#if USE_MOMENTUM
             cb_pop_front(cb_momentum_to_dram_idx, block_size);
+#endif
             cb_pop_front(cb_param_out_idx, block_size);
         }
     }
