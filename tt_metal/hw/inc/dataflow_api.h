@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <stdint.h>
+#include <tuple>
+#include <utility>
 
 #include "dataflow_api_addrgen.h"
 #include "core_config.h"
@@ -2263,3 +2265,134 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     invalidate_l1_cache();
     WAYPOINT("NWTD");
 }
+
+namespace experimental {
+
+template <typename T>
+struct noc_traits_t;
+
+class Noc {
+private:
+    template <typename T>
+    using src_args_t = typename noc_traits_t<T>::src_args_type;
+    template <typename T>
+    using dst_args_t = typename noc_traits_t<T>::dst_args_type;
+
+    template <typename Src>
+    auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
+        return std::apply(
+            [&](auto&&... args) {
+                return noc_traits_t<Src>::src_addr(src, *this, std::forward<decltype(args)>(args)...);
+            },
+            src_args);
+    }
+    template <typename Dst>
+    auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
+        return std::apply(
+            [&](auto&&... args) {
+                return noc_traits_t<Dst>::dst_addr(dst, *this, std::forward<decltype(args)>(args)...);
+            },
+            dst_args);
+    }
+
+public:
+    explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
+
+    uint32_t get_noc_id() const { return noc_id_; }
+
+    template <
+        typename Src,
+        typename Dst,
+        uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
+        bool enable_noc_tracing = true>
+    void async_read(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args,
+        uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
+        uint64_t src_noc_addr{get_src_ptr(src, src_args)};
+        uint32_t dst_local_l1_addr{get_dst_ptr(dst, dst_args)};
+        noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size, noc_id_, read_req_vc);
+    }
+
+    template <
+        typename Src,
+        typename Dst,
+        uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
+        bool enable_noc_tracing = true>
+    void async_write(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args,
+        uint32_t vc = NOC_UNICAST_WRITE_VC) const {
+        uint32_t src_local_l1_addr{get_src_ptr(src, src_args)};
+        uint64_t dst_noc_addr{get_dst_ptr(dst, dst_args)};
+        noc_async_write<max_page_size, enable_noc_tracing>(src_local_l1_addr, dst_noc_addr, size, noc_id_, vc);
+    }
+
+    void async_read_barrier() const { noc_async_read_barrier(noc_id_); }
+
+    void async_write_barrier() const { noc_async_write_barrier(noc_id_); }
+
+private:
+    uint8_t noc_id_;
+};
+
+class CircularBuffer {
+public:
+    explicit CircularBuffer(uint32_t cb_id) : cb_id_(cb_id) {}
+
+    uint32_t get_cb_id() const { return cb_id_; }
+#ifdef DATA_FORMATS_DEFINED
+    uint32_t get_tile_size() const { return ::get_tile_size(cb_id_); }
+#endif
+
+    void reserve_back(int32_t num_pages) { cb_reserve_back(cb_id_, num_pages); }
+
+    void push_back(int32_t num_pages) { cb_push_back(cb_id_, num_pages); }
+
+    void wait_front(int32_t num_pages) { cb_wait_front(cb_id_, num_pages); }
+
+    void pop_front(int32_t num_pages) { cb_pop_front(cb_id_, num_pages); }
+
+    uint32_t get_write_ptr() const {
+        // return byte address (fifo_wr_ptr is 16B address)
+        uint32_t wr_ptr_bytes = get_local_cb_interface(cb_id_).fifo_wr_ptr;
+        return wr_ptr_bytes;
+    }
+
+    uint32_t get_read_ptr() const {
+        // return byte address (fifo_rd_ptr is 16B address)
+        uint32_t rd_ptr_bytes = get_local_cb_interface(cb_id_).fifo_rd_ptr;
+        return rd_ptr_bytes;
+    }
+
+private:
+    uint32_t cb_id_;
+};
+
+template <>
+struct noc_traits_t<CircularBuffer> {
+    using src_args_type = std::tuple<>;
+    using dst_args_type = std::tuple<>;
+    static auto src_addr(const CircularBuffer& src, const Noc&) { return src.get_read_ptr(); }
+    static auto dst_addr(const CircularBuffer& dst, const Noc&) { return dst.get_write_ptr(); }
+};
+
+template <typename DSpecT>
+struct noc_traits_t<TensorAccessor<DSpecT>> {
+    using src_args_type = std::tuple<uint32_t, uint32_t>;
+    using dst_args_type = std::tuple<uint32_t, uint32_t>;
+    static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, uint32_t page_id, uint32_t offset) {
+        return src.get_noc_addr(page_id, offset, noc.get_noc_id());
+    }
+    static auto dst_addr(const TensorAccessor<DSpecT>& dst, const Noc& noc, uint32_t page_id, uint32_t offset) {
+        return dst.get_noc_addr(page_id, offset, noc.get_noc_id());
+    }
+};
+
+}  // namespace experimental
