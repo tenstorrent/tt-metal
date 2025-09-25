@@ -242,10 +242,9 @@ class TtnnOBB:
             count = mask.sum()
             print(f"    [{low}, {high}): {count} values")
         
-        # Conservative bias correction with improved math precision
-        # Now that we're using HiFi math + float32 accumulation, 
-        # we should have much better spatial features
-        bias_correction = 8.0  # Modest correction
+        # With bfloat16 precision, we should have much better value distribution
+        # Apply modest bias correction to improve sigmoid range
+        bias_correction = 10.0  # Conservative correction
         yb = ttnn.add(yb, bias_correction)
 
         # Debug: Check values after bias correction
