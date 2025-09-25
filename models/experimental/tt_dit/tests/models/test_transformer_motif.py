@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import huggingface_hub
 import pytest
 import torch
 import ttnn
@@ -40,7 +41,12 @@ def test_transformer_motif(
     num_links: int,
     batch_size: int,
 ) -> None:
-    model_path = "motif_image_preview.bin"
+    model_checkpoint_path = huggingface_hub.hf_hub_download(
+        repo_id="Motif-Technologies/Motif-Image-6B-Preview",
+        filename="motif_image_preview.bin",
+        subfolder="checkpoints",
+        revision="update_new_ckpt",
+    )
 
     # checkpoint config
     modulation_dim = 4096  # new parameter (corresponds to hidden_dim in SD3 large in some places)
@@ -135,7 +141,7 @@ def test_transformer_motif(
     )
 
     logger.info("loading state dict...")
-    state_dict = torch.load(model_path, map_location=torch.device("cpu"), mmap=True)
+    state_dict = torch.load(model_checkpoint_path, map_location=torch.device("cpu"), mmap=True)
     state_dict = substate(state_dict, "dit")
 
     logger.info("loading state dict into Torch model...")
