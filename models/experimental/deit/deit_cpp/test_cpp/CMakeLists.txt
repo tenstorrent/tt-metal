@@ -4,13 +4,22 @@
 
 cmake_minimum_required(VERSION 3.16)
 
-# Include directories
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../../)
+# Common include directories
+set(COMMON_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/../
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../
+)
 
 # Common variables
-set(COMMON_LIBRARIES
+set(COMMON_LIBRARIES_BASIC
+    ${TORCH_LIBRARIES}
+    ttnncpp
+    tt_metal
+    pthread
+)
+
+set(COMMON_LIBRARIES_WITH_OPENCV
     ${TORCH_LIBRARIES}
     ${OpenCV_LIBS}
     ttnncpp
@@ -27,10 +36,9 @@ set(COMMON_COMPILE_OPTIONS
     -Wno-error
 )
 
-set(HELPER_FUNCS ../helper_funcs.cpp)
 
-# Function to create a test executable with common settings
-function(add_deit_test TARGET_NAME MAIN_SOURCE)
+# Function to create a test executable with helper_funcs.cpp only
+function(add_deit_basic_test TARGET_NAME MAIN_SOURCE)
     # Get additional source files from ARGN (remaining arguments)
     set(ADDITIONAL_SOURCES ${ARGN})
 
@@ -39,11 +47,60 @@ function(add_deit_test TARGET_NAME MAIN_SOURCE)
         ${TARGET_NAME}
         ${MAIN_SOURCE}
         ${ADDITIONAL_SOURCES}
-        ${HELPER_FUNCS}
+        ../helper_funcs.cpp
     )
 
     # Link libraries
-    target_link_libraries(${TARGET_NAME} ${COMMON_LIBRARIES})
+    target_link_libraries(${TARGET_NAME} ${COMMON_LIBRARIES_BASIC})
+
+    # Set include directories
+    target_include_directories(${TARGET_NAME} PRIVATE 
+        ${COMMON_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+        ${libtorch_SOURCE_DIR}/include
+        ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
+
+    # Set C++ standard
+    set_target_properties(
+        ${TARGET_NAME}
+        PROPERTIES
+            CXX_STANDARD
+                17
+            CXX_STANDARD_REQUIRED
+                ON
+    )
+
+    # Set compiler options
+    target_compile_options(${TARGET_NAME} PRIVATE ${COMMON_COMPILE_OPTIONS})
+endfunction()
+
+# Function to create a test executable with both helper_funcs.cpp and image_utils.cpp
+function(add_deit_image_test TARGET_NAME MAIN_SOURCE)
+    # Get additional source files from ARGN (remaining arguments)
+    set(ADDITIONAL_SOURCES ${ARGN})
+
+    # Add executable
+    add_executable(
+        ${TARGET_NAME}
+        ${MAIN_SOURCE}
+        ${ADDITIONAL_SOURCES}
+        ../helper_funcs.cpp
+        ../image_utils.cpp
+    )
+
+    # Link libraries
+    target_link_libraries(${TARGET_NAME} ${COMMON_LIBRARIES_WITH_OPENCV})
+
+    # Set include directories
+    target_include_directories(${TARGET_NAME} PRIVATE 
+        ${COMMON_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+        ${libtorch_SOURCE_DIR}/include
+        ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
+        ${OpenCV_INCLUDE_DIRS}
+    )
 
     # Set C++ standard
     set_target_properties(
@@ -91,21 +148,23 @@ set(MODEL_SOURCES
     ${TT_CPP_DIR}/deit_pooler.cpp
 )
 
-# Create all test executables
-add_deit_test(test_deit_self_attention test_deit_self_attention.cpp ${SELF_ATTENTION_SOURCES})
-add_deit_test(test_deit_self_output test_deit_self_output.cpp ${TT_CPP_DIR}/deit_self_output.cpp)
-add_deit_test(test_deit_attention test_deit_attention.cpp ${ATTENTION_SOURCES})
-add_deit_test(test_deit_patch_embeddings test_deit_patch_embeddings.cpp ${TT_CPP_DIR}/deit_patch_embeddings.cpp)
-add_deit_test(test_deit_embeddings test_deit_embeddings.cpp ${EMBEDDINGS_SOURCES})
-add_deit_test(test_deit_intermediate test_deit_intermediate.cpp ${TT_CPP_DIR}/deit_intermediate.cpp)
-add_deit_test(test_deit_output test_deit_output.cpp ${TT_CPP_DIR}/deit_output.cpp)
-add_deit_test(test_deit_layer test_deit_layer.cpp ${LAYER_SOURCES})
-add_deit_test(test_deit_encoder test_deit_encoder.cpp ${ENCODER_SOURCES})
-add_deit_test(test_deit_model test_deit_model.cpp ${MODEL_SOURCES})
-add_deit_test(test_deit_for_image_classification test_deit_for_image_classification.cpp ${MODEL_SOURCES})
-add_deit_test(test_deit_for_image_classification_with_teacher test_deit_for_image_classification_with_teacher.cpp
+# Create all test executables using basic test function (helper_funcs.cpp only)
+add_deit_basic_test(test_deit_self_attention test_deit_self_attention.cpp ${SELF_ATTENTION_SOURCES})
+add_deit_basic_test(test_deit_self_output test_deit_self_output.cpp ${TT_CPP_DIR}/deit_self_output.cpp)
+add_deit_basic_test(test_deit_attention test_deit_attention.cpp ${ATTENTION_SOURCES})
+add_deit_basic_test(test_deit_patch_embeddings test_deit_patch_embeddings.cpp ${TT_CPP_DIR}/deit_patch_embeddings.cpp)
+add_deit_basic_test(test_deit_embeddings test_deit_embeddings.cpp ${EMBEDDINGS_SOURCES})
+add_deit_basic_test(test_deit_intermediate test_deit_intermediate.cpp ${TT_CPP_DIR}/deit_intermediate.cpp)
+add_deit_basic_test(test_deit_output test_deit_output.cpp ${TT_CPP_DIR}/deit_output.cpp)
+add_deit_basic_test(test_deit_layer test_deit_layer.cpp ${LAYER_SOURCES})
+add_deit_basic_test(test_deit_encoder test_deit_encoder.cpp ${ENCODER_SOURCES})
+add_deit_basic_test(test_deit_model test_deit_model.cpp ${MODEL_SOURCES})
+
+# Create image classification test executables (helper_funcs.cpp + image_utils.cpp)
+add_deit_image_test(test_deit_for_image_classification test_deit_for_image_classification.cpp ${MODEL_SOURCES})
+add_deit_image_test(test_deit_for_image_classification_with_teacher test_deit_for_image_classification_with_teacher.cpp
     ${TT_CPP_DIR}/deit_for_image_classification_with_teacher.cpp ${MODEL_SOURCES}
 )
 
 # Add simple device test
-add_deit_test(test_device test_device.cpp)
+add_deit_basic_test(test_device test_device.cpp)

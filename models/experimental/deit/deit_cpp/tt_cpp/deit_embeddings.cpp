@@ -65,9 +65,8 @@ torch::Tensor TtDeiTEmbeddings::forward(
     // Get patch embeddings
     auto embeddings = patch_embeddings_->forward(pixel_values);
 
-    // Get batch size and sequence length
+    // Get batch size
     auto batch_size = embeddings.size(0);
-    auto seq_length = embeddings.size(1);
 
     // Apply mask if provided
     if (bool_masked_pos != nullptr && use_mask_token_) {

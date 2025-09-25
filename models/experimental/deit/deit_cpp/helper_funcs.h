@@ -120,15 +120,6 @@ ttnn::Tensor apply_layernorm(
     float eps = 1e-5
 );
 
-/**
- * Load and preprocess an image for DeiT inference
- * Mimics the functionality of AutoImageProcessor from transformers
- * @param image_path Path to the image file
- * @return Preprocessed image tensor [1, 3, 224, 224] ready for DeiT inference
- */
-torch::Tensor load_and_preprocess_image(
-    const std::string& image_path
-);
 
 /**
  * Compute Pearson Correlation Coefficient (PCC) between two tensors
