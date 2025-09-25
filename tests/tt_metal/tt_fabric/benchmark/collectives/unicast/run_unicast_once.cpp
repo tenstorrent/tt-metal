@@ -270,41 +270,41 @@ Notes:
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // --- Mesh trace capture & replay ---
-    namespace MD = tt::tt_metal::distributed;
-    auto md = fixture->get_mesh_device();
-    auto view = md->get_view();
+    namespace Dist = tt::tt_metal::distributed;
+    auto mesh = fixture->get_mesh_device();
+    auto view = mesh->get_view();
 
-    auto coord_of_phys = [&](chip_id_t phys) -> MD::MeshCoordinate {
-        for (const auto& c : MD::MeshCoordinateRange(view.shape())) {
+    auto coord_of_phys = [&](chip_id_t phys) -> Dist::MeshCoordinate {
+        for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
             if (view.get_device(c)->id() == phys) {
                 return c;
             }
         }
         TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phys);
-        return MD::MeshCoordinate(0);
+        return Dist::MeshCoordinate(0);
     };
-    MD::MeshCoordinate src_coord = coord_of_phys(src_phys);
-    MD::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+    Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
+    Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
-    auto mesh_workload = MD::CreateMeshWorkload();
-    MD::AddProgramToMeshWorkload(mesh_workload, std::move(sender_prog), MD::MeshCoordinateRange(src_coord));
-    MD::AddProgramToMeshWorkload(mesh_workload, std::move(receiver_prog), MD::MeshCoordinateRange(dst_coord));
+    auto mesh_workload = Dist::CreateMeshWorkload();
+    Dist::AddProgramToMeshWorkload(mesh_workload, std::move(sender_prog), Dist::MeshCoordinateRange(src_coord));
+    Dist::AddProgramToMeshWorkload(mesh_workload, std::move(receiver_prog), Dist::MeshCoordinateRange(dst_coord));
 
-    auto& mcq = md->mesh_command_queue();
+    auto& mcq = mesh->mesh_command_queue();
     // 1) Warm-up outside capture so loads/routes happen before tracing
-    MD::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/true);
+    Dist::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/true);
     // 2) Capture p.trace_iters enqueues back-to-back
-    auto trace_id = MD::BeginTraceCapture(md.get(), mcq.id());
+    auto trace_id = Dist::BeginTraceCapture(mesh.get(), mcq.id());
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
-        MD::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/false);
+        Dist::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/false);
     }
-    MD::EndTraceCapture(md.get(), mcq.id(), trace_id);
+    Dist::EndTraceCapture(mesh.get(), mcq.id(), trace_id);
     // 3) Replay measured section
     auto t0 = std::chrono::steady_clock::now();
-    MD::ReplayTrace(md.get(), mcq.id(), trace_id, /*blocking=*/false);
-    MD::Finish(mcq);
+    Dist::ReplayTrace(mesh.get(), mcq.id(), trace_id, /*blocking=*/false);
+    Dist::Finish(mcq);
     auto t1 = std::chrono::steady_clock::now();
-    MD::ReleaseTrace(md.get(), trace_id);
+    Dist::ReleaseTrace(mesh.get(), trace_id);
 
     // Read back and verify
     tt::tt_metal::Finish(cq_dst);
