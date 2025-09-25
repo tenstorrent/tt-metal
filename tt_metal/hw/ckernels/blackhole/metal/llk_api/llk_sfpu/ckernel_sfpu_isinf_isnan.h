@@ -46,6 +46,13 @@ inline void calculate_isinf() {
     }
 }
 
+/* Checks if the sign bit of the floating point number in DEST
+is positive. Checks if the exponent is 128 and mantissa is 0.
+If all of the three conditions are met, the number is marked as
+positive infinity, so '1' is written in the location of the DEST
+where the number was stored. Otherwise, `0` is written instead
+of the number.
+*/
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isposinf() {
     // SFPU microcode
@@ -62,6 +69,13 @@ inline void calculate_isposinf() {
     }
 }
 
+/* Checks if the sign bit of the floating point number in DEST
+is negative. Checks if the exponent is 128 and mantissa is 0.
+If all of the three conditions are met, the number is marked as
+negative infinity, so '1' is written in the location of the DEST
+where the number was stored. Otherwise, `0` is written instead
+of the number.
+*/
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isneginf() {
     // SFPU microcode
@@ -78,6 +92,12 @@ inline void calculate_isneginf() {
     }
 }
 
+/* Checks if the exponent is 128 and mantissa is not 0.
+If both conditions are met, the number is marked as
+nan, so '1' is written in the location of the DEST
+where the number was stored. Otherwise, `0` is written instead
+of the number.
+*/
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isnan() {
     // SFPU microcode
