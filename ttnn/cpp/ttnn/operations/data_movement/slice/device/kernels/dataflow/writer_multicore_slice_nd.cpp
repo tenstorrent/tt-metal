@@ -88,8 +88,9 @@ void kernel_main() {
 
         // Write the complete row to output tensor
         noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
 
         cb_pop_front(cb_id_in, 1);
     }
+    noc_async_write_barrier();
 }
