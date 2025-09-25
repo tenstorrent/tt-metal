@@ -247,7 +247,7 @@ class TtnnOBB:
         # Target: Map to sigmoid effective range [-4, +4]
         
         # Step 1: Shift center to ~0 (add +15 to get range [-2.75, +2.375])
-        bias_correction = 15.0  
+        bias_correction = 12.0  
         yb = ttnn.add(yb, bias_correction)
         
         # Step 2: Scale to spread the quantized values across sigmoid range
