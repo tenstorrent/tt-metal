@@ -39,21 +39,27 @@ def track_input_output(_tensor_io_log):
     return _track_input_output
 
 
+def get_tensors_from_shape_dtype_minmax(shape, dtype, min_max):
+    if len(shape) == 1 and shape[0] == 0:
+        return torch.tensor([], dtype=dtype)
+    if torch.is_floating_point(torch.empty((), dtype=dtype)):
+        # torch.randn does not support min/max, so use uniform_ after creation
+        t = torch.randn(*shape, dtype=dtype)
+        t = t * (min_max[1] - min_max[0]) + min_max[0]
+    else:
+        # torch.randint's high is exclusive, so add 1 if min==max
+        low, high = min_max
+        if high == low:
+            high = low + 1
+        t = torch.randint(low, high, shape, dtype=dtype)
+    return t
+
+
 def get_tensors_from_input_spec(input_specs):
     tensors = []
     for shape, dtype_str, min_max in input_specs:
         dtype = getattr(torch, dtype_str.split(".")[1])
-        if torch.is_floating_point(torch.empty((), dtype=dtype)):
-            # torch.randn does not support min/max, so use uniform_ after creation
-            t = torch.randn(*shape, dtype=dtype)
-            t = t * (min_max[1] - min_max[0]) + min_max[0]
-        else:
-            # torch.randint's high is exclusive, so add 1 if min==max
-            low, high = min_max
-            if high == low:
-                high = low + 1
-            t = torch.randint(low, high, shape, dtype=dtype)
-        tensors.append(t)
+        tensors.append(get_tensors_from_shape_dtype_minmax(shape, dtype, min_max))
     return tensors
 
 
@@ -83,17 +89,7 @@ class LazyParams:
             min_max = const_meta["min_max"]
             if self.empty:
                 return torch.empty(*shape, device="meta", dtype=dtype)
-            if torch.is_floating_point(torch.empty((), dtype=dtype)):
-                # torch.randn does not support min/max, so use uniform_ after creation
-                t = torch.randn(*shape, dtype=dtype)
-                t = (t - t.min()) / (t.max() - t.min())
-                t = t * (min_max[1] - min_max[0]) + min_max[0]
-                return t
-            low, high = min_max
-            if high == low:
-                high = low + 1
-            t = torch.randint(int(low), int(high), shape, dtype=dtype)
-            return t
+            return get_tensors_from_shape_dtype_minmax(shape, dtype, min_max)
         return self.data[const_name]
 
     def to_dict(self):

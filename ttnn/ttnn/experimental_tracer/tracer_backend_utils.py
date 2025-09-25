@@ -990,6 +990,14 @@ class AtenDivTensor(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten._safe_softmax")
+class AtenSafeSoftmax(WrappedOperation):
+    """Represents the _safe_softmax operation."""
+
+    pass
+
+
+@dataclass
 class InputOp(Operation):
     """Represents an input operation in the graph."""
 

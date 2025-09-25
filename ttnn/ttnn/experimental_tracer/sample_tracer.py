@@ -41,7 +41,6 @@ allowed_modes = [
     "swin_transformer_v2",
     "open_vla",
     "meta-llama/Llama-2-7b-hf",
-    "Qwen3-Next-80B-A3B-Instruct",
 ]
 
 allowed_dtypes = ["float32", "float64", "int32", "int64", "bfloat16"]
@@ -276,28 +275,11 @@ def main(args_dict):
 
         torch_model = OpenVLA()
     elif args.model == "meta-llama/Llama-2-7b-hf":
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM
 
         model_name = "meta-llama/Llama-2-7b-hf"
         torch_model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
 
-    elif args.model == "Qwen3-Next-80B-A3B-Instruct":
-        # Load model directly
-        from transformers import AutoModelForCausalLM
-
-        torch.fx.experimental._config.meta_nonzero_assume_all_nonzero = True
-
-        class QWEN80B(torch.nn.Module):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.qwen = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-Next-80B-A3B-Instruct")
-                self.qwen.eval()
-
-            def forward(self, input_ids):
-                inputs = {"input_ids": input_ids}
-                return self.qwen.forward(**inputs)
-
-        torch_model = QWEN80B()
     # torch_model = CustomClass()
     torch_model.eval()
     if not args.model == "sentence_bert" and not args.disable_torch_summary:
