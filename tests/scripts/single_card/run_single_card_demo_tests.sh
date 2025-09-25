@@ -57,7 +57,7 @@ run_ds_r1_qwen_func() {
 
   ds_r1_qwen=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
   qwen_cache=$TT_CACHE_HOME/$ds_r1_qwen
-  HF_MODEL=$ds_r1_qwen TT_CACHE_PATH=$qwen_cache MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+  HF_MODEL=$ds_r1_qwen TT_CACHE_PATH=$qwen_cache MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 600
 
 }
 
