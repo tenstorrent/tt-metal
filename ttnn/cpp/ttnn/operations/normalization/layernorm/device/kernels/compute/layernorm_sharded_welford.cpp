@@ -8,6 +8,7 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -15,6 +16,10 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/copy_dest_values.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
+#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/welford.h"
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -35,8 +40,8 @@ void MAIN {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-    constexpr uint32_t W = get_compile_time_arg_val(14);
-    constexpr uint32_t total_width = get_compile_time_arg_val(15);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(14);
+    constexpr uint32_t W = get_compile_time_arg_val(15);
     constexpr uint32_t last_tile_data_width = get_compile_time_arg_val(16);
 
     const uint32_t num_reduce_tiles_per_block_h =
@@ -61,6 +66,11 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
+
+    // Welford destination registers
+    constexpr uint32_t welford_input_dst = 0;
+    constexpr uint32_t welford_mean_dst = 1;
+    constexpr uint32_t welford_var_dst = 2;
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
@@ -141,12 +151,12 @@ void MAIN {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             transpose_wh_tile(cb_x, w + index_h_offset, dst0);
-            welford_tile<in_dst, mean_dst, var_dst, true, 0>(w * tile_width, block_w, 0, {});
+            welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, 0>(w * tile_width, block_w, 0, {});
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(mean_dst, cb_ex_partial);
-        pack_tile(var_dst, cb_ex_partial);
+        pack_tile(welford_mean_dst, cb_ex_partial);
+        pack_tile(welford_var_dst, cb_ex_partial);
         tile_regs_release();
         index_h_offset += block_wt;
     }
@@ -279,26 +289,6 @@ void MAIN {
         }
         cb_push_back(cb_ex, 2 * num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, 2 * num_tiles_per_allgather_worker);
-
-        // Compute 1/sqrt(Var[x] + eps)
-        if (do_sqrt) {
-            cb_wait_front(cb_eps, 1);
-            cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
-            for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-                // Tiles in cb_ex alternate mean, var
-                uint32_t cb_var_tile_idx = 2 * i + 1;
-                tile_regs_acquire();
-                add_tiles_init(cb_ex, cb_eps);
-                add_tiles(cb_ex, cb_eps, cb_var_tile_idx, 0, dst0);
-                rsqrt_tile_init();
-                rsqrt_tile(dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex2pe);
-                tile_regs_release();
-                cb_push_back(cb_ex2pe, 1);
-            }
-        }
     }
 
     // Compute (x - E[x])
