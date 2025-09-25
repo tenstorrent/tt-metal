@@ -405,6 +405,8 @@ jobs:
         uses: mshick/add-pr-comment@v2
         with:
           issue: ${{ steps.get-pr-number.outputs.pr-number }}
+          # using run_id to ensure it's unique for every workflow run
+          message-id: llk-${{ github.run_id }}
           message: |
             ## 🚀 tt-metal post-commit tests
 
