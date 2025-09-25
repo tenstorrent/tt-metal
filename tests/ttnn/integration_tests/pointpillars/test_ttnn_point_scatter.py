@@ -37,16 +37,18 @@ def test_ttnn_point_scatter(device, use_pretrained_weight, reset_seeds):
     reference_model = reference_model.pts_middle_encoder
 
     voxel_features = torch.load(
-        "models/experimental/functional_pointpillars/reference/voxel_features_point_pillars_scatter.pt"
+        "models/experimental/functional_pointpillars/scatter_input_0.pt"
     )  # torch.randn(4352, 64)
     coors = torch.load(
-        "models/experimental/functional_pointpillars/reference/coors_point_pillars_scatter.pt"
-    )  # torch.randn(4352, 4)
-    batch_size = torch.tensor(1, dtype=torch.int32)
+        "models/experimental/functional_pointpillars/scatter_input_1.pt"
+    )  # torch.randn((4352, 4)).to(dtype=torch.int32)
+    batch_size = torch.load(
+        "models/experimental/functional_pointpillars/scatter_input_2.pt"
+    )  # torch.tensor(1, dtype=torch.int32)
 
     ttnn_voxel_features = ttnn.from_torch(voxel_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_batch_size = ttnn.from_torch(batch_size, device=device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)
-    ttnn_coors = ttnn.from_torch(coors, device=device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)
+    ttnn_coors = ttnn.from_torch(coors, device=device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)  # bfloat16
 
     reference_output = reference_model(voxel_features=voxel_features, coors=coors, batch_size=batch_size)
 

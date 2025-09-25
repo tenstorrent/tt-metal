@@ -5,54 +5,8 @@
 import ttnn
 import torch
 
+
 # Giving low pcc
-# class TtPointPillarsScatter:
-#     def __init__(self, in_channels=64, output_shape=[496, 432], device=None):
-#         self.output_shape = output_shape
-#         self.ny = output_shape[0]
-#         self.nx = output_shape[1]
-#         self.in_channels = in_channels
-#         self.fp16_enabled = False
-#         self.device = device
-
-#     def __call__(self, voxel_features, coors, batch_size):
-#         batch_canvas = []
-#         for batch_itt in range(batch_size):
-#             canvas = ttnn.zeros([self.in_channels, self.nx * self.ny], dtype=voxel_features.dtype, device=self.device)
-
-#             # Only include non-empty pillars
-#             batch_mask = coors[:, 0] == batch_itt
-#             this_coors = ttnn.to_torch(coors)[ttnn.to_torch(batch_mask).to(torch.int), :]
-#             this_coors = ttnn.from_torch(this_coors, device=self.device, layout=ttnn.TILE_LAYOUT)
-#             indices = this_coors[:, 2] * self.nx + this_coors[:, 3]
-#             # indices = indices.type(torch.long)
-#             voxels = ttnn.to_torch(voxel_features)[ttnn.to_torch(batch_mask).to(torch.int), :]
-#             voxels = ttnn.from_torch(voxels, device=self.device, layout=ttnn.TILE_LAYOUT)
-#             if len(voxels.shape) == 2:
-#                 voxels = ttnn.permute(voxels, (1, 0))
-#             else:
-#                 assert False, "voxels size is different"
-
-#             canvas = ttnn.to_torch(canvas)
-#             voxels = ttnn.to_torch(voxels)
-#             indices = ttnn.to_torch(indices).to(torch.long)
-#             canvas[:, indices] = voxels
-#             canvas = ttnn.from_torch(canvas, device=self.device, layout=ttnn.TILE_LAYOUT)
-
-#             batch_canvas.append(canvas)
-
-#         # Stack to 3-dim tensor (batch-size, in_channels, nrows*ncols)
-#         if len(batch_canvas) > 1:
-#             batch_canvas = torch.stack(batch_canvas, 0)  # need to convert to ttnn
-#         else:
-#             batch_canvas = batch_canvas[0]
-
-#         # Undo the column stacking to final 4-dim tensor
-#         batch_canvas = ttnn.reshape(batch_canvas, (batch_size, self.in_channels, self.ny, self.nx))
-
-#         return batch_canvas
-
-
 class TtPointPillarsScatter:
     def __init__(self, in_channels=64, output_shape=[496, 432], device=None):
         self.output_shape = output_shape
@@ -63,36 +17,74 @@ class TtPointPillarsScatter:
         self.device = device
 
     def __call__(self, voxel_features, coors, batch_size):
-        voxel_features = ttnn.to_torch(voxel_features)
-        coors = ttnn.to_torch(coors)
-        # batch_canvas will be the final output.
         batch_canvas = []
-        # print("batch_size",batch_size)
-        for batch_itt in range(1):
-            # Create the canvas for this sample
-            canvas = torch.zeros(
-                self.in_channels, self.nx * self.ny, dtype=voxel_features.dtype, device=voxel_features.device
-            )
+        for batch_itt in range(batch_size):
+            canvas = ttnn.zeros([self.in_channels, self.nx * self.ny], dtype=voxel_features.dtype, device=self.device)
 
             # Only include non-empty pillars
+            coors = ttnn.typecast(coors, dtype=ttnn.bfloat16)
             batch_mask = coors[:, 0] == batch_itt
-            this_coors = coors[batch_mask, :]
+
+            batch_mask = ttnn.unsqueeze(batch_mask, 0)
+            batch_mask = ttnn.unsqueeze(batch_mask, 0)
+            batch_mask = ttnn.unsqueeze(batch_mask, 0)
+            batch_mask = ttnn.to_layout(batch_mask, ttnn.ROW_MAJOR_LAYOUT)
+            nonzero_out = ttnn.nonzero(batch_mask)
+
+            row_indices = nonzero_out[1]
+            row_indices = ttnn.reshape(row_indices, (-1,))
+            row_indices = ttnn.to_layout(row_indices, ttnn.TILE_LAYOUT)
+            row_indices = ttnn.typecast(row_indices, dtype=ttnn.uint32)
+            coors = ttnn.typecast(coors, dtype=ttnn.bfloat16)
+            this_coors = ttnn.embedding(row_indices, coors)
+
             indices = this_coors[:, 2] * self.nx + this_coors[:, 3]
-            indices = indices.type(torch.long)
-            voxels = voxel_features[batch_mask, :]
-            voxels = voxels.t()
 
-            # Now scatter the blob back to the canvas.
-            canvas[:, indices] = voxels
+            voxel_features = ttnn.typecast(voxel_features, dtype=ttnn.bfloat16)
+            voxels = ttnn.embedding(row_indices, voxel_features)
+            voxels_t = ttnn.permute(voxels, (1, 0))  # PCC: 0.9999981845508428
 
-            # Append to a list for later stacking.
+            print("indices: ", indices)
+            print("canvas: ", canvas)
+            print("voxels_t: ", voxels_t)
+
+            # indices = ttnn.typecast(indices, ttnn.uint32)
+
+            # canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
+            # indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+            # voxels_t = ttnn.to_layout(voxels_t, ttnn.ROW_MAJOR_LAYOUT)
+
+            # expanded_indices = ttnn.unsqueeze(indices, 0)          # [1, 6522]
+            # print("expanded_indices: ", expanded_indices)
+            # expanded_indices = ttnn.repeat(expanded_indices, [64, 1])
+            # # print("expanded_indices: ", expanded_indices)
+
+            # canvas = ttnn.scatter(
+            #     canvas,  # input_tensor (base canvas)
+            #     1,  # dim = 1 (your axis=1)
+            #     expanded_indices,  # integer indices
+            #     voxels_t,  # updates
+            # )
+            indices = ttnn.to_torch(indices).to(torch.long)
+            canvas = ttnn.to_torch(canvas)
+            voxels_t = ttnn.to_torch(voxels_t)
+            print("##### indices: ", indices, type(indices))
+            print("##### canvas: ", canvas, type(canvas))
+            print("##### voxels_t: ", voxels_t, type(voxels_t))
+
+            canvas[:, indices] = voxels_t
+            print("canvas: ", canvas.shape)
+
+            canvas = ttnn.from_torch(canvas, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            # return canvas
             batch_canvas.append(canvas)
 
-        # Stack to 3-dim tensor (batch-size, in_channels, nrows*ncols)
-        batch_canvas = torch.stack(batch_canvas, 0)
+        batch_canvas = batch_canvas[0]
+        print("batch_canvas: ", batch_canvas.shape)
 
         # Undo the column stacking to final 4-dim tensor
-        batch_canvas = batch_canvas.view(1, self.in_channels, self.ny, self.nx)
+        batch_canvas = ttnn.reshape(batch_canvas, (batch_size, self.in_channels, self.ny, self.nx))
+        print("batch_canvas: ", batch_canvas.shape)
 
-        batch_canvas = ttnn.from_torch(batch_canvas, device=self.device, layout=ttnn.TILE_LAYOUT)
         return batch_canvas
