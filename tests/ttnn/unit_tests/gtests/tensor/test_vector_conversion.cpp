@@ -141,32 +141,6 @@ TYPED_TEST(VectorConversionTest, RoundtripTilizedLayoutOddShape) {
     EXPECT_THAT(output, Pointwise(Eq(), input));
 }
 
-TYPED_TEST(VectorConversionTest, RoundtripWithShardedLayout) {
-    ttnn::Shape shape{56, 56, 30};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-    auto tensor = Tensor::from_vector(
-        input,
-        get_tensor_spec(
-            shape,
-            convert_to_data_type<TypeParam>(),
-            Layout::TILE,
-            MemoryConfig{
-                TensorMemoryLayout::HEIGHT_SHARDED,
-                BufferType::L1,
-                ShardSpec{
-                    ttnn::CoreRangeSet{ttnn::CoreRange{ttnn::CoreCoord{0, 0}, ttnn::CoreCoord{63, 63}}},
-                    /*shard_shape_=*/{49, 30},
-                    ShardOrientation::ROW_MAJOR,
-                    ShardMode::LOGICAL}}));
-
-    EXPECT_THAT(tensor.logical_shape(), ShapeIs(56, 56, 30));
-    EXPECT_THAT(tensor.padded_shape(), ShapeIs(56, 64, 32));
-
-    auto output = tensor.template to_vector<TypeParam>();
-
-    EXPECT_THAT(output, Pointwise(Eq(), input));
-}
-
 TEST(FloatVectorConversionTest, Float32Bfloat16Interop) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input_bf16 = arange<bfloat16>(0, shape.volume(), 1);

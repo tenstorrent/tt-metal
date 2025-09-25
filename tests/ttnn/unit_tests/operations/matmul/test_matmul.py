@@ -2234,7 +2234,6 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             (192, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
 
