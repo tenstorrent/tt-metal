@@ -43,7 +43,7 @@ def check_noc_status(
     fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
     fw_elf = elfs_cache[fw_elf_path]
 
-    message = f"Device {location._device._id} at {location.to_user_str()}\n"
+    message = f"Device {location._device._id} at {location.to_user_str()} on {risc_name} for NOC {noc_id}\n"
     passed = True
 
     loc_mem_reader = ELF.get_mem_reader(location, risc_name)
@@ -54,7 +54,7 @@ def check_noc_status(
         # If reading fails, write error message and skip to next core
         try:
             reg_val = read_tensix_register(location=location, register=reg, noc_id=noc_id)
-            var_val = mem_access(fw_elf, var, loc_mem_reader)[0][0]
+            var_val = mem_access(fw_elf, f"{var}[{noc_id}]", loc_mem_reader)[0][0]
         except Exception as e:
             message += "    " + str(e) + "\n"
             passed = False
@@ -71,7 +71,7 @@ def check_noc_status(
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
-    NOC_ID = 0
+    NOC_ID = 0  # TODO: Add support for NOC1
     # Dictionary of corresponding variables and registers to check
     VAR_TO_REG_MAP = {
         "noc_reads_num_issued": "NIU_MST_RD_RESP_RECEIVED",
