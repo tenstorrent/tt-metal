@@ -757,6 +757,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
+        case UnaryOpType::CBRT: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -977,6 +978,7 @@ std::string get_compute_kernel_path(
             } else {
                 return fmt::format("{}/{}", compute_root, "hardswish_kernel.cpp");
             }
+        case UnaryOpType::CBRT: return fmt::format("{}/{}", compute_root, "cbrt_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }
