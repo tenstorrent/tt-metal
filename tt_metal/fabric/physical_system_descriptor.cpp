@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
 
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -35,17 +36,10 @@ tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
 
     // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
-    for (auto other_chip_id : chips) {
-        tt::ARCH other_arch = cluster_descriptor->get_arch(other_chip_id);
-        TT_FATAL(
-            other_arch == arch,
-            "Chips with differing architectures detected (chip {} has architecture {} but chip {} is {}). This is "
-            "unsupported.",
-            other_chip_id,
-            tt::arch_to_str(other_arch),
-            *chips.begin(),
-            tt::arch_to_str(arch));
-    }
+    bool all_same_arch = std::all_of(
+        chips.begin(), chips.end(), [&](chip_id_t chip_id) { return cluster_descriptor->get_arch(chip_id) == arch; });
+
+    TT_FATAL(all_same_arch, "Chips with differing architectures detected. This is unsupported.");
 
     return arch;
 }
