@@ -274,7 +274,6 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                     // reader
                     auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                     worker_reader_runtime_args[0] = input.buffer()->address();
-                    worker_reader_runtime_args[1] = output.buffer()->address();
                     worker_reader_runtime_args[9] = out_ready_semaphore.address();
                     // writer
                     auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];

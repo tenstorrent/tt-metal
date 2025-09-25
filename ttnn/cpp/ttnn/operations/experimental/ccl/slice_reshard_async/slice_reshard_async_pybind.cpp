@@ -85,7 +85,7 @@ void py_bind_slice_reshard_async(pybind11::module& module) {
         Keyword Args:
             num_links (int, optional): Number of links to use for the slice_reshard operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
 
         Returns:
             ttnn.Tensor: the slice_resharded output tensor.
