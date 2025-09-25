@@ -30,11 +30,9 @@
 
 // Constants
 const std::string output_dir = "generated/fabric";
-const std::string bandwidth_csv_dir = output_dir + "/bandwidth_results";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
 // CI will always check the following folder for artifacts to upload
 const std::string ci_artifacts_dir = "generated/test_reports";
-const std::string ci_bandwidth_results_dir = ci_artifacts_dir + "/fabric_bandwidth_results";
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
@@ -409,25 +407,11 @@ public:
     void initialize_csv_file() {
         // Create output directory
         std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-        std::filesystem::path bandwidth_results_path = tt_metal_home / bandwidth_csv_dir;
+        std::filesystem::path bandwidth_results_path = tt_metal_home / output_dir;
 
         if (!std::filesystem::exists(bandwidth_results_path)) {
             std::filesystem::create_directories(bandwidth_results_path);
         }
-
-        // Create a symlink to the bandwidth results directory for CI to upload CSV files
-        std::filesystem::path ci_artifacts_path = tt_metal_home / ci_artifacts_dir;
-        std::filesystem::path ci_symlink_path = tt_metal_home / ci_bandwidth_results_dir;
-        if (!std::filesystem::exists(ci_artifacts_path)) {
-            std::filesystem::create_directories(ci_artifacts_path);
-        }
-        // Edge case: Symlink already exists
-        if (std::filesystem::exists(ci_symlink_path)) {
-            std::filesystem::remove(ci_symlink_path);
-            log_info(tt::LogTest, "Removed existing symlink to bandwidth results directory: {}", ci_symlink_path);
-        }
-        std::filesystem::create_directory_symlink(bandwidth_results_path, ci_symlink_path);
-        log_info(tt::LogTest, "Created symlink to bandwidth results directory: {}", ci_symlink_path);
 
         // Generate detailed CSV filename
         auto arch_name = tt::tt_metal::hal::get_arch_name();
@@ -547,6 +531,36 @@ public:
             num_links,
             packet_size);
         return 0.0;
+    }
+
+    void setup_ci_artifacts(){
+        std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+        std::filesystem::path bandwidth_results_path = tt_metal_home / output_dir;
+        std::filesystem::path ci_artifacts_path = tt_metal_home / ci_artifacts_dir;
+        // Create CI artifacts directory if it doesn't exist
+        if (!std::filesystem::exists(ci_artifacts_path)) {
+            try {
+                std::filesystem::create_directories(ci_artifacts_path);
+            } catch (const std::filesystem::filesystem_error& e) {
+                log_error(tt::LogTest, "Failed to create CI artifacts directory, skipping CI artifacts creation: {}", e.what());
+                return;
+            }
+        }
+
+        // Copy CSV files to CI artifacts directory
+        for (const std::filesystem::path& csv_filepath : {csv_file_path_, csv_summary_file_path_, diff_csv_file_path_}) {
+            try {
+                std::filesystem::copy_file(
+                    csv_filepath,
+                    ci_artifacts_path / csv_filepath.filename(),
+                    std::filesystem::copy_options::overwrite_existing
+                );
+            } catch (const std::filesystem::filesystem_error& e) {
+                log_error(tt::LogTest, "Failed to copy CSV file {} to CI artifacts directory: {}", csv_filepath.filename().string(), e.what());
+                return;
+            }
+        }
+        log_info(tt::LogTest, "Copied CSV files to CI artifacts directory: {}", ci_artifacts_path.string());
     }
 
     void read_telemetry();
