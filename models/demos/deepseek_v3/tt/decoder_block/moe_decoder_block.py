@@ -8,7 +8,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
@@ -43,7 +43,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             ),
             "moe": [
                 (
-                    MoE.convert_weights(hf_config, [state_dict], output_path / f"moe_{i}", mesh_device)
+                    MoE.convert_weights(hf_config, (state_dict,), output_path / f"moe_{i}", mesh_device)
                     if state_dict is not None
                     else None
                 )
@@ -57,7 +57,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
@@ -89,7 +89,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
@@ -122,8 +122,8 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
-        ccl: CCL1D,
+        ccl: CCL,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
             "moe": [
@@ -132,6 +132,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
             "revert_dp": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(0),
             },
         }
 
@@ -155,7 +156,12 @@ class MoEDecoderBlock(DecoderBlockBase):
         return x_partitioned
 
     @classmethod
-    def _broadcast_row_to_mesh(cls, tt_input: ttnn.Tensor, mesh_shape: tuple[int, int], src_row: int) -> ttnn.Tensor:
+    def _broadcast_row_to_mesh(
+        cls,
+        tt_input: ttnn.Tensor,
+        mesh_shape: tuple[int, int],
+        src_row: int,
+    ) -> ttnn.Tensor:
         """Broadcast data from a source row to all other rows in the mesh."""
         # Broadcast from src_row to mesh
         # Loop over rows, skip src_row
@@ -204,7 +210,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
             "moe": [

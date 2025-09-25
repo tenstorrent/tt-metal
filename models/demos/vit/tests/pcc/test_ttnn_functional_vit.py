@@ -10,9 +10,9 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_functional_vit
-from models.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

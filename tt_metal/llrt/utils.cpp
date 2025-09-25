@@ -8,6 +8,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <chrono>
 
 #include "impl/context/metal_context.hpp"
 
@@ -50,12 +51,11 @@ void create_file(const std::string& file_path_str) {
 
 const std::string& get_reports_dir() {
     static std::string outpath;
-    if (outpath == "") {
+    if (outpath.empty()) {
         outpath = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "/generated/reports/";
     }
     return outpath;
 }
-
 }  // namespace utils
 
 }  // namespace tt

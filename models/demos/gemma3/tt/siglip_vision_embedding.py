@@ -72,8 +72,9 @@ class TtSiglipVisionEmbeddings(LightweightModule):
         Returns:
             embeddings: ttnn.Tensor of shape (B, num_patches, hidden_dim)
         """
-        patch_embeddings = self.patch_embed(pixel_values)  # [B, num_patches, hidden_dim]
-        patch_embeddings = ttnn.reshape(patch_embeddings, (1, -1, self.hidden_dim))
+        patch_embeddings = self.patch_embed(pixel_values)  # Returns [1, B, num_patches, hidden_dim]
+        batch_size = patch_embeddings.shape[1]
+        patch_embeddings = ttnn.reshape(patch_embeddings, (batch_size, -1, self.hidden_dim))
         positional_embeddings = ttnn.embedding(self.position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
         embeddings = ttnn.add(patch_embeddings, positional_embeddings)
         return embeddings

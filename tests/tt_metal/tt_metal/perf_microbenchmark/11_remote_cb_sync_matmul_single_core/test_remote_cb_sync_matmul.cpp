@@ -53,8 +53,8 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
@@ -210,7 +210,7 @@ create_programs(
         tt_metal::CircularBufferConfig(in0_reader_cb_size, {{in0_reader_cb_index, tile_format}})
             .set_page_size(in0_reader_cb_index, single_tile_size)
             .set_globally_allocated_address(*in0_buffer->get_backing_buffer());
-    auto in0_reader_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
 
     // in1 receiver CB
     uint32_t in1_receiver_cb_index = 31;
@@ -230,7 +230,7 @@ create_programs(
         tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, tile_format}})
             .set_page_size(output_cb_index, single_tile_size)
             .set_globally_allocated_address(*output_buffer->get_backing_buffer());
-    auto output_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
 
     // sync CB
     uint32_t sync_cb_index = 2;
@@ -426,7 +426,7 @@ create_programs(
     return {std::move(programs), std::move(global_cb)};
 }
 
-float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
+float to_float(bfloat16 bfloat16_num) { return static_cast<float>(bfloat16_num); }
 
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     if (x.size() != y.size()) {
@@ -603,7 +603,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
 
     std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer;
     if (address.has_value()) {
-        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address.value());
+        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address);
     } else {
         input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }

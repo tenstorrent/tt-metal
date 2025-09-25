@@ -34,7 +34,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -53,9 +52,13 @@
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
+
+// Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
+#include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -231,7 +234,7 @@ bool cb_config_successful(
 }
 
 void test_dummy_EnqueueProgram_with_runtime_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& eth_core_coord) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreCoord& eth_core_coord) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -271,7 +274,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramMultiCBConfig& program_config) {
     distributed::MeshWorkload workload;
@@ -291,7 +294,7 @@ bool test_dummy_EnqueueProgram_with_cbs(
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramMultiCBConfig& program_config) {
     distributed::MeshWorkload workload;
@@ -367,7 +370,7 @@ bool test_dummy_EnqueueProgram_with_sems(
 }
 
 bool test_dummy_EnqueueProgram_with_sems(
-    std::shared_ptr<distributed::MeshDevice> device,
+    const std::shared_ptr<distributed::MeshDevice>& device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramConfig& program_config) {
     distributed::MeshWorkload workload;
@@ -388,7 +391,7 @@ bool test_dummy_EnqueueProgram_with_sems(
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_dm0,
@@ -503,7 +506,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshCommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_for_cr0,
@@ -799,9 +802,17 @@ bool verify_rt_args(
                       : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
-    log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
+    log_debug(
+        tt::LogTest,
+        "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}",
+        expected_rt_args.size(),
+        label,
+        noc_xy,
+        logical_core.str(),
+        addr,
+        incr_val);
 
-    for(int i=0; i<expected_rt_args.size(); i++){
+    for (int i = 0; i < expected_rt_args.size(); i++) {
         uint32_t expected_val = expected_rt_args[i] + incr_val;
         log_debug(
             tt::LogTest,
@@ -881,7 +892,7 @@ IncrementKernelsSet create_increment_kernels(
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
 // Multiple program_configs may be provided to create multiple kernels on the same program.
 bool test_increment_runtime_args_sanity(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<DummyProgramConfig>& program_configs,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args,
@@ -937,7 +948,7 @@ bool test_increment_runtime_args_sanity(
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
     for (const auto& kernel_id : configured_kernels.kernel_handles) {
-        const auto& kernel = tt::tt_metal::detail::GetKernel(workload.get_programs()[device_range], kernel_id);
+        const auto& kernel = workload.get_programs()[device_range].impl().get_kernel(kernel_id);
 
         for (auto& core_range : kernel->logical_coreranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -968,7 +979,7 @@ bool test_increment_runtime_args_sanity(
 }
 
 bool test_increment_runtime_args_sanity(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DummyProgramConfig& program_config,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args,
@@ -982,7 +993,7 @@ bool test_increment_runtime_args_sanity(
 }
 
 void test_my_coordinates(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, HalProcessorIdentifier processor, size_t cq_id = 0) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, HalProcessorIdentifier processor, size_t cq_id = 0) {
     const std::string k_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
@@ -1006,7 +1017,7 @@ void test_my_coordinates(
         processor.core_type, cr, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
-void test_basic_dispatch_functions(std::shared_ptr<distributed::MeshDevice> mesh_device, int cq_id) {
+void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int cq_id) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1187,12 +1198,9 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
 
         vector<uint32_t> cb_config_vector;
 
+        auto address = program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, CoreType::WORKER);
         tt::tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0],
-            core_coord,
-            program_.get_cb_base_addr(device->get_devices()[0], core_coord, CoreType::WORKER),
-            cb_config_buffer_size,
-            cb_config_vector);
+            device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
@@ -2441,7 +2449,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms)
     Finish(device_->mesh_command_queue());
 }
 
-TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
+TEST_F(UnitMeshRandomProgramFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallPrograms) {
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);

@@ -16,7 +16,7 @@ class TtYOLOv12xConv2D:
         conv_pth,
         bn=None,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
@@ -62,7 +62,6 @@ class TtYOLOv12xConv2D:
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
@@ -118,10 +117,16 @@ class TtYOLOv12xConv2D:
 class TtnnBottleneck:
     def __init__(self, device, parameter, conv_pt):
         self.cv1 = TtYOLOv12xConv2D(
-            conv=parameter.cv1.conv, conv_pth=conv_pt.cv1.conv, device=device, activation="silu"
+            conv=parameter.cv1.conv,
+            conv_pth=conv_pt.cv1.conv,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2 = TtYOLOv12xConv2D(
-            conv=parameter.cv2.conv, conv_pth=conv_pt.cv2.conv, device=device, activation="silu"
+            conv=parameter.cv2.conv,
+            conv_pth=conv_pt.cv2.conv,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
 
     def __call__(self, x):

@@ -16,7 +16,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 
@@ -24,7 +24,7 @@ TEST_F(MeshDispatchFixture, InitializeGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
 
     auto cores_vec = corerange_to_cores(cores);
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
         {
             uint32_t initial_value = 1;
@@ -60,7 +60,7 @@ TEST_F(MeshDispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     for (const auto& crs : cores) {
         cores_vecs.push_back(corerange_to_cores(crs));
     }
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
         {
             std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
@@ -93,7 +93,7 @@ TEST_F(MeshDispatchFixture, ResetGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
 
     auto cores_vec = corerange_to_cores(cores);
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
         {
             uint32_t initial_value = 1;

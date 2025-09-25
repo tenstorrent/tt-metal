@@ -12,8 +12,6 @@
 
 #include "layernorm_distributed_types.hpp"
 
-using namespace tt::constants;
-
 namespace ttnn::operations::normalization {
 
 tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(

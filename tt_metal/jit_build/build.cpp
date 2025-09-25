@@ -32,7 +32,7 @@
 #include "profiler_state.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace fs = std::filesystem;
 
@@ -395,6 +395,25 @@ void JitBuildState::compile_one(
             }
             defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
         });
+
+        // This creates a command-line define for named compile time args
+        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
+        // This generates:
+        // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
+        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
+        settings->process_named_compile_time_args(
+            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
+                if (named_args.empty()) {
+                    return;
+                }
+                std::ostringstream ss;
+                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
+                for (const auto& [name, value] : named_args) {
+                    ss << "{\\\"" << name << "\\\"," << value << "}, ";
+                }
+                ss << "\"";
+                defines += ss.str() + " ";
+            });
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
     } else {

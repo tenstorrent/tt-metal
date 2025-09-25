@@ -18,6 +18,7 @@
 #include "tt_align.hpp"
 #include <bit>
 #include <algorithm>
+#include <utility>
 
 namespace tt::tt_fabric {
 
@@ -26,7 +27,7 @@ static bool device_has_dispatch_tunnel(chip_id_t device_id) {
     auto tunnels_from_mmio =
         tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
     // results are inclusive of the mmio_device_id so they will never be zero
-    TT_FATAL(tunnels_from_mmio.size() > 0, "must have at least one mmio device");
+    TT_FATAL(!tunnels_from_mmio.empty(), "must have at least one mmio device");
     return (tunnels_from_mmio.size() - 1) > 0;
 }
 
@@ -88,15 +89,16 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
 // FabricTensixDatamoverConfig implementation
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
-    // Initialize channel mappings and configurations
-    initialize_channel_mappings();
+    // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
+    if (!initialize_channel_mappings()) {
+        return;
+    }
     calculate_buffer_allocations();
     create_mux_configs();
 }
 
-void FabricTensixDatamoverConfig::initialize_channel_mappings() {
+bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
     const bool is_TG =
@@ -133,14 +135,22 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     // Get maximum number of active ethernet channels from control plane across all devices
     size_t max_eth_channels = find_max_eth_channels(all_active_devices);
+    if (max_eth_channels == 0) {
+        log_warning(tt::LogMetal, "No active ethernet channels found in the system");
+        return false;
+    }
 
-    TT_FATAL(max_eth_channels > 0, "No active ethernet channels found in the system");
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "logical_fabric_mux_cores_ is empty before division");
 
     // Calculate number of configs per core and riscs needed BEFORE using them
     num_configs_per_core_ =
         (max_eth_channels + logical_fabric_mux_cores_.size() - 1) / logical_fabric_mux_cores_.size();
     num_used_riscs_per_tensix_ = num_configs_per_core_;
+
+    TT_FATAL(
+        num_used_riscs_per_tensix_ == 1,
+        "Currently only support one mux per tensix but got {} muxes per tensix",
+        num_used_riscs_per_tensix_);
 
     // Second pass: create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
@@ -168,6 +178,8 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
             channel_index++;
         }
     }
+
+    return true;
 }
 
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
@@ -361,7 +373,7 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     risc_id_(risc_id),
     noc_x_(noc_x),
     noc_y_(noc_y),
-    fabric_mux_config_(fabric_mux_config),
+    fabric_mux_config_(std::move(fabric_mux_config)),
     direction_(direction) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
@@ -417,7 +429,7 @@ void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* dev
     // Create the mux kernel using the fabric mux kernel file
     auto mux_kernel = tt::tt_metal::CreateKernel(
         program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_extension.cpp",
         my_core_logical_,
         tt::tt_metal::DataMovementConfig{
             .processor = processor, .noc = noc, .compile_args = get_compile_time_args(device), .defines = {}});
@@ -469,7 +481,14 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
         }
     }();
 
+    fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(fabric_router_config.sender_channels_num_buffers[0]);
+    fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);
+    fabric_mux_config_->set_fabric_endpoint_status_address(fabric_router_config.edm_status_address);
     auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);
+
+    // Add number of upstream routers and sync address
+    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
+    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
 
     // Get topology-specific fabric router stream IDs based on topology
     const auto topology = fabric_context.get_fabric_topology();
@@ -525,9 +544,21 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
 }
 
 std::vector<uint32_t> FabricTensixDatamoverBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
-    // Get runtime args from the underlying mux config
-    return fabric_mux_config_->get_fabric_mux_run_time_args(
+    std::vector<uint32_t> runtime_args;
+    runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
+    runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
+
+    // Get base runtime args from the underlying mux config
+    auto mux_runtime_args = fabric_mux_config_->get_fabric_mux_run_time_args(
         local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, {my_core_logical_});
+
+    runtime_args.insert(runtime_args.end(), mux_runtime_args.begin(), mux_runtime_args.end());
+    return runtime_args;
+}
+
+void FabricTensixDatamoverBuilder::append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y) {
+    upstream_routers_noc_x_.push_back(noc_x);
+    upstream_routers_noc_y_.push_back(noc_y);
 }
 
 }  // namespace tt::tt_fabric

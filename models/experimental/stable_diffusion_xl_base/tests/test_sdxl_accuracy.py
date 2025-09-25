@@ -11,9 +11,13 @@ import urllib
 from loguru import logger
 import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_TRACE_REGION_SIZE
+from models.experimental.stable_diffusion_xl_base.tests.test_common import (
+    SDXL_L1_SMALL_SIZE,
+    SDXL_TRACE_REGION_SIZE,
+    SDXL_FABRIC_CONFIG,
+)
 import json
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
 
 test_demo.__test__ = False
@@ -22,7 +26,26 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+    "device_params, use_cfg_parallel",
+    [
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+                "fabric_config": SDXL_FABRIC_CONFIG,
+            },
+            True,
+        ),
+        (
+            {
+                "l1_small_size": SDXL_L1_SMALL_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+            },
+            False,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["use_cfg_parallel", "no_cfg_parallel"],
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -63,6 +86,7 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
+    validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
     num_inference_steps,
@@ -74,6 +98,7 @@ def test_accuracy_sdxl(
     evaluation_range,
     guidance_scale,
     negative_prompt,
+    use_cfg_parallel,
 ):
     start_from, num_prompts = evaluation_range
 
@@ -86,6 +111,7 @@ def test_accuracy_sdxl(
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     images = test_demo(
+        validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
         prompts,
@@ -96,6 +122,7 @@ def test_accuracy_sdxl(
         capture_trace,
         evaluation_range,
         guidance_scale,
+        use_cfg_parallel,
     )
 
     clip = CLIPEncoder()
@@ -158,7 +185,9 @@ def test_accuracy_sdxl(
     trace_flag = "with_trace" if capture_trace else "no_trace"
     vae_flag = "device_vae" if vae_on_device else "host_vae"
     encoders_flag = "device_encoders" if encoders_on_device else "host_encoders"
-    new_file_name = f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{num_inference_steps}.json"
+    new_file_name = (
+        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel}_{num_inference_steps}.json"
+    )
     with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
         json.dump(data, f, indent=4)
 

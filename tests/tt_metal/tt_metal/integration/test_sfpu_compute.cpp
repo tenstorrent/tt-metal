@@ -37,7 +37,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 #include <tt-metalium/distributed.hpp>
 
@@ -64,27 +64,27 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "relu") {
-        return bfloat16(fmaxf(input.to_float(), 0.0f));
+        return bfloat16(fmaxf(static_cast<float>(input), 0.0f));
     } else if (op_name == "exponential") {
-        return bfloat16(std::exp(input.to_float()));
+        return bfloat16(std::exp(static_cast<float>(input)));
     } else if (op_name == "reciprocal") {
-        return bfloat16(1 / input.to_float());
+        return bfloat16(1 / static_cast<float>(input));
     } else if (op_name == "gelu") {
         static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
-        auto x = input.to_float();
+        auto x = static_cast<float>(input);
         auto x3 = x * x * x;
         float result = x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
         return bfloat16(result);
     } else if (op_name == "sqrt") {
-        return bfloat16(sqrtf(input.to_float()));
+        return bfloat16(sqrtf(static_cast<float>(input)));
     } else if (op_name == "sigmoid") {
-        auto x = input.to_float();
+        auto x = static_cast<float>(input);
         float result = 1 / (1 + std::exp(-x));
         return bfloat16(result);
     } else if (op_name == "log") {
-        return bfloat16(logf(input.to_float()));
+        return bfloat16(logf(static_cast<float>(input)));
     } else if (op_name == "tanh") {
-        return bfloat16(std::tanh(input.to_float()));
+        return bfloat16(std::tanh(static_cast<float>(input)));
     } else {
         TT_THROW("Unsupported op_name in test");
         return bfloat16(0.0f);
@@ -162,7 +162,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
 
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
-        byte_size / bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
+        byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
@@ -257,7 +257,7 @@ class SingleCoreSingleCardSfpuParameterizedFixture
     : public UnitMeshCQFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
-    for (auto device_ : devices_) {
+    for (const auto& device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         std::string sfpu_op = std::get<1>(GetParam());
 
@@ -305,7 +305,7 @@ class SingleCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
-    for (auto device_ : devices_) {
+    for (const auto& device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         std::string sfpu_op = std::get<1>(GetParam());
 
@@ -353,7 +353,7 @@ class MultiCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTileSfpuApproxCompute) {
-    for (auto device_ : devices_) {
+    for (const auto& device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         std::string sfpu_op = std::get<1>(GetParam());
 

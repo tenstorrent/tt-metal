@@ -25,7 +25,7 @@ namespace ttnn::operations::data_movement {
 
 std::vector<CoreRange> get_multicast_regions(
     const IDevice* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
-    TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
+    TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
 
@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
         CoreRange noc_cr(
             device->worker_core_from_logical_core(logical_cr.start_coord),
             device->worker_core_from_logical_core(logical_cr.end_coord));
-        noc_multicast_regions.push_back(std::move(noc_cr));
+        noc_multicast_regions.push_back(noc_cr);
     }
 
     CoreRange range_0_noc = noc_multicast_regions[0];

@@ -60,6 +60,7 @@ target_sources(
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
         core/distributed/distributed_configs.cpp
+        core/distributed/distribution_mode.cpp
         core/distributed/host_ccl.cpp
         core/distributed/tensor_topology.cpp
         core/distributed/bidirectional_fabric_socket.cpp
@@ -306,6 +307,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/sdpa_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/transformer_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform_${PY_BINDING}.cpp
@@ -315,6 +317,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sort/sort_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/gather/gather_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/test/hang_device/hang_device_operation_${PY_BINDING}.cpp
 )
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
@@ -464,11 +467,9 @@ target_sources(
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
+        cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
-        cpp/ttnn/operations/normalization/softmax/softmax.cpp
-        cpp/ttnn/operations/normalization/softmax/device/multi_core/softmax_op_multi_core.cpp
-        cpp/ttnn/operations/normalization/softmax/device/softmax_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
@@ -527,6 +528,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::UnaryBackward
         TTNN::Ops::Experimental::Where
+        TTNN::Ops::Experimental::Test
         TTNN::Ops::Full
         TTNN::Ops::FullLike
         TTNN::Ops::IndexFill
@@ -694,6 +696,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/experimental/where)
+add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
@@ -712,5 +715,4 @@ add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/operations/debug)
 add_subdirectory(cpp/ttnn/deprecated)
-
 add_subdirectory(examples)

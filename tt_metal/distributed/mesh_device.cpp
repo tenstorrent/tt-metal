@@ -55,10 +55,11 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;
@@ -98,12 +99,15 @@ decltype(auto) validate_and_get_reference_value(
         TT_THROW("{} [{}:{}] failed: MeshDevice has no devices", loc.function_name(), loc.file_name(), loc.line());
     }
 
+    // Forward the callable once to preserve its value category.
+    auto&& callable = std::forward<F>(func);
+
     // Get reference to first device's value
-    decltype(auto) reference_value = std::forward<F>(func)(devices.front());
+    decltype(auto) reference_value = callable(devices.front());
 
     // Validate all other devices match
     for (auto it = devices.begin() + 1; it != devices.end(); ++it) {
-        const auto& current_value = std::forward<F>(func)(*it);
+        decltype(auto) current_value = callable(*it);
         if (current_value != reference_value) {
             TT_THROW(
                 "{} [{}:{}] failed: Device at index {} returned value that differs from reference. "
@@ -182,6 +186,11 @@ uint8_t MeshDevice::num_hw_cqs() const {
 }
 
 bool MeshDevice::is_initialized() const {
+    // TODO: Revisit whether we can simplify this when `MeshDevice` initialization isn't so coupled
+    // with individual device initialization.
+    if (!is_internal_state_initialized) {
+        return false;
+    }
     if (!scoped_devices_) {
         return false;
     }
@@ -267,16 +276,17 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         }
     }();
 
-    auto local_root_devices = extract_locals(scoped_devices->root_devices());
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    const auto root_devices = scoped_devices->root_devices();
 
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(mesh_shape, scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : local_root_devices) {
+    for (auto device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -310,10 +320,12 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
             MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         fabric_node_ids.push_back(fabric_node_id);
     }
+
+    // Make a copy because we std::move the scoped_devices when creating MeshDevice
+    const auto root_devices = scoped_devices->root_devices();
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(
-            MeshShape(1, device_ids.size()), scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
@@ -324,7 +336,6 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
-        submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
         result[device_ids[i]] = submeshes[i];
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -466,7 +477,11 @@ IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
 }
 
-std::vector<IDevice*> MeshDevice::get_devices() const { return view_->get_devices(); }
+std::vector<IDevice*> MeshDevice::get_devices() const {
+    auto devices = view_->get_devices();
+    TT_ASSERT(!devices.empty(), "Mesh Device should have at least 1 IDevice");
+    return devices;
+}
 
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
@@ -479,9 +494,13 @@ tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coo
     return view_->get_fabric_node_id(coord);
 }
 
-MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
-    TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
-    return *(mesh_command_queues_[cq_id]);
+MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
+    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+
+    TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
+    auto& command_queue = mesh_command_queues_[id];
+    TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
+    return *command_queue;
 }
 
 DeviceIds MeshDevice::get_device_ids() const {
@@ -588,6 +607,7 @@ bool MeshDevice::close() {
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
+    is_internal_state_initialized = false;
     return true;
 }
 
@@ -640,7 +660,7 @@ void MeshDevice::disable_and_clear_program_cache() {
 size_t MeshDevice::num_program_cache_entries() { return program_cache_->num_entries(); }
 
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
-    std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
@@ -801,7 +821,7 @@ SystemMemoryManager& MeshDevice::sysmem_manager() {
     return reference_device()->sysmem_manager();
 }
 
-CommandQueue& MeshDevice::command_queue(size_t cq_id) {
+CommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) {
     TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->command_queue(cq_id);
 }
@@ -819,6 +839,12 @@ void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
 
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
+}
+
+MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) {
+    auto trace_id = MeshTrace::next_id();
+    this->begin_mesh_trace(cq_id, trace_id);
+    return trace_id;
 }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
@@ -887,6 +913,8 @@ bool MeshDevice::initialize(
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
+    TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
+
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
@@ -920,6 +948,7 @@ bool MeshDevice::initialize(
         }
     }
     Inspector::mesh_device_initialized(this);
+    is_internal_state_initialized = true;
     return true;
 }
 

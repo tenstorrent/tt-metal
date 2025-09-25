@@ -22,7 +22,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal::distributed {
-class MeshTraceBuffer;
+struct MeshTraceBuffer;
 }
 namespace tt::tt_metal {
 

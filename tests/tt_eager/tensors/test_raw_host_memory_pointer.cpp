@@ -21,6 +21,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
+
 namespace tt {
 namespace tt_metal {
 class IDevice;
@@ -114,7 +116,7 @@ void test_raw_host_memory_pointer() {
     tt::tt_metal::memcpy(tensor_for_printing, c_dev);
 
     // Check that cpu tensor has correct data
-    bfloat16 output_value = 1.99219f;  // Not exactly 2.0f because of rounding errors
+    bfloat16 output_value = 2.0f;
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == output_value);
     }
@@ -173,3 +175,5 @@ int main() {
     }
     return 0;
 }
+
+// NOLINTEND(cppcoreguidelines-no-malloc)

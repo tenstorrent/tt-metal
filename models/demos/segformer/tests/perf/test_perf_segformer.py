@@ -11,6 +11,7 @@ from transformers import SegformerImageProcessor
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import profiler, skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
@@ -24,7 +25,6 @@ from models.demos.segformer.tests.pcc.test_segformer_model import (
 from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler, skip_for_grayskull
 
 
 def get_expected_times(name):
@@ -124,9 +124,7 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator):
             }
         )
         n_cores = 64
-        shard_spec = ttnn.ShardSpec(
-            shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardMode.PHYSICAL
-        )
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )

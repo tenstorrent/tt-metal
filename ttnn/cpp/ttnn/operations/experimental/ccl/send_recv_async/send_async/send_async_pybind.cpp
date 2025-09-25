@@ -40,7 +40,6 @@ void py_bind_send_async(pybind11::module& module) {
         module,
         ttnn::experimental::send_async,
         R"doc(
-
         Performs a send operation on multi-device :attr:`input_tensor` to a :attr:`mesh_socket`.
 
         Args:
