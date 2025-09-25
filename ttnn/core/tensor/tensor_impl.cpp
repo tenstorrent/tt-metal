@@ -349,7 +349,6 @@ bool should_use_scientific_notation(tt::stl::Span<const T> buffer) {
         double nonzero_finite_max = std::numeric_limits<double>::lowest();
         bool found_nonzero_finite = false;
 
-        // TODO: parallelize this
         for (const auto& value : buffer) {
             double val = static_cast<double>(value);
             if (std::isfinite(val) && val != 0.0) {
