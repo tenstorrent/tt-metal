@@ -105,7 +105,7 @@ __attribute__((noinline)) void init_profiler(
     defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
-    profiler_control_buffer[GLOBAL_TRACE_COUNT] = 0;
+    // profiler_control_buffer[GLOBAL_TRACE_COUNT] = 0;
 
     if (runCounter == 0) {
         for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
@@ -271,7 +271,7 @@ __attribute__((noinline)) void finish_profiler() {
     NocDestinationStateSaver noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         profiler_data_buffer[riscID].data[ID_LH] =
-            ((profiler_control_buffer[GLOBAL_TRACE_COUNT] & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | riscID;
+            ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
         if (profiler_control_buffer[deviceIndex]) {
@@ -351,7 +351,7 @@ __attribute__((noinline)) void quick_push() {
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
     profiler_data_buffer[myRiscID].data[ID_LH] =
-        ((profiler_control_buffer[GLOBAL_TRACE_COUNT] & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | myRiscID;
+        ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | myRiscID;
 
     uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
@@ -537,13 +537,13 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     }
 }
 
+inline __attribute__((always_inline)) void increment_trace_count() { traceCount++; }
+
 __attribute__((noinline)) void trace_init() {
-    profiler_control_buffer[GLOBAL_TRACE_COUNT]++;
     if constexpr (TRACE_ON_TENSIX) {
         if (traceCount > 0) {
             quick_push();
         }
-        traceCount++;
         set_host_counter(traceCount);
         profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_FW_START;
         // Invalidate profiler_data_buffer in L1
@@ -633,9 +633,13 @@ __attribute__((noinline)) void trace_init() {
 #define DeviceProfilerInit()                          \
     if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
         kernel_profiler::init_profiler();             \
+    } else {                                          \
+        kernel_profiler::traceCount = 0;              \
     }
 
 #define DeviceTraceProfilerInit() kernel_profiler::trace_init();
+
+#define DeviceIncrementTraceCount() kernel_profiler::increment_trace_count();
 
 #else
 
@@ -660,6 +664,8 @@ __attribute__((noinline)) void trace_init() {
 #define DeviceRecordEvent(event_id)
 
 #define DeviceProfilerInit()
+
+#define DeviceIncrementTraceCount()
 
 // null macros when noc tracing is disabled
 #define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
