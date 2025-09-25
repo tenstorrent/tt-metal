@@ -75,6 +75,16 @@ void ttnn_device(py::module& module) {
         R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
+
+    module.def(
+        "wait_for_compile_threadpool",
+        []() { tt::tt_metal::detail::WaitForKernelCompilationThreadPool(); },
+        R"doc(
+        Wait for all operations in the kernel compilation thread pool to complete.
+
+        Example:
+            >>> ttnn.wait_for_compile_threadpool()
+    )doc");
 }
 
 }  // namespace

@@ -195,11 +195,19 @@ void enqueue_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload& workload) {
     mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
+        if (tt::tt_metal::GraphTracker::instance().is_compilation_enabled_in_no_dispatch()) {
+            ZoneScopedN("EnqueueMeshWorkload");
+            tt::tt_metal::distributed::EnqueueMeshWorkload(
+                mesh_device->mesh_command_queue(),
+                workload,
+                /*blocking=*/false,
+                tt::tt_metal::distributed::CompilationMode::CompileOnly);
+        }
         return;
     }
     {
         ZoneScopedN("EnqueueMeshWorkload");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
     }
 
     TracyOpMeshWorkload(

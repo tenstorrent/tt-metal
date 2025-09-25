@@ -56,6 +56,35 @@ void py_graph_module(py::module& m) {
         },
         "Extracts calltrace from the graph trace",
         py::arg("trace"));
+
+    m.def(
+        "enable_compilation_in_no_dispatch",
+        []() { tt::tt_metal::GraphTracker::instance().enable_compilation_in_no_dispatch(); },
+        R"doc(
+        Enable kernel compilation in NO_DISPATCH mode.
+
+        By default, NO_DISPATCH mode skips kernel compilation for faster execution.
+        This function enables compilation to allow for kernel preparation without dispatch.
+        )doc");
+
+    m.def(
+        "disable_compilation_in_no_dispatch",
+        []() { tt::tt_metal::GraphTracker::instance().disable_compilation_in_no_dispatch(); },
+        R"doc(
+        Disable kernel compilation in NO_DISPATCH mode.
+
+        This restores the default behavior where NO_DISPATCH mode skips kernel compilation.
+        )doc");
+
+    m.def(
+        "is_compilation_enabled_in_no_dispatch",
+        []() { return tt::tt_metal::GraphTracker::instance().is_compilation_enabled_in_no_dispatch(); },
+        R"doc(
+        Check if kernel compilation is enabled in NO_DISPATCH mode.
+
+        Returns:
+            bool: True if compilation is enabled in NO_DISPATCH mode, False otherwise.
+        )doc");
 }
 
 }  // namespace ttnn::graph

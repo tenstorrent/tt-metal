@@ -314,6 +314,7 @@ public:
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
     void wait_for_thread_pool();
+
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,

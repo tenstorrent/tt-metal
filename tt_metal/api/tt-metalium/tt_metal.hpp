@@ -377,5 +377,8 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
  */
 std::string get_platform_architecture_name();
 
+// Wait for all operations in the kernel compilation thread pool to complete.
+void WaitForKernelCompilationThreadPool();
+
 }  // namespace detail
 }  // namespace tt::tt_metal

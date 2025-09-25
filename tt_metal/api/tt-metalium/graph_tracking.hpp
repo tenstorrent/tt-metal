@@ -175,6 +175,10 @@ public:
 
     void clear_hook();
 
+    void enable_compilation_in_no_dispatch();
+    void disable_compilation_in_no_dispatch();
+    bool is_compilation_enabled_in_no_dispatch() const;
+
 private:
     GraphTracker() = default;
     ~GraphTracker() = default;
@@ -182,6 +186,7 @@ private:
     std::vector<std::shared_ptr<IGraphProcessor>> processors;
 
     std::shared_ptr<IGraphHooks> hook;
+    bool compilation_enabled_in_no_dispatch_ = false;
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;

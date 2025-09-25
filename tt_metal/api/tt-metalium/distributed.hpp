@@ -36,11 +36,17 @@ class IDevice;
 
 namespace distributed {
 
+enum class CompilationMode { CompileAndExecute, CompileOnly };
+
 MeshWorkload CreateMeshWorkload();
 
 void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
 
-void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
+void EnqueueMeshWorkload(
+    MeshCommandQueue& mesh_cq,
+    MeshWorkload& mesh_workload,
+    bool blocking,
+    CompilationMode compilation_mode = CompilationMode::CompileAndExecute);
 
 template <typename DType>
 void WriteShard(

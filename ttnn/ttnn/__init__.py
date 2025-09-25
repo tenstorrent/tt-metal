@@ -409,3 +409,20 @@ from ttnn._ttnn.device import get_arch_name as _get_arch_name
 
 def get_arch_name():
     return _get_arch_name()
+
+
+class compile_only:
+    def __init__(self, mesh_device):
+        self.captured_graph = None
+        self.mesh_device = mesh_device
+
+    def __enter__(self):
+        ttnn._ttnn.graph.enable_compilation_in_no_dispatch()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        ttnn._ttnn.device.wait_for_compile_threadpool()
+        ttnn._ttnn.graph.disable_compilation_in_no_dispatch()
+        self.captured_graph = ttnn.graph.end_graph_capture()
+        return False

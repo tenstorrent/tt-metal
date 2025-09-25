@@ -165,4 +165,10 @@ void GraphTracker::clear_hook() {
     hook = nullptr;
 }
 
+void GraphTracker::enable_compilation_in_no_dispatch() { compilation_enabled_in_no_dispatch_ = true; }
+
+void GraphTracker::disable_compilation_in_no_dispatch() { compilation_enabled_in_no_dispatch_ = false; }
+
+bool GraphTracker::is_compilation_enabled_in_no_dispatch() const { return compilation_enabled_in_no_dispatch_; }
+
 }  // namespace tt::tt_metal
