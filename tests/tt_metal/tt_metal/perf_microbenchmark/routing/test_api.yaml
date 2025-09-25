@@ -35,7 +35,7 @@ Tests:
       topology: Linear/Mesh/Ring/Torus # The logical topology we're testing.
       # LowLatency: Each packet is loaded with an infiniband-style packet header, where a segment is peeled off for each hop.
       # Dynamic: Every time a packet arrives at a router, the router checks its routing table to figure out where to send it.
-      (optional) routing_type: "LowLatency"/"Dynamic" 
+      (optional) routing_type: "LowLatency"/"Dynamic"
       # Tensix extension for fabric routers, used to build connections between worker->fabric router, upstream fabric router->downstream fabric router.
       (optional) fabric_tensix_config: "Default"/"Mux"
       # Controls the number of ETH links on each chip that is used in the test.
@@ -72,7 +72,7 @@ Tests:
                   W: 0
             (optional) atomic_inc_val: 1 # Only used for atomic_inc ntype, how much to increment by.
             (optional) atomic_inc_wrap: 65535 # Only used for atomic_inc ntype, the maximum value of the remote counter after which it will wrap to 0.
-            # How many hops to perform before starting the multicast. Used for grid-based multicasting. 
+            # How many hops to perform before starting the multicast. Used for grid-based multicasting.
             # For example, if the source is [0,0] and the destination is [0,1], and mcast_start_hops is 1, the multicast will start at [0,1].
             (optional) mcast_start_hops: 0
     # 2. High-level pattern
@@ -94,12 +94,12 @@ Tests:
     # 2. All patterns will be run simultaneously in each iteration.
     # expand_patterns_into_test in tt_fabric_test_config.hpp:
     # 1. All patterns are given a new random seed, for randomized iterations.
-    # NOTE: Only the maximum number of iterations is used to determine the number of tests to run. 
+    # NOTE: Only the maximum number of iterations is used to determine the number of tests to run.
     # In the case above, 5 iterations of the tests will be created, even though the first pattern only requests 2.
 
 
 
-    # Allows us to sweep multiple test configurations. 
+    # Allows us to sweep multiple test configurations.
     # The Framework generates new tests based on these parameters and inserts them into the test list.
     (optional) parametrization_params:
       (optional) ftype: [unicast, mcast]
