@@ -1196,14 +1196,14 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
 @pytest.mark.parametrize(
-    "mesh_device, h_axis, w_axis",
+    "mesh_device, h_axis, w_axis, num_links",
     [
-        ((1, 1), 0, 1),
-        ((2, 4), 0, 1),
-        ((2, 4), 1, 0),
-        ((1, 8), 0, 1),
-        ((1, 4), 1, 0),
-        ((4, 8), 0, 1),
+        ((1, 1), 0, 1, 1),
+        ((2, 4), 0, 1, 1),
+        ((2, 4), 1, 0, 1),
+        ((1, 8), 0, 1, 1),
+        ((1, 4), 1, 0, 1),
+        ((4, 8), 0, 1, 4),
     ],
     ids=[
         "1x1_h0_w1",
@@ -1216,7 +1216,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, real_weights, skip_check):
+def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch_dtype = torch.float32
@@ -1246,7 +1246,7 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, real
         )
     torch_model.eval()
 
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
         width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),

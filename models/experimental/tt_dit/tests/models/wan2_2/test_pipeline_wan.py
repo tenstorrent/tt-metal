@@ -8,17 +8,19 @@ import ttnn
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load",
     [
-        [(2, 4), (2, 4), 0, 1, 1],
+        [(2, 4), (2, 4), 0, 1, 1, True],
+        [(4, 8), (4, 8), 1, 0, 4, False],
     ],
     ids=[
         "2x4sp0tp1",
+        "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links):
+def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -53,7 +55,7 @@ def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links
         num_links=num_links,
         use_cache=True,
         boundary_ratio=0.875,
-        dynamic_load=True,
+        dynamic_load=dynamic_load,
     )
 
     # Run inference
