@@ -7,10 +7,11 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_wormhole_b0, is_blackhole, skip_for_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole, skip_for_blackhole, skip_for_slow_dispatch
 from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
@@ -57,6 +58,7 @@ def test_run_prefetcher_post_commit(
 
 
 # Test DRAM Prefetcher x Matmul on T3K
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",
     [
