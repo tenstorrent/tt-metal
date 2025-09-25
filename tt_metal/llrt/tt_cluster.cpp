@@ -95,7 +95,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         }
     }
     const auto num_chips = cluster_desc->get_all_chips().size();
-    TT_ASSERT(num_chips > 0, "No chips detected in the cluster");
+    TT_FATAL(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -169,7 +169,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
         } else if (board_type == BoardType::UBB_BLACKHOLE) {
-            cluster_type = tt::tt_metal::ClusterType::GALAXY;
+            cluster_type = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
         }
     }
     return cluster_type;
@@ -228,6 +228,11 @@ void Cluster::detect_arch_and_target() {
 
 // TODO: remove this when we deprecate TG
 bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
+
+bool Cluster::is_ubb_galaxy() const {
+    return this->cluster_type_ == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY ||
+           this->cluster_type_ == tt::tt_metal::ClusterType::GALAXY;
+}
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 

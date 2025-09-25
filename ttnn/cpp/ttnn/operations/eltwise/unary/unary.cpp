@@ -119,6 +119,7 @@ template struct ExecuteUnary<UnaryOpType::FRAC>;
 template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
 template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
+template struct ExecuteUnary<UnaryOpType::CBRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -228,6 +229,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RPOW>;
 
 // threshold(a,t,v) = (a <= t ? v : a)
 template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
@@ -257,7 +259,7 @@ Tensor Sigmoid_accurate::invoke(
     return detail::unary_impl(
         input,
         {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP, 1.0f),
+         UnaryWithParam(UnaryOpType::EXP),
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
