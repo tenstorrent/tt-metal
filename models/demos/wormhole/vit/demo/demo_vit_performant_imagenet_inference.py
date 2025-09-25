@@ -10,14 +10,14 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
+from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
 from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
-from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
-# @run_for_wormhole_b0()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
 )

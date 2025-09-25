@@ -264,47 +264,12 @@ def vit_attention(
         query_key_value,
         memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         num_heads=num_heads,
-        transpose_key=True,
     )
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
     if config.should_reallocate_in_attention:
         value = ttnn.reallocate(value)
 
-    """
-    # SDPA code
-    query = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
-    key = ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG)
-    value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
-
-    program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(config.core_grid_8x8.x, config.core_grid_8x8.y),
-        q_chunk_size=128,
-        k_chunk_size=128,
-        exp_approx_mode=False,  # NOTE: False is more correct
-    )
-
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
-    context_layer = ttnn.transformer.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        is_causal=False,
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    # ttnn.deallocate(query)
-    # ttnn.deallocate(key)
-    # ttnn.deallocate(value)
-
-    """
     attention_scores = ttnn.matmul(
         query,
         key,
@@ -523,7 +488,6 @@ def vit(
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_before_program_config"],
-        compute_kernel_config=config.program_configs["ln_compute_config"],
     )
 
     # reshard back to 48 cores as we are losing a bit of precision if this is 64 cores
