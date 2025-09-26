@@ -133,9 +133,9 @@ void fabric_mux_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
-    MeshCoordinate& sender_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -179,9 +179,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    MeshCoordinate& sender_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -687,9 +687,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
-    MeshCoordinate& sender_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
