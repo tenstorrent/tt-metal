@@ -1150,7 +1150,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                      num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
                      weights_mcast_sender_semaphore_id,
                      weights_mcast_receiver_semaphore_id,
-                     static_cast<uint32_t>(is_sender_core)});
+                     static_cast<uint32_t>(is_sender_core),
+                     static_cast<uint32_t>(false)});  // skip_work
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
             } else {
                 CoreCoord top_core = {(std::size_t)core.x, 0};
