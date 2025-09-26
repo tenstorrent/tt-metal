@@ -74,7 +74,12 @@ class TtnnYoloV11:
         print(f"    Range: [{x_pre_permute_flat.min()}, {x_pre_permute_flat.max()}], Mean: {x_pre_permute_flat.mean()}")
         print(f"    Dtype: {x_pre_permute_debug.dtype}, Shape: {x_pre_permute_debug.shape}")
         
-        x = ttnn.permute(x, (0, 2, 3, 1))
+        # CRITICAL FIX: Use explicit memory config with float32 to prevent internal typecasting
+        float32_memory_config = ttnn.DRAM_MEMORY_CONFIG  # Explicit memory config
+        x = ttnn.permute(x, (0, 2, 3, 1), memory_config=float32_memory_config)
+        
+        # Ensure output maintains float32 precision
+        x = ttnn.to_memory_config(x, float32_memory_config, dtype=ttnn.float32)
         
         # Debug: Check diversity after permute operation  
         x_post_permute_debug = ttnn.to_torch(x)
