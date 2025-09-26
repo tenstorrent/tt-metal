@@ -429,10 +429,11 @@ private:
     }
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
-    TestConfig resolve_test_config(const ParsedTestConfig& parsed_test) {
+    TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number) {
         TestConfig resolved_test;
         resolved_test.name = parsed_test.name;
         resolved_test.parametrized_name = parsed_test.parametrized_name;
+        resolved_test.iteration_number = iteration_number;
         resolved_test.fabric_setup = parsed_test.fabric_setup;
         resolved_test.on_missing_param_policy = parsed_test.on_missing_param_policy;
         resolved_test.parametrization_params = parsed_test.parametrization_params;
@@ -591,9 +592,7 @@ private:
             split_all_unicast_or_multicast_patterns(iteration_test);
 
             // Convert to resolved TestConfig
-            TestConfig resolved_test = resolve_test_config(iteration_test);
-            // Set iteration number explicitly, because it doesn't make sense to have it in ParsedTestConfig
-            resolved_test.iteration_number = i;
+            TestConfig resolved_test = resolve_test_config(iteration_test, i);
 
             validate_test(resolved_test);
             expanded_tests.push_back(resolved_test);
