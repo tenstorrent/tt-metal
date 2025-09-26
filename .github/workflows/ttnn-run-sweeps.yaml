@@ -639,13 +639,26 @@ jobs:
           import os, json, math
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
+
+          # Separate slow modules that should run in their own batch
+          slow_modules = ['conv2d.full.conv2d_sliding_window']
+          regular_modules = [m for m in modules if m not in slow_modules]
+
           # Use smaller batch size for comprehensive runs (Friday night schedule or manual comprehensive dispatch)
           # Use larger batch size for nightly runs (Thursday schedule or manual nightly dispatch)
           if "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
               BATCH_SIZE = 4  # Smaller batches for comprehensive runs
           else:
               BATCH_SIZE = 10  # Larger batches for nightly runs
-          batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
+
+          # Create batches for regular modules
+          batches = [",".join(regular_modules[i:i+BATCH_SIZE]) for i in range(0, len(regular_modules), BATCH_SIZE)]
+
+          # Add slow modules as individual batches
+          for slow_module in slow_modules:
+              if slow_module in modules:  # Only add if the module exists
+                  batches.append(slow_module)
+
           print(json.dumps({"module": modules, "batches": batches}))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
