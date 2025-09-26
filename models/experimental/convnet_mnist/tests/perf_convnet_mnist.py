@@ -22,7 +22,7 @@ from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
     "expected_inference_time, expected_compile_time",
     (
         (
-            1.3,
+            0.0042,
             6.5,
         ),
     ),

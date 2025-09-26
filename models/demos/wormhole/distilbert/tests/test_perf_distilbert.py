@@ -21,7 +21,7 @@ from models.perf.perf_utils import prep_perf_report
 @pytest.mark.parametrize("model_name", ["distilbert-base-uncased-distilled-squad"])
 @pytest.mark.parametrize(
     "batch_size, seq_len, expected_inference_time, expected_compile_time",
-    ([8, 384, 15.00, 16.00],),
+    ([8, 384, 0.0338, 16.00],),
 )
 def test_performance_distilbert_for_qa(
     mesh_device,
