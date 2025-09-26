@@ -138,13 +138,13 @@ template <typename, typename = void>
 inline constexpr bool has_log_base_2_of_page_size_v = false;
 
 template <typename T>
-inline constexpr bool has_log_base_2_of_page_size_v<T, std::void_t<decltype(std::declval<T>().log_base_2_of_page_size)>> = true;
+inline constexpr bool
+    has_log_base_2_of_page_size_v<T, std::void_t<decltype(std::declval<T>().log_base_2_of_page_size)>> = true;
 
 // Combined addrgen traits
 template <typename T>
 inline constexpr bool has_required_addrgen_traits_v =
-    has_get_noc_addr_v<T> and
-    (has_page_size_v<T> or has_log_base_2_of_page_size_v<T>);
+    has_get_noc_addr_v<T> and (has_page_size_v<T> or has_log_base_2_of_page_size_v<T>);
 
 // clang-format off
 /**
@@ -281,6 +281,24 @@ struct InterleavedAddrGen {
         return (bank_offset_index * this->aligned_page_size) + this->bank_base_address + offset +
                interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
     }
+
+    FORCE_INLINE
+    uint32_t get_addr_debug(const uint32_t id) const {
+        return get_addr(
+            id,
+            interleaved_addr_gen::get_bank_offset_index<DRAM>(id),
+            interleaved_addr_gen::get_bank_index<DRAM>(id, interleaved_addr_gen::get_bank_offset_index<DRAM>(id)),
+            0);
+    }
+    FORCE_INLINE
+    uint32_t get_bank_index_debug(const uint32_t id) const {
+        return interleaved_addr_gen::get_bank_index<DRAM>(id, interleaved_addr_gen::get_bank_offset_index<DRAM>(id));
+    }
+    FORCE_INLINE
+    uint32_t get_bank_offset_index_debug(const uint32_t id) const {
+        return interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    }
+
 
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {

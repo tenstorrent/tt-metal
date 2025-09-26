@@ -22,6 +22,15 @@
 
 namespace NAMESPACE {
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 16, .w1 = 32, .ws = 1};
+        UNPACK(DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
+    }
+}
+
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -189,6 +198,26 @@ void MAIN {
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
+// for (uint32_t delay = 0; delay < 1000000000; ++delay) {
+//     // Simple delay loop - just consume cycles
+//     asm volatile("nop");
+// }
+
+for (uint32_t i = 0; i < in0_block_num_tiles; ++i) {
+    UNPACK(DPRINT << "Batch: " << b << " num block_h_dim: " << bh << " num_blocks_w_dim: " << bw << " block: " << block << " i: " << i << ENDL());
+    print_full_tile(in0_cb_id, i);
+}
+
+// uint32_t count = 0;
+// UNPACK(volatile tt_l1_ptr uint8_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t *>(get_local_cb_interface(in1_cb_id).fifo_rd_ptr));
+// // volatile tt_l1_ptr uint8_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(in1_start_address);
+// for (uint32_t i = 0; i < 1000; ++i) {
+//     UNPACK(DPRINT << (uint32_t)ptr[i] << " ");
+//     if (i % 100 == 0) {
+//         UNPACK(DPRINT << ENDL());
+//     }
+// }
+// UNPACK(DPRINT << ENDL());
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {

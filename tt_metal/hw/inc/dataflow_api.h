@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "debug/dprint.h"
 #if __has_include("chlkc_unpack_data_format.h")
 #include "chlkc_pack_data_format.h"
 #include "chlkc_unpack_data_format.h"
@@ -522,18 +523,22 @@ inline void noc_async_read(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    DPRINT << "noc_async_read: start" << ENDL();
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        DPRINT << "noc_async_read_one_packet: chosen" << ENDL();
         noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
+        DPRINT << "ncrisc_noc_fast_read_any_len: chosen" << ENDL();
         ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
         WAYPOINT("NARD");
     }
+    DPRINT << "noc_async_read: finish" << ENDL();
 }
 
 // clang-format off
@@ -968,7 +973,7 @@ FORCE_INLINE void noc_async_read_page(
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
         "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
-
+// DPRINT << "noc_async_read_page: start" << ENDL();
     uint32_t page_size;
     if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
@@ -978,8 +983,11 @@ FORCE_INLINE void noc_async_read_page(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, page_size, -1);
     }
+    const auto x = addrgen.get_noc_addr(id, offset, noc);
+    // DPRINT << "  -> x: " << x << ", page_size: " << page_size << ENDL();
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
+        x, dst_local_l1_addr, page_size, noc);
+    // DPRINT << "noc_async_read_page: finish" << ENDL();
 }
 
 // clang-format off
@@ -1020,6 +1028,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
+    DPRINT << "noc_async_read_tile: Start" << ENDL();
     RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, addrgen.page_size, -1);
     noc_async_read_page<TensorAccessor<DSpec>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }

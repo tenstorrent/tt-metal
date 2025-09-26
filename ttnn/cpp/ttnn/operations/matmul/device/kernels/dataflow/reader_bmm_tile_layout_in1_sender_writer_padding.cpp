@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
-
+#include "accessor/tensor_accessor.h"
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -166,9 +166,23 @@ void kernel_main() {
     cb_push_back(cb_id_in1, in1_block_num_tiles * num_blocks_inner_dim);
 #else
     uint32_t l1_write_addr_in1;
-
+    DPRINT << "Creating tensor accessor for tensor 1 (s1)" << ENDL();
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
+    DPRINT << "Created s1" << ENDL();
+    // const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes*2);
 #endif
+    // --------- DEBUG ----------
+    // for (uint32_t i = 0; i < 4; ++i) {
+    //    cb_reserve_back(cb_id_in1, 2);
+    //     const uint32_t addr = get_write_ptr(cb_id_in1);
+    //    DPRINT << "DEBUG: i: " << i << " addr: " << addr << ENDL();
+    //     noc_async_read_page(i, s1, addr); // TODO: HERE
+    //     noc_async_read_barrier();
+    //    cb_push_back(cb_id_in1, 2);
+    // }
+    // cb_wait_front(cb_id_in1, 8);
+    // cb_pop_front(cb_id_in1, 8);
+    // --------- DEBUG END -----------
 
     //  WRITER
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
@@ -299,8 +313,12 @@ void kernel_main() {
 #else
 #ifndef IN1_SHARDED
                         // Operand 1
+                        uint32_t helper_cb_index = tt::CBIndex::c_7;
+                        cb_reserve_back(helper_cb_index, 1);
+                        const uint32_t cb_helper_write_ptr = get_write_ptr(helper_cb_index);
+
                         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-                        DPRINT << "!!! in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
+                        DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
                         l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                         uint64_t in1_start_address =
                             l1_write_addr_in1;  // copy start address of block, to be used for mcasting
@@ -309,15 +327,45 @@ void kernel_main() {
                         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
                         for (uint32_t h = 0; h < in1_block_h; ++h) {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                            for (uint32_t w = 0; w < in1_block_w; ++w) {
+                            for (uint32_t w = 0; w < in1_block_w; w++) {
                                 if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
                                     DPRINT << "     > --- w: " << w << " / " << in1_block_w << " ---" << ENDL();
                                     DPRINT << "     > in1_tensor_tile_id: " << in1_tensor_tile_id << ENDL();
                                     DPRINT << "     > l1_write_addr_in1: " << l1_write_addr_in1 << ENDL();
-                                    // noc_async_read_page(in1_tensor_tile_id, s1, l1_write_addr_in1); // TODO: HERE
+                                    const auto noc_address = s1.get_noc_addr(in1_tensor_tile_id);
+                                    DPRINT << "     > NoC address: " << noc_address << ENDL();
+
+                                    const auto dram_address = s1.get_addr_debug(in1_tensor_tile_id);
+                                    DPRINT << "     > DRAM address: " << dram_address << ENDL();
+
+                                    const auto bank_index = s1.get_bank_index_debug(in1_tensor_tile_id);
+                                    DPRINT << "     > Bank index: " << bank_index << ENDL();
+
+                                    const auto bank_offset = s1.get_bank_offset_index_debug(in1_tensor_tile_id);
+                                    DPRINT << "     > Bank offset index: " << bank_offset << ENDL();
+
+                                    noc_async_read_page(in1_tensor_tile_id, s1, cb_helper_write_ptr); // TODO: READ
+                                    noc_async_read_barrier();
+// uint32_t count = 0;
+// volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_helper_write_ptr);
+// for (uint32_t i = 0; i < 544; ++i) {
+//     DPRINT << ptr[i] << " ";
+// }
+// DPRINT << ENDL();
+                                    // Copy from helper CB to the actual CB to ensure alignment
+                                    volatile tt_l1_ptr uint8_t* src = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_helper_write_ptr);
+                                    volatile tt_l1_ptr uint8_t* dst = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr_in1);
+                                    for (uint32_t i = 0; i < 544; ++i) {
+                                        dst[i] = src[i];
+                                    }
+                                    // DPRINT << "AFTER MEMCPY" << ENDL();
+                                    // memcpy(dst, src, in1_single_tile_size_bytes);
+                                    // DPRINT << "     > READ DONE" << ENDL();
                                     // READ noc_async_read_barrier();
-                                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);  // TODO: HERE READ
+                                    // noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);  // TODO: READ
+                                    // noc_async_read_barrier();
                                 }
+                                // l1_write_addr_in1 += 2*in1_single_tile_size_bytes;
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
                                 in1_tensor_tile_id += in1_tensor_stride_w;
                             }
@@ -327,6 +375,16 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
+// DPRINT << "AFTER READ BARRIER" << ENDL();
+// uint32_t count = 0;
+// volatile tt_l1_ptr uint8_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(in1_start_address);
+// for (uint32_t i = 0; i < 1000; ++i) {
+//     DPRINT << (uint32_t)ptr[i] << " ";
+//     if (i % 100 == 0) {
+//         DPRINT << ENDL();
+//     }
+// }
+// DPRINT << ENDL();
 #endif
 #endif  // IN1_DRAM_SHARDED
 
@@ -474,6 +532,7 @@ void kernel_main() {
 #endif  // FUSE_BIAS
 
 #ifndef OUT_SHARDED
+                    DPRINT << "Writing output" << ENDL();
                     // WRITER
                     uint32_t num_blocks_w_dim_ =
                         bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
@@ -499,8 +558,17 @@ void kernel_main() {
                                 subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                             }
 
-                            cb_wait_front(cb_id_out0, out_subblock_tile_count);
+                            cb_wait_front(cb_id_out0, out_subblock_tile_count); // TODO: HERE OUT
                             uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+uint32_t count = 0;
+volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_read_addr);
+for (uint32_t i = 0; i < 1000; ++i) {
+    DPRINT << (uint32_t)ptr[i] << " ";
+    if (i % 100 == 0) {
+        DPRINT << ENDL();
+    }
+}
+DPRINT << ENDL();
 
                             for (uint32_t h = 0; h < out_subblock_h_; ++h) {
                                 uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
@@ -558,8 +626,21 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
+    DPRINT << "Writing output SHARDED" << ENDL();
     cb_wait_front(
         cb_id_out0,
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+const auto x = batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h;
+DPRINT << "out sharded count: " << x << ENDL();
+uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+uint32_t count = 0;
+volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_read_addr);
+for (uint32_t i = 0; i < 24; ++i) {
+    DPRINT << BF16(ptr[i]) << " ";
+    if (i % 100 == 0 && i != 0) {
+        DPRINT << ENDL();
+    }
+}
+DPRINT << ENDL();
 #endif
 }

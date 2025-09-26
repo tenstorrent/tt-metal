@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <iostream>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -84,13 +85,20 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
-    std::cout << "in1_data_format: " << in1_data_format << std::endl;
+    std::cout << "in0_single_tile_size: " << in0_single_tile_size << std::endl; // 1024
+    std::cout << "in0_tile.get_tile_hw(): " << in0_tile.get_tile_hw() << std::endl; // 512
+    std::cout << "in0_tile.get_height(): " << in0_tile.get_height() << std::endl; // 16
+    std::cout << "in0_tile.get_width(): " << in0_tile.get_width() << std::endl; // 32
+    std::cout << "in0_tile.get_num_faces(): " << in0_tile.get_num_faces() << std::endl; // 2
+    std::cout << "in0_data_format: " << in0_data_format << std::endl; // bfloat16
+
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    std::cout << "in1_single_tile_size: " << in1_single_tile_size << std::endl;
-    std::cout << "in1_tile.get_tile_hw(): " << in1_tile.get_tile_hw() << std::endl;
-    std::cout << "in1_tile.get_height(): " << in1_tile.get_height() << std::endl;
-    std::cout << "in1_tile.get_width(): " << in1_tile.get_width() << std::endl;
-    std::cout << "in1_tile.get_num_faces(): " << in1_tile.get_num_faces() << std::endl;
+    std::cout << "in1_single_tile_size: " << in1_single_tile_size << std::endl; // 544
+    std::cout << "in1_tile.get_tile_hw(): " << in1_tile.get_tile_hw() << std::endl; // 512
+    std::cout << "in1_tile.get_height(): " << in1_tile.get_height() << std::endl; // 32
+    std::cout << "in1_tile.get_width(): " << in1_tile.get_width() << std::endl; // 16
+    std::cout << "in1_tile.get_num_faces(): " << in1_tile.get_num_faces() << std::endl; // 2
+    std::cout << "in1_data_format: " << in1_data_format << std::endl; // bfp8_b
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
@@ -100,7 +108,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
     const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-
+std::cout << "in1_is_sharded: " << in1_is_sharded << std::endl;
+std::cout << "in1_memory_layout: " <<  enchantum::to_string(in1_buffer->buffer_layout()) << std::endl;
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
@@ -121,8 +130,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (B * num_blocks > 1) {
         in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
+std::cout << "in1_CB_tiles: " << in1_CB_tiles << std::endl; // 24
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
-
+std::cout << "!!! in1_CB_size: " << in1_CB_size << std::endl; // 13056
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
@@ -163,7 +173,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     CoreRange all_cores_with_work(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
-
+    std::cout << "all_cores_with_work: " << all_cores_with_work.str() << std::endl;
+    std::cout << "all_cores_with_work size: " << all_cores_with_work.size() << std::endl;
     ////////////////////////////////////////////////////////////////////////////
     //                      IN0 SHARDED SENDER/RECEIVER
     ////////////////////////////////////////////////////////////////////////////
@@ -225,6 +236,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    std::cout << "All cores: " << all_cores.str() << std::endl;
+    std::cout << "All cores size: " << all_cores.size() << std::endl;
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -590,10 +603,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::tt_metal::KernelHandle mm_kernel_in0_sender_id = 0;
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
     if (in0_block_sharded) {
+        std::cout << "all_cores_with_work: " << all_cores_with_work.str() << std::endl;
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp", // TODO: USED THIS ONE
             all_cores_with_work,  // in0_mcast_cores_with_work_and_in_receiver_grid
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -603,10 +617,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
             in0_sender_compile_time_args[1] = 0;  // core_in_in0_receiver_mcast_grid
+            std::cout << "in0_mcast_cores_without_work_and_not_in_receiver_grid: " << in0_mcast_cores_without_work_and_not_in_receiver_grid.value().str() << std::endl;
             mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp", // TODO: NOT USED THIS ONE
                 in0_mcast_cores_without_work_and_not_in_receiver_grid.value(),
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -625,7 +640,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
             }
         }
-
+std::cout << "Creating in0 sender interleaved kernel with " << in0_sender_interleaved.str() << " cores" << std::endl;
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
@@ -639,7 +654,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp", // TODO: USED THIS ONE
         in1_sender,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -664,6 +679,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
     if (!in0_block_sharded and in0_receiver_interleaved.num_cores() > 0) {
+        std::cout << "in0_receiver_interleaved: " << in0_receiver_interleaved.str() << std::endl;
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -679,6 +695,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
 
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+        std::cout << "in0_receiver_in1_receiver_interleaved_other_cores: " << in0_receiver_in1_receiver_interleaved_other_cores.value().str() << std::endl;
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -689,7 +706,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 .noc = in1_split_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
                 .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
-
+std::cout << "in0_receiver_in1_receiver_interleaved_other_cores: " << in0_receiver_in1_receiver_interleaved_other_cores.value().str() << " cores" << std::endl;
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -772,10 +789,18 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
+
+    uint32_t helper_cb_index = tt::CBIndex::c_7;  // TODO: HERE config!!!
+    tt_metal::CircularBufferConfig helper_cb_config =
+        tt_metal::CircularBufferConfig(in1_single_tile_size, {{helper_cb_index, in1_data_format}})
+            .set_page_size(helper_cb_index, in1_single_tile_size)
+            .set_tile_dims(helper_cb_index, in1_tile);
+
     if (in1_is_sharded and not in1_is_dram) {
         src1_cb_config.set_globally_allocated_address(*in1_buffer);
     }
     tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, helper_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",

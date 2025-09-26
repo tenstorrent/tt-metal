@@ -22,6 +22,14 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
     const tt::DataFormat output_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
+    const auto in_tile = tensor_args.input_tensor.tensor_spec().tile();
+    std::cout << "in_tile.get_tile_hw(): " << in_tile.get_tile_hw() << std::endl;
+    std::cout << "in_tile.get_height(): " << in_tile.get_height() << std::endl;
+    std::cout << "in_tile.get_width(): " << in_tile.get_width() << std::endl;
+    std::cout << "in_tile.get_num_faces(): " << in_tile.get_num_faces() << std::endl;
+    std::cout << "in_tile.get_tile_size(input_tensor_cb_data_format): " << in_tile.get_tile_size(input_tensor_cb_data_format) << std::endl;
+    std::cout << "input_tensor_cb_data_format: " << input_tensor_cb_data_format << std::endl;
+
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t input_index_tensor_tile_size = tile_size(input_index_tensor_cb_data_format);
     const uint32_t output_tensor_tile_size = tile_size(output_tensor_cb_data_format);

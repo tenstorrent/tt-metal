@@ -12,7 +12,7 @@
 #include "shard_pages_address_iterator.h"
 #include "pages_address_iterator.h"
 #include "compile_time_args.h"
-
+#include "debug/dprint.h"
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api_addrgen.h"
 #endif
@@ -64,18 +64,18 @@ public:
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
-        dspec_instance(std::forward<DSpec_>(dspec)), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
+        dspec_instance(std::forward<DSpec_>(dspec)), bank_base_address(bank_base_address_in), page_size(page_size_in) {DPRINT << "Tensor accessor created 1" << ENDL();}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<DSpec_::is_static, int> = 0>
     TensorAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
-        bank_base_address(bank_base_address_in), page_size(page_size_in) {}
+        bank_base_address(bank_base_address_in), page_size(page_size_in) {DPRINT << "Tensor accessor created 2" << ENDL();}
 
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
-        dspec_instance(args), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
+        dspec_instance(args), bank_base_address(bank_base_address_in), page_size(page_size_in) {DPRINT << "Tensor accessor created 3" << ENDL();}
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -96,12 +96,14 @@ public:
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t page_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        DPRINT << "TensorAccessor::get_noc_addr 1" << ENDL();
         return get_noc_addr(get_bank_and_offset(page_id), offset, noc);
     }
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_noc_addr(
         const ArrType page_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        DPRINT << "TensorAccessor::get_noc_addr 2" << ENDL();
         return get_noc_addr(get_bank_and_offset(page_coord), offset, noc);
     }
 
@@ -109,6 +111,7 @@ public:
     FORCE_INLINE
     std::uint64_t get_shard_noc_addr(
         const uint32_t shard_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        DPRINT << "TensorAccessor::get_shard_noc_addr 1" << ENDL();
         PageMapping page_mapping{
             .bank_id = shard_id % dspec().num_banks(),
             .bank_page_offset = shard_id / dspec().num_banks() * dspec().shard_volume(),
@@ -119,6 +122,7 @@ public:
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_shard_noc_addr(
         const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        DPRINT << "TensorAccessor::get_shard_noc_addr 2" << ENDL();
         uint32_t shard_id = 0;
         for (uint32_t i = 0; i < dspec().rank(); ++i) {
             // Check that shard_coord is within bounds
@@ -135,6 +139,8 @@ public:
     };
 
     PageMapping get_bank_and_offset(uint32_t page_id) const {
+        DPRINT << "TensorAccessor::get_bank_and_offset 1" << ENDL();
+
         // Check that page_id is within bounds
         ASSERT(page_id < dspec().tensor_volume());
         if (dspec().rank() >= 4) {
@@ -156,6 +162,7 @@ public:
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     PageMapping get_bank_and_offset(const ArrType page_coord) const {
+        DPRINT << "TensorAccessor::get_bank_and_offset 2" << ENDL();
         // Flattened shard id is used to compute the bank id and shard id within a bank
         // - First, get the shard coordinate with page_coord[i] / dspec.shard_shape[i]
         // - Then, multiply by the shard grid strides and accumulate
@@ -240,6 +247,7 @@ private:
     FORCE_INLINE
     std::uint64_t get_noc_addr(
         const PageMapping page_mapping, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        DPRINT << "TensorAccessor::get_noc_addr 3" << ENDL();
         const auto& packed_xy_coords = dspec().packed_xy_coords();
         auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
@@ -314,12 +322,12 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {DPRINT << "Tensor accessor created 4" << ENDL();}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {DPRINT << "Tensor accessor created 5" << ENDL();}
 
     // Locality APIs
     FORCE_INLINE

@@ -685,14 +685,15 @@ def test_matmul_2d_multiple_output_blocks_per_core(
 def run_matmul_2d_tiny_tile(
     device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    in0_shape = [1, 1, m, k]
-    in1_shape = [1, 1, k, n]
+    torch.manual_seed(10)
+    in0_shape = [1, 1, m, k]  # [1, 1, 512, 512]
+    in1_shape = [1, 1, k, n]  # [1, 1, 512, 768]
     bias_shape = [1, 1, n]
 
-    in0_block_w = k // grid_size[0] // 32
-    out_block_h = m // grid_size[1] // tile_h
-    out_block_w = n // grid_size[0] // tile_w
-    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+    in0_block_w = k // grid_size[0] // 32  # 2
+    out_block_h = m // grid_size[1] // tile_h  # 8
+    out_block_w = n // grid_size[0] // tile_w  # 6
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)  # 1, 2, _
 
     in0 = torch.ones(in0_shape).bfloat16()
     in1 = torch.randn(in1_shape).bfloat16()
@@ -793,6 +794,86 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
+def run_small_example(device):
+    torch.manual_seed(10)
+    tile_h = 16
+    tile_w = 16
+
+    in0_shape = [32, 64]
+    in1_shape = [64, 32]
+
+    in0_block_w = 64 // 1 // 32  #
+    out_block_h = 32 // 1 // tile_h  #
+    out_block_w = 32 // 1 // tile_w  #
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)  # 2, 2, _
+
+    in0 = torch.ones(in0_shape).bfloat16()
+    in1 = torch.randn(in1_shape).bfloat16()
+
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (1, 1, 32, 64),
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, tile_w), transpose_tile=True),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    out_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    output_tile = ttnn.Tile([tile_h, tile_w])
+
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        memory_config=out_mem_config,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
+        output_tile=output_tile,
+    )
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
+
+
 """
 Failing config:
 transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=16-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512
@@ -810,24 +891,78 @@ terminate called after throwing an instance of 'std::runtime_error'
   what():  TT_THROW @ /localdev/mgajewski/tt-metal/tt_metal/impl/debug/watcher_device_reader.cpp:696: tt::exception
 info:
 Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x021060] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction).
+
+# 2
+transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=32-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512
+
+# 3
+transpose_tile=False-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=16-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512
+2025-09-18 07:39:31.426 | warning  |           Metal | Device 0 worker core(x= 4,y= 0) virtual(x= 5,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x0210a0] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000700] (invalid address alignment in NOC transaction). (watcher_device_reader.cpp:722)
+2025-09-18 07:39:31.426 | info     |           Metal | Last waypoint: NARW,CRBW,   K,MWDD,   K (watcher_device_reader.cpp:1022)
+2025-09-18 07:39:31.426 | info     |           Metal | While running kernels: (watcher_device_reader.cpp:1091)
+2025-09-18 07:39:31.426 | info     |           Metal |   brisc: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:39:31.426 | info     |           Metal |  ncrisc: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:39:31.426 | info     |           Metal |  trisc0: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:39:31.426 | info     |           Metal |  trisc1: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:39:31.426 | info     |           Metal |  trisc2: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:39:31.426 | critical |          Always | Device 0 worker core(x= 4,y= 0) virtual(x= 5,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x0210a0] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000700] (invalid address alignment in NOC transaction). (assert.hpp:111)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /localdev/mgajewski/tt-metal/tt_metal/impl/debug/watcher_device_reader.cpp:728: tt::exception
+info:
+Device 0 worker core(x= 4,y= 0) virtual(x= 5,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x0210a0] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000700] (invalid address alignment in NOC transaction).
+
+# 4
+transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=16-grid_size=(8, 4)-has_bias=True-n=768-k=512-m=512
+2025-09-18 07:54:32.073 | warning  |           Metal | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x0210a0] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction). (watcher_device_reader.cpp:722)
+2025-09-18 07:54:32.073 | info     |           Metal | Last waypoint: NARW,CRBW,   K,MWDD,   K (watcher_device_reader.cpp:1022)
+2025-09-18 07:54:32.073 | info     |           Metal | While running kernels: (watcher_device_reader.cpp:1091)
+2025-09-18 07:54:32.073 | info     |           Metal |   brisc: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:54:32.073 | info     |           Metal |  ncrisc: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:54:32.073 | info     |           Metal |  trisc0: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:54:32.073 | info     |           Metal |  trisc1: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:54:32.073 | info     |           Metal |  trisc2: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp (watcher_device_reader.cpp:1093)
+2025-09-18 07:54:32.073 | critical |          Always | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x0210a0] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction). (assert.hpp:111)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /localdev/mgajewski/tt-metal/tt_metal/impl/debug/watcher_device_reader.cpp:728: tt::exception
+info:
+Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x0210a0] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction).
+
+# 5
+transpose_tile=True-in1_dtype=DataType.BFLOAT8_B-out_sharded=True-in0_sharded=True-tile_w=16-tile_h=32-grid_size=(8, 4)-has_bias=False-n=768-k=512-m=512
+Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):  brisc using noc0 tried to unicast read 544 bytes to local L1[0x0210a0] from DRAM core w/ virtual coords (x=17,y=15) DRAM[addr=0x00000040] (invalid address alignment in NOC transaction).
+
+if has_bias == False and tile_h == 16 and tile_w == 16 and in1_dtype == ttnn.bfloat8_b and transpose_tile == True:
+    pytest.skip("Known failure case")
+if has_bias == False and tile_h == 32 and tile_w == 16 and in1_dtype == ttnn.bfloat8_b and transpose_tile == False:
+    pytest.skip("Known failure case")
+if has_bias == False and tile_h == 16 and tile_w == 16 and in1_dtype == ttnn.bfloat8_b and transpose_tile == False:
+    pytest.skip("Known failure case")
+if has_bias == True and tile_h == 16 and tile_w == 16 and in1_dtype == ttnn.bfloat8_b and transpose_tile == True:
+    pytest.skip("Known failure case")
+if has_bias == True and tile_h == 32 and tile_w == 16 and in1_dtype == ttnn.bfloat8_b and transpose_tile == True:
+    pytest.skip("Known failure case")
 """
 
 
 def test_fail_config(device):
-    run_matmul_2d_tiny_tile(
-        device,
-        m=512,
-        k=512,
-        n=768,
-        has_bias=False,
-        grid_size=(8, 4),
-        tile_h=16,
-        tile_w=16,
-        in0_sharded=True,
-        out_sharded=True,
-        in1_dtype=ttnn.bfloat8_b,
-        transpose_tile=True,
-    )
+    small = True
+    if not small:
+        run_matmul_2d_tiny_tile(
+            device,
+            m=512,
+            k=512,
+            n=768,
+            has_bias=False,
+            grid_size=(8, 4),
+            tile_h=16,
+            tile_w=16,
+            in0_sharded=True,
+            out_sharded=True,
+            in1_dtype=ttnn.bfloat8_b,
+            transpose_tile=True,
+        )
+    else:
+        run_small_example(device)
 
 
 """
