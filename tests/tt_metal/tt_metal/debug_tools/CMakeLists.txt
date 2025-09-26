@@ -12,7 +12,6 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_raise_wait.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_config_register.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/inspector/test_rpc_startup.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_assert.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize_delays.cpp
@@ -23,48 +22,78 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp
 )
 
-function(create_unit_test_executable)
-    set(exec_name unit_tests_debug_tools)
+# Create the test executable
+add_executable(unit_tests_debug_tools ${UNIT_TESTS_DEBUG_TOOLS_SRC})
 
-    # Create the test executable
-    add_executable(${exec_name} ${UNIT_TESTS_DEBUG_TOOLS_SRC})
+# Enable unity build for the executable
+TT_ENABLE_UNITY_BUILD(unit_tests_debug_tools)
 
-    # Enable unity build for the executable
-    TT_ENABLE_UNITY_BUILD(${exec_name})
+# Link libraries
+target_link_libraries(unit_tests_debug_tools PRIVATE test_metal_common_libs)
 
-    # Link libraries
-    target_link_libraries(
-        ${exec_name}
-        PRIVATE
-            test_metal_common_libs
-            Metalium::Metal::Impl
-            capnp
-            capnp-rpc
-            numa
-    )
+# Set include directories
+target_include_directories(
+    unit_tests_debug_tools
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
 
-    # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
-    target_compile_options(${exec_name} PRIVATE -DKJ_NO_EXCEPTIONS=0)
+# Set runtime output directory
+set_target_properties(
+    unit_tests_debug_tools
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
 
-    # Set include directories
-    target_include_directories(
-        ${exec_name}
-        BEFORE
-        PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-            ${PROJECT_SOURCE_DIR}/tests
-            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
-            ${CMAKE_CURRENT_SOURCE_DIR}
-            ${CMAKE_CURRENT_SOURCE_DIR}/common
-    )
 
-    # Set runtime output directory
-    set_target_properties(
-        ${exec_name}
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                ${PROJECT_BINARY_DIR}/test/tt_metal
-    )
-endfunction()
 
-create_unit_test_executable()
+
+set(UNIT_TESTS_INSPECTOR_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/inspector/test_rpc_startup.cpp
+)
+
+# Create the test executable
+add_executable(unit_tests_inspector ${UNIT_TESTS_INSPECTOR_SRC})
+
+# Enable unity build for the executable
+TT_ENABLE_UNITY_BUILD(unit_tests_inspector)
+
+# Link libraries
+target_link_libraries(
+    unit_tests_inspector
+    PRIVATE
+        test_metal_common_libs
+        Metalium::Metal::Impl
+        capnp
+        capnp-rpc
+        numa
+)
+
+# Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
+target_compile_options(unit_tests_inspector PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
+# Set include directories
+target_include_directories(
+    unit_tests_inspector
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+# Set runtime output directory
+set_target_properties(
+    unit_tests_inspector
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
