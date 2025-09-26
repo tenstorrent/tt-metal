@@ -321,12 +321,14 @@ void set_or_update_runtime_arguments(
 
         const bool is_quant_op = operation_attributes.is_quant_op;
         TT_FATAL(
-            is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
-                            (operation_attributes.post_activations[0].op_type ==
-                             ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+            is_quant_op ==
+                ((operation_attributes.post_activations.size() == 1) &&
+                 (operation_attributes.post_activations[0].type() == ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
             "Quantization op needs to exactly one zero-point value as a post activation");
         const uint32_t quantization_zero_point =
-            is_quant_op ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].params[0]) : 0u;
+            is_quant_op ? std::bit_cast<uint32_t>(
+                              operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
+                        : 0u;
 
         if (b.has_value()) {
             if (has_sharding) {
@@ -541,9 +543,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
 
-    uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
-    uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
-    uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
+    uint32_t a_single_tile_size = tt::tile_size(a_data_format);
+    uint32_t b_single_tile_size = tt::tile_size(b_data_format);
+    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -554,15 +556,17 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     auto op_type = operation_attributes.binary_op_type;
 
-    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>)
-                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>);
+    // TODO: when handling mixed types, we must identify the appropriate dtype and pass it here to define the respective
+    // LLK APIs
+    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
+                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
     {
-        ttnn::SmallVector<unary::UnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
-        ttnn::SmallVector<unary::UnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
-        ttnn::SmallVector<unary::UnaryWithParam> post_activations = operation_attributes.post_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);
@@ -588,10 +592,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
-            if (post_activations[0].op_type == unary::UnaryOpType::RELU) {
+            if (post_activations[0].type() == unary::UnaryOpType::RELU) {
                 compute_kernel_defines["PACK_RELU"] = "1";
                 unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
-            } else if (post_activations[0].op_type == unary::UnaryOpType::ZERO_POINT) {
+            } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
@@ -624,7 +628,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         auto a_intermediate_format = is_sfpu_op   ? a_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : a_data_format;
-        uint32_t a_intermediate_single_tile_size = tt_metal::detail::TileSize(a_intermediate_format);
+        uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         create_cb(
             tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
     }
@@ -643,7 +647,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         auto b_intermediate_format = is_sfpu_op   ? b_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : b_data_format;
-        uint32_t b_intermediate_single_tile_size = tt_metal::detail::TileSize(b_intermediate_format);
+        uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         create_cb(
             tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
     }

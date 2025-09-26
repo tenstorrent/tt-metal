@@ -8,7 +8,6 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
@@ -113,7 +112,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
     tt::tt_metal::Program program = tt::tt_metal::Program();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -515,7 +514,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     bool needs_padding = (C % tile_shape[1] != 0) && pad_value.has_value();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     auto compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -558,8 +557,18 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
             }
         }
     }
-    std::vector<uint32_t> reader_compile_time_args = {
-        num_writes, padding_val_packed, (uint32_t)needs_padding, (uint32_t)0, 1, 1, 1, 1, 1};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"num_writes", num_writes},
+        {"padding_val_packed", padding_val_packed},
+        {"needs_padding", needs_padding},
+        {"swap_hw", (uint32_t)0},
+        {"H", 1},
+        {"W", 1},
+        {"accumulated_outer_dims", 1},
+        {"tile_height", 1},
+        {"tile_width", 1},
+    };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -567,7 +576,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     // create writer kernel with compile time and runtime args
 
@@ -628,7 +637,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     log_debug(tt::LogOp, "transpose_hc_multi_core");
     log_debug(tt::LogOp, "sub_tile_line_bytes: {}", sub_tile_line_bytes);
@@ -1095,9 +1104,9 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
     uint32_t stick_size_bytes = W * a.element_size();
@@ -1453,9 +1462,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -1673,9 +1682,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     const auto tile = a.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
@@ -1876,9 +1885,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2];
     uint32_t stick_size_bytes = W * a.element_size();

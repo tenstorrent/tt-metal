@@ -6,6 +6,8 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
+add_compile_options(-Wno-unused-variable)
+
 ############################################################################################################################
 # NUMA
 ############################################################################################################################
@@ -62,10 +64,11 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "protobuf_BUILD_TESTS OFF"
         "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-invalid-noreturn"
+        "protobuf_INSTALL OFF"
         "BUILD_TESTING OFF"
-        "CMAKE_POSITION_INDEPENDENT_CODE ON"
         "protobuf_BUILD_EXAMPLES OFF"
         "BUILD_SHARED_LIBS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 
 ############################################################################################################################
@@ -321,3 +324,26 @@ CPMAddPackage(
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
 )
+
+####################################################################################################################
+# Cap'n Proto : https://github.com/capnproto/capnproto
+####################################################################################################################
+CPMAddPackage(
+    NAME capnproto
+    GITHUB_REPOSITORY capnproto/capnproto
+    GIT_TAG
+        d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
+    PATCHES
+        capnp.patch # We need to patch capnp until bug is properly fixed: https://github.com/capnproto/capnproto/issues/2418
+    OPTIONS
+        "BUILD_TESTING OFF"
+        "CAPNP_LITE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_CXX_EXTENSIONS ON"
+    CUSTOM_CACHE_KEY "1_2_0_patched"
+)
+
+if(capnproto_ADDED)
+    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
+    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
+endif()

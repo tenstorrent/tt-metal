@@ -16,10 +16,10 @@ jobs:
       build-wheel: true
       version: 22.04
       toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
-  tg-model-perf-tests:
+  galaxy-model-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit
-    uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-model-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}

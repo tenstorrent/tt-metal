@@ -10,7 +10,6 @@
 namespace ttnn::operations::point_to_point {
 
 ttnn::Tensor ExecutePointToPoint::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,

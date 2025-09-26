@@ -10,7 +10,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 // #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
@@ -54,8 +53,8 @@ Tensor HaloTensorCreation(const Tensor& input) {
     Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output = ttnn::halo(
-        DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
+    auto halo_output =
+        ttnn::halo(input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
 
     return halo_output;
 }

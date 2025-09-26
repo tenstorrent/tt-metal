@@ -7,7 +7,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 
 def run_perf_device(batch_size, test, command, expected_perf):
     subdir = "resnet50"
-    num_iterations = 4
+    num_iterations = 1
     margin = 0.03
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

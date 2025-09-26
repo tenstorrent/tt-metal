@@ -31,7 +31,7 @@ struct OnePacketConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePacketConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
     // Program
@@ -104,7 +104,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        test_config.packet_size_bytes / bfloat16::SIZEOF,
+        test_config.packet_size_bytes / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
@@ -116,7 +116,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
         detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, subordinate_l1_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-        auto mesh_workload = distributed::CreateMeshWorkload();
+        auto mesh_workload = distributed::MeshWorkload();
         vector<uint32_t> coord_data = {0, 0};
         auto target_devices =
             distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
@@ -132,7 +132,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
         detail::WriteToDeviceL1(device, test_config.master_core_coord, master_l1_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-        auto mesh_workload = distributed::CreateMeshWorkload();
+        auto mesh_workload = distributed::MeshWorkload();
         vector<uint32_t> coord_data = {0, 0};
         auto target_devices =
             distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)

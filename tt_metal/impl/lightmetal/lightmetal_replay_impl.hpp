@@ -12,9 +12,12 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+
+#include "impl/kernels/kernel_impl.hpp"
 
 namespace tt::tt_metal {
-class TraceDescriptor;
+struct TraceDescriptor;
 }
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h

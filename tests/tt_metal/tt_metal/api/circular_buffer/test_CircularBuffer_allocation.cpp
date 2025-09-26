@@ -31,9 +31,11 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
-#include <tt-metalium/util.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
+
+// Access to internal API: ProgramImpl::get_cb_base_addr
+#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -42,7 +44,7 @@ namespace basic_tests::circular_buffer {
 
 void validate_cb_address(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& cr_set,
     const std::map<CoreCoord, std::map<uint8_t, uint32_t>>& core_to_address_per_buffer_index) {
     auto& cq = mesh_device->mesh_command_queue();
@@ -59,12 +61,10 @@ void validate_cb_address(
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 CoreCoord core_coord(x, y);
+                auto address =
+                    program.impl().get_cb_base_addr(mesh_device->get_devices()[0], core_coord, CoreType::WORKER);
                 tt::tt_metal::detail::ReadFromDeviceL1(
-                    mesh_device->get_devices()[0],
-                    core_coord,
-                    program.get_cb_base_addr(mesh_device->get_devices()[0], core_coord, CoreType::WORKER),
-                    cb_config_buffer_size,
-                    cb_config_vector);
+                    mesh_device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
 
                 std::map<uint8_t, uint32_t> address_per_buffer_index = core_to_address_per_buffer_index.at(core_coord);
 
@@ -219,7 +219,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         Program program;
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
-        uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
+        uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
         auto buffer_size = page_size * 128;
         tt::tt_metal::InterleavedBufferConfig buff_config{
@@ -417,11 +417,12 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
+                    auto address = program_.impl().get_cb_base_addr(
+                        this->devices_.at(id)->get_devices()[0], core_coord, CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         this->devices_.at(id)->get_devices()[0],
                         core_coord,
-                        program_.get_cb_base_addr(
-                            this->devices_.at(id)->get_devices()[0], core_coord, CoreType::WORKER),
+                        address,
                         cb_config_buffer_size,
                         cb_config_vector);
 
@@ -451,11 +452,12 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
+                    auto address = program_.impl().get_cb_base_addr(
+                        this->devices_.at(id)->get_devices()[0], core_coord, CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         this->devices_.at(id)->get_devices()[0],
                         core_coord,
-                        program_.get_cb_base_addr(
-                            this->devices_.at(id)->get_devices()[0], core_coord, CoreType::WORKER),
+                        address,
                         cb_config_buffer_size,
                         cb_config_vector);
 

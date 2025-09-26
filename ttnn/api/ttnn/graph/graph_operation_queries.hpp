@@ -9,6 +9,7 @@
 #include "graph_trace_utils.hpp"
 
 #include <vector>
+#include <utility>
 
 namespace ttnn::graph {
 
@@ -16,7 +17,7 @@ template <class Callable>
 auto query_trace(Callable&& callable) {
     GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
-        auto output = callable();
+        [[maybe_unused]] auto output = std::forward<Callable>(callable)();
     }
     auto json_trace = GraphProcessor::end_graph_capture();
     return json_trace;
@@ -26,7 +27,7 @@ template <class Callable>
 auto query_peak_L1_memory_usage(Callable&& callable) {
     GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
-        auto output = callable();
+        auto output = std::forward<Callable>(callable)();
     }
     auto json_trace = GraphProcessor::end_graph_capture();
     return graph::extract_peak_L1_memory_usage(json_trace);
@@ -36,7 +37,7 @@ template <class Callable>
 auto query_output_info(Callable&& callable) {
     GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
-        auto output = callable();
+        auto output = std::forward<Callable>(callable)();
     }
     auto json_trace = GraphProcessor::end_graph_capture();
     return graph::extract_output_info(json_trace);

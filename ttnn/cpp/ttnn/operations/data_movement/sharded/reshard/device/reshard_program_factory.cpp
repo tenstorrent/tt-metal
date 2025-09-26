@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 
@@ -401,7 +400,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * input_pages_per_original;
         uint32_t valid_pages = input_pages_per_original;
         if (is_last_in_row) {
             uint32_t next_total =
@@ -424,7 +422,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
         uint32_t valid_pages = output_pages_per_original;
         if (is_last_in_row) {
             uint32_t next_total =
@@ -630,7 +627,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
     if (local_tensor.layout() == Layout::TILE) {
-        unit_size = tt::tt_metal::detail::TileSize(data_format);
+        unit_size = tt::tile_size(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
     } else {
@@ -783,7 +780,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     if (input.layout() == Layout::TILE) {
-        page_size = tt::tt_metal::detail::TileSize(data_format);
+        page_size = tt::tile_size(data_format);
         unit_size = page_size;
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {

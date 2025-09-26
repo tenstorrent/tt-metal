@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24...3.30)
 
+# REVERTME: force CI runs
+
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
@@ -111,6 +113,7 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
+message(STATUS "Build TT Telemetry Server: ${BUILD_TELEMETRY}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
@@ -170,13 +173,9 @@ add_compile_options(
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     -Wno-unused-but-set-variable
-    -Wno-unused-function
-    -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
@@ -238,6 +237,11 @@ if(ENABLE_CODE_TIMERS)
 endif()
 include(tracy)
 
+if(ENABLE_TRACY AND TARGET TracyClient)
+    message(STATUS "Adding -Wno-unused-variable to TracyClient")
+    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+endif()
+
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
 file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
@@ -273,11 +277,16 @@ target_link_libraries(
 ############################################################################################################################
 
 add_subdirectory(tt_stl)
+add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
+endif()
+
+if(BUILD_TELEMETRY)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/tt_telemetry)
 endif()
 
 ############################################################################################################################

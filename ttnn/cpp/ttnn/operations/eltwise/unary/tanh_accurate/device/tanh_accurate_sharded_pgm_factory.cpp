@@ -6,7 +6,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::unary::program {
@@ -38,8 +37,8 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
@@ -164,7 +163,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
         unary_defines["TANH_BF16"] = "1";
     }
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
-    if (ops_chain[0].op_type == UnaryOpType::TANHSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::TANHSHRINK) {
         path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
     }
 

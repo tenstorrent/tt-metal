@@ -149,7 +149,7 @@ TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
     auto rt_args_out = GetRuntimeArgs(example_program, compute_kernel_id);
     EXPECT_EQ(rt_args_out.size(), 2);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
 
     auto target_devices = MeshCoordinateRange(mesh_device_->shape());
 
@@ -173,7 +173,7 @@ TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
     // We will create a distributed buffer with 2 shards of {32, 32} and distribute it across the devices in the mesh.
     auto shard_shape = Shape2D{32, 32};
     auto distributed_buffer_shape = Shape2D{32 * mesh_device_->num_rows(), 32 * mesh_device_->num_cols()};
-    uint32_t tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::UInt32);
+    uint32_t tile_size_bytes = tt::tile_size(tt::DataFormat::UInt32);
 
     uint32_t distributed_buffer_size_bytes =
         mesh_device_->num_rows() * 32 * mesh_device_->num_cols() * 32 * tile_size_bytes;
@@ -204,7 +204,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device_->num_rows(), shard_shape.width() * mesh_device_->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
@@ -231,7 +231,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
 
     auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
@@ -240,13 +240,13 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
+    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (std::size_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
+        EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
     }
 }
 
@@ -267,7 +267,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device_->num_rows(), shard_shape.width() * mesh_device_->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
@@ -289,7 +289,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
@@ -313,14 +313,14 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
+    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
 
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (std::size_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
+        EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
     }
 }
 
@@ -331,7 +331,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device_->num_rows(), shard_shape.width() * mesh_device_->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
@@ -353,7 +353,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kMulOpId);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
@@ -383,11 +383,11 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (std::size_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
+        EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
     }
 }
 
-MATCHER_P(Bfloat16Eq, calculated, "") { return arg.to_float() == calculated; }
+MATCHER_P(Bfloat16Eq, calculated, "") { return static_cast<float>(arg) == calculated; }
 
 TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     using tt::constants::TILE_HEIGHT;
@@ -467,8 +467,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
         kSubOpId,
         sub_device_2);  // Subtraction runs on the second SubDevice
 
-    auto add_mesh_workload = CreateMeshWorkload();
-    auto multiply_and_subtract_mesh_workload = CreateMeshWorkload();
+    auto add_mesh_workload = MeshWorkload();
+    auto multiply_and_subtract_mesh_workload = MeshWorkload();
     AddProgramToMeshWorkload(
         add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
     AddProgramToMeshWorkload(

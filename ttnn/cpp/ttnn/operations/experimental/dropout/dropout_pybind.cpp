@@ -13,7 +13,6 @@ namespace py = pybind11;
 void bind_experimental_dropout_operation(py::module& module) {
     auto doc = fmt::format(
         R"doc(
-
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
@@ -28,7 +27,6 @@ void bind_experimental_dropout_operation(py::module& module) {
             scale (float): Scales output tensor. In general scale = 1.0/(1.0-probability).
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.

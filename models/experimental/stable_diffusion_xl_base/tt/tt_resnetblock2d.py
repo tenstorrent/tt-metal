@@ -169,7 +169,7 @@ class TtResnetBlock2D(LightweightModule):
             negative_mask=self.input_negative_mask_1,
         )
 
-        hidden_states = ttnn.silu(hidden_states)
+        hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
         # TBD: reshard
         if hidden_states.memory_config().memory_layout != self.conv1_config.shard_layout:
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
@@ -222,6 +222,8 @@ class TtResnetBlock2D(LightweightModule):
             )
             C = self.conv1_params["output_channels"]
 
+        # ToDo: move to implace version or even better fuse iwth conv2d.
+        # Currently both optinos have pcc issues.
         temb = ttnn.silu(temb)
 
         temb = ttnn.linear(
@@ -260,7 +262,7 @@ class TtResnetBlock2D(LightweightModule):
             epsilon=self.norm_eps,
         )
 
-        hidden_states = ttnn.silu(hidden_states)
+        ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,

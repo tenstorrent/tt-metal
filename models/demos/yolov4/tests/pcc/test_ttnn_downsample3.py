@@ -9,10 +9,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.yolov4.common import load_torch_model
 from models.demos.yolov4.tt.downsample3 import Down3
 from models.demos.yolov4.tt.model_preprocessing import create_ds3_model_parameters
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

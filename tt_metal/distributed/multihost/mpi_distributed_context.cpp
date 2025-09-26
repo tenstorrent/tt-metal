@@ -10,7 +10,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
 // ULFM extensions.
@@ -58,7 +58,7 @@ constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
     return MPI_DATATYPE_NULL;
 }
 
-constexpr inline int mpi_dtype_size(DType dt) noexcept {
+constexpr int mpi_dtype_size(DType dt) noexcept {
     switch (dt) {
         case DType::INT8:
         case DType::UINT8:

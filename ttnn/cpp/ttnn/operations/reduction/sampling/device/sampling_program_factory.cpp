@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
@@ -47,13 +46,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     auto p_buffer = p.buffer();
     auto temp_buffer = temp.buffer();
     auto output_buffer = output_tensor.buffer();
-
-    bool input_values_is_dram = input_values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool input_indices_is_dram = input_indices_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool k_is_dram = k_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool p_is_dram = p_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool temp_is_dram = temp_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     auto device = input_values_tensor.device();
 

@@ -150,6 +150,7 @@ jobs:
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
       # name clashes.
       build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
+      build-wheel: true
       publish-artifact: false
       skip-tt-train: true
       distributed: false
@@ -174,6 +175,26 @@ jobs:
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+
+  ttsim-integration-tests:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        (github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true') &&
+        github.event.pull_request.head.repo.fork == false
+      }}
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    secrets: inherit
+    with:
+      basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   docker-image:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
@@ -244,7 +265,7 @@ jobs:
       run: |
         mkdir clang-tidy-result
     - name: Analyze
-      timeout-minutes: 60 # Big PRs will have a LOT to scan, but most should be well under this.
+      timeout-minutes: 90 # Big PRs will have a LOT to scan, but this should be enough for everyone.
       shell: bash
       run: |
         set -euo pipefail
@@ -295,13 +316,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, clang-tidy-light, model-charts-sync]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, model-charts-sync"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

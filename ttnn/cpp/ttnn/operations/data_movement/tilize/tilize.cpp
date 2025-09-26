@@ -5,7 +5,6 @@
 #include "tilize.hpp"
 
 #include "device/tilize_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -36,16 +35,15 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize) {
 }
 
 ttnn::Tensor ExecuteTilize::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
         output_dtype.has_value()
-            ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
             : input_single_tile_size;
 
     uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
@@ -69,8 +67,7 @@ ttnn::Tensor ExecuteTilize::invoke(
                 enough_space_height},
             {input_tensor},
             {},
-            {},
-            queue_id)[0];
+            {})[0];
     };
 
     return build_ndiml_tilize(base_tilize)(input_tensor);

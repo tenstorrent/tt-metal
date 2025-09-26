@@ -12,7 +12,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
@@ -29,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -43,8 +42,8 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
@@ -175,7 +174,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 }
 
 bool validation(
-    tt_metal::IDevice* device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     std::vector<CoreCoord>& all_cores,
@@ -192,7 +191,8 @@ bool validation(
     uint32_t core_id = 0;
     for (auto core : all_cores) {
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromDeviceL1(device, core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
+        tt_metal::detail::ReadFromDeviceL1(
+            device->get_devices()[0], core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
 
         uint32_t num_datum_per_block = block_h * block_w * num_datum_per_slice;
         uint32_t tensor_slice_stride = core_id * num_datum_per_slice;
@@ -360,7 +360,7 @@ int main(int argc, char** argv) {
         uint32_t block_w = nt / num_banks;
         uint32_t num_datum_per_slice = 32 * 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        uint32_t single_tile_size = tt::tile_size(tile_format);
         if (input_size % single_tile_size != 0) {
             auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
                 return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         tt_metal::distributed::AddProgramToMeshWorkload(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
@@ -463,7 +463,7 @@ int main(int argc, char** argv) {
             auto t_begin = std::chrono::steady_clock::now();
             tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             tt_metal::distributed::Finish(device->mesh_command_queue());
-            tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*device);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
@@ -479,7 +479,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
 
         pass = validation(
-            device.get(),
+            device,
             input_vec,
             num_cores,
             all_cores_list,

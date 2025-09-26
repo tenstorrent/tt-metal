@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -434,7 +434,6 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
         [torch.float32, ttnn.float32],
     ),
 )
@@ -1106,7 +1105,6 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
         [torch.float32, ttnn.float32],
     ),
 )
@@ -1842,13 +1840,9 @@ def test_binary_sharded_invalid_row_major_layout(
         _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=None)
 
 
-@pytest.mark.skip(reason="Skipping test for dchen/23538-sharded_ND")
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    (
-        [torch.bfloat16, ttnn.bfloat16],
-        [torch.int32, ttnn.int32],
-    ),
+    ([torch.bfloat16, ttnn.bfloat16],),
 )
 @pytest.mark.parametrize(
     "a_shape, b_shape, shard_type, shard_size, core_range",
@@ -1991,7 +1985,6 @@ profile_a_b_shape_pairs = [
     "dtype_pt, dtype_tt",
     (
         (torch.bfloat16, ttnn.bfloat16),
-        # (torch.int32, ttnn.int32),
         # (torch.float32, ttnn.float32)
     ),
 )

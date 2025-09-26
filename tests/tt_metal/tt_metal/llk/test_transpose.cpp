@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -35,7 +35,6 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
@@ -99,7 +98,7 @@ void validate_transpose_wh(
 }
 
 void run_single_core_transpose(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const TransposeConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TransposeConfig& test_config) {
     TT_FATAL(test_config.shape.size() == 4, "Error");
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);

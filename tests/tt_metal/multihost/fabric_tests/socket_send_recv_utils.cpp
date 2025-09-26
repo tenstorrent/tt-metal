@@ -118,7 +118,7 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = sender_core_range_set.num_cores() * data_size};
 
             auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
-            auto sender_mesh_workload = CreateMeshWorkload();
+            auto sender_mesh_workload = MeshWorkload();
             std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
@@ -186,7 +186,7 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = recv_core_range_set.num_cores() * data_size};
             auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device_.get());
 
-            auto recv_mesh_workload = CreateMeshWorkload();
+            auto recv_mesh_workload = MeshWorkload();
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 auto recv_core = connection.receiver_core.core_coord;
                 auto sender_fabric_node_id =
@@ -267,7 +267,7 @@ std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
 }
 
 void test_multi_mesh_single_conn_bwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -327,7 +327,7 @@ void test_multi_mesh_single_conn_bwd(
 }
 
 void test_multi_mesh_single_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -384,7 +384,7 @@ void test_multi_mesh_single_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -444,7 +444,7 @@ void test_multi_mesh_multi_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_bidirectional(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,

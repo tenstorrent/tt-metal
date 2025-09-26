@@ -8,7 +8,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/decorators.hpp"
@@ -34,7 +33,6 @@ struct ScatterDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
@@ -48,8 +46,7 @@ struct ScatterDeviceOperation {
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const MemoryConfig& output_memory_config,
-        const std::optional<ScatterReductionType>& opt_reduction,
-        const QueueId& queue_id = DefaultQueueId);
+        const std::optional<ScatterReductionType>& opt_reduction);
 };
 
 }  // namespace ttnn::operations::data_movement::scatter

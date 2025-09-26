@@ -20,7 +20,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
 )
 
@@ -563,8 +563,6 @@ def test_demo_text(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Llama TG only supports batch-32")
-    if galaxy_type == "6U" and apc_test:
-        pytest.skip("Skipping test since there is no 6U machines dedicated for APC")
     if apc_test and not pcc_check:
         raise ValueError("APC test requires PCC check to be enabled")
     if apc_test:
@@ -782,7 +780,9 @@ def test_demo_text(
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
-
+        device_sampling_params = SamplingParams(
+            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+        )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -795,6 +795,7 @@ def test_demo_text(
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
+                    sampling_params=device_sampling_params,
                 )
             except Exception as e:
                 logger.error(f"Error during prefill warmup: {str(e)}")
@@ -817,6 +818,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 enable_trace=prefill_enable_trace,
                 tt_out_logits_all_users=tt_out_logits_all_users,
+                sampling_params=device_sampling_params,
             )
             if prefill_profile:
                 signpost("stop")
@@ -864,10 +866,6 @@ def test_demo_text(
 
         # Keeps track when a user reaches EoD token
         user_done = [False] * batch_size
-
-        device_sampling_params = SamplingParams(
-            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
-        )
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])

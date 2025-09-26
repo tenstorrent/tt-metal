@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -57,7 +57,7 @@ Tensor host_function(const Tensor& input_tensor) {
     auto output_buffer = std::vector<bfloat16>(input_tensor.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value = UnaryFunction(input_buffer[index].to_float());
+        auto value = UnaryFunction(static_cast<float>(input_buffer[index]));
         output_buffer[index] = bfloat16(value);
     }
 

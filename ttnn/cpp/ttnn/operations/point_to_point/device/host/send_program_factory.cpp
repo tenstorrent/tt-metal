@@ -53,7 +53,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     tt::tt_metal::CircularBufferConfig cb_sender_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * aligned_input_page_size_bytes, {{sender_cb_id, input_dataformat}})
             .set_page_size(sender_cb_id, aligned_input_page_size_bytes);
-    tt::tt_metal::CBHandle cb_sender_handle = CreateCircularBuffer(program, all_cores, cb_sender_config);
+    CreateCircularBuffer(program, all_cores, cb_sender_config);
 
     // allocate space for packet headers for payload sempahore
     constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
@@ -65,14 +65,14 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
             {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size_bytes);
-    auto cb_header_handle = CreateCircularBuffer(program, all_cores, cb_header_config);
+    CreateCircularBuffer(program, all_cores, cb_header_config);
 
     // Scratch CB for coalescing pages into packets
     constexpr auto packet_cb_id = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
         tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id, input_dataformat}})
             .set_page_size(packet_cb_id, packet_size_bytes);
-    tt::tt_metal::CBHandle cb_cb_handle = CreateCircularBuffer(program, all_cores, cb_packet_config);
+    CreateCircularBuffer(program, all_cores, cb_packet_config);
 
     // basic reader kernel set up
     std::vector<uint32_t> reader_ct_args;

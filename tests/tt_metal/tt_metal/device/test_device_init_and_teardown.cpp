@@ -20,7 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 
 namespace tt {
@@ -45,7 +45,7 @@ namespace unit_tests_common::basic::test_device_init {
 /// @brief load_blank_kernels into all cores and will launch
 /// @param device
 /// @return
-bool load_all_blank_kernels(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
     auto mesh_workload = distributed::MeshWorkload();

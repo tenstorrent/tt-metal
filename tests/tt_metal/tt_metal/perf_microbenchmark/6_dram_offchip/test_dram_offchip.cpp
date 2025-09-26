@@ -11,7 +11,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <algorithm>
 #include <array>
@@ -29,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -44,7 +43,7 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
@@ -102,7 +101,7 @@ bool assign_runtime_args_to_program(
 
 bool validation(
     tt_metal::distributed::MeshDevice* device,
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -176,7 +175,7 @@ int main(int argc, char** argv) {
         }
 
         tt::DataFormat tile_format = tt::DataFormat::Float16_b;
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        uint32_t single_tile_size = tt::tile_size(tile_format);
         if (input_size % single_tile_size != 0) {
             auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
                 return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;
@@ -276,7 +275,7 @@ int main(int argc, char** argv) {
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Num tests {}", num_tests);
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         tt_metal::distributed::AddProgramToMeshWorkload(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
@@ -468,7 +467,7 @@ bool assign_runtime_args_to_program(
 
 bool validation(
     tt_metal::distributed::MeshDevice* device,
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,

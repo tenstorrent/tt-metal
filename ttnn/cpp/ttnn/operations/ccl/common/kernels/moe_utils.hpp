@@ -247,8 +247,7 @@ inline void fabric_send_chip_unicast_noc_unicast(
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route(dest_chip_id, (LowLatencyMeshPacketHeader*)packet_header);
 
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
@@ -357,8 +356,7 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route(dest_chip_id, (LowLatencyMeshPacketHeader*)packet_header);
 
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
@@ -396,8 +394,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route(dest_chip_id, (LowLatencyMeshPacketHeader*)packet_header);
 
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         addrgen,
@@ -430,8 +427,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route(dest_chip_id, (LowLatencyMeshPacketHeader*)packet_header);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();
@@ -574,6 +570,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
 template <typename T, uint32_t Size, bool ReturnIdx>
 inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
     for (uint32_t i = 0; i < Size; ++i) {
+        invalidate_l1_cache();
         if (ptr[i] == val) {
             if constexpr (ReturnIdx) {
                 return std::make_tuple(true, i);

@@ -23,21 +23,21 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include <umd/device/cluster.h>
-#include <umd/device/device_api_metal.h>
-#include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/harvesting.h>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/harvesting.hpp>
+#include <umd/device/types/cluster_types.hpp>
 
 namespace tt {
-enum class ARCH;
 namespace llrt {
 class RunTimeOptions;
 }
@@ -49,7 +49,6 @@ namespace tt_metal {
 class Hal;
 }
 }  // namespace tt
-struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -192,11 +191,6 @@ public:
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
-    std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
-        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
-        return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
-    }
-
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals
@@ -313,8 +307,11 @@ public:
     void initialize_fabric_config(
         tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
 
-    // Returns whether we are running on Galaxy.
+    // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
+
+    // Returns whether we are running on UBB Galaxy.
+    bool is_ubb_galaxy() const;
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;

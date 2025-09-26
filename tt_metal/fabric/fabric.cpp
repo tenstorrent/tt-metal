@@ -9,19 +9,20 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <optional>
 #include <set>
 #include <vector>
-#include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.h>
+#include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
+#include <umd/device/types/xy_pair.hpp>
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
@@ -50,11 +51,7 @@ bool is_TG_gateway_connection(
 
     // both of the chips should have the same associated mmio device and
     // one of the chips should be the mmio device itself
-    if (mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id)) {
-        return true;
-    }
-
-    return false;
+    return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
 }
 
 }  // namespace
@@ -62,7 +59,7 @@ bool is_TG_gateway_connection(
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
@@ -220,16 +217,17 @@ void append_fabric_connection_rt_args(
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
-    CoreType core_type,
-    const std::vector<uint32_t>& connection_link_indices) {
+    CoreType core_type) {
     // 1) append tag (like direction) and fabric connection info for each route
     TT_FATAL(
-        connection_link_indices.empty() || connection_link_indices.size() == dst_nodes.size(),
-        "connection_link_indices must be empty or the same size as dst_nodes");
+        connection_link_indices.empty() ||
+            (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
+        "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -251,7 +249,6 @@ void append_routing_plane_connection_manager_rt_args(
         }
     }
 
-    // for (const auto& dst_node : dst_nodes) {
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
         auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
@@ -265,10 +262,14 @@ void append_routing_plane_connection_manager_rt_args(
 
         uint32_t link_idx = 0;
         if (!connection_link_indices.empty()) {
-            link_idx = connection_link_indices[i];
+            if (connection_link_indices.size() == 1) {
+                link_idx = connection_link_indices[0];
+            } else {
+                link_idx = connection_link_indices[i];
+            }
         } else {
             const auto links = get_forwarding_link_indices(src_fabric_node_id, dst_node);
-            TT_FATAL(links.size() > 0, "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
+            TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
             link_idx = links[0];
         }
 
@@ -278,7 +279,7 @@ void append_routing_plane_connection_manager_rt_args(
 
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto kernel = tt::tt_metal::detail::GetKernel(worker_program, kernel_id);
+        auto kernel = worker_program.impl().get_kernel(kernel_id);
         kernel->add_defines({{"FABRIC_2D", "1"}});
         if (fabric_context.is_dynamic_routing_enabled()) {
             kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});

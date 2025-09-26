@@ -27,7 +27,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 using namespace tt;
 
@@ -45,7 +45,7 @@ struct DRAMtoL1MulticastConfig {
 
 bool dram_to_l1_multicast(
     tt::tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
 
@@ -163,7 +163,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMtoL1Multicast) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast.cpp",
     };
 
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(
             unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, mesh_device, test_config));
     }
@@ -175,7 +175,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
     };
 
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(
             unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, mesh_device, test_config));
     }

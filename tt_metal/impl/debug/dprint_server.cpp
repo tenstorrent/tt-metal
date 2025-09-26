@@ -14,7 +14,6 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
-#include <initializer_list>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -25,21 +24,22 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <umd/device/types/core_coordinates.hpp>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
 #include "fmt/base.h"
+#include "hal_types.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 using std::cout;
 using std::endl;
@@ -73,20 +73,33 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
 string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (risc_id) {
-            case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
-            case DPRINT_RISCV_INDEX_ER1:
+            case 0: return abbreviated ? "ER" : "ERISC";
+            case 1:
                 return abbreviated ? "ER1" : "ERISC1";
                 // Default case falls through and handled at end.
         }
     } else {
-        switch (risc_id) {
-            case DPRINT_RISCV_INDEX_NC: return abbreviated ? "NC" : "NCRISC";
-            case DPRINT_RISCV_INDEX_TR0: return abbreviated ? "TR0" : "TRISC0";
-            case DPRINT_RISCV_INDEX_TR1: return abbreviated ? "TR1" : "TRISC1";
-            case DPRINT_RISCV_INDEX_TR2: return abbreviated ? "TR2" : "TRISC2";
-            case DPRINT_RISCV_INDEX_BR:
-                return abbreviated ? "BR" : "BRISC";
-                // Default case falls through and handled at end.
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        auto [processor_class, processor_type] =
+            hal.get_processor_class_and_type_from_index(tt::tt_metal::HalProgrammableCoreType::TENSIX, risc_id);
+        switch (processor_class) {
+            case tt::tt_metal::HalProcessorClassType::DM:
+                switch (processor_type) {
+                    case 0: return abbreviated ? "BR" : "BRISC";
+                    case 1:
+                        return abbreviated ? "NC" : "NCRISC";
+                        // Default case falls through and handled at end.
+                }
+                break;
+            case tt::tt_metal::HalProcessorClassType::COMPUTE:
+                switch (processor_type) {
+                    case 0: return abbreviated ? "TR0" : "TRISC0";
+                    case 1: return abbreviated ? "TR1" : "TRISC1";
+                    case 2:
+                        return abbreviated ? "TR2" : "TRISC2";
+                        // Default case falls through and handled at end.
+                }
+                break;
         }
     }
     return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
@@ -100,15 +113,10 @@ void AssertSize(uint8_t sz, uint8_t expected_sz) {
         expected_sz);
 }
 
-inline bool RiscEnabled(const CoreDescriptor& core, int risc_index) {
-    uint32_t risc_mask =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
-    if (core.type == CoreType::ETH) {
-        // For ethernet cores, need to adjust the index up since the mask flags are successive. TODO(#17275): move this
-        // logic into HAL?
-        risc_index += DPRINT_NRISCVS;
-    }
-    return risc_mask & (1 << risc_index);
+inline bool RiscEnabled(tt_metal::HalProgrammableCoreType core_type, int risc_index) {
+    const auto& processors =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
+    return processors.contains(core_type, risc_index);
 }
 
 // A null stream for when the print server is muted.
@@ -507,7 +515,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
 
     // One file per risc auto-generates the output files and ignores the env var for it. Print a warning if both are
     // specified just in case.
-    if (file_name != "" && one_file_per_risc) {
+    if (!file_name.empty() && one_file_per_risc) {
         log_warning(
             tt::LogMetal,
             "Both TT_METAL_DPRINT_FILE_NAME and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
@@ -525,7 +533,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
     std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
-    if (file_name != "" && !one_file_per_risc) {
+    if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }
     stream_ = outfile_ ? outfile_ : &cout;
@@ -582,12 +590,13 @@ void DPrintServer::Impl::await() {
         } while (num_riscs_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
     };
     auto future = std::async(std::launch::async, poll_until_no_new_data);
-    if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
+    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
         TT_THROW("Timed out waiting on debug print server to read data.");
     }
 }  // await
 
 void DPrintServer::Impl::init_device(chip_id_t device_id) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(device_id);
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
@@ -598,7 +607,8 @@ void DPrintServer::Impl::init_device(chip_id_t device_id) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
+        uint32_t num_processors = hal.get_num_risc_processors(llrt::get_core_type(device_id, virtual_core));
+        for (int risc_index = 0; risc_index < num_processors; risc_index++) {
             WriteInitMagic(device_id, virtual_core, risc_index, false);
         }
     }
@@ -733,8 +743,11 @@ void DPrintServer::Impl::attach_device(chip_id_t device_id) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
-            if (RiscEnabled(logical_core, risc_index)) {
+        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+        uint32_t num_processors =
+            tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+        for (int risc_index = 0; risc_index < num_processors; risc_index++) {
+            if (RiscEnabled(programmable_core_type, risc_index)) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
             }
         }
@@ -784,10 +797,12 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device_id)) {
             CoreCoord virtual_core =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, logical_core.coord, logical_core.type);
-            for (int risc_id = 0; risc_id < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_id++) {
-                if (RiscEnabled(logical_core, risc_id)) {
+            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+            uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+            for (int risc_id = 0; risc_id < num_processors; risc_id++) {
+                if (RiscEnabled(programmable_core_type, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
                     if (!CheckInitMagicCleared(device_id, virtual_core, risc_id)) {
                         continue;
@@ -795,9 +810,9 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
 
                     // Check if rpos < wpos, indicating unprocessed prints.
                     constexpr int eightbytes = 8;
-                    uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
-                    auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        chip_id, virtual_core, base_addr, eightbytes);
+                    uint32_t base_addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
+                    auto from_dev =
+                        MetalContext::instance().get_cluster().read_core(chip_id, virtual_core, base_addr, eightbytes);
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
@@ -843,15 +858,16 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_to_core_range_.erase(device_id);
-    log_info(tt::LogMetal, "DPRINT Server dettached device {}", device_id);
+    log_info(LogMetal, "DPRINT Server detached device {}", device_id);
 
     // When detaching a device, disable prints on it.
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(device_id);
+    CoreDescriptorSet all_cores = GetAllCores(device_id);
     for (auto& logical_core : all_cores) {
-        CoreCoord virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                device_id, logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
+        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core.coord, logical_core.type);
+        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+        uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+        for (int risc_index = 0; risc_index < num_processors; risc_index++) {
             WriteInitMagic(device_id, virtual_core, risc_index, false);
         }
     }
@@ -1221,9 +1237,13 @@ void DPrintServer::Impl::poll_print_data() {
             }
             device_intermediate_streams_force_flush_lock_.unlock();
             for (auto& logical_core : device_and_cores.second) {
-                int risc_count = tt::tt_metal::GetNumRiscs(device_id, logical_core);
+                auto virtual_core =
+                    MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                        device_id, logical_core.coord, logical_core.type);
+                auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+                uint32_t risc_count = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
                 for (int risc_index = 0; risc_index < risc_count; risc_index++) {
-                    if (RiscEnabled(logical_core, risc_index)) {
+                    if (RiscEnabled(programmable_core_type, risc_index)) {
                         try {
                             new_data_this_iter |=
                                 peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter);

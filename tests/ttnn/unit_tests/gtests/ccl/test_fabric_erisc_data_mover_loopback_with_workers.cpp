@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -56,8 +56,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "umd/device/types/arch.h"
-
+#include <umd/device/types/arch.hpp>
 
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////

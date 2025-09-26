@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -36,9 +35,9 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::Buffer* out_buffer) {
     tt_metal::Program program{};
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_cb_data_format);
-    uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_cb_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_cb_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_cb_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
@@ -93,13 +92,13 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_cb_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_cb_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
@@ -109,7 +108,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
         tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
             .set_page_size(output_cb_index, out_single_tile_size)
             .set_page_size(interm0_cb_index, out_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
@@ -132,7 +131,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Create compute kernel
-    auto mm_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,

@@ -26,7 +26,6 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/util.hpp>
 #include "tt_metal/api/tt-metalium/math.hpp"
 #include <enchantum/enchantum.hpp>
 
@@ -60,8 +59,6 @@ protected:
 bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     const size_t num_dram_channels = mesh_device.num_dram_channels();
     const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const size_t dram_size = num_dram_channels * dram_size_per_channel;
-    const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
     const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
 
     bool result{true};
@@ -85,7 +82,7 @@ bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
 class InterleavedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
                                        public testing::WithParamInterface<std::tuple<uint64_t, uint32_t>> {};
 
-TEST_P(InterleavedMeshBufferTestSuite, DRAMReadback) {
+TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // - REPLICATED layout for writing, SHARDED with ROW_MAJOR for reading
     // - DRAM, bottom up allocation
     auto [tensor_size, page_size] = GetParam();
@@ -188,7 +185,7 @@ class ShardedMeshBufferTestSuite
     : public LargeMeshBufferTestSuiteBase,
       public testing::WithParamInterface<std::tuple<std::pair<Shape2D, CoreCoord>, uint32_t>> {};
 
-TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
+TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // shard_shape: shape on device (elements)
     // page_size: (bytes)
     auto [tensor_and_grid, page_size] = GetParam();
