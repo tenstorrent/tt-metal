@@ -52,7 +52,7 @@ on:
         default: true
 
 
-# This needs to be set to a value that is greater than the timeout of the longest running test
+# This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
 env:
   TEST_BUDGET_SECONDS: 300
 
