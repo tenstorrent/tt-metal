@@ -13,7 +13,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -516,7 +515,7 @@ int main(int argc, char** argv) {
         uint32_t block_w_per_receiver = block_w / 2;
         uint32_t num_datum_per_slice = 32 * 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        uint32_t single_tile_size = tt::tile_size(tile_format);
         if (input_size % single_tile_size != 0) {
             auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
                 return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;
@@ -639,7 +638,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         tt_metal::distributed::AddProgramToMeshWorkload(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
@@ -648,7 +647,7 @@ int main(int argc, char** argv) {
             auto t_begin = std::chrono::steady_clock::now();
             tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             tt_metal::distributed::Finish(device->mesh_command_queue());
-            tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*device);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

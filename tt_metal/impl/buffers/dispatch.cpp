@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -650,7 +650,7 @@ void write_interleaved_buffer_to_device(
             continue;
         }
 
-        log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
+        log_debug(tt::LogDispatch, "write_interleaved_buffer_to_device for command queue {}", dispatch_params.cq_id);
 
         dispatch_params.calculate_num_pages_for_write_transaction(num_pages_available_in_cq);
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
@@ -695,7 +695,7 @@ void write_sharded_buffer_to_core(
             continue;
         }
 
-        log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
+        log_debug(tt::LogDispatch, "write_sharded_buffer_to_core for command queue {}", dispatch_params.cq_id);
 
         dispatch_params.calculate_params_for_write_transaction(num_pages_available_in_cq);
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);

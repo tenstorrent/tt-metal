@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -469,8 +469,8 @@ void run_test(
 
     log_info(tt::LogAlways, "Launching programs");
 
-    tt_metal::distributed::MeshWorkload local_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::MeshWorkload remote_workload = tt_metal::distributed::CreateMeshWorkload();
+    tt_metal::distributed::MeshWorkload local_workload;
+    tt_metal::distributed::MeshWorkload remote_workload;
     tt_metal::distributed::AddProgramToMeshWorkload(
         local_workload,
         std::move(test_resources.local_device.program),

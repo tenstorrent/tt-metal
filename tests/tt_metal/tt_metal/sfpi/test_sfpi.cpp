@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ bool runTest(
     std::vector<uint32_t> compile_args{args_addr};
 
     auto program(tt::tt_metal::CreateProgram());
-    distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
+    distributed::MeshWorkload workload;
     CreateKernel(
         program,
         path,
