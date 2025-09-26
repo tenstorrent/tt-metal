@@ -215,6 +215,11 @@ class WanAttention:
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
         kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
 
         # Project spatial
@@ -319,13 +324,5 @@ class WanAttention:
         spatial_1BND = self.to_out(
             spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
         )
-
-        # if self.parallel_config.tensor_parallel.factor > 1:
-        #     # Gather spatial on TP axis after projection
-        #     spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-        #         spatial_1BND,
-        #         dim=3,
-        #         mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-        #     )
 
         return spatial_1BND

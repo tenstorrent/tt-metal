@@ -412,12 +412,14 @@ class WanPatchEmbed:
         embed_dim,
         mesh_device=None,
         init=False,
+        tp_mesh_axis=None,
     ):
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.embed_dim = embed_dim
         self.mesh_device = mesh_device
-
+        # Optionally output tensor parallel
+        self.tp_mesh_axis = tp_mesh_axis
         self.proj_weight = None
         self.proj_bias = None
 
@@ -471,6 +473,8 @@ class WanPatchEmbed:
         self.proj_weight = bf16_tensor(
             conv_weight,
             device=self.mesh_device,
+            mesh_axis=self.tp_mesh_axis,
+            shard_dim=-1,
         )
 
         if "bias" in state_dict:
@@ -478,6 +482,8 @@ class WanPatchEmbed:
             self.proj_bias = bf16_tensor(
                 bias,
                 device=self.mesh_device,
+                mesh_axis=self.tp_mesh_axis,
+                shard_dim=-1,
             )
 
     def __call__(self, latent_1BNI):
@@ -485,7 +491,7 @@ class WanPatchEmbed:
         latent_1BNI: (1, batch, pt * ph * pw, kt * kh * kw * in_channels
 
         returns:
-        latent_1BND: (1, batch, pt * ph * pw, embed_dim)
+        latent_1BND: (1, batch, pt * ph * pw, embed_dim), optionally fractured embed_dim on TP
         """
 
         # Apply unfolded conv2d projection

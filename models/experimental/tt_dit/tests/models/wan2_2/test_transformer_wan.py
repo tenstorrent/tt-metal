@@ -204,8 +204,7 @@ def test_wan_transformer_block(
     )
 
     logger.info(f"Checking spatial outputs")
-    for i in range(tt_spatial_out.shape[0]):
-        assert_quality(torch_spatial_out, tt_spatial_out[i], pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
