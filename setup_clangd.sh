@@ -100,7 +100,7 @@ setup_testing_environment() {
 # Function to validate sfpi installation
 validate_sfpi_installation() {
     local sfpi_dirs=(
-        "$ROOT_DIR/tests/sfpi/compiler/lib/gcc/riscv32-tt-elf/12.4.0/include/"
+        "$ROOT_DIR/tests/sfpi/compiler/lib/gcc/riscv32-tt-elf/15.1.0/include/"
         "$ROOT_DIR/tests/sfpi/compiler/riscv32-tt-elf/include"
         "$ROOT_DIR/tests/sfpi/include"
     )
@@ -130,13 +130,13 @@ generate_compile_flags() {
 -DLLK_TRISC_PACK
 
 -isystem
-$ROOT_DIR/tests/sfpi/compiler/lib/gcc/riscv32-tt-elf/12.4.0/include/
+$ROOT_DIR/tests/sfpi/compiler/lib/gcc/riscv32-tt-elf/15.1.0/include/
 -isystem
 $ROOT_DIR/tests/sfpi/compiler/riscv32-tt-elf/include
 -isystem
-$ROOT_DIR/tests/sfpi/compiler/riscv32-tt-elf/include/c++/12.4.0
+$ROOT_DIR/tests/sfpi/compiler/riscv32-tt-elf/include/c++/15.1.0
 -isystem
-$ROOT_DIR/tests/sfpi/compiler/riscv32-tt-elf/include/c++/12.4.0/riscv32-tt-elf
+$ROOT_DIR/tests/sfpi/compiler/riscv32-tt-elf/include/c++/15.1.0/riscv32-tt-elf
 -isystem
 $ROOT_DIR/tests/sfpi/include
 -I$ROOT_DIR/tests/firmware/riscv/common
