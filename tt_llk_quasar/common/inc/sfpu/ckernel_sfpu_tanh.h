@@ -33,7 +33,7 @@ inline void _calculate_tanh_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         _calculate_tanh_sfp_rows_<APPROXIMATION_MODE>();
-        _incr_counters_<0x0, 0x0, SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
 }
 

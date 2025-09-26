@@ -10,6 +10,7 @@ from ttexalens.tt_exalens_lib import check_context
 class ChipArchitecture(Enum):
     BLACKHOLE = "blackhole"
     WORMHOLE = "wormhole"
+    QUASAR = "quasar"
 
     def __str__(self):
         return self.value
@@ -20,6 +21,8 @@ class ChipArchitecture(Enum):
             return cls.BLACKHOLE
         elif arch_str.lower() == "wormhole":
             return cls.WORMHOLE
+        elif arch_str.lower() == "quasar":
+            return cls.QUASAR
         else:
             raise ValueError(f"Unknown architecture: {arch_str}")
 

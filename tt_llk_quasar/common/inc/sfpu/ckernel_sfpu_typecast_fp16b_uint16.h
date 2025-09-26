@@ -32,7 +32,7 @@ inline void _calculate_typecast_fp16b_to_uint16_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         _calculate_typecast_fp16b_to_uint16_rows();
-        _incr_counters_<0x0, 0x0, SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
 }
 
