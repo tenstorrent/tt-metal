@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "firmware_common.h"
 // #include "risc_common.h"
 #include "risc_attribs.h"
