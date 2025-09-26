@@ -230,7 +230,6 @@ void MetalContext::teardown() {
     }
 
     if (profiler_state_manager_) {
-        profiler_state_manager_->cleanup_device_profilers();
         profiler_state_manager_.reset();
     }
 
