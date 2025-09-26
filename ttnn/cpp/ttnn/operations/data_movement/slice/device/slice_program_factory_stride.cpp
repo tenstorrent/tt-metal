@@ -22,15 +22,15 @@ namespace ttnn::operations::data_movement::detail {
  * Get element size in bytes for different TTNN data types.
  * Translated from Python _get_element_size method.
  */
-inline uint32_t get_element_size_kb(const DataType& dtype) {
+inline uint32_t get_element_size(const DataType& dtype) {
     switch (dtype) {
-        case DataType::BFLOAT16: return 2;   // 16-bit brain floating point
-        case DataType::FLOAT32: return 4;    // 32-bit IEEE floating point
-        case DataType::INT32: return 4;      // 32-bit signed integer
-        case DataType::UINT32: return 4;     // 32-bit unsigned integer
-        case DataType::UINT16: return 2;     // 16-bit unsigned integer
-        case DataType::UINT8: return 1;      // 8-bit unsigned integer
-        default: TT_THROW("Unsupported data type for KB slice operation");
+        case DataType::BFLOAT16: return 2;  // 16-bit brain floating point
+        case DataType::FLOAT32: return 4;   // 32-bit IEEE floating point
+        case DataType::INT32: return 4;     // 32-bit signed integer
+        case DataType::UINT32: return 4;    // 32-bit unsigned integer
+        case DataType::UINT16: return 2;    // 16-bit unsigned integer
+        case DataType::UINT8: return 1;     // 8-bit unsigned integer
+        default: TT_THROW("Unsupported data type for multi-core stride slice operation");
     }
 }
 
@@ -39,7 +39,7 @@ inline uint32_t get_element_size_kb(const DataType& dtype) {
  * Generalized for N-dimensional tensors. For rank R, rows = product(dims[0:R-1])
  * The last dimension is always processed as contiguous width data.
  */
-inline uint32_t calculate_total_output_rows_kb(const ttnn::Shape& output_shape) {
+inline uint32_t calculate_total_output_rows(const ttnn::Shape& output_shape) {
     auto rank = output_shape.rank();
 
     if (rank == 1) {
@@ -56,11 +56,11 @@ inline uint32_t calculate_total_output_rows_kb(const ttnn::Shape& output_shape) 
 }
 
 /**
- * Core allocation and work distribution for KB multi-core slice operation.
+ * Core allocation and work distribution for multi-core slice operation.
  * This implements the key insight from Python: use only as many cores as we have work for.
  * Translated from Python get_multicore_slice_descriptor method.
  */
-inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_core_allocation_kb(
+inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_core_allocation(
     tt::tt_metal::IDevice* device, uint32_t total_output_rows) {
     // Get hardware compute grid dimensions
     auto compute_grid = device->compute_with_storage_grid_size();
@@ -90,11 +90,11 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_co
 }
 
 /**
- * Prepare runtime arguments for KB multi-core slice kernels.
+ * Prepare runtime arguments for multi-core slice kernels.
  * Handles both 4D kernels and maintains compatibility with 2D kernels.
  * Translated from Python get_multicore_slice_descriptor method.
  */
-inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_kb(
+inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
@@ -108,7 +108,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const std::string& writer_kernel_path) {
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
-    uint32_t element_size = get_element_size_kb(input_tensor.dtype());
+    uint32_t element_size = get_element_size(input_tensor.dtype());
 
     // Extract dimensions for N-dimensional tensors
     uint32_t tensor_rank = input_shape.rank();
@@ -258,11 +258,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 /**
- * Main KB multi-core slice program factory.
+ * Main multi-core slice program factory.
  * Implements the intelligent multi-core slice strategy from kernel_bench.
  * Translated from Python MulticoreSlice.__call__ and get_multicore_slice_descriptor methods.
  */
-operation::ProgramWithCallbacks slice_rm_multi_core_kb(
+operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
@@ -274,21 +274,21 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
 
     const auto& input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
-    uint32_t element_size = get_element_size_kb(input_tensor.dtype());
+    uint32_t element_size = get_element_size(input_tensor.dtype());
 
     // Calculate total output rows based on tensor rank - this is what we distribute across cores
-    uint32_t total_output_rows = calculate_total_output_rows_kb(output_shape);
+    uint32_t total_output_rows = calculate_total_output_rows(output_shape);
 
     // MULTI-CORE ALLOCATION STRATEGY:
     // The key insight is to use only as many cores as we have work for
     // This avoids the overhead of idle cores and optimizes resource utilization
     auto [grid_x, grid_y, num_cores, max_cores_available, num_cores_needed] =
-        calculate_core_allocation_kb(device, total_output_rows);
+        calculate_core_allocation(device, total_output_rows);
 
     // DEBUG OUTPUT: Show core allocation decisions for performance analysis
     log_debug(
         tt::LogOp,
-        "KB Multi-core slice allocation - Total output rows: {}, Available cores: {}",
+        "Multi-core slice allocation - Total output rows: {}, Available cores: {}",
         total_output_rows,
         max_cores_available);
     log_debug(tt::LogOp, "Tensor shape: {}D {}", input_shape.rank(), output_shape);
@@ -353,7 +353,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
         program, writer_kernel_path, core_grid, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Get runtime arguments for all cores
-    auto all_runtime_args = get_slice_runtime_args_kb(
+    auto all_runtime_args = get_slice_runtime_args(
         input_tensor,
         output_tensor,
         slice_start,

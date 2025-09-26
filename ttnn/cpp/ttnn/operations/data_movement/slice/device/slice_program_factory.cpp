@@ -986,7 +986,7 @@ operation::ProgramWithCallbacks slice_multi_core(
         case Layout::ROW_MAJOR:
             return a.is_sharded()
                        ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
-                       : (has_step ? slice_rm_multi_core_kb(a, output, output_tensor_start, output_tensor_end, step)
+                       : (has_step ? slice_rm_multi_core_stride(a, output, output_tensor_start, output_tensor_end, step)
                                    : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
         case Layout::TILE: return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
         default: TT_ASSERT(false, "Unsupported Layout");
