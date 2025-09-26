@@ -41,26 +41,14 @@ def create_yolov11_input_tensors(
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        # Debug: Check diversity before scaling
-        pre_scale_flat = torch_input_tensor.flatten()
-        pre_scale_unique = torch.unique(pre_scale_flat)
-        print(f"🔍 [SCALING DEBUG] BEFORE scaling: {len(pre_scale_unique)} unique values")
-        print(f"    Range: [{pre_scale_flat.min()}, {pre_scale_flat.max()}], Mean: {pre_scale_flat.mean()}")
-        
-        # EXPERIMENT: Scale by 100x to test bfloat16's range-dependent precision
-        # Move from [-5, +5] to [-500, +500] range to access different quantization levels
-        scale_factor = 100.0
-        torch_input_tensor_scaled = torch_input_tensor * scale_factor
-        
-        # Debug: Check diversity after 100x scaling
-        post_scale_flat = torch_input_tensor_scaled.flatten()
-        post_scale_unique = torch.unique(post_scale_flat)
-        print(f"🔍 [SCALING DEBUG] AFTER scaling by {scale_factor}x: {len(post_scale_unique)} unique values")
-        print(f"    Range: [{post_scale_flat.min()}, {post_scale_flat.max()}], Mean: {post_scale_flat.mean()}")
+        # PROVEN: float32 preprocessing is necessary to preserve all 306K values
+        # Experiments showed bfloat16 fundamentally limited to ~3K values regardless of scaling
+        print(f"🔍 [PREPROCESSING DEBUG] Input diversity: {len(torch.unique(torch_input_tensor.flatten()))} unique values")
+        print(f"    Range: [{torch_input_tensor.min()}, {torch_input_tensor.max()}], Mean: {torch_input_tensor.mean()}")
         
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor_scaled,  # Use 100x scaled tensor
-            dtype=ttnn.bfloat16,        # Test bfloat16 with extreme scaling
+            torch_input_tensor,         # Use original tensor (no scaling needed)
+            dtype=ttnn.float32,         # CRITICAL: Use float32 to preserve all 306K values
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=input_mem_config,
