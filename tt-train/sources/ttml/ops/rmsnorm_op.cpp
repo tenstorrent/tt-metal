@@ -117,11 +117,12 @@ autograd::TensorPtr rmsnorm_composite(
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        true,
         none,
         none,
         none,
-        false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
+        false,
+        /* fast_and_approximate_mode*/ true);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C] - Use approximate version due to
+                                               // issue #28961 when dealing with broadcasted tensors
 
     auto out = autograd::create_tensor(out_tensor);
 
@@ -143,11 +144,12 @@ autograd::TensorPtr rmsnorm_composite(
             /*dtype*/ std::nullopt,
             /*memory_config*/ std::nullopt,
             /*output*/ std::nullopt,
-            /*fast_and_approximate_mode*/ true,
             /*activations*/ none,
             /*input_tensor_a_activations*/ none,
             /*input_tensor_b_activations*/ none,
-            /*use_legacy*/ false);  // [1,1,1,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
+            /*use_legacy*/ false,
+            /*fast_and_approximate_mode*/ true);  // [1,1,1,C] x [B,1,S,1] -> [B,1,S,C] (bcast) - Use approximate
+                                                  // version due to issue #28961 when dealing with broadcasted tensors
 
         auto gained_dL_dout = ttnn::multiply(
             scaled_gain,
@@ -197,11 +199,12 @@ autograd::TensorPtr rmsnorm_composite(
             std::nullopt,
             std::nullopt,
             std::nullopt,
-            true,
             none,
             none,
             none,
-            false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
+            false,
+            /*fast_and_approximate_mode*/ true);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast) - Use approximate
+                                                  // version due to issue #28961 when dealing with broadcasted tensors
 
         auto dL_da = ttnn::subtract(
             gained_dL_dout,
@@ -218,7 +221,17 @@ autograd::TensorPtr rmsnorm_composite(
         // dL_dgamma = (a / rms(a)) * dL_dout -> requires sum over batch due to broadcasting
         auto dL_dg_components = ttnn::multiply(
             dL_dout,
-            ttnn::divide(a, rms_a, std::nullopt, std::nullopt, std::nullopt, true, none, none, none),
+            ttnn::divide(
+                a,
+                rms_a,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                none,
+                none,
+                none,
+                false,
+                true),  // Use approximate version due to issue #28961 when dealing with broadcasted tensors
             std::nullopt,
             std::nullopt,
             std::nullopt,
