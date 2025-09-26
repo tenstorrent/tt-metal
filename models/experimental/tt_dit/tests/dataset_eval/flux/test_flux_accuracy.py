@@ -43,8 +43,8 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "flux_test_results.json"
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
-        ("schnell", 1024, 1024, 1.0, 4),
-        # ("dev", 1024, 1024, 3.5, 28),
+        # ("schnell", 1024, 1024, 1.0, 4),
+        ("dev", 1024, 1024, 3.5, 28),
     ],
 )
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
