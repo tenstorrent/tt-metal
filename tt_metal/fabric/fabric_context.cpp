@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
@@ -15,8 +16,39 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
+#include "host_to_router_comm_helpers.hpp"
 
 namespace tt::tt_fabric {
+
+HostToRouterCommConfig::HostToRouterCommConfig(
+    size_t num_buffer_slots,
+    size_t buffer_base_address,
+    size_t router_write_counter_address,
+    size_t router_read_counter_address,
+    size_t common_fsm_log_address,
+    size_t heartbeat_fsm_log_address,
+    size_t reroute_fsm_log_address) :
+    num_buffer_slots_(num_buffer_slots),
+    buffer_base_address_(buffer_base_address),
+    router_write_counter_address_(router_write_counter_address),
+    router_read_counter_address_(router_read_counter_address),
+    common_fsm_log_address_(common_fsm_log_address),
+    heartbeat_fsm_log_address_(heartbeat_fsm_log_address),
+    reroute_fsm_log_address_(reroute_fsm_log_address) {}
+
+size_t HostToRouterCommConfig::get_num_buffer_slots() const { return num_buffer_slots_; }
+
+size_t HostToRouterCommConfig::get_buffer_base_address() const { return buffer_base_address_; }
+
+size_t HostToRouterCommConfig::get_router_write_counter_address() const { return router_write_counter_address_; }
+
+size_t HostToRouterCommConfig::get_router_read_counter_address() const { return router_read_counter_address_; }
+
+size_t HostToRouterCommConfig::get_common_fsm_log_address() const { return common_fsm_log_address_; }
+
+size_t HostToRouterCommConfig::get_heartbeat_fsm_log_address() const { return heartbeat_fsm_log_address_; }
+
+size_t HostToRouterCommConfig::get_reroute_fsm_log_address() const { return reroute_fsm_log_address_; }
 
 std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
@@ -183,6 +215,16 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
 
     set_routing_mode(this->topology_, this->fabric_config_);
+
+    const auto& control_channel_config = this->router_config_->control_channel_config;
+    this->host_to_router_comm_config_ = std::make_unique<HostToRouterCommConfig>(
+        control_channel_config.num_host_buffer_slots,
+        control_channel_config.host_buffer_base_address,
+        control_channel_config.host_buffer_remote_write_counter_address,
+        control_channel_config.host_buffer_remote_read_counter_address,
+        control_channel_config.common_fsm_log_address,
+        control_channel_config.heartbeat_fsm_log_address,
+        control_channel_config.reroute_fsm_log_address);
 }
 
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
@@ -335,6 +377,31 @@ void FabricContext::initialize_tensix_config() {
         // configure_routing_tables_for_fabric_ethernet_channels() has already run
         tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
     }
+}
+
+void FabricContext::initialize_router_comm_context(chip_id_t chip_id, chan_id_t chan_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+    this->router_comm_contexts_[node_id].emplace(
+        chan_id, RouterCommContext(this->host_to_router_comm_config_->get_num_buffer_slots()));
+}
+
+HostToRouterCommConfig* FabricContext::get_host_to_router_comm_config() const {
+    TT_FATAL(this->host_to_router_comm_config_ != nullptr, "Error, host to router comm config is uninitialized");
+    return this->host_to_router_comm_config_.get();
+}
+
+RouterCommContext& FabricContext::get_router_comm_context(FabricNodeId& node_id, chan_id_t chan_id) {
+    const auto it = this->router_comm_contexts_.find(node_id);
+    TT_FATAL(
+        it != this->router_comm_contexts_.end(),
+        "Error, querying router comm context for an unknown node id {}",
+        node_id);
+
+    const auto it2 = it->second.find(chan_id);
+    TT_FATAL(it2 != it->second.end(), "Error, querying router comm context for an unknown eth chan id {}", chan_id);
+
+    return this->router_comm_contexts_[node_id][chan_id];
 }
 
 }  // namespace tt::tt_fabric
