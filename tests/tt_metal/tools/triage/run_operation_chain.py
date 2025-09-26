@@ -16,6 +16,9 @@ def main():
     os.environ["TT_METAL_HOME"] = os.getcwd()
     os.environ["PYTHONPATH"] = os.environ["TT_METAL_HOME"]
 
+    # Enable Inspector with RPC server for operation tracking
+    os.environ["TT_METAL_INSPECTOR_LOG_PATH"] = "generated/inspector"
+
     torch.manual_seed(42)
 
     # Clean up any existing ops.yaml files before test
@@ -67,15 +70,6 @@ def main():
 
         # Verify the computation is correct
         assert_with_pcc(torch_expected, torch_final, pcc=0.99)
-
-        # Check that ops.yaml was created and contains our operations
-        ops_yaml_path = "./generated/inspector/ops/ops.yaml"
-        if os.path.exists(ops_yaml_path):
-            import yaml
-
-            with open(ops_yaml_path, "r") as f:
-                ops_data = yaml.safe_load(f)
-            print(f"=== Found {len(ops_data)} operations in ops.yaml ===")
 
         print("=== Test completed successfully ===")
 

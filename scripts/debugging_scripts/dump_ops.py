@@ -5,27 +5,25 @@
 
 """
 Usage:
-    dump_ops [--mapping-file=<file>] [--max-width=<width>] [--verbose]
+    dump_ops [--max-width=<width>] [--verbose]
 
 Options:
-    --mapping-file=<file>  YAML file containing kernel config host-assigned ID to python callstack/args mappings
     --max-width=<width>    Maximum column width for wrapping text [default: 120]
     --verbose              Show detailed argument information (default: concise)
 
 Description:
     Dumps core location and kernel config host-assigned ID for all operations in a table format.
-    If a mapping file is provided, shows callstack and args instead of kernel config host-assigned ID.
-      Otherwise, shows the kernel config host-assigned ID.
+    If Inspector RPC is available, shows operation names and details.
     By default shows concise argument info, use --verbose for full details.
 """
 
 from triage import ScriptConfig, triage_field, run_script
 from dataclasses import dataclass
 from run_checks import run as get_run_checks
-from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from inspector_data import run as get_inspector_data
 
 try:
-    from ttexalens.coordinate import OnChipCoordinate
     from ttexalens.context import Context
     from ttexalens.device import Device
 except ImportError:
@@ -33,7 +31,12 @@ except ImportError:
     print("Please run 'scripts/install_debugger.sh' to install the required debugging dependencies.")
     exit(1)
 
-import yaml, os, re, textwrap
+import re, textwrap
+
+script_config = ScriptConfig(
+    data_provider=False,
+    depends=["inspector_data", "dispatcher_data"],
+)
 
 # Color constants for argument highlighting
 RST = "\033[0m"
@@ -317,7 +320,7 @@ script_config = ScriptConfig(
 @dataclass
 class DumpOpsData:
     dev_core: str = triage_field("Dev/Core")
-    host_info: str = triage_field("Call Info", preserve_indentation_serializer)
+    host_info: str = triage_field("Operation", preserve_indentation_serializer)
 
 
 def format_ops_table(ops_data: list[DumpOpsData], use_mapping: bool = False) -> str:
@@ -352,32 +355,88 @@ def format_ops_table(ops_data: list[DumpOpsData], use_mapping: bool = False) -> 
         return "\n".join([header, separator] + rows)
 
 
-def load_host_id_mapping(mapping_file: str | None) -> dict:
-    """Load host ID mapping from YAML file."""
-    if not mapping_file or not os.path.exists(mapping_file):
+def fetch_operations_from_serialized_files(inspector_path="generated/inspector") -> dict:
+    """Read operations from serialized capnp files when RPC is not available."""
+    import os
+    import capnp
+
+    # Load the capnp schema
+    capnp_file = os.path.join(os.path.dirname(__file__), "../../tt_metal/impl/debug/inspector/rpc.capnp")
+    if not os.path.exists(capnp_file):
+        print(f"[Warning] Cannot find capnp schema at {capnp_file}")
         return {}
 
+    rpc_capnp = capnp.load(capnp_file)
+
+    # Look for serialized operations file
+    operations_file = os.path.join(inspector_path, "getOperations.capnp.bin")
+
+    if os.path.exists(operations_file):
+        try:
+            with open(operations_file, "rb") as f:
+                # Read packed message
+                operations_response = rpc_capnp.Inspector.GetOperationsResults.read_packed(f)
+
+                # Convert to mapping dict keyed by device_operation_id
+                mapping = {}
+                for op in operations_response.operations:
+                    # Skip host-only operations
+                    if op.deviceOperationId != "none":
+                        mapping[op.deviceOperationId] = {
+                            "device_operation_id": op.deviceOperationId,
+                            "operation_name": op.operationName,
+                            "call_stack": op.callstack,
+                            "arguments": op.arguments,
+                        }
+
+                print(f"[Info] Loaded {len(mapping)} operations from serialized file")
+                return mapping
+
+        except Exception as e:
+            print(f"[Warning] Failed to read serialized operations file: {e}")
+            return {}
+    else:
+        print(f"[Info] No serialized operations file found at {operations_file}")
+        return {}
+
+
+def fetch_operations_from_inspector(inspector) -> dict:
+    """Fetch operations from Inspector RPC and convert to mapping format."""
     try:
-        with open(mapping_file, "r") as f:
-            yaml_data = yaml.safe_load(f) or []
-            # Convert list of operations to dict keyed by device_operation_id
+        # Try to get operations
+        try:
+            operations_response = inspector.getOperations()
+            operations = operations_response.operations
+
+            # Convert to mapping dict keyed by device_operation_id
             mapping = {}
-            for op in yaml_data:
-                if isinstance(op, dict):
-                    # Use device_operation_id as the key
-                    if "device_operation_id" in op and op["device_operation_id"] != "none":
-                        mapping[str(op["device_operation_id"])] = op
+            for op in operations:
+                # Skip host-only operations
+                if op.deviceOperationId != "none":
+                    mapping[op.deviceOperationId] = {
+                        "device_operation_id": op.deviceOperationId,
+                        "operation_name": op.operationName,
+                        "call_stack": op.callstack,
+                        "arguments": op.arguments,
+                    }
             return mapping
-    except Exception:
+        except AttributeError as e:
+            # Inspector doesn't have getOperations method (old version or not RPC)
+            print(f"[Warning] Inspector doesn't support getOperations: {e}")
+            return {}
+
+    except Exception as e:
+        # If we can't get operations from Inspector, return empty dict
+        print(f"[Warning] Could not fetch operations from Inspector: {e}")
         return {}
 
 
 def dump_ops(
     device: Device,
     dispatcher_data: DispatcherData,
-    mapping_file: str | None = None,
     max_width: int = 100,
     verbose: bool = False,
+    inspector_data=None,
 ) -> tuple[list[DumpOpsData], list[tuple[int, str]]]:
     """Extract core location and host ID for all operations.
 
@@ -387,7 +446,10 @@ def dump_ops(
     blocks_to_test = ["functional_workers", "eth"]
     result: list[DumpOpsData] = []
     host_id_op_names: list[tuple[int, str]] = []
-    host_id_mapping = load_host_id_mapping(mapping_file)
+
+    # Get operations from Inspector RPC
+    host_id_mapping = fetch_operations_from_inspector(inspector_data) if inspector_data else {}
+
     seen_host_ids = set()
 
     for block_to_test in blocks_to_test:
@@ -426,40 +488,73 @@ def dump_ops(
                 # device_operation_id matches kernel_config_host_assigned_id directly
                 operation_id_key = str(kernel_config_host_id)
 
-                # Get callstack and args from mapping if available
+                # Get operation info from mapping if available
+                operation_name = None
                 callstack = ""
                 args = ""
                 if operation_id_key in host_id_mapping:
                     mapping = host_id_mapping[operation_id_key]
+                    operation_name = mapping.get("operation_name", None)
                     callstack = mapping.get("callstack", "")
                     args = mapping.get("arguments", "")
 
                 # Format host info based on whether we have mapping data
-                if callstack:
-                    # Combine callstack and args, preserving original line breaks and indentation
-                    # Only strip trailing whitespace to preserve internal indentation structure
-                    full_text = f"{callstack.rstrip()}\n{args.rstrip()}"
+                if operation_name:
+                    # Show operation name as primary info
+                    if verbose:
+                        # In verbose mode, show operation name + args + callstack
+                        host_info_lines = [operation_name]
 
-                    # Apply concise formatting first if not verbose
-                    if not verbose:
-                        full_text = format_text_concise(full_text)
+                        # Add arguments if available (they contain tensor shapes)
+                        if args:
+                            # Format arguments nicely
+                            arg_lines = args.split("\n")
+                            for arg_line in arg_lines:
+                                if arg_line.strip():
+                                    # Indent arguments
+                                    host_info_lines.append(f"  {arg_line}")
 
-                    # Wrap each line individually to preserve structure
-                    wrapped_lines = []
-                    for line in full_text.split("\n"):
-                        if len(line) <= max_width:
-                            wrapped_lines.append(line)
+                        # Add callstack if available
+                        if callstack:
+                            host_info_lines.append("  Callstack:")
+                            # Limit callstack to first 3 frames in table view
+                            stack_lines = callstack.split("\n")[:3]
+                            for stack_line in stack_lines:
+                                if stack_line.strip():
+                                    host_info_lines.append(f"    {stack_line.strip()}")
+                            if len(callstack.split("\n")) > 3:
+                                host_info_lines.append("    ...")
+
+                        # Wrap long lines
+                        wrapped_lines = []
+                        for line in host_info_lines:
+                            if len(line) <= max_width:
+                                wrapped_lines.append(line)
+                            else:
+                                # Detect original indentation and preserve it
+                                original_indent = len(line) - len(line.lstrip())
+                                indent_str = line[:original_indent]
+
+                                # Wrap this line, preserving original indentation for continuation
+                                wrapped = textwrap.fill(line, width=max_width, subsequent_indent=indent_str + "  ")
+                                wrapped_lines.append(wrapped)
+
+                        host_info = "\n".join(wrapped_lines)
+                    else:
+                        # In concise mode, show operation name and first tensor shape if available
+                        if args and "Tensor[shape=" in args:
+                            # Extract first tensor shape
+                            import re
+
+                            shape_match = re.search(r"shape=\(([^)]+)\)", args)
+                            if shape_match:
+                                host_info = f"{operation_name} [{shape_match.group(1)}]"
+                            else:
+                                host_info = operation_name
                         else:
-                            # Detect original indentation and preserve it
-                            original_indent = len(line) - len(line.lstrip())
-                            indent_str = line[:original_indent]
-
-                            # Wrap this line, preserving original indentation for continuation
-                            wrapped = textwrap.fill(line, width=max_width, subsequent_indent=indent_str + "  ")
-                            wrapped_lines.append(wrapped)
-
-                    host_info = "\n".join(wrapped_lines)
+                            host_info = operation_name
                 else:
+                    # No mapping available, just show the ID
                     host_info = str(kernel_config_host_id)
 
                 # Combine device ID and core location into a single string
@@ -476,17 +571,17 @@ def dump_ops(
 
 def run(args, context: Context):
     """Run the dump_ops script."""
-    mapping_file = args["--mapping-file"]
     max_width = int(args["--max-width"]) if args["--max-width"] else 100
     verbose = args["--verbose"]
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
+    inspector_data = get_inspector_data(args, context)
 
     # Handle device iteration directly to avoid automatic "Dev" column
     all_ops_data = []
     all_host_id_op_names = []
     for device in run_checks.devices:
-        device_ops, host_id_op_names = dump_ops(device, dispatcher_data, mapping_file, max_width, verbose)
+        device_ops, host_id_op_names = dump_ops(device, dispatcher_data, max_width, verbose, inspector_data)
         all_ops_data.extend(device_ops)
         all_host_id_op_names.extend(host_id_op_names)
 
@@ -499,27 +594,4 @@ def run(args, context: Context):
 
 
 if __name__ == "__main__":
-    import docopt
-
-    # Parse arguments to check if mapping file is provided
-    args = docopt.docopt(__doc__)
-    mapping_file = args["--mapping-file"]
-
-    # Run the main triage script
     run_script()
-
-    # If mapping file was provided, show the tips
-    if mapping_file:
-        # Try to access the collected host_id_op_names
-        try:
-            # Access from current module after run_script has completed
-            import dump_ops as this_module
-
-            if hasattr(this_module, "_collected_host_id_op_names") and this_module._collected_host_id_op_names:
-                print("\nTIP: Generate tests for the hanging operations:")
-                print("  python scripts/debugging_scripts/generate_tests.py generated/inspector/ops/ops.yaml")
-                print("\nTIP: Run tests for the hanging operations:")
-                for host_id, op_name in this_module._collected_host_id_op_names:
-                    print(f"  pytest test_op_{host_id}.py  # {op_name}")
-        except:
-            pass

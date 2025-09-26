@@ -9,10 +9,6 @@ import sys
 import time
 import traceback
 import types
-import os
-import yaml
-from threading import Lock
-import inspect
 
 from contextlib import contextmanager
 from functools import wraps
@@ -24,195 +20,6 @@ from loguru import logger
 
 import ttnn
 import ttnn.database
-
-# Global lock for thread-safe YAML file operations
-_yaml_lock = Lock()
-
-
-def format_arguments_for_logging(function_args, function_kwargs, operation_name):
-    """Simple argument capture for logging - no coloring, minimal formatting."""
-    arg_lines = []
-
-    # Get function signature to map positional args to parameter names
-    param_names = []
-    try:
-        if hasattr(ttnn, operation_name.split(".")[-1]):
-            func = getattr(ttnn, operation_name.split(".")[-1])
-            if hasattr(func, "function"):  # It's an Operation/FastOperation
-                func = func.function
-            sig = inspect.signature(func)
-            param_names = list(sig.parameters.keys())
-    except:
-        pass
-
-    # Format positional arguments
-    for i, arg in enumerate(function_args):
-        param_name = param_names[i] if i < len(param_names) else f"arg_{i}"
-        arg_info = format_single_argument(param_name, arg)
-        if arg_info:
-            arg_lines.append(arg_info)
-
-    # Format keyword arguments
-    for key, value in function_kwargs.items():
-        arg_info = format_single_argument(key, value)
-        if arg_info:
-            arg_lines.append(arg_info)
-
-    return "\n".join(arg_lines)
-
-
-def format_single_argument(param_name, value):
-    """Simple argument formatting - no coloring."""
-    try:
-        if hasattr(value, "__class__") and "ttnn" in str(value.__class__):
-            # Handle TTNN tensors
-            if hasattr(value, "shape") and hasattr(value, "dtype"):
-                shape_str = str(value.shape) if hasattr(value, "shape") else "unknown_shape"
-                dtype_str = str(value.dtype) if hasattr(value, "dtype") else "unknown_dtype"
-                layout_str = str(value.layout) if hasattr(value, "layout") else "unknown_layout"
-
-                # Try to get memory config info
-                memory_info = ""
-                if hasattr(value, "memory_config"):
-                    try:
-                        memory_info = f" memory_config = {value.memory_config()}"
-                    except:
-                        memory_info = " memory_config = unknown"
-
-                return f"{param_name} : shape = {shape_str} data_type = {dtype_str} layout = {layout_str}{memory_info}"
-
-        elif isinstance(value, (int, float, complex)):
-            # Handle scalar values
-            if isinstance(value, float):
-                return f"{param_name} = {value:.6f}"
-            else:
-                return f"{param_name} = {value}"
-
-        elif isinstance(value, (str, bool)):
-            return f"{param_name} = {value}"
-
-        elif isinstance(value, (list, tuple)):
-            if len(value) <= 3:  # Only show small collections
-                return f"{param_name} = {value}"
-            else:
-                return f"{param_name} = [{type(value[0]).__name__} array of length {len(value)}]"
-
-        elif value is None:
-            return f"{param_name} = None"
-
-        else:
-            # Generic fallback
-            return f"{param_name} = {type(value).__name__}"
-
-    except Exception as e:
-        return f"{param_name} = <error formatting: {e}>"
-
-    return None
-
-
-def log_operation_info(operation_name, function_args, function_kwargs):
-    """Shared function to handle operation logging for both Operation and FastOperation."""
-    pre_operation_state = None
-    try:
-        # Capture state before operation
-        python_op_id = ttnn._ttnn.fetch_and_increment_python_operation_id()
-        # Clear any previous thread-local device operation ID
-        ttnn._ttnn.clear_first_assigned_device_operation_id()
-
-        pre_operation_state = {
-            "python_op_id": python_op_id,
-            "callstack": get_filtered_python_call_stack(),
-            "args_info": format_arguments_for_logging(function_args, function_kwargs, operation_name),
-        }
-    except Exception as e:
-        print(f"Warning: Failed to capture pre-operation state for {operation_name}: {e}")
-
-    return pre_operation_state
-
-
-def finalize_operation_logging(operation_name, pre_operation_state):
-    """Shared function to finalize operation logging after execution."""
-    if pre_operation_state:
-        try:
-            # Get the first assigned device operation ID for this thread
-            first_device_op_id = ttnn._ttnn.get_first_assigned_device_operation_id()
-
-            # Check if a device operation actually occurred
-            if first_device_op_id > 0:
-                # Device operation occurred - use the first assigned ID
-                actual_device_op_id = first_device_op_id
-            else:
-                # No device operation - this is a host-only operation
-                actual_device_op_id = None
-
-            write_new_operation_info(
-                operation_name=operation_name,
-                python_op_id=pre_operation_state["python_op_id"],
-                device_op_id=actual_device_op_id,
-                callstack=pre_operation_state["callstack"],
-                args_info=pre_operation_state["args_info"],
-            )
-        except Exception as e:
-            print(f"Warning: Failed to log operation {operation_name}: {e}")
-
-
-def write_new_operation_info(operation_name: str, python_op_id: int, device_op_id, callstack: str, args_info: str = ""):
-    """Write operation info to new ops-new.yaml file with both python_operation_id and device_operation_id."""
-
-    # Create directory if it doesn't exist
-    dir_path = "./generated/inspector/ops"
-    os.makedirs(dir_path, exist_ok=True)
-
-    # Create filename with full path
-    filename = os.path.join(dir_path, "ops.yaml")
-
-    # Prepare operation data
-    operation_data = {
-        "python_operation_id": python_op_id,
-        "device_operation_id": device_op_id if device_op_id is not None else "none",
-        "operation_name": operation_name,
-        "callstack": callstack,
-        "arguments": args_info,
-    }
-
-    # Thread-safe file writing
-    with _yaml_lock:
-        try:
-            # Load existing data if file exists
-            existing_data = []
-            if os.path.exists(filename):
-                try:
-                    with open(filename, "r") as f:
-                        existing_data = yaml.safe_load(f) or []
-                except Exception:
-                    existing_data = []
-
-            # Append new operation
-            existing_data.append(operation_data)
-
-            # Write back to file
-            with open(filename, "w") as f:
-                yaml.safe_dump(existing_data, f, default_flow_style=False)
-
-        except Exception as e:
-            # Don't fail the operation if logging fails, just print a warning
-            print(f"Warning: Failed to write to ops.yaml: {e}")
-
-
-def get_filtered_python_call_stack():
-    """Get Python call stack, filtering out internal framework code."""
-    stack_frames = traceback.format_stack()
-    filtered_frames = []
-
-    for frame in stack_frames:
-        # Skip internal framework files
-        if not any(
-            internal in frame
-            for internal in ["/site-packages/", "/lib/python", "decorators.py", "/pytest/", "/pluggy/", "__call__"]
-        ):
-            filtered_frames.append(frame.strip())
-
-    return "\n".join(filtered_frames)
 
 
 def compare_tensors_using_pcc(
@@ -559,9 +366,6 @@ class FastOperation:
         return hash(self.python_fully_qualified_name)
 
     def __call__(self, *function_args, **function_kwargs):
-        # Log operation info before execution
-        pre_operation_state = log_operation_info(self.python_fully_qualified_name, function_args, function_kwargs)
-
         cq_id = None
         if "queue_id" in function_kwargs:
             cq_id = function_kwargs.pop("queue_id")
@@ -573,9 +377,6 @@ class FastOperation:
         else:
             with command_queue(cq_id):
                 result = self.function(*function_args, **function_kwargs)
-
-        # Finalize operation logging after execution
-        finalize_operation_logging(self.python_fully_qualified_name, pre_operation_state)
 
         return result
 
@@ -888,21 +689,10 @@ class Operation:
 
     def __call__(self, *function_args, **function_kwargs):
         try:
-            pre_operation_state = None
-
             if not OPERATION_CALL_STACK:
-                # Log operation info before execution (only for top-level calls)
-                pre_operation_state = log_operation_info(
-                    self.python_fully_qualified_name, function_args, function_kwargs
-                )
-
+                ttnn._ttnn.fetch_and_increment_python_operation_id()
             OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
-
-            # Finalize operation logging after execution (only for top-level calls)
-            if pre_operation_state:
-                finalize_operation_logging(self.python_fully_qualified_name, pre_operation_state)
-
         finally:
             OPERATION_CALL_STACK.pop()
         return output

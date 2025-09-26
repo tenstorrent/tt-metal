@@ -34,6 +34,7 @@ target_sources(
         test_conv2d.cpp
         test_multi_cq_multi_dev.cpp
         test_multiprod_queue.cpp
+        test_inspector_operation_tracking.cpp
 )
 target_include_directories(unit_tests_ttnn_smoke PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
