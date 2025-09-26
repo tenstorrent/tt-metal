@@ -1,2 +1,2 @@
 InheritParentConfig: true
-Checks: -bugprone-suspicious-stringview-data-usage
+Checks: -bugprone-suspicious-stringview-data-usage, -misc-use-anonymous-namespace
