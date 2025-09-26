@@ -499,7 +499,6 @@ def test_line_all_reduce_on_TG_cols_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
