@@ -50,7 +50,7 @@ def create_yolov11_input_tensors(
         
         ttnn_input_tensor = ttnn.from_torch(
             torch_input_tensor,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=input_mem_config,
