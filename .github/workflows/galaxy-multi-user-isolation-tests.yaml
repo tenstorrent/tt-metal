@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       galaxy-multi-user-isolation-tests:
-        description: 'Run Galaxy multi-host job'
+        description: 'Run Galaxy multi-host job (not actually used in logic yet)'
         required: false
         default: true
         type: boolean
@@ -22,7 +22,7 @@ jobs:
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
     runs-on:
-      # A physical, multi-host WH 6U that's in service
+      - in-service
       - topology-6u
       - arch-wormhole_b0
       - bare-metal
@@ -32,20 +32,21 @@ jobs:
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create Docker Compose file
         run: python3 .github/scripts/utils/multi-user-create-files.py --image "${{ needs.build-artifact.outputs.dev-docker-image }}"
       - name: Run Docker Compose
+        timeout-minutes: 10
         run: |
           TRAY_PODS_DIR=".multi-user-galaxy-docker-files"
           REQUIRED_PODS=4
@@ -76,6 +77,7 @@ jobs:
           echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
 
       - name: Run the tests
+        timeout-minutes: 15
         run: |
           run_test() {
             testname="$1"

@@ -87,7 +87,7 @@ def test_model_inference(
                 "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
             )
 
-        if "Phi-3-mini" in model_name_env and weights == "random":
+        if ("Phi-3-mini" in model_name_env or "phi-4" in model_name_env) and weights == "random":
             pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC

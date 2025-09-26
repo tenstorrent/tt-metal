@@ -37,7 +37,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "circular_buffer_constants.h"
@@ -47,8 +47,8 @@
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
+#include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
-#include "kernel.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -74,8 +74,6 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "util.hpp"
-#include "utils.hpp"
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
 
@@ -401,14 +399,16 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<std::shared_ptr<Kernel>> Program::kernels() const { return internal_->kernels(); }
+std::vector<detail::KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
+    return program.impl().collect_kernel_meta(device);
+}
 
-std::vector<std::shared_ptr<Kernel>> ProgramImpl::kernels() const {
-    std::vector<std::shared_ptr<Kernel>> result;
+std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
+    std::vector<detail::KernelMeta> result;
     result.reserve(this->num_kernels());
     for (const auto& m : this->kernels_) {
         for (const auto& [id, kernel] : m) {
-            result.push_back(kernel);
+            result.push_back(kernel->meta(device));
         }
     }
     return result;
@@ -436,7 +436,8 @@ KernelGroup::KernelGroup(
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        kernel_config.kernel_config_base()[index] = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
+        kernel_config.kernel_config_base()[index] =
+            hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
     }
 
     std::set<NOC_MODE> noc_modes;
@@ -456,7 +457,7 @@ KernelGroup::KernelGroup(
         if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
             // The code below sets the brisc_noc_id for use by the device firmware
             // Use 0 if neither brisc nor ncrisc specify a noc
-            if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+            if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use brisc's noc if brisc specifies a noc
                 kernel_config.brisc_noc_id() = std::get<DataMovementConfig>(kernel->config()).noc;
@@ -464,7 +465,7 @@ KernelGroup::KernelGroup(
                 if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                     kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                 }
-            } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+            } else if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                 // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
@@ -512,7 +513,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
 }
 
 void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_index) {
-    if (core_to_kernel_group_index_table_[programmable_core_type_index].size() == 0) {
+    if (core_to_kernel_group_index_table_[programmable_core_type_index].empty()) {
         // Get the extent of the kernels in x, y
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[programmable_core_type_index] = {0, 0};
@@ -918,8 +919,9 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
+    const auto& hal = MetalContext::instance().hal();
     uint64_t kernel_config_base =
-        MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
+        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
@@ -1063,7 +1065,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         return dst_noc_unicast_info;
     };
 
-    // Circular Buffer Configs handled in EnqueueProgram
+    // Circular Buffer Configs handled in progrm_dispatch::update_program_dispatch_commands
 
     // Assume here and in command queue that kg_buffers is populated with multicast buffers first then unicast buffers
     // Program Binaries and Go Signals
@@ -1126,7 +1128,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         }
     }
 
-    if (binaries_data.size() > 0) {
+    if (!binaries_data.empty()) {
         this->program_transfer_info.binary_data = binaries_data;
     }
 
@@ -1253,7 +1255,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
                         const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
-                        if (intersection.size() > 0) {
+                        if (!intersection.empty()) {
                             used_sub_device_ids.insert(SubDeviceId{i});
                             num_intersections += intersection.num_cores();
                         }
@@ -1458,7 +1460,7 @@ void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; 
 void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
-    HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
+    HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + this->get_program_config(
                                MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
@@ -1466,7 +1468,7 @@ uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*log
 }
 
 uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
-    HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
+    HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + this->get_program_config(
                                MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))

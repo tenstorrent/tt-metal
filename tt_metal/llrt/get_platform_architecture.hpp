@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <mutex>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "llrt/rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/pcie/pci_device.hpp>

@@ -267,11 +267,15 @@ bool fabric_set_unicast_route(
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && dst_mesh_id != routing_table->my_mesh_id) {
         // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
-        // dst_dev_id = exit_node;
+        tt_l1_ptr exit_node_table_t* exit_node_table =
+            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+        while (true) {
+        }  // not fully supported yet
     }
 
-    tt_l1_ptr routing_path_t<2, true>* routing_info =
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    tt_l1_ptr intra_mesh_routing_path_t<2, true>* routing_info =
+        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
     packet_header->routing_fields.value = 0;
@@ -304,8 +308,8 @@ bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatency
             return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
         }
     } else {
-        tt_l1_ptr routing_path_t<1, compressed>* routing_info =
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+        tt_l1_ptr intra_mesh_routing_path_t<1, compressed>* routing_info =
+            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
         if constexpr (target_as_dev) {
             tt_l1_ptr tensix_routing_l1_info_t* routing_table =
                 reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);

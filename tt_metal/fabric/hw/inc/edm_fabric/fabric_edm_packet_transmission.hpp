@@ -299,7 +299,7 @@ template <
     bool stateful_api,
     bool increment_pointers = true,
     uint8_t NUM_SENDER_BUFFERS>
-#ifndef FABRIC_2D
+#if !defined(FABRIC_2D) && !defined(ARCH_BLACKHOLE)
 FORCE_INLINE
 #endif
     void
