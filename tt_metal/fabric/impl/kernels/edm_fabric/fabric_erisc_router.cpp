@@ -1858,11 +1858,7 @@ void run_receiver_channel_step_impl(
         if (can_send_completion) {
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
-                if constexpr (receiver_channel == 0) {
-                    src_ch_id = remote_worker_sender_channel;
-                } else {
-                    src_ch_id = remote_vc1_sender_channel;
-                }
+                src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
@@ -1968,6 +1964,10 @@ void run_fabric_edm_main_loop(
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<NUM_RECEIVER_CHANNELS - 1>();
     receiver_channel_pointers_ch0.reset();
     receiver_channel_pointers_ch1.reset();
+    if constexpr (skip_src_ch_id_update) {
+        receiver_channel_pointers_ch0.set_src_chan_id(BufferIndex{0}, remote_worker_sender_channel);
+        receiver_channel_pointers_ch1.set_src_chan_id(BufferIndex{0}, remote_vc1_sender_channel);
+    }
 
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();
