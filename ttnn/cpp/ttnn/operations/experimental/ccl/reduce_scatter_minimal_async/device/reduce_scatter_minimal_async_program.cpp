@@ -551,6 +551,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                         topology, tiles_to_read, tiles_read, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
+                uint32_t start_pages_read_in_row =
+                    (worker_id * batch_slice_num_pages / num_workers) % (input_tensor_Wt / ring_size);
+                uint32_t start_row_offset =
+                    (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) * input_tensor_Wt;
+                uint32_t start_tiles_read = worker_id * batch_slice_num_pages / num_workers;
+                uint32_t start_tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
+
                 std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,              // my_chip_id
                     ring_size,               // ring_size
@@ -595,12 +602,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     input_tensor.buffer()->address(),         // input_tensor_address
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     semaphore.at(dir).address(),              // out_ready_semaphore
-                    (worker_id * batch_slice_num_pages / num_workers) %
-                        (input_tensor_Wt / ring_size),  // start_pages_read_in_row
-                    (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
-                        input_tensor_Wt,                                   // start_row_offset
-                    worker_id * batch_slice_num_pages / num_workers,       // start_tiles_read
-                    (worker_id + 1) * batch_slice_num_pages / num_workers  // start_tiles_to_read
+                    start_pages_read_in_row,                  // start_pages_read_in_row
+                    start_row_offset,                         // start_row_offset
+                    start_tiles_read,                         // start_tiles_read
+                    start_tiles_to_read                       // start_tiles_to_read
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -681,18 +686,16 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    intermediate_tensor.buffer()->address(),          // intermediate_tensor_address
-                    output_tensor.buffer()->address(),                // output_tensor_address
-                    virtual_core.x,                                   // out_ready_sem_noc0_x
-                    virtual_core.y,                                   // out_ready_sem_noc0_y
-                    semaphore.at(dir).address(),                      // out_ready_fwd_semaphore
-                    semaphore.at(num_directions_per_link).address(),  // batch_ready_semaphore
-                    (worker_id * batch_slice_num_pages / num_workers) %
-                        (input_tensor_Wt / ring_size),  // pages_read_in_row
-                    (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
-                        input_tensor_Wt,                                         // row_offset
-                    (worker_id * batch_slice_num_pages / num_workers),           // tiles_read
-                    (worker_id + 1) * batch_slice_num_pages / num_workers,       // tiles_to_read
+                    intermediate_tensor.buffer()->address(),                     // intermediate_tensor_address
+                    output_tensor.buffer()->address(),                           // output_tensor_address
+                    virtual_core.x,                                              // out_ready_sem_noc0_x
+                    virtual_core.y,                                              // out_ready_sem_noc0_y
+                    semaphore.at(dir).address(),                                 // out_ready_fwd_semaphore
+                    semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
+                    start_pages_read_in_row,                                     // start_pages_read_in_row
+                    start_row_offset,                                            // start_row_offset
+                    start_tiles_read,                                            // start_tiles_read
+                    start_tiles_to_read,                                         // tiles_to_read
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
                     barrier_semaphore.has_value()                                // barrier_sem
                         ? barrier_semaphore.value().address()
@@ -728,8 +731,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 reduce_kernel_ids.push_back(sender_reduce_kernel_id);
 
                 std::vector<uint32_t> reduce_rt_args = {
-                    worker_id * batch_slice_num_pages / num_workers,       // tiles_read
-                    (worker_id + 1) * batch_slice_num_pages / num_workers  // tiles_to_read
+                    start_tiles_read,    // start_tiles_read
+                    start_tiles_to_read  // start_tiles_to_read
                 };
                 tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
             }
