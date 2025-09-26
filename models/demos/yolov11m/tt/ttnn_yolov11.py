@@ -84,7 +84,32 @@ class TtnnYoloV11:
         reshape_loss = 100 * (len(x_pre_reshape_unique) - len(x_post_reshape_unique)) / len(x_pre_reshape_unique)
         print(f"🔍 [RESHAPE DEBUG] AFTER reshape: {len(x_post_reshape_unique)} unique values ({reshape_loss:.2f}% loss)")
         
+        # EXPERIMENT: Test if sharded memory is causing quantization
         x = self.conv1(self.device, x)
+        
+        # Try moving to DRAM to see if sharding was the issue
+        x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x_dram_debug = ttnn.to_torch(x_dram)
+        x_dram_unique = torch.unique(x_dram_debug.flatten())
+        print(f"🔍 [DRAM TEST] CONV1 output in DRAM: {len(x_dram_unique)} unique values")
+        
+        # EXPERIMENT: Test if we can force float32 output from conv
+        try:
+            x_float32 = ttnn.to_dtype(x_dram, ttnn.float32)
+            x_float32_debug = ttnn.to_torch(x_float32)
+            x_float32_unique = torch.unique(x_float32_debug.flatten())
+            print(f"🔍 [FLOAT32 TEST] CONV1 output as float32: {len(x_float32_unique)} unique values")
+            
+            # Use float32 version if it has more diversity
+            if len(x_float32_unique) > len(x_dram_unique):
+                print(f"🔍 [FLOAT32 TEST] Float32 conversion improved diversity! Using float32.")
+                x = x_float32
+            else:
+                print(f"🔍 [FLOAT32 TEST] No improvement from float32 conversion.")
+                x = x_dram
+        except Exception as e:
+            print(f"🔍 [FLOAT32 TEST] Float32 conversion failed: {e}")
+            x = x_dram
         
         # Debug: Check diversity after CONV1 (shows impact of conv layer precision)
         x_conv1_debug = ttnn.to_torch(x)
