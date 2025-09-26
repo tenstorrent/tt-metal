@@ -137,7 +137,7 @@ jobs:
         if: ${{ steps.analyze.outputs.regressed_workflows != '[]' || steps.analyze.outputs.alert_all_message != '' }}
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
           regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
           alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
 
