@@ -29,7 +29,7 @@ class TtnnSPPF:
             self.conv_pt.cv2.conv,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=True,
-            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
     def __call__(self, x):
@@ -45,8 +45,6 @@ class TtnnSPPF:
             in_c_padded = in_c + (TILE_WIDTH - in_c % TILE_WIDTH)
 
         for i in range(3):
-            if y[-1].is_sharded():
-                y[-1] = ttnn.sharded_to_interleaved(y[-1])
             tt_out = ttnn.max_pool2d(
                 input_tensor=y[-1],
                 batch_size=x.shape[0],
@@ -57,14 +55,14 @@ class TtnnSPPF:
                 stride=[1, 1],
                 padding=[2, 2],
                 dilation=[1, 1],
-                applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                applied_shard_scheme=None if y[-1].is_sharded() else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             )
             y.append(tt_out)
 
         out = concat(-1, True, *y)
 
         deallocate_tensors(*y)
-
+        out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = self.cv2(out)
 
         return out
