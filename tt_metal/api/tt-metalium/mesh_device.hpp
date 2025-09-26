@@ -117,7 +117,7 @@ private:
 
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
 
-    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
@@ -140,6 +140,10 @@ private:
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
+
+    // Helper functions for initialization
+    void initialize_allocators_();
+    void initialize_cq_();
 
 public:
     MeshDevice(

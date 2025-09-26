@@ -960,14 +960,19 @@ bool MeshDevice::initialize(
     bool /*minimal*/) {
     TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
 
+    initialize_allocators_();
+    initialize_cq_();
+
+    Inspector::mesh_device_initialized(this);
+    is_internal_state_initialized = true;
+    return true;
+}
+
+void MeshDevice::initialize_allocators_() {
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
         SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
-
-    // Resource shared across mesh command queues.
-    auto cq_shared_state = std::make_shared<CQSharedState>();
-    cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator();
     auto alloc_config = allocator->get_config();
@@ -986,6 +991,13 @@ bool MeshDevice::initialize(
     }
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(alloc_config), sub_devices);
+}
+
+void MeshDevice::initialize_cq_() {
+    // Resource shared across mesh command queues.
+    auto cq_shared_state = std::make_shared<CQSharedState>();
+    cq_shared_state->sub_device_cq_owner.resize(1);
+
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
@@ -1006,9 +1018,6 @@ bool MeshDevice::initialize(
                 std::make_unique<SDMeshCommandQueue>(this, cq_id, std::bind(&MeshDevice::lock_api, this)));
         }
     }
-    Inspector::mesh_device_initialized(this);
-    is_internal_state_initialized = true;
-    return true;
 }
 
 void MeshDevice::init_command_queue_host() {
