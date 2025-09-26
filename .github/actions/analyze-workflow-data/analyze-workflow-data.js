@@ -21,6 +21,8 @@ const SUCCESS_EMOJI = '✅';
 const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
 
+// CODE FOR OWNERSHIP MAPPING
+
 // Owners mapping cache
 let __ownersMapping = undefined; // Stores the owners data
 function loadOwnersMapping() {
@@ -125,7 +127,10 @@ function findOwnerForLabel(label) {
   return undefined;
 }
 
+// END OF CODE FOR OWNERSHIP MAPPING
+
 // Simple HTML escaping for rendering snippets safely in summary HTML
+// This is used to prevent XSS attacks by converting special characters to basic text that can't be rendered as HTML
 function escapeHtml(text) {
   if (typeof text !== 'string') return text;
   return text
@@ -135,34 +140,22 @@ function escapeHtml(text) {
 }
 
 function renderErrorsTable(errorSnippets) {
-  if (!Array.isArray(errorSnippets) || errorSnippets.length === 0) {
+  if (!Array.isArray(errorSnippets) || errorSnippets.length === 0) { // If the error snippets are not an array or the length is 0
     return '<em>No error info found</em>';
   }
-  const rows = errorSnippets.map(obj => {
-    const label = escapeHtml(obj.label || '');
-    const snippet = escapeHtml(obj.snippet || '');
+  const rows = errorSnippets.map(obj => { // Map each object in the error snippets array to something else
+    const label = escapeHtml(obj.label || ''); // Escape the label so no security issues
+    const snippet = escapeHtml(obj.snippet || ''); // Escape the snippet so no security issues
     // Render owner display name(s) if present; fallback to id(s); else 'no owner found'
     let ownerDisplay = 'no owner found';
     if (obj.owner && Array.isArray(obj.owner) && obj.owner.length) {
-      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
-      if (names.length) ownerDisplay = names.join(', ');
+      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean); // if the owner exists and has a name or and id that isn't falsy then make that the new owner value in the mapping
+      if (names.length) ownerDisplay = names.join(', '); // If the names array is not empty, join the names with a comma
     }
     const owner = escapeHtml(ownerDisplay);
     return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td>${owner}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
   }).join('\n');
   return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Owner</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
-
-function renderRepeatedErrorsTable(repeatedErrors) {
-  if (!Array.isArray(repeatedErrors) || repeatedErrors.length === 0) {
-    return '<em>None</em>';
-  }
-  const rows = repeatedErrors.map(e => {
-    const snippet = escapeHtml(e.snippet || '');
-    const count = typeof e.count === 'number' ? String(e.count) : '';
-    return `<tr><td>${count}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
-  }).join('\n');
-  return `<table><thead><tr><th>Count</th><th>Snippet</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderCommitsTable(commits) {
