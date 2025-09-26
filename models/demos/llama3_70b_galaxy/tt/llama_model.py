@@ -47,6 +47,14 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
 
+        self.delays = []
+        for row in range(self.mesh_device.shape[0]):
+            delay_row = []
+            for col in range(self.mesh_device.shape[1]):
+                delay = 1000
+                delay_row.append(delay)
+            self.delays.append(delay_row)
+
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
             args=args,
@@ -428,10 +436,16 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            # x_torch = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMesh2dToTensor(
+            #     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+            # ))
+            # breakpoint()
+            # ttnn.synchronize_device(self.mesh_device)
 
             tt_logits = self.lm_head(x, None, mode="prefill")
 
             # Gather the output across all devices and untilize the tensor (for argmax)
+            # ttnn.apply_device_delay(self.mesh_device, self.delays)
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
