@@ -30,6 +30,14 @@ class LMHead(LightweightModule):
         self.num_devices = args.num_devices
         self.tt_ccl = tt_ccl
 
+        self.delays = []
+        for row in range(self.mesh_device.shape[0]):
+            delay_row = []
+            for col in range(self.mesh_device.shape[1]):
+                delay = 400000
+                delay_row.append(delay)
+            self.delays.append(delay_row)
+
         size_per_device = self.vocab_size // self.num_devices
 
         if args.is_galaxy:
@@ -217,7 +225,9 @@ class LMHead(LightweightModule):
                 outputs.append(output)
 
         outputs_reduced = []
+
         for output in outputs:
+            # ttnn.apply_device_delay(self.mesh_device, self.delays)
             output_reduced = self.tt_ccl.line_all_reduce(
                 output,
                 cluster_axis=1,

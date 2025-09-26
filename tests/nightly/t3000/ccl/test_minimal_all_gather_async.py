@@ -257,6 +257,8 @@ def run_all_gather_impl(
         ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Llama LM-HEAD
+        ([4, 1, 32, 16384], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "dit_shape",  # this one triggers the default chunks_per_sync
@@ -271,6 +273,7 @@ def run_all_gather_impl(
         "composite_ag_test_two",
         "composite_ag_test_three",
         "composite_ag_test_four",
+        "lm_head",
     ],
 )
 @pytest.mark.parametrize(

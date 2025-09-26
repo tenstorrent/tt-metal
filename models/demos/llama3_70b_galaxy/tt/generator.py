@@ -127,8 +127,9 @@ class Generator:
                 last_token_idx = seq_len - 1
                 prefill_seq_len = prefill_seq_lens[id]
 
-                if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
-                    enable_trace = False
+                # if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
+                # enable_trace = False
+                enable_trace = True
 
             if use_batched_prefill:
                 # reordering the tokens when empty_slots are not sequential (from vllm)
