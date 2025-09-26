@@ -2386,10 +2386,10 @@ struct noc_traits_t<TensorAccessor<DSpecT>> {
         uint32_t offset_bytes = 0;
     };
     static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, const src_args_type& args) {
-        return src.get_noc_addr(args.page_id, args.offset, noc.get_noc_id());
+        return src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
     }
     static auto dst_addr(const TensorAccessor<DSpecT>& dst, const Noc& noc, const dst_args_type& args) {
-        return dst.get_noc_addr(args.page_id, args.offset, noc.get_noc_id());
+        return dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
     }
 };
 
