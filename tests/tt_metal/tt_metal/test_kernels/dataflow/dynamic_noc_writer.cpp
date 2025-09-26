@@ -139,11 +139,7 @@ void kernel_main() {
 
     // barrier on all txns
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        while (!ncrisc_dynamic_noc_reads_flushed(noc));
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+        noc_async_full_barrier(noc);
     }
 
     // Sync all riscs since we should only clear the trid counters when there are no outstanding requests
@@ -178,8 +174,7 @@ void kernel_main() {
         noc_async_read_barrier_with_trid(i, 1 - noc_index);
     }
 
-#ifndef ARCH_BLACKHOLE
-    // DRAM sharded write API
+    // L1 sharded write API
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t trid = i % 16;
         noc_async_write_one_packet_with_trid(l1_read_addr, addr_self_noc, page_size, trid, write_cmd_buf, noc_index);
@@ -190,7 +185,6 @@ void kernel_main() {
         noc_async_write_barrier_with_trid(i, noc_index);
         noc_async_write_barrier_with_trid(i, 1 - noc_index);
     }
-#endif
 
     DPRINT << "END" <<ENDL();
     DPRINT << "noc_mode " << (uint)noc_mode << ENDL();
