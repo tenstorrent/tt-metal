@@ -22,7 +22,8 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace ttnn::types {
 
 void py_module_types(nb::module_& mod) {
