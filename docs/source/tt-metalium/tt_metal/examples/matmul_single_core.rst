@@ -340,9 +340,9 @@ Kernel execution and result verification
 On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
 The overall execution flow is managed by enqueuing commands:
 
-1.  ``EnqueueWriteBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the device.
-2.  ``EnqueueProgram``: Launches the compiled program (reader, compute, and writer kernels) on the designated core.
-3.  ``EnqueueReadBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
+1.  ``EnqueueWriteMeshBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the Mesh Device (a 1x1 Mesh Device in this example).
+2.  ``EnqueueMeshWorkload``: Launches the compiled workload (reader, compute, and writer kernels) on the designated core on the Unit Mesh Device.
+3.  ``EnqueueReadMeshBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
 
 .. code-block:: cpp
 

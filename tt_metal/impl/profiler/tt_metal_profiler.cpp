@@ -899,9 +899,6 @@ void ReadDeviceProfilerResults(
             } else if (state == ProfilerReadState::LAST_FD_READ) {
                 profiler.setLastFDReadAsDone();
             }
-            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id));
-            }
         }
 
         const std::vector<CoreCoord> virtual_cores = getVirtualCoresForProfiling(device, state);
