@@ -135,10 +135,3 @@ ttnn/ttnn/runtime
 ClangBuildAnalyzer.ini
 ttnn/ttnn/.rpath_checked__ttnn
 Testing
-
-
-models/demos/wormhole/phi2
-prepare_tt.sh
-learn_tt
-log_txt
-llama-models
