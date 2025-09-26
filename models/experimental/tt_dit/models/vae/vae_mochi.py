@@ -343,7 +343,7 @@ class ResBlock:
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
         ttnn.deallocate(x_tiled_NTHWC)
-        x_norm_tiled_NTHWC = ttnn.swish(x_norm_tiled_NTHWC)  # in-place
+        x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_norm_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_norm_tiled_NTHWC)
 
@@ -414,7 +414,7 @@ class ResBlock:
         num_out_blocks = self.num_out_blocks_map[C][HW]
         x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_conv1_tiled_NTHWC)
-        x_tiled_NTHWC = ttnn.swish(x_tiled_NTHWC)  # in-place
+        x_tiled_NTHWC = ttnn.silu(x_tiled_NTHWC, output_tensor=x_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_tiled_NTHWC)
 
@@ -611,8 +611,8 @@ class MochiVAEDecoder:
         latent_dim=12,
         has_attention=[False, False, False, False, False],
         output_norm=False,
-        nonlinearity="swish",
-        output_nonlinearity="swish",
+        nonlinearity="silu",
+        output_nonlinearity="silu",
         causal=True,
         latents_mean=None,
         latents_std=None,
@@ -627,14 +627,19 @@ class MochiVAEDecoder:
         self.num_res_blocks = num_res_blocks
         self.output_nonlinearity = output_nonlinearity
         self.mesh_device = mesh_device
-        self.config = [("latents_mean", latents_mean), ("latents_std", latents_std), ("scaling_factor", scaling_factor)]
-        assert nonlinearity == "swish"
+        self.config = lambda: None
+        self.config.latents_mean = latents_mean
+        self.config.latents_std = latents_std
+        self.config.scaling_factor = scaling_factor
+        assert nonlinearity == "silu"
         assert causal
         assert not any(has_attention), "Attention is not supported in the decoder"
         attn_block = None
         # Calculate channels for each level
         ch = [mult * base_channels for mult in channel_multipliers]
         self.num_up_blocks = len(ch) - 1
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
         assert len(num_res_blocks) == self.num_up_blocks + 2
 
         assert len(temporal_expansions) == len(spatial_expansions) == self.num_up_blocks
@@ -767,10 +772,10 @@ class MochiVAEDecoder:
             x_NTHWC = x_res_NTHWC
 
         # Apply output nonlinearity if needed
-        if self.output_nonlinearity == "swish":
+        if self.output_nonlinearity == "silu":
             x_tile_NTHWC = ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)
             ttnn.deallocate(x_NTHWC)
-            x_tile_NTHWC = ttnn.swish(x_tile_NTHWC)  # in-place
+            x_tile_NTHWC = ttnn.silu(x_tile_NTHWC, output_tensor=x_tile_NTWHC)  # in-place
             x_NTHWC = ttnn.to_layout(x_tile_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tile_NTHWC)
         else:
@@ -778,5 +783,80 @@ class MochiVAEDecoder:
 
         # Final projection
         x_NTHWC = self.output_proj(x_NTHWC)
+
+        return x_NTHWC
+
+    def decode(self, x_NTHWC, return_dict):
+        N, C, T, H, W = x_NTHWC.shape
+        num_devices_T = self.mesh_device.shape[self.parallel_config.time_parallel.mesh_axis]
+        if T % num_devices_T:
+            padded_T = get_padded_size(T, num_devices_T)
+            T_padding = padded_T - T
+            x_NTHWC = torch.nn.functional.pad(x_NTHWC, pad=(0, 0, 0, 0, 0, 0, 0, T_padding))
+        else:
+            padded_T = T
+        num_devices_W = self.parallel_config.w_parallel.factor
+        if W % num_devices_W:
+            padded_W = get_padded_size(W, num_devices_W)
+            W_padding = padded_W - W
+            x_NTHWC = torch.nn.functional.pad(x_NTHWC, pad=(0, 0, 0, W_padding))
+        else:
+            padded_W = W
+        num_devices_H = self.parallel_config.h_parallel.factor
+        if H % num_devices_H:
+            padded_H = get_padded_size(H, num_devices_H)
+            H_padding = padded_H - H
+            x_NTHWC = torch.nn.functional.pad(x_NTHWC, pad=(0, 0, 0, 0, 0, H_padding))
+        else:
+            padded_H = H
+
+        x_NTHWC = torch.reshape(
+            x_NTHWC,
+            (N, padded_T, num_devices_H, padded_H // num_devices_H, num_devices_W, padded_W // num_devices_W, C),
+        )
+        x_NTHWC = x_NTHWC.permute(0, 1, 2, 4, 3, 5, 6)
+        x_NTHWC = torch.reshape(
+            x_NTHWC,
+            (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C),
+        )
+
+        x_NTHWC = ttnn.from_torch(
+            x_NTHWC,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[2, 1]),
+        )
+        x_NTHWC = ttnn.squeeze(x_NTHWC, 2)
+
+        logger.info(f"Input shape: {torch_input.shape}")
+        logger.info("Run TtDecoder forward")
+
+        x_NTHWC = self(x_NTHWC)
+        logger.info("End TtDecoder forward")
+        x_NTHWC = ttnn.unsqueeze(x_NTHWC, 2)
+
+        # Convert TT output to torch tensor
+        x_NTWHC = ttnn.to_torch(
+            x_NTHWC,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
+        )
+
+        # unpad tt output
+        expected_T = 168  # ref_output.shape[2]
+        expected_padded_T = get_padded_size(expected_T, num_devices_T)
+        expected_H = 480 // num_devices_H  # ref_output.shape[3] // num_devices_H
+        expected_W = 848 // num_deivces_W  # ref_output.shape[4] // num_devices_W
+        x_NTHWC = torch.reshape(
+            x_NTHWC,
+            (N, expected_padded_T, num_devices_H, num_devices_W, expected_H, expected_W, 3),  # ref_output.shape[1]),
+        )
+        x_NTHWC = x_NTHWC.permute(0, 1, 2, 4, 3, 5, 6)
+        x_NTHWC = torch.reshape(
+            x_NTHWC,
+            (N, expected_padded_T, num_devices_H * expected_H, num_devices_W * expected_W, 3),  # ref_output.shape[1]),
+        )
+        x_NTHWC = x_NTHWC.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
 
         return x_NTHWC

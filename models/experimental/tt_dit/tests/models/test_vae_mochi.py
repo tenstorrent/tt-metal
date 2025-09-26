@@ -155,10 +155,10 @@ resblock_args = {
 }
 
 
-def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_channels):
+def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_channels, nonlinearity):
     """Initialize both reference and TT models."""
     # Create reference model
-    reference_model = MochiResnetBlock3D(in_channels=in_channels)
+    reference_model = MochiResnetBlock3D(in_channels=in_channels, act_fn=nonlinearity)
 
     # Create TT model
     tt_model = TtResBlock(
@@ -199,6 +199,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     """Test complete forward pass of TtResBlock."""
     block_args = resblock_args.copy()
     block_args["channels"] = C
+    block_args["nonlinearity"] = "silu"
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     h_parallel_factor = 4
@@ -211,7 +212,11 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
 
     reference_model, tt_model = create_random_resblock_models(
-        mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager, in_channels=block_args["channels"]
+        mesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+        in_channels=block_args["channels"],
+        nonlinearity=block_args["nonlinearity"],
     )
 
     # Create input tensor
@@ -509,6 +514,8 @@ def create_decoder_models(
     temporal_expansions,
     spatial_expansions,
     num_res_blocks,
+    nonlinearity,
+    output_nonlinearity,
 ):
     """Initialize both reference and TT decoder models with optional real weights."""
     # Create reference model
@@ -519,6 +526,7 @@ def create_decoder_models(
         layers_per_block=num_res_blocks,
         temporal_expansions=temporal_expansions,
         spatial_expansions=spatial_expansions,
+        act_fn=nonlinearity,
     )
 
     # Create TT model with same weights
@@ -534,6 +542,8 @@ def create_decoder_models(
         spatial_expansions=spatial_expansions,
         num_res_blocks=num_res_blocks,
         latent_dim=latent_dim,
+        nonlinearity=nonlinearity,
+        output_nonlinearity=output_nonlinearity,
     )
 
     return reference_model, tt_model
@@ -553,8 +563,8 @@ decoder_test_configs = [
         "latent_dim": 12,
         "has_attention": [False, False, False, False, False],
         "output_norm": False,
-        "nonlinearity": "swish",
-        "output_nonlinearity": "swish",
+        "nonlinearity": "silu",
+        "output_nonlinearity": "silu",
         "causal": True,
         # Expected output will be approximately: (1, 3, 163, 480, 848)
     },
@@ -609,6 +619,8 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         num_res_blocks=config["num_res_blocks"],
         temporal_expansions=config["temporal_expansions"],
         spatial_expansions=config["spatial_expansions"],
+        nonlinearity=config["nonlinearity"],
+        output_nonlinearity=config["output_nonlinearity"],
     )
 
     # Create input tensor (latent representation)
