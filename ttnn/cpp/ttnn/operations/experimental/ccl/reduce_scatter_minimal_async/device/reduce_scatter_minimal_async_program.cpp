@@ -558,7 +558,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     intermediate_cb_index,   // cb_intermediate_id
                     reader_output_cb_index,  // cb_reader_output_id
                     tile_granularity,        // tile_granularity
-                    page_size,               // tensor0_page_size
+                    page_size,               // page_size
                     batch_slice_num_pages,   // batch_slice_num_pages
                     input_tensor_B,          // input_tensor_B
                     input_tensor_C,          // input_tensor_C
@@ -621,17 +621,23 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
                     ring_index,                     // my_chip_id
+                    ring_size,                      // ring_size
                     compute_output_cb_index,        // cb_compute_output_id
                     reader_output_cb_index,         // cb_reader_output_id
                     tile_granularity,               // packet_size_in_pages
-                    page_size,                      // tensor0_page_size
-                    input_tensor_Wt,                // input_tensor_Wt
-                    batch_slice_num_pages,          // batch_slice_num_pages
-                    ring_size,                      // ring_size
-                    input_tensor_B,                 // num_batches
+                    page_size,                      // page_size
                     num_tiles_to_write_per_packet,  // num_tiles_to_write_per_packet
+                    batch_slice_num_pages,          // batch_slice_num_pages
+                    input_tensor_B,                 // input_tensor_B
+                    input_tensor_C,                 // input_tensor_C
+                    input_tensor_Ht,                // input_tensor_Ht
+                    input_tensor_Wt,                // input_tensor_Wt
+                    slice_B,                        // slice_B
+                    slice_C,                        // slice_C
+                    slice_Ht,                       // slice_Ht
+                    slice_Wt,                       // slice_Wt
                     dir,                            // direction
-                    chunks_per_sync_val,
+                    chunks_per_sync_val,            // chunks_per_sync
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -681,17 +687,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     virtual_core.y,                                   // out_ready_sem_noc0_y
                     semaphore.at(dir).address(),                      // out_ready_fwd_semaphore
                     semaphore.at(num_directions_per_link).address(),  // batch_ready_semaphore
-                    worker_id,
-                    num_workers,
-                    input_tensor_Wt / ring_size,  // slice_Wt
                     (worker_id * batch_slice_num_pages / num_workers) %
                         (input_tensor_Wt / ring_size),  // pages_read_in_row
                     (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
                         input_tensor_Wt,                                         // row_offset
                     (worker_id * batch_slice_num_pages / num_workers),           // tiles_read
                     (worker_id + 1) * batch_slice_num_pages / num_workers,       // tiles_to_read
-                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
+                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
+                    barrier_semaphore.has_value()                                // barrier_sem
                         ? barrier_semaphore.value().address()
                         : 0};
                 append_fabric_mux_connection_rt_args(
@@ -780,7 +783,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                         worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
 
                         if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
+                            worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();
                         }
 
                         core_idx++;
