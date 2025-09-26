@@ -108,7 +108,7 @@ struct GoldenCsvEntry {
     uint32_t num_links{};
     uint32_t packet_size{};
     uint32_t num_iterations{};
-    uint64_t cycles{};
+    double cycles{};
     double bandwidth_GB_s{};
     double packets_per_second{};
     double tolerance_percent{};  // Per-test tolerance percentage
@@ -1307,7 +1307,7 @@ private:
             entry.num_links = std::stoul(tokens[5]);
             entry.packet_size = std::stoul(tokens[6]);
             entry.num_iterations = std::stoul(tokens[7]);
-            entry.cycles = std::stoull(tokens[8]);
+            entry.cycles = std::stod(tokens[8]);
             entry.packets_per_second = std::stod(tokens[9]);
             entry.bandwidth_GB_s = std::stod(tokens[10]);
             // Skip min, max, std dev
