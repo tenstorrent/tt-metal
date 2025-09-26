@@ -253,3 +253,137 @@ class TTTransformerDecoderLayer(LightweightModule):
         if return_attn_weights:
             return tgt, None
         return tgt, None
+
+
+class TTTransformerEncoderLayer(LightweightModule):
+    def __init__(
+        self,
+        device,
+        d_model,
+        nhead=4,
+        dim_feedforward=128,
+        dropout=0.0,
+        normalize_before=True,
+        use_ffn=True,
+        model_config=None,
+        parameters=None,
+    ):
+        super().__init__()
+        self.device = device
+        self.d_model = d_model
+        self.nhead = nhead
+        self.dim_feedforward = dim_feedforward
+        self.normalize_before = normalize_before
+        self.use_ffn = use_ffn
+        self.model_config = model_config or {}
+
+        self.self_attn = TTNNMultiheadAttention(d_model, nhead, device)
+
+        # Load preprocessed parameters
+        if parameters is not None:
+            self.load_parameters(parameters)
+        else:
+            # Initialize weights as None (for backward compatibility)
+            self.self_attn_weights = None
+            self.ff_weights1 = None
+            self.ff_weights2 = None
+            self.norm1_weights = None
+            self.norm2_weights = None
+
+    def load_parameters(self, parameters):
+        """Load preprocessed parameters from the preprocessor"""
+        # Self-attention weights
+        if "self_attn" in parameters:
+            self.self_attn.q_weight = parameters["self_attn"].get("q_weight")
+            self.self_attn.k_weight = parameters["self_attn"].get("k_weight")
+            self.self_attn.v_weight = parameters["self_attn"].get("v_weight")
+            self.self_attn.q_bias = parameters["self_attn"].get("q_bias")
+            self.self_attn.k_bias = parameters["self_attn"].get("k_bias")
+            self.self_attn.v_bias = parameters["self_attn"].get("v_bias")
+            self.self_attn.out_weight = parameters["self_attn"].get("out_weight")
+            self.self_attn.out_bias = parameters["self_attn"].get("out_bias")
+
+        # Feedforward weights
+        if "linear1" in parameters:
+            self.ff_weights1 = parameters["linear1"]["weight"]
+            self.ff1_bias = parameters["linear1"].get("bias")
+        if "linear2" in parameters:
+            self.ff_weights2 = parameters["linear2"]["weight"]
+            self.ff2_bias = parameters["linear2"].get("bias")
+
+        # Normalization weights
+        for i, norm_name in enumerate(["norm1", "norm2"], 1):
+            if norm_name in parameters:
+                setattr(self, f"norm{i}_weights", parameters[norm_name]["weight"])
+                setattr(self, f"norm{i}_bias", parameters[norm_name].get("bias"))
+
+    def with_pos_embed(self, tensor, pos):
+        return tensor if pos is None else ttnn.add(tensor, pos)
+
+    def forward(
+        self,
+        src,
+        src_mask=None,
+        src_key_padding_mask=None,
+        pos=None,
+        return_attn_weights=False,
+    ):
+        if self.normalize_before:
+            return self.forward_pre(src, src_mask, src_key_padding_mask, pos, return_attn_weights)
+        else:
+            return self.forward_post(src, src_mask, src_key_padding_mask, pos, return_attn_weights)
+
+    def forward_post(
+        self,
+        src,
+        src_mask=None,
+        src_key_padding_mask=None,
+        pos=None,
+        return_attn_weights=False,
+    ):
+        q = k = self.with_pos_embed(src, pos)
+        value = src
+
+        # Self-attention
+        src2 = self.self_attn(q, k, value, src_mask)
+        src = ttnn.add(src, src2)
+        src = ttnn.layer_norm(src, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
+
+        # Feedforward network
+        if self.use_ffn:
+            src2 = ttnn.linear(src, self.ff_weights1, bias=getattr(self, "ff1_bias", None))
+            src2 = ttnn.relu(src2)
+            src2 = ttnn.linear(src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None))
+            src = ttnn.add(src, src2)
+            src = ttnn.layer_norm(src, weight=self.norm2_weights, bias=getattr(self, "norm2_bias", None))
+
+        if return_attn_weights:
+            return src, None  # TTNN doesn't return attention weights
+        return src
+
+    def forward_pre(
+        self,
+        src,
+        src_mask=None,
+        src_key_padding_mask=None,
+        pos=None,
+        return_attn_weights=False,
+    ):
+        # Pre-norm self-attention
+        src2 = ttnn.layer_norm(src, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
+        value = src2
+        q = k = self.with_pos_embed(src2, pos)
+        src2 = self.self_attn(q, k, value, src_mask)
+        src = ttnn.add(src, src2)
+
+        # Pre-norm feedforward
+        if self.use_ffn:
+            src2 = ttnn.layer_norm(src, weight=self.norm2_weights, bias=getattr(self, "norm2_bias", None))
+            src2 = ttnn.linear(src2, self.ff_weights1, bias=getattr(self, "ff1_bias", None))
+            src2 = ttnn.relu(src2)
+            src2 = ttnn.linear(src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None))
+            src = ttnn.add(src, src2)
+
+        if return_attn_weights:
+            return src, None
+        return src

@@ -299,8 +299,9 @@ class TransformerEncoderLayer(nn.Module):
         value = src
         src2 = self.self_attn(q, k, value=value, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
         src = src + src2  # self.dropout1(src2)
-        if self.use_norm_fn_on_input:
-            src = self.norm1(src)
+        # if self.use_norm_fn_on_input: # NOTE: is this required?
+        #     src = self.norm1(src)
+        src = self.norm1(src)  # Removing if self.use_norm_fn_on_input
         if self.use_ffn:
             src2 = self.linear2(self.activation(self.linear1(src)))
             src = src + src2  # self.dropout2(src2)
