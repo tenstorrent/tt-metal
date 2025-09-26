@@ -282,6 +282,7 @@ distributed::multihost::DistributedContext& MetalContext::global_distributed_con
 }
 
 std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context() {
+    TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return distributed_context_;
 }
 
