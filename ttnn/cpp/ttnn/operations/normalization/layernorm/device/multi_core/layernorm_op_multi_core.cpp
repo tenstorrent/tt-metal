@@ -1446,6 +1446,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
             .set_page_size(ex_global_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
+    // Intermediate buffer to store transposed Welford results
+    // This is only needed as a workaround for a transpose_wh_dest() bug
+    if (use_welford) {
+        uint32_t cb_transpose_index = tt::CBIndex::c_22;
+        tt::tt_metal::CircularBufferConfig cb_transpose_config =
+            tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_transpose_index, cb_data_format}})
+                .set_page_size(cb_transpose_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_transpose_config);
+    }
 
     CBHandle cb_stats = 0;
     if (is_post_all_gather) {
