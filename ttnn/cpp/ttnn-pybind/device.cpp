@@ -485,15 +485,6 @@ void device_module(py::module& m_device) {
             )doc";
     m_device.def(
         "synchronize_device",
-        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            Synchronize(device, raw_optional(cq_id), sub_device_ids);
-        },
-        synchronize_device_doc.data(),
-        py::arg("device"),
-        py::arg("cq_id") = std::nullopt,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def(
-        "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             tt::tt_metal::distributed::Synchronize(device, raw_optional(cq_id), sub_device_ids);
         },
