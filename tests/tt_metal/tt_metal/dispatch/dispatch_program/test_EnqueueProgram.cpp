@@ -41,7 +41,6 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt_stl/span.hpp>
 
 #include "buffer_types.hpp"
