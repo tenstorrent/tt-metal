@@ -19,7 +19,6 @@
 namespace {
 
 static std::vector<float> transpose_2d_flat(const std::vector<float> &flat, int64_t rows, int64_t cols) {
-    fmt::print("Transposing!\n");
     assert(rows * cols == static_cast<int64_t>(flat.size()));
     std::vector<int> shape_vec = {static_cast<int>(rows), static_cast<int>(cols)};
     auto src = xt::adapt(flat, shape_vec);
@@ -80,6 +79,38 @@ Qwen::Qwen(const QwenConfig& config) : m_config(config) {
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
     fmt::print("    Theta: {}\n", theta);
 
+    // Parameter validation
+    if (vocab_size == 0) {
+        throw std::logic_error("Vocab size must be greater than 0");
+    }
+    if (num_blocks == 0) {
+        throw std::logic_error("Number of blocks must be greater than 0");
+    }
+    if (num_heads == 0) {
+        throw std::logic_error("Number of heads must be greater than 0");
+    }
+    if (num_groups == 0) {
+        throw std::logic_error("Number of groups must be greater than 0");
+    }
+    if (embedding_dim == 0) {
+        throw std::logic_error("Embedding dimension must be greater than 0");
+    }
+    if (embedding_dim % num_heads != 0) {
+        throw std::logic_error(fmt::format(
+            "Embedding dimension ({}) must be divisible by number of heads ({})",
+            embedding_dim, num_heads));
+    }
+    if (num_heads % num_groups != 0) {
+        throw std::logic_error(fmt::format(
+            "Number of heads ({}) must be divisible by number of groups ({})",
+            num_heads, num_groups));
+    }
+    if (dropout_prob < 0.0f || dropout_prob > 1.0f) {
+        throw std::logic_error(fmt::format(
+            "Dropout probability must be between 0.0 and 1.0, provided: {}",
+            dropout_prob));
+    }
+
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
         throw std::logic_error(fmt::format(
@@ -94,7 +125,7 @@ Qwen::Qwen(const QwenConfig& config) : m_config(config) {
             embedding_dim));
     }
     
-    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ true);
+    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size_divisible_by_32, /* bias */ true);
     if (config.weight_tying == WeightTyingType::Enabled) {
         tok_emb = std::make_shared<ttml::modules::Embedding>(last_fc->get_weight());
     } else {
@@ -209,6 +240,10 @@ YAML::Node write_config(const QwenConfig& qwen_config) {
     config["vocab_size"] = qwen_config.vocab_size;
     config["max_sequence_length"] = qwen_config.max_sequence_length;
     config["theta"] = qwen_config.theta;
+    
+    // Add runner_type and weight_tying for consistency with read_config
+    config["runner_type"] = (qwen_config.runner_type == RunnerType::Default) ? "default" : "memory_efficient";
+    config["weight_tying"] = (qwen_config.weight_tying == WeightTyingType::Enabled) ? "enabled" : "disabled";
 
     // Add RoPE scaling parameters if they are set
     if (qwen_config.scaling_factor != 0.0F && qwen_config.original_context_length != 0U) {
@@ -244,25 +279,25 @@ void Qwen::load_from_safetensors(const std::filesystem::path& model_path) {
 }
 
 void load_model_from_safetensors(const std::filesystem::path &path, serialization::NamedParameters &parameters, const QwenConfig& config) {
-    for (auto &[k, v] : parameters) {
-        fmt::print("parameter name: {}\n", k);
-    }
-    
     // Track which parameters have been used
     std::set<std::string> used_parameters;
+    
+    // Local variables to replace static variables for thread safety
+    std::map<int, std::vector<float>> k_weights, v_weights;
+    std::map<int, std::array<int64_t, 2>> k_shapes, v_shapes;
+    std::map<int, std::vector<float>> k_bias, v_bias;
     
     auto get_parameter = [&parameters, &used_parameters](const std::string &name) -> ttml::autograd::TensorPtr {
         auto it = parameters.find(name);
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_value().logical_shape());
         used_parameters.insert(name);
         return it->second;
     };
     
     serialization::SafetensorSerialization::TensorCallback loading_callback =
-        [&parameters, &get_parameter, &config, &used_parameters](
+        [&parameters, &get_parameter, &config, &used_parameters, &k_weights, &v_weights, &k_shapes, &v_shapes, &k_bias, &v_bias](
             const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
             fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
             std::vector<float> float_vec;
@@ -303,15 +338,17 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 out_tensor1->set_value(core::from_vector(
                     resized_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 
-                auto out_tensor2 = get_parameter("qwen/fc/weight");
-                auto resized_weight1 = pad_and_resize_flat(
-                    float_vec, 
-                    info.shape[0], 
-                    info.shape[1], 
-                    out_tensor2->get_value().logical_shape()[-2],
-                    out_tensor2->get_value().logical_shape()[-1]);
-                out_tensor2->set_value(core::from_vector(
+                if (config.weight_tying == WeightTyingType::Disabled) {
+                    auto out_tensor2 = get_parameter("qwen/fc/weight");
+                    auto resized_weight1 = pad_and_resize_flat(
+                        float_vec, 
+                        info.shape[0], 
+                        info.shape[1], 
+                        out_tensor2->get_value().logical_shape()[-2],
+                        out_tensor2->get_value().logical_shape()[-1]);
+                    out_tensor2->set_value(core::from_vector(
                     resized_weight1, out_tensor2->get_value().logical_shape(), out_tensor2->get_value().device()));
+                }
             }
             
             // Final layer norm
@@ -413,8 +450,6 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 }
                 
                 // For GroupedQueryAttention, k_proj and v_proj are combined into kv_linear
-                static std::map<int, std::vector<float>> k_weights, v_weights;
-                static std::map<int, std::array<int64_t, 2>> k_shapes, v_shapes;
                 
                 if (info.name == layer_pfx + ".self_attn.k_proj.weight" || info.name == layers_pfx + ".self_attn.k_proj.weight") {
                     k_weights[i] = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
@@ -456,7 +491,6 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 }
                 
                 // For GroupedQueryAttention, k_proj and v_proj bias are combined into kv_linear bias
-                static std::map<int, std::vector<float>> k_bias, v_bias;
                 
                 if (info.name == layer_pfx + ".self_attn.k_proj.bias" || info.name == layers_pfx + ".self_attn.k_proj.bias") {
                     k_bias[i] = float_vec;

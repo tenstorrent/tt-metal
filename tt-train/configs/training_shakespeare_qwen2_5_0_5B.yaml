@@ -19,21 +19,17 @@ training_config:
     embedding_dim: 896
     intermediate_dim: 4864
     dropout_prob: 0.0
-    num_blocks: 24
-    vocab_size: 151665
+    num_blocks: 7
+    vocab_size: 151936
     max_sequence_length: 2048
     runner_type: memory_efficient
-    theta: 10000.0
+    theta: 500000
 
 # if you want to run as eval with weighgts from hugging face:
 # nano_gpt --safetensors /path/to/Qwen/Qwen2.5-0.5B/  -c configs/training_shakespeare_qwen2_5_0_5B.yaml --eval 1
 
 eval_config:
-  repetition_penalty: 1.1
-  temperature: 1.2
+  repetition_penalty: 1.0
+  temperature: 0.7
   top_k: 50
   top_p: 1.0
-
-device_config:
-    enable_ddp: true
-    mesh_shape: [1,2]
