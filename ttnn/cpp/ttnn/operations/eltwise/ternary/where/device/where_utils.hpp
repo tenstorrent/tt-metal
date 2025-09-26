@@ -32,13 +32,10 @@ enum class KernelName {
     ReaderRowBcastTTS,
     WriterColBcastTTT,
     ComputeNoBcastTTT,  // TTT: no bcast, outer dim and row bcast cases
-    ComputeNoBcastTST,
-    ComputeNoBcastTTS,
-    ComputeBcastTTT,  // TTT : column and scalar bcast cases
-    ComputeColBcastTTS,
-    ComputeColBcastTST,
-    ComputeScalarBcastTST,
-    ComputeScalarBcastTTS,
+    ComputeBcastTTT,    // TTT : column and scalar bcast cases
+    ComputeColBcastTTSTST,
+    ComputeScalarBcastTTSTST,
+    ComputeUnifiedTTSTST,
 };
 
 struct WhereKernelConfig {
@@ -62,5 +59,19 @@ WhereBroadcastType get_broadcast_type(
 
 // 2-tensor broadcast compatibility (used by both TTS and TST)
 WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);
+
+// Validation helpers for broadcast compatibility
+void validate_broadcast_compatibility(
+    WhereVariant variant,
+    WhereBroadcastType broadcast_type,
+    const ttnn::Shape& predicate_shape,
+    const ttnn::Shape& value_true_shape,
+    const ttnn::Shape& value_false_shape);
+
+void validate_broadcast_compatibility(
+    WhereVariant variant,
+    WhereBroadcastType broadcast_type,
+    const ttnn::Shape& predicate_shape,
+    const ttnn::Shape& tensor_shape);
 
 }  // namespace ttnn::operations::ternary
