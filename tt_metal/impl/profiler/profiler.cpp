@@ -838,8 +838,8 @@ void dumpJsonNocTraces(
 void writeCSVHeader(std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency) {
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, "
-                    "run host ID,  zone name, type, source line, source file, meta data"
+    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
+                    "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
                  << std::endl;
 }
 
@@ -874,8 +874,14 @@ void dumpDeviceResultsToCSV(
                     std::replace(meta_data_str.begin(), meta_data_str.end(), ',', ';');
                 }
 
+                const std::string trace_id_str =
+                    marker.trace_id == tracy::TTDeviceMarker::INVALID_NUM ? "" : fmt::format("{}", marker.trace_id);
+                const std::string trace_id_counter_str = marker.trace_id_counter == tracy::TTDeviceMarker::INVALID_NUM
+                                                             ? ""
+                                                             : fmt::format("{}", marker.trace_id_counter);
+
                 log_file_ofs << fmt::format(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                     marker.chip_id,
                     marker.core_x,
                     marker.core_y,
@@ -884,6 +890,8 @@ void dumpDeviceResultsToCSV(
                     marker.timestamp,
                     marker.data,
                     marker.runtime_host_id,
+                    trace_id_str,
+                    trace_id_counter_str,
                     marker.marker_name,
                     enchantum::to_string(marker.marker_type),
                     marker.line,
@@ -1263,16 +1271,9 @@ void DeviceProfiler::readRiscProfilerResults(
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
                     deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
                     runHostCounterRead = data_buffer.at(index + 1);
-                    log_info(
-                        tt::LogMetal,
-                        "data source {}, virtual core {}, {} traceIDRead: {}",
-                        data_source,
-                        worker_core.x,
-                        worker_core.y,
-                        deviceTraceCounterRead);
-                    uint32_t base_program_id =
-                        tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
 
+                    const uint32_t base_program_id =
+                        tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
                 } else if (oneStartFound) {
@@ -1422,20 +1423,27 @@ void DeviceProfiler::readDeviceMarkerData(
     const uint64_t trace_id =
         device_trace_counter == 0 ? tracy::TTDeviceMarker::INVALID_NUM : trace_ids[device_trace_counter - 1];
 
+    uint64_t trace_id_count;
+    if (trace_id == tracy::TTDeviceMarker::INVALID_NUM) {
+        trace_id_count = tracy::TTDeviceMarker::INVALID_NUM;
+    } else {
+        trace_id_count = 0;
+        for (uint32_t i = 0; i < device_trace_counter; ++i) {
+            if (trace_ids[i] == trace_id) {
+                trace_id_count++;
+            }
+        }
+    }
+
     // log_info(tt::LogMetal, "trace_ids size: {}", trace_ids.size());
     // for (const auto& trace_id : trace_ids) {
     //     log_info(tt::LogMetal, "trace_id: {}", trace_id);
     // }
 
-    // TT_ASSERT(
-    //     trace_ids.size() == traceCounterRead,
-    //     "trace_ids size: {}, traceCounterRead: {}",
-    //     trace_ids.size(),
-    //     traceCounterRead);
-
-    const auto& [_, new_marker_inserted] = device_markers.emplace(
+    const auto& [new_marker_it, new_marker_inserted] = device_markers.emplace(
         run_host_id,
         trace_id,
+        trace_id_count,
         device_id,
         physical_core.x,
         physical_core.y,
@@ -1451,7 +1459,11 @@ void DeviceProfiler::readDeviceMarkerData(
         marker_details.marker_name_keyword_flags,
         meta_data);
 
+    log_info(tt::LogMetal, "New marker:");
+    new_marker_it->print();
+
     if (!new_marker_inserted) {
+        log_info(tt::LogMetal, "New marker not inserted");
         return;
     }
 
@@ -1491,6 +1503,9 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
         auto next_device_marker_it = std::next(device_marker_it);
 
+        log_info(tt::LogMetal, "Processing marker");
+        marker.print();
+
         if (isMarkerAZoneEndpoint(marker)) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() &&
                 marker.risc == tracy::RiscType::CORE_AGG) {
@@ -1526,8 +1541,12 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             current_dispatch_meta_data.cmd_subtype = "";
 
             if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
+                log_info(tt::LogMetal, "Start marker found");
+                marker.print();
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
+                log_info(tt::LogMetal, "End marker found");
+                marker.print();
                 TT_FATAL(
                     !start_marker_stack.empty(),
                     "End marker {} found without a corresponding start marker",
@@ -1686,14 +1705,14 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
     if (!is_mid_run_dump) {
         for (auto& [core, _] : this->device_markers_per_core_risc_map) {
-            this->thread_pool->enqueue([this, core]() {
-                for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
-                    processDeviceMarkerData(device_markers);
-                }
-            });
+            // this->thread_pool->enqueue([this, core]() {
+            for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
+                processDeviceMarkerData(device_markers);
+            }
+            // });
         }
 
-        this->thread_pool->wait();
+        // this->thread_pool->wait();
     }
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
@@ -1882,6 +1901,8 @@ void DeviceProfiler::pushTracyDeviceResults(
         if (adjusted_timestamp != orig_marker.timestamp) {
             marker_with_adjusted_timestamp = tracy::TTDeviceMarker(
                 orig_marker.runtime_host_id,
+                orig_marker.trace_id,
+                orig_marker.trace_id_counter,
                 orig_marker.chip_id,
                 orig_marker.core_x,
                 orig_marker.core_y,
