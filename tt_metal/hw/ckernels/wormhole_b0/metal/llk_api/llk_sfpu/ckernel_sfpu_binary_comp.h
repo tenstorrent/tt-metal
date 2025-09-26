@@ -9,7 +9,7 @@
 
 namespace ckernel::sfpu {
 
-// Comparison ops use int32 subtract (whose result in also in the int32 range) + sign check.
+// Comparison ops use int32 subtract (whose result is also in the int32 range) + sign check.
 // In order to avoid overflow for inputs of opposite signs, the output is determined directly from a sign check.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
@@ -44,7 +44,6 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
             TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_NE0);
             TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
             TTI_SFPENCC(0, 0, 0, 0);
-            TTI_SFPENCC(0, 0, 0, 0);
 
             // LREG_1 -> dest
             TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
@@ -62,7 +61,6 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
             TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x01);
             TTI_SFPENCC(0, 0, 0, 0);
-            TTI_SFPENCC(0, 0, 0, 0);
 
             // LREG_0 -> dest
             TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
@@ -76,7 +74,6 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
             TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x00);
             TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_NE0);
             TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
-            TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFPENCC(0, 0, 0, 0);
 
             // XOR with 1 to invert the result
@@ -95,7 +92,6 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
             TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x00);
             TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPLOADI(p_sfpu::LREG0, SFPLOADI_MOD0_USHORT, 0x01);
-            TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFPENCC(0, 0, 0, 0);
 
             // XOR with 1 to invert the result
