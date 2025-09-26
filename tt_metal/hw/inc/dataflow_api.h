@@ -1528,9 +1528,7 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
 
     WAYPOINT("NRBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_reads_flushed(noc));
     } else {
         while (!ncrisc_noc_reads_flushed(noc));
     }
@@ -1558,9 +1556,7 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
 
     WAYPOINT("NWBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_flushed(noc));
     }
@@ -1587,9 +1583,7 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
 
     WAYPOINT("NWFW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_sent(noc));
     }
@@ -1612,9 +1606,7 @@ FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
     WAYPOINT("NPWW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_posted_writes_sent(noc));
     }
@@ -1640,9 +1632,7 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 
     WAYPOINT("NABW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
     } else {
         while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
     }
@@ -1983,7 +1973,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  * This is similar to \a noc_async_read_set_state, except that the source location is determined by the bank_base_address and bank_id.
  * In addition, the VC used for the transactions can also be configured.
  *
- * Return value: None
+ * Return value: source address
  *
  * | Argument                   | Description                               | Data type | Valid range                                            | required |
  * |----------------------------|-------------------------------------------|-----------|--------------------------------------------------------|----------|
@@ -2288,4 +2278,22 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     }
     invalidate_l1_cache();
     WAYPOINT("NWTD");
+}
+
+// clang-format off
+/**
+ * This resets the barrier counter for a given transaction id on a given NOC using a mask.
+ * Only the N bits up to the number of transaction ids are used.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                               | Type     | Valid Range      | Required |
+ * |----------|-------------------------------------------|----------|------------------|----------|
+ * | id_mask  | Transaction id mask for the transaction   | uint32_t | 0x0 - 0xFFFFFFFF | False    |
+ * | noc      | Which NOC to use for the transaction      | uint8_t  | 0 or 1           | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void reset_noc_trid_barrier_counter(uint32_t id_mask = NOC_CLEAR_OUTSTANDING_REQ_MASK, uint32_t noc = noc_index) {
+    noc_clear_outstanding_req_cnt(noc, id_mask);
 }
