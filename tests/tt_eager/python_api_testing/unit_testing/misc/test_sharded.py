@@ -16,7 +16,6 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
     skip_for_blackhole,
-    skip_for_grayskull,
     run_for_wormhole_b0,
 )
 from loguru import logger
@@ -2364,7 +2363,6 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "seq_len",
     (32,),

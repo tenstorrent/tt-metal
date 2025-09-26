@@ -11,7 +11,6 @@ from ttnn.model_preprocessing import (
     preprocess_layernorm_parameter,
     preprocess_linear_bias,
 )
-from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_v2.reference.mlp import MLP
 from models.experimental.swin_v2.tt.tt_mlp import TtMLP
@@ -38,7 +37,6 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "in_channels,hidden_channels,seq_len,i,j",

@@ -11,18 +11,12 @@ from transformers import AutoTokenizer, DistilBertForQuestionAnswering
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    profiler,
-    skip_for_grayskull,
-)
+from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 
 
-@skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("model_name", ["distilbert-base-uncased-distilled-squad"])
 @pytest.mark.parametrize(
@@ -161,7 +155,6 @@ def test_performance_distilbert_for_qa(
     logger.info("Exit Distilbert perf test")
 
 
-@skip_for_grayskull()
 @pytest.mark.skip(reason="#26285: Seems to have changed in perf")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(

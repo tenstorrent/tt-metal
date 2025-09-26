@@ -10,7 +10,6 @@ from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.common.utility_functions import (
     comp_allclose,
 )
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
@@ -161,7 +160,6 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size",
     (32,),
