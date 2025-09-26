@@ -110,6 +110,9 @@ RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
     python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi
 
+# Enable Inspector RPC by default for users of this docker image
+ENV TT_INSPECTOR_RPC_ENABLED=1
+
 #############################################################
 
 FROM ci-test AS dev
@@ -223,6 +226,3 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
-
-# Enable Inspector RPC by default for users of this docker image
-ENV TT_INSPECTOR_RPC_ENABLED=1
