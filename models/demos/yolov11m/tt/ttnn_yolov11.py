@@ -71,7 +71,18 @@ class TtnnYoloV11:
         print(f"    Range: [{x_flat.min()}, {x_flat.max()}], Mean: {x_flat.mean()}")
         print(f"    Dtype: {x_debug.dtype}, Shape: {x_debug.shape}")
         
+        # Debug: Check diversity before reshape
+        x_pre_reshape_debug = ttnn.to_torch(x)
+        x_pre_reshape_unique = torch.unique(x_pre_reshape_debug.flatten())
+        print(f"🔍 [RESHAPE DEBUG] BEFORE reshape: {len(x_pre_reshape_unique)} unique values")
+        
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
+        
+        # Debug: Check diversity after reshape
+        x_post_reshape_debug = ttnn.to_torch(x)
+        x_post_reshape_unique = torch.unique(x_post_reshape_debug.flatten())
+        reshape_loss = 100 * (len(x_pre_reshape_unique) - len(x_post_reshape_unique)) / len(x_pre_reshape_unique)
+        print(f"🔍 [RESHAPE DEBUG] AFTER reshape: {len(x_post_reshape_unique)} unique values ({reshape_loss:.2f}% loss)")
         
         x = self.conv1(self.device, x)
         
@@ -81,6 +92,13 @@ class TtnnYoloV11:
         x_conv1_unique = torch.unique(x_conv1_flat)
         print(f"🔍 [CONV DEBUG] AFTER CONV1: {len(x_conv1_unique)} unique values out of {len(x_conv1_flat)} total")
         print(f"    Range: [{x_conv1_flat.min()}, {x_conv1_flat.max()}], Mean: {x_conv1_flat.mean()}")
+        print(f"    Dtype: {x_conv1_debug.dtype}, Memory: {x.memory_config()}")
+        
+        # Debug: Check if output dtype is being quantized
+        if len(x_conv1_unique) < 10000:
+            print(f"🔍 [CONV1 ANALYSIS] Low diversity detected:")
+            print(f"    Expected ~65K values (bfloat16), got {len(x_conv1_unique)}")
+            print(f"    Potential causes: memory layout quantization, internal conv precision limits")
         x = self.conv2(self.device, x)
         x = self.c3k2_1(self.device, x)
         x = self.conv3(self.device, x)
