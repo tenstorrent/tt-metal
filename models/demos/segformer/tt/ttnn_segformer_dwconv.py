@@ -25,6 +25,7 @@ class TtSegformerDWConv:
                 act_block_h=32,
                 dtype=ttnn.bfloat8_b,
                 activation=activation,
+                reshard=True,
             )
         elif dim == 640:
             self.dwconv = Conv(
@@ -35,6 +36,7 @@ class TtSegformerDWConv:
                 act_block_h=32,
                 dtype=ttnn.bfloat8_b,
                 activation=activation,
+                reshard=True,
             )
         else:
             self.dwconv = Conv(
@@ -43,6 +45,7 @@ class TtSegformerDWConv:
                 groups=dim,
                 dtype=ttnn.bfloat8_b,
                 activation=activation,
+                reshard=True,
             )
 
     def __call__(
@@ -58,8 +61,8 @@ class TtSegformerDWConv:
             batch_size, seq_len, num_channels = hidden_states.shape
         elif len(hidden_states.shape) == 4:
             batch_size, __, seq_len, num_channels = hidden_states.shape
-
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        if seq_len == 256:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, num_channels))
 
         hidden_states = self.dwconv(device, hidden_states)
