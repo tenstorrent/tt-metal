@@ -116,7 +116,7 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     // Create input CB to read reduction dim worth of data at once
     const uint32_t src_cb_idx = tt::CBIndex::c_0;
-    const uint32_t src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
+    const uint32_t src_page_size = red_dim_units * input_unit_size;
     tt::tt_metal::CircularBufferConfig src_cb_config =
         tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_idx, input_cb_data_format}})
             .set_page_size(src_cb_idx, src_page_size);
@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
-    const uint32_t dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
+    const uint32_t dst_page_size = output_last_dim * output_unit_size;
     const tt::tt_metal::CircularBufferConfig dst_db_config =
         tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
             .set_page_size(dst_cb_idx, dst_page_size);
