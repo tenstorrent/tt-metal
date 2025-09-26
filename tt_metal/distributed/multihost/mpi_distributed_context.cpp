@@ -10,7 +10,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
 // ULFM extensions.

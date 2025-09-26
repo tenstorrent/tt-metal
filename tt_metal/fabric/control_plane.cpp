@@ -22,7 +22,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
@@ -318,22 +318,28 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                     col_min_planes.at(mesh_coord_y));
             }
 
+            // Collect row and column mins from all hosts in a BigMesh
+            auto rows_min = *std::min_element(row_min_planes.begin(), row_min_planes.end());
+            auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
+            std::vector<size_t> rows_min_buf(*distributed_context.size());
+            std::vector<size_t> cols_min_buf(*distributed_context.size());
+            distributed_context.all_gather(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
+                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
+            distributed_context.all_gather(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
+                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
+            distributed_context.barrier();
+            const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
+            const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
             // TODO: specialize by topology for better perf
             if (topology == Topology::Mesh || topology == Topology::Torus) {
-                const auto rows_min = std::min_element(row_min_planes.begin(), row_min_planes.end());
-                const auto cols_min = std::min_element(col_min_planes.begin(), col_min_planes.end());
-                auto mesh_min = std::min(*rows_min, *cols_min);
-
-                std::vector<size_t> recv_buf(*distributed_context.size());
-                distributed_context.all_gather(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&mesh_min), sizeof(size_t)),
-                    tt::stl::as_writable_bytes(tt::stl::Span<size_t>{recv_buf.data(), recv_buf.size()}));
-
-                distributed_context.barrier();
-
-                auto global_mesh_min = std::min(recv_buf.begin(), recv_buf.end());
-                std::fill(row_min_planes.begin(), row_min_planes.end(), *global_mesh_min);
-                std::fill(col_min_planes.begin(), col_min_planes.end(), *global_mesh_min);
+                auto global_mesh_min = std::min(*global_rows_min, *global_cols_min);
+                std::fill(row_min_planes.begin(), row_min_planes.end(), global_mesh_min);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), global_mesh_min);
+            } else {
+                std::fill(row_min_planes.begin(), row_min_planes.end(), *global_rows_min);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), *global_cols_min);
             }
 
             // Second pass: Apply minimums to each device
@@ -1098,6 +1104,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             }
         }
     }
+
     this->initialize_dynamic_routing_plane_counts(intra_mesh_connectivity, fabric_config, reliability_mode);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction

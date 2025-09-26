@@ -180,7 +180,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >

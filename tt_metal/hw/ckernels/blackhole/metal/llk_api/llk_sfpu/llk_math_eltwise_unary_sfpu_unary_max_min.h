@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 // Unary maximum
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_max_init() {

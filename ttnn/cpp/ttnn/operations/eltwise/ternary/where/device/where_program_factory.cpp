@@ -622,10 +622,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     auto output_data_format = datatype_to_dataformat_converter(output.dtype());
     // datatype_to_dataformat_converter((output.dtype() == DataType::BFLOAT16) ? DataType::UINT16 : output.dtype());
 
-    uint32_t predicate_single_tile_size = tt_metal::detail::TileSize(predicate_data_format);
-    uint32_t value_true_single_tile_size = tt_metal::detail::TileSize(value_true_data_format);
-    uint32_t value_false_single_tile_size = tt_metal::detail::TileSize(value_false_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
+    uint32_t predicate_single_tile_size = tt::tile_size(predicate_data_format);
+    uint32_t value_true_single_tile_size = tt::tile_size(value_true_data_format);
+    uint32_t value_false_single_tile_size = tt::tile_size(value_false_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     // we parallelize the computation across the output tiles
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
