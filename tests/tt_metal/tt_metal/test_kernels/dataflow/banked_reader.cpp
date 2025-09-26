@@ -24,7 +24,7 @@ void kernel_main() {
     // read tiles from src to CB
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         cb.reserve_back(ublock_size_tiles);
-        noc.async_read(tensor_accessor, cb, tile_bytes, {i, 0}, {});
+        noc.async_read(tensor_accessor, cb, tile_bytes, {.page_id = i}, {});
         noc.async_read_barrier();
         cb.push_back(ublock_size_tiles);
     }

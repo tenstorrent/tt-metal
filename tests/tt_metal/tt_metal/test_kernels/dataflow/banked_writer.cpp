@@ -24,7 +24,7 @@ void kernel_main() {
     // Write tiles from CB to L1(interleaved)
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         cb.wait_front(ublock_size_tiles);
-        noc.async_write(cb, tensor_accessor, tile_bytes, {}, {i, 0});
+        noc.async_write(cb, tensor_accessor, tile_bytes, {}, {.page_id = i});
         noc.async_write_barrier();
         cb.pop_front(ublock_size_tiles);
     }

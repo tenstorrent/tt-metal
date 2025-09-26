@@ -2280,19 +2280,11 @@ private:
 
     template <typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
-        return std::apply(
-            [&](auto&&... args) {
-                return noc_traits_t<Src>::src_addr(src, *this, std::forward<decltype(args)>(args)...);
-            },
-            src_args);
+        return noc_traits_t<Src>::src_addr(src, *this, src_args);
     }
     template <typename Dst>
     auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
-        return std::apply(
-            [&](auto&&... args) {
-                return noc_traits_t<Dst>::dst_addr(dst, *this, std::forward<decltype(args)>(args)...);
-            },
-            dst_args);
+        return noc_traits_t<Dst>::dst_addr(dst, *this, dst_args);
     }
 
 public:
@@ -2377,21 +2369,27 @@ private:
 
 template <>
 struct noc_traits_t<CircularBuffer> {
-    using src_args_type = std::tuple<>;
-    using dst_args_type = std::tuple<>;
-    static auto src_addr(const CircularBuffer& src, const Noc&) { return src.get_read_ptr(); }
-    static auto dst_addr(const CircularBuffer& dst, const Noc&) { return dst.get_write_ptr(); }
+    struct src_args_type {};
+    struct dst_args_type {};
+    static auto src_addr(const CircularBuffer& src, const Noc&, const src_args_type&) { return src.get_read_ptr(); }
+    static auto dst_addr(const CircularBuffer& dst, const Noc&, const dst_args_type&) { return dst.get_write_ptr(); }
 };
 
 template <typename DSpecT>
 struct noc_traits_t<TensorAccessor<DSpecT>> {
-    using src_args_type = std::tuple<uint32_t, uint32_t>;
-    using dst_args_type = std::tuple<uint32_t, uint32_t>;
-    static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, uint32_t page_id, uint32_t offset) {
-        return src.get_noc_addr(page_id, offset, noc.get_noc_id());
+    struct src_args_type {
+        uint32_t page_id{};
+        uint32_t offset = 0;
+    };
+    struct dst_args_type {
+        uint32_t page_id{};
+        uint32_t offset = 0;
+    };
+    static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, const src_args_type& args) {
+        return src.get_noc_addr(args.page_id, args.offset, noc.get_noc_id());
     }
-    static auto dst_addr(const TensorAccessor<DSpecT>& dst, const Noc& noc, uint32_t page_id, uint32_t offset) {
-        return dst.get_noc_addr(page_id, offset, noc.get_noc_id());
+    static auto dst_addr(const TensorAccessor<DSpecT>& dst, const Noc& noc, const dst_args_type& args) {
+        return dst.get_noc_addr(args.page_id, args.offset, noc.get_noc_id());
     }
 };
 
