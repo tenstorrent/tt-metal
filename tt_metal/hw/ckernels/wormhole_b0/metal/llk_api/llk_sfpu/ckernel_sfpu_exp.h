@@ -102,25 +102,89 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
         //     y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
         // }
 
-        //---exp 41f algorithm---
+        // //---exp 41f algorithm---
 
-        // Normalize mantissa field into a fractional value in [0,1)
-        sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.0f / float(1 << 23));
+        // // Normalize mantissa field into a fractional value in [0,1)
+        // sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.0f / float(1 << 23));
 
-        constexpr float C0 = 1.0000026f;
-        constexpr float C1 = 0.69300383f;
-        constexpr float C2 = 0.24144276f;
-        constexpr float C3 = 0.052011463f;
-        constexpr float C4 = 0.013534167f;
+        // constexpr float C0 = 1.0000026f;
+        // constexpr float C1 = 0.69300383f;
+        // constexpr float C2 = 0.24144276f;
+        // constexpr float C3 = 0.052011463f;
+        // constexpr float C4 = 0.013534167f;
 
-        sfpi::vFloat poly =
-            ((((sfpi::vFloat(C4) * frac + sfpi::vFloat(C3)) * frac + sfpi::vFloat(C2)) * frac + sfpi::vFloat(C1)) *
-                 frac +
-             sfpi::vFloat(C0));
+        // sfpi::vFloat poly =
+        //     ((((sfpi::vFloat(C4) * frac + sfpi::vFloat(C3)) * frac + sfpi::vFloat(C2)) * frac + sfpi::vFloat(C1)) *
+        //          frac +
+        //      sfpi::vFloat(C0));
+
+        // // Restore exponent
+        // zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
+        // y = sfpi::reinterpret<sfpi::vFloat>(zii);
+        // if constexpr (!is_fp32_dest_acc_en) {
+        //     // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
+        //     // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
+        //     // rather than 81 (which would have been correct).
+        //     // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        //     y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+        // }
+
+        //---exp 24f algorithm---
+        // Dynamic polynomial coefficients for approximation of exp on [1; 2]
+        sfpi::vInt CONST_CHECK_1 = 0x00400000;
+        sfpi::vInt CONST_CHECK_2 = 0x00600000;
+        sfpi::vInt CONST_CHECK_3 = 0x00200000;
+
+        v_if(zif > CONST_CHECK_1) {
+            v_if(zif > CONST_CHECK_2) {
+                // fourth segment
+                sfpi::vFloat d1 = sfpi::vFloat(0.52496276e-7f);
+                sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0x81354a) + zif, 0);
+                sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x10a440) + zif, 0);
+
+                d2 = d1 * d2;
+                zif = sfpu::_float_to_int32_(d2 * d3);
+            }
+            v_else {
+                // third segment
+                sfpi::vFloat d1 = sfpi::vFloat(0.4414393e-7f);
+                sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xcdf4b4) + zif, 0);
+                sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x3e4d6) + zif, 0);
+
+                d2 = d1 * d2;
+                zif = sfpu::_float_to_int32_(d2 * d3);
+            }
+            v_endif;
+        }
+        v_else {
+            v_if(zif > CONST_CHECK_3) {
+                // second segment
+                sfpi::vFloat d1 = sfpi::vFloat(0.37120473e-7f);
+                sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0x1113a74) + zif, 0);
+                sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x9f16) + zif, 0);
+
+                d2 = d1 * d2;
+                zif = sfpu::_float_to_int32_(d2 * d3);
+            }
+            v_else {
+                // first segment
+                sfpi::vFloat d1 = sfpi::vFloat(0.31214472e-7f);
+                sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0x151d842) + zif, 0);
+                sfpi::vFloat d3 = sfpi::vFloat(328.83582f) + sfpi::int32_to_float(zif, 0);
+
+                d2 = d1 * d2;
+                zif = sfpu::_float_to_int32_(d2 * d3);
+            }
+            v_endif;
+        }
+        v_endif;
 
         // Restore exponent
-        zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
+        zii = sfpi::reinterpret<sfpi::vInt>(
+            sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
+
         y = sfpi::reinterpret<sfpi::vFloat>(zii);
+
         if constexpr (!is_fp32_dest_acc_en) {
             // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
             // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
