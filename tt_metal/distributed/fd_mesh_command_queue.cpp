@@ -116,17 +116,23 @@ FDMeshCommandQueue::FDMeshCommandQueue(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
     dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
+    printf("[DEBUG] FDMeshCommandQueue::FDMeshCommandQueue ENTRY - id=%u, mesh_device=%p\n", id, mesh_device);
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_,
         expected_num_workers_completed_,
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
         mesh_device_->allocator()->get_config().l1_unreserved_base);
+    printf("[DEBUG] FDMeshCommandQueue::FDMeshCommandQueue reset_config_buf_mgrs_and_expected_workers DONE\n");
     this->populate_virtual_program_dispatch_core();
+    printf("[DEBUG] FDMeshCommandQueue::FDMeshCommandQueue populate_virtual_program_dispatch_core DONE\n");
     this->populate_read_descriptor_queue();
+    printf("[DEBUG] FDMeshCommandQueue::FDMeshCommandQueue populate_read_descriptor_queue DONE\n");
     completion_queue_reader_thread_ = std::thread(&FDMeshCommandQueue::read_completion_queue, this);
+    printf("[DEBUG] FDMeshCommandQueue::FDMeshCommandQueue completion_queue_reader_thread started - EXIT\n");
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
+    printf("[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue ENTRY - in_use_=%s\n", in_use_ ? "true" : "false");
     if (in_use_) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
@@ -134,25 +140,34 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         // This allows physical device close to proceed correctly, since we still
         // rely on single device CQs during this step. Not needed for functionality
         // once single device CQs are removed, however this is still good practice.
+        printf("[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue calling clear_expected_num_workers_completed\n");
         this->clear_expected_num_workers_completed();
+        printf("[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue clear_expected_num_workers_completed DONE\n");
     }
 
+    printf("[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue checking completion_queue_reads_.empty()\n");
     TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
 
+    printf("[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue checking read_descriptors_\n");
     for (auto& queue : read_descriptors_) {
         TT_FATAL(queue.second->empty(), "No buffer read requests should be outstanding when closing devices.");
     }
 
+    printf(
+        "[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue checking num_outstanding_reads_=%u\n",
+        num_outstanding_reads_.load());
     TT_FATAL(
         num_outstanding_reads_ == 0,
         "Mismatch between num_outstanding reads and number of entries in completion reader queue.");
 
+    printf("[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue setting exit_condition and joining reader thread\n");
     {
         std::lock_guard lock(reader_thread_cv_mutex_);
         reader_thread_cv_.notify_one();
         exit_condition_ = true;
     }
     completion_queue_reader_thread_.join();
+    printf("[DEBUG] FDMeshCommandQueue::~FDMeshCommandQueue reader thread joined - EXIT\n");
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
@@ -181,12 +196,17 @@ CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return thi
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
+    printf("[DEBUG] FDMeshCommandQueue::clear_expected_num_workers_completed ENTRY\n");
     auto sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, {});
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event =
         MeshEvent(sysmem_manager.get_next_event(id_), mesh_device_, id_, MeshCoordinateRange(mesh_device_->shape()));
 
     // Issue commands to clear expected_num_workers_completed counter(s) on the dispatcher
+    printf(
+        "[DEBUG] FDMeshCommandQueue::clear_expected_num_workers_completed issuing record_event_commands for %zu "
+        "devices\n",
+        mesh_device_->get_devices().size());
     for (auto device : mesh_device_->get_devices()) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
@@ -201,26 +221,34 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
             true /* clear_count */);
     }
     // Clear counter(s) on host to reflect update device state
+    printf(
+        "[DEBUG] FDMeshCommandQueue::clear_expected_num_workers_completed clearing host counters for %zu sub_devices\n",
+        sub_device_ids.size());
     for (auto sub_device_id : sub_device_ids) {
         expected_num_workers_completed_[*sub_device_id] = 0;
     }
 
     // Block after clearing counter(s) on dispatcher
+    printf("[DEBUG] FDMeshCommandQueue::clear_expected_num_workers_completed enqueueing completion read and waiting\n");
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     reads_processed_cv_.wait(
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+    printf("[DEBUG] FDMeshCommandQueue::clear_expected_num_workers_completed EXIT\n");
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    printf("[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload ENTRY - blocking=%s\n", blocking ? "true" : "false");
     auto lock = lock_api_function_();
+    printf("[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload acquired lock\n");
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
+    printf("[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload sub_device_id=%u\n", *sub_device_id);
     auto mesh_device_id = mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
@@ -329,7 +357,13 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
+    printf(
+        "[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload processing programs - count=%zu\n",
+        mesh_workload.get_programs().size());
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
+        printf(
+            "[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload processing program runtime_id=%lu\n",
+            program.get_runtime_id());
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
             use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
@@ -402,9 +436,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
+    printf(
+        "[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload programs processed, blocking=%s\n",
+        blocking ? "true" : "false");
     if (blocking) {
+        printf("[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload calling finish_nolock\n");
         this->finish_nolock({{sub_device_id}});
+        printf("[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload finish_nolock DONE\n");
     }
+    printf("[DEBUG] FDMeshCommandQueue::enqueue_mesh_workload EXIT\n");
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
@@ -485,17 +525,32 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
+    printf("[DEBUG] FDMeshCommandQueue::finish_nolock ENTRY - sub_device_ids.size()=%zu\n", sub_device_ids.size());
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
+    printf(
+        "[DEBUG] FDMeshCommandQueue::finish_nolock enqueue_record_event_to_host_nolock DONE - event_id=%u\n",
+        event.id());
 
+    printf(
+        "[DEBUG] FDMeshCommandQueue::finish_nolock waiting for reads_processed_cv - num_outstanding_reads_=%u\n",
+        num_outstanding_reads_.load());
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     reads_processed_cv_.wait(
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+    printf(
+        "[DEBUG] FDMeshCommandQueue::finish_nolock reads_processed_cv wait DONE - num_outstanding_reads_=%u, "
+        "thread_exception_state_=%s\n",
+        num_outstanding_reads_.load(),
+        thread_exception_state_.load() ? "true" : "false");
+
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
+    printf("[DEBUG] FDMeshCommandQueue::finish_nolock marked sub_devices finished\n");
 
     if (should_handle_exception_.load()) {
+        printf("[DEBUG] FDMeshCommandQueue::finish_nolock handling exception\n");
         std::lock_guard<std::mutex> exception_lock(exception_mutex_);
         if (auto exception_ptr = thread_exception_ptr_) {
             thread_exception_ptr_ = nullptr;
@@ -506,6 +561,7 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
             std::rethrow_exception(exception_ptr);
         }
     }
+    printf("[DEBUG] FDMeshCommandQueue::finish_nolock EXIT\n");
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -605,11 +661,18 @@ void FDMeshCommandQueue::read_shard_from_device(
 }
 
 void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
+    printf("[DEBUG] FDMeshCommandQueue::increment_num_entries_in_completion_queue ENTRY\n");
     {
         std::lock_guard lock(reader_thread_cv_mutex_);
         num_outstanding_reads_++;
+        printf(
+            "[DEBUG] FDMeshCommandQueue::increment_num_entries_in_completion_queue incremented num_outstanding_reads_ "
+            "to %u\n",
+            num_outstanding_reads_.load());
         reader_thread_cv_.notify_one();
+        printf("[DEBUG] FDMeshCommandQueue::increment_num_entries_in_completion_queue notified reader_thread_cv_\n");
     }
+    printf("[DEBUG] FDMeshCommandQueue::increment_num_entries_in_completion_queue EXIT\n");
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
@@ -722,42 +785,73 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
+    printf("[DEBUG] FDMeshCommandQueue::read_completion_queue thread started\n");
     while (!thread_exception_state_.load()) {
         try {
+            printf(
+                "[DEBUG] FDMeshCommandQueue::read_completion_queue waiting for work - num_outstanding_reads_=%u\n",
+                num_outstanding_reads_.load());
             {
                 std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
                 reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
             }
+            printf(
+                "[DEBUG] FDMeshCommandQueue::read_completion_queue woke up - exit_condition_=%s, "
+                "num_outstanding_reads_=%u\n",
+                exit_condition_.load() ? "true" : "false",
+                num_outstanding_reads_.load());
             if (exit_condition_) {
+                printf("[DEBUG] FDMeshCommandQueue::read_completion_queue exiting due to exit_condition\n");
                 return;
             }
 
             uint32_t num_reads = num_outstanding_reads_.load();
+            printf("[DEBUG] FDMeshCommandQueue::read_completion_queue processing %u reads\n", num_reads);
             for (uint32_t i = 0; i < num_reads; i++) {
+                printf("[DEBUG] FDMeshCommandQueue::read_completion_queue processing read %u/%u\n", i + 1, num_reads);
                 auto mesh_read_descriptor = *(completion_queue_reads_.pop());
                 std::visit(
                     [&](auto&& mesh_read_descriptor) {
                         using T = std::decay_t<decltype(mesh_read_descriptor)>;
                         if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                            printf(
+                                "[DEBUG] FDMeshCommandQueue::read_completion_queue calling "
+                                "copy_buffer_data_to_user_space\n");
                             this->copy_buffer_data_to_user_space(mesh_read_descriptor);
                         } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
+                            printf(
+                                "[DEBUG] FDMeshCommandQueue::read_completion_queue calling "
+                                "read_completion_queue_event\n");
                             this->read_completion_queue_event(mesh_read_descriptor);
                         } else {
+                            printf(
+                                "[DEBUG] FDMeshCommandQueue::read_completion_queue calling "
+                                "read_l1_data_from_completion_queue\n");
                             this->read_l1_data_from_completion_queue(mesh_read_descriptor);
                         }
                     },
                     mesh_read_descriptor);
+                printf("[DEBUG] FDMeshCommandQueue::read_completion_queue processed read %u/%u\n", i + 1, num_reads);
             }
+            printf("[DEBUG] FDMeshCommandQueue::read_completion_queue updating outstanding reads count\n");
             std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
             num_outstanding_reads_.fetch_sub(num_reads);
             if (num_outstanding_reads_ == 0) {
+                printf(
+                    "[DEBUG] FDMeshCommandQueue::read_completion_queue notifying reads_processed_cv - all reads "
+                    "done\n");
                 reads_processed_cv_.notify_one();
+            } else {
+                printf(
+                    "[DEBUG] FDMeshCommandQueue::read_completion_queue num_outstanding_reads_ still %u\n",
+                    num_outstanding_reads_.load());
             }
         } catch (const std::runtime_error& e) {
             // Just to clarify, this is a weird case and it is an unrecoverable error.
             // If we are here, its likely the device is hung, meaning that the whole program is stuck.
             // We don't have a recovery mechanism for this, so we just need to clean up the state and let the main
             // thread handle it.
+            printf("[DEBUG] FDMeshCommandQueue::read_completion_queue EXCEPTION caught: %s\n", e.what());
             {
                 std::lock_guard<std::mutex> exception_lock(exception_mutex_);
                 thread_exception_ptr_ = std::current_exception();
@@ -770,9 +864,11 @@ void FDMeshCommandQueue::read_completion_queue() {
             reads_processed_cv_.notify_all();
             completion_queue_reads_.clear();
             reader_thread_cv_.notify_all();
+            printf("[DEBUG] FDMeshCommandQueue::read_completion_queue exception cleanup done, returning\n");
             return;
         }
     }
+    printf("[DEBUG] FDMeshCommandQueue::read_completion_queue thread exiting\n");
 }
 
 MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::get_read_descriptor_queue(
@@ -828,8 +924,9 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+        std::cout << "completion_queue_wait_front" << std::endl;
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
-
+        std::cout << "completion_queue_wait_front DONE" << std::endl;
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor,
             mmio_device_id,

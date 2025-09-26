@@ -268,7 +268,9 @@ void MeshCommandQueueBase::enqueue_write(
         }
     }
 
+    std::cout << "enqueue_write ENTRY" << std::endl;
     this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking);
+    std::cout << "enqueue_write EXIT" << std::endl;
 }
 
 void MeshCommandQueueBase::enqueue_read_shards_nolock(

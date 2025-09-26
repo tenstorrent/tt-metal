@@ -589,6 +589,7 @@ DeviceStorage write_to_mesh_buffer(
         distributed_host_buffer.shard_coords().begin(),
         distributed_host_buffer.shard_coords().end(),
         std::back_inserter(coords));
+    mesh_buffer->device()->mesh_command_queue(cq_id_int).finish({});
     return DeviceStorage(mesh_buffer, std::move(coords));
 }
 
