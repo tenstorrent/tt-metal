@@ -374,6 +374,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
+        case HYPOT: return {"hypot_binary_tile_init();", "hypot_binary_tile"};
         case RSUB:
             if (dtype == DataType::INT32) {
                 return {"rsub_int32_tile_init();", "rsub_int32_tile"};

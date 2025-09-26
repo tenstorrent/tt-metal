@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn::operations::binary {
 namespace detail {
@@ -782,5 +783,58 @@ template struct BinaryOperationSfpu<BinaryOpType::LCM>;
 
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
+
+// ExecuteHypot implementations
+Tensor ExecuteHypot::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return BinaryOperationSfpu<BinaryOpType::HYPOT>::invoke(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor ExecuteHypot::invoke(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return ExecuteHypot::invoke(
+        input_tensor_a, input_tensor_b, std::nullopt, memory_config, std::nullopt, {}, {}, {}, std::nullopt);
+}
+
+Tensor ExecuteHypot::invoke(
+    const Tensor& input_tensor_a,
+    float input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    // Use consistent binary_ng framework path for scalar (same as tensor-tensor)
+    return detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        BinaryOpType::HYPOT,
+        dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
 
 }  // namespace ttnn::operations::binary
