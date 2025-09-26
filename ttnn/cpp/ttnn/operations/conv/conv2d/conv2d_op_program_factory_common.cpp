@@ -607,7 +607,7 @@ bool is_split_reader_viable(
     DataType output_datatype,
     bool act_reuse_enabled) {
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        return true;
+        return false;
     }
     // If activation reuse is enabled, we always enable split_reader
     if (act_reuse_enabled) {
