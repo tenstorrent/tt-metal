@@ -15,7 +15,7 @@
 
 namespace ttml::modules::distributed {
 
-class DistributedGPTMLP : public autograd::ModuleBase {
+class DistributedGPTMLP : public modules::ModuleBase {
 public:
     DistributedGPTMLP(uint32_t embedding_size, float dropout_prob);
 
@@ -27,7 +27,7 @@ private:
     std::shared_ptr<DropoutLayer> m_dropout;
 };
 
-class DistributedGPTBlock : public autograd::ModuleBase {
+class DistributedGPTBlock : public modules::ModuleBase {
 public:
     explicit DistributedGPTBlock(
         uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);

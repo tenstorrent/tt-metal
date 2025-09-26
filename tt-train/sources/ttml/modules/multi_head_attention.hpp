@@ -13,7 +13,7 @@
 
 namespace ttml::modules {
 
-class MultiHeadAttention : public ttml::autograd::ModuleBase {
+class MultiHeadAttention : public ttml::modules::ModuleBase {
 private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};

@@ -233,7 +233,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     config.transformer_config.vocab_size =
         round_up_to_tile(tokenizer->get_vocab_size(), (use_tensor_parallel ? num_devices : 1U) * 32U);
 
-    std::shared_ptr<ttml::autograd::ModuleBase> model;
+    std::shared_ptr<ttml::modules::ModuleBase> model;
     if (use_tensor_parallel) {
         config.transformer_config.num_groups = num_devices;
         config.transformer_config.num_heads = num_devices * 3;

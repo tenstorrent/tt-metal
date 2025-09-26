@@ -7,13 +7,13 @@
 #include <autograd/auto_context.hpp>
 #include <memory>
 
-#include "autograd/module_base.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
+#include "modules/module_base.hpp"
 #include "ops/unary_ops.hpp"
 
-class MNISTModel : public ttml::autograd::ModuleBase {
+class MNISTModel : public ttml::modules::ModuleBase {
     std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
     std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
     std::shared_ptr<ttml::modules::LinearLayer> m_fc3;

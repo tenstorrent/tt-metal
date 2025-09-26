@@ -6,10 +6,10 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
 #include "init/tensor_initializers.hpp"
+#include "modules/module_base.hpp"
 
 namespace ttml::models::common::transformer {
 
@@ -67,8 +67,8 @@ autograd::TensorPtr memory_efficient_runner(
     return out;
 }
 
-void initialize_weights_gpt2(autograd::ModuleBase& model);
-void initialize_weights_he_kaiming_normal(autograd::ModuleBase& model);
+void initialize_weights_gpt2(modules::ModuleBase& model);
+void initialize_weights_he_kaiming_normal(modules::ModuleBase& model);
 
 RunnerType read_runner_type(const YAML::Node& config);
 WeightTyingType read_weight_tying_type(const YAML::Node& config);
