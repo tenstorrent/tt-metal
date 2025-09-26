@@ -51,7 +51,7 @@
 #include "semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "utils.hpp"
+#include <tt_stl/enum.hpp>
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -1064,7 +1064,7 @@ KernelHandle CreateEthernetKernel(
     }
 
     TT_FATAL(
-        utils::underlying_type<DataMovementProcessor>(config.processor) <
+        ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
             MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "
@@ -1359,18 +1359,6 @@ LightMetalBinary LightMetalEndCapture() {
     log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
     return {};
 #endif
-}
-
-void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        if (cq_id.has_value()) {
-            Finish(device->command_queue(cq_id), sub_device_ids);
-        } else {
-            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id), sub_device_ids);
-            }
-        }
-    }
 }
 
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {

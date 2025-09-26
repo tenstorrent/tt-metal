@@ -42,7 +42,6 @@
 #include "impl/dispatch/command_queue_common.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -218,7 +217,7 @@ int main(int argc, char** argv) {
         auto& cq = mesh_device->mesh_command_queue();
         auto device_id = mesh_device->get_devices()[0]->id();
 
-        auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();
 
         std::string src_mem;
@@ -494,7 +493,7 @@ int main(int argc, char** argv) {
         }
 
         if (read_profiler_results) {
-            tt_metal::detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
         }
 
         pass &= mesh_device->close();
