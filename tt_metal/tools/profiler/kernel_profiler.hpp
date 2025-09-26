@@ -537,13 +537,18 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     }
 }
 
-inline __attribute__((always_inline)) void increment_trace_count() { traceCount++; }
+inline __attribute__((always_inline)) void increment_trace_count() {
+    if constexpr (!TRACE_ON_TENSIX) {
+        traceCount++;
+    }
+}
 
-__attribute__((noinline)) void trace_init() {
+__attribute__((noinline)) void trace_only_init() {
     if constexpr (TRACE_ON_TENSIX) {
         if (traceCount > 0) {
             quick_push();
         }
+        traceCount++;
         set_host_counter(traceCount);
         profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_FW_START;
         // Invalidate profiler_data_buffer in L1
@@ -633,11 +638,10 @@ __attribute__((noinline)) void trace_init() {
 #define DeviceProfilerInit()                          \
     if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
         kernel_profiler::init_profiler();             \
-    } else {                                          \
-        kernel_profiler::traceCount = 0;              \
-    }
+    }                                                 \
+    kernel_profiler::traceCount = 0;
 
-#define DeviceTraceProfilerInit() kernel_profiler::trace_init();
+#define DeviceTraceOnlyProfilerInit() kernel_profiler::trace_only_init();
 
 #define DeviceIncrementTraceCount() kernel_profiler::increment_trace_count();
 
@@ -655,7 +659,7 @@ __attribute__((noinline)) void trace_init() {
 
 #define DeviceZoneScopedSumN2(name)
 
-#define DeviceTraceProfilerInit()
+#define DeviceTraceOnlyProfilerInit()
 
 #define DeviceZoneSetCounter(counter)
 
