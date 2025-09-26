@@ -382,7 +382,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
           # Format L2 Nightly results (runs with All post-commit tests)
-          L2_RESULT=$(format_test_result "L2 Nightly APC" \
+          L2_RESULT=$(format_test_result "Wormhole C++ tests" \
             "${{ needs.detect-changes.outputs.run-wormhole }}" \
             "${{ steps.parse-results.outputs.l2-status }}" \
             "${{ steps.parse-results.outputs.l2-url }}" \
@@ -421,8 +421,8 @@ jobs:
 
             **Test Results:**
             ${{ steps.format-results.outputs.wormhole-result }}
-            ${{ steps.format-results.outputs.blackhole-result }}
             ${{ steps.format-results.outputs.l2-nightly-result }}
+            ${{ steps.format-results.outputs.blackhole-result }}
 
             ## 🔗 Links
             📊 **Post-commit workflow:** [#${{ github.run_id }}](${{
