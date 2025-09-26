@@ -266,7 +266,7 @@ Notes:
     // The device kernel must unpack these in the same order via build_from_args(...).
     tt::tt_fabric::append_fabric_connection_rt_args(
         src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
-    tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
+
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // --- Mesh trace capture & replay ---
@@ -285,6 +285,22 @@ Notes:
     };
     Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+
+    // Phase A: simple E/W hops (single row); N/S = 0.
+    uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
+    if (dst_coord[1] > src_coord[1]) {
+        e_hops = static_cast<uint16_t>(dst_coord[1] - src_coord[1]);
+    } else {
+        w_hops = static_cast<uint16_t>(src_coord[1] - dst_coord[1]);
+    }
+
+    // Append hops AFTER fabric connection args so the kernel’s parsing isn’t disturbed.
+    writer_rt.push_back((uint32_t)e_hops);
+    writer_rt.push_back((uint32_t)w_hops);
+    writer_rt.push_back((uint32_t)n_hops);
+    writer_rt.push_back((uint32_t)s_hops);
+
+    tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
     auto mesh_workload = Dist::CreateMeshWorkload();
     Dist::AddProgramToMeshWorkload(mesh_workload, std::move(sender_prog), Dist::MeshCoordinateRange(src_coord));
