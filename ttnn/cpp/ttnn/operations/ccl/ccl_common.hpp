@@ -727,7 +727,7 @@ private:
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
 
 // Forward/backward devices are assumed to be neighbors for 1D fabric for now
-std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, distributed::MeshCoordinate src_device_coord, std::optional<distributed::MeshCoordinate> forward_device_coord, std::optional<distributed::MeshCoordinate> backward_device_coord, distributed::MeshDevice* mesh_device);
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, const distributed::MeshCoordinate& src_device_coord, const std::optional<distributed::MeshCoordinate>& forward_device_coord, const std::optional<distributed::MeshCoordinate>& backward_device_coord, distributed::MeshDevice* mesh_device);
 
 std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
     size_t ring_size,
@@ -737,7 +737,7 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 
 // Forward/backward devices are assumed to be neighbors for 1D fabric for now
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
-    Topology topology, distributed::MeshCoordinate src_device_coord, std::optional<distributed::MeshCoordinate> forward_device_coord, std::optional<distributed::MeshCoordinate> backward_device_coord, uint32_t num_targets_forward, uint32_t num_targets_backward, distributed::MeshDevice* mesh_device);
+    Topology topology, const distributed::MeshCoordinate& src_device_coord, const std::optional<distributed::MeshCoordinate>& forward_device_coord, const std::optional<distributed::MeshCoordinate>& backward_device_coord, uint32_t num_targets_forward, uint32_t num_targets_backward, distributed::MeshDevice* mesh_device);
 
 
 }  // namespace ccl

@@ -77,7 +77,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     const GlobalSemaphore& final_barrier_semaphore) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", coord);
 
-    auto input_tensor = input_tensors[0];
+    const auto& input_tensor = input_tensors[0];
 
     uint32_t target_ring_size = ccl::get_topological_dimension(input_tensor, this->cluster_axis);
 

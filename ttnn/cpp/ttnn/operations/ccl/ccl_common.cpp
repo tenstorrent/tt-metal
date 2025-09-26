@@ -1757,9 +1757,9 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
     Topology topology,
-    MeshCoordinate src_device_coord,
-    std::optional<MeshCoordinate> forward_device_coord,
-    std::optional<MeshCoordinate> backward_device_coord,
+    const MeshCoordinate& src_device_coord,
+    const std::optional<MeshCoordinate>& forward_device_coord,
+    const std::optional<MeshCoordinate>& backward_device_coord,
     MeshDevice* mesh_device) {
     std::array<uint32_t, 2> forward_args = {};
     std::array<uint32_t, 2> backward_args = {};
@@ -1815,9 +1815,9 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
     Topology topology,
-    MeshCoordinate src_device_coord,
-    std::optional<MeshCoordinate> forward_device_coord,
-    std::optional<MeshCoordinate> backward_device_coord,
+    const MeshCoordinate& src_device_coord,
+    const std::optional<MeshCoordinate>& forward_device_coord,
+    const std::optional<MeshCoordinate>& backward_device_coord,
     uint32_t num_targets_forward,
     uint32_t num_targets_backward,
     MeshDevice* mesh_device) {
@@ -1832,11 +1832,11 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
                                   std::array<uint32_t, 6>& args,
-                                  std::optional<MeshCoordinate> coord,
+                                  const std::optional<MeshCoordinate>& coord,
                                   uint32_t num_targets,
                                   MeshDevice* mesh_device) {
             if (coord) {
-                const auto dev_coord = *coord;
+                const auto& dev_coord = *coord;
                 auto device_fabric_node_id = mesh_device->get_fabric_node_id(dev_coord);
                 auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
