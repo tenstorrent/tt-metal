@@ -4,7 +4,6 @@
 
 #include "conv3d.hpp"
 #include "device/conv3d_device_operation.hpp"
-#include <tt_stl/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"

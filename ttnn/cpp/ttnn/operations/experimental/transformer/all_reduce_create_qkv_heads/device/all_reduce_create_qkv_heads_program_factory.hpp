@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt_stl/math.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "all_reduce_create_qkv_heads_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"

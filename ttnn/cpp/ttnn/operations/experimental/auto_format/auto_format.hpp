@@ -10,8 +10,6 @@
 
 #include <optional>
 
-#include <tt_stl/math.hpp>
-
 namespace ttnn::operations::experimental::auto_format {
 
 struct FormatParams {
