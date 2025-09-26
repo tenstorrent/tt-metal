@@ -62,6 +62,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     ):
         return True, "Row major is only supported for fp32 & fp16"
 
+    # ttnn.prod doesn't support keepdim=True when reducing over all dimensions (dim=None)
+    if test_vector["dim"] is None and test_vector["keepdim"]:
+        return True, "keepdim=True is not supported when dim=None for prod operation"
+
     return False, None
 
 
