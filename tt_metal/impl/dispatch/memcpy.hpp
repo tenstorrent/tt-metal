@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt_stl/aligned_allocator.hpp>
 #include <umd/device/driver_atomics.hpp>
 
