@@ -8,7 +8,6 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/math.hpp>
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
