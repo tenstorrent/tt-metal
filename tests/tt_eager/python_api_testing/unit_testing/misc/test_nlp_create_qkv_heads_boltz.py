@@ -89,6 +89,7 @@ def run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype
 )
 
 # Test with different configurations: batch size, sequence length, number of heads, head dimension
+@pytest.mark.timeout(120)
 def test_nlp_create_qkv_heads_boltz(batch, seq_len, n_heads, head_dim, dtype, in0_mem_config, request, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
