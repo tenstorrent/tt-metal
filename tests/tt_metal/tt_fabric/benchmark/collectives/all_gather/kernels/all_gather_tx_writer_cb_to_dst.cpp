@@ -28,9 +28,12 @@ using namespace tt::tt_fabric;
 //   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
 //   1: dst_mesh_id    (u32)  // logical (truncated to u16)
 //   2: dst_dev_id     (u32)  // logical (truncated to u16)
-//   3: rx_noc_x       (u32)  // receiver worker XY
+//   3: rx_noc_x       (u32)  // receiver worker XY (for unicast completion)
 //   4: rx_noc_y       (u32)
-//   5: sem_l1_addr    (u32)  // receiver L1 semaphore address
+//   5: sem_l1_addr    (u32)  // receiver L1 semaphore address (unicast completion)
+//   … fabric-connection args … (inserted by append_fabric_connection_rt_args on host)
+//   … then optional Phase-A diagnostics:
+//      e_hops (u32), w_hops (u32), n_hops (u32), s_hops (u32)
 
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
@@ -47,28 +50,30 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
-    // Build a fabric send adapter from the runtime args that the host packed.
-    // Needed before sending over fabric: binds this core to a specific routing/link.
+    // Build the fabric connection next (these args were appended by the host
+    // right after the fixed 6 args).
     auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+
+    // Phase A diagnostics (optional): hops were appended by the host
+    // AFTER the fabric-connection args, so read them now.
+    const uint16_t e_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t w_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t n_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t s_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
 
     // TEMP (2D API): manual packet header. Post-uplift this becomes implicit.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
 
-    // Fabric route setup (temporary 2D API):
-    // Program a fixed unicast route to (dst_mesh_id, dst_dev_id). Dynamic routing is not
-    // supported in this path (see guard below). This API will change soon. The future 2D
-    // interface will mirror the 1D style. See linear/api.h for the reference shape.
+    // Set multicast route once using Phase-A hop counts (2D temporary API).
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    static_assert(false, "Dynamic routing is not supported");
-#endif
-    fabric_set_unicast_route(
-        mh,
-        eth_chan_directions::EAST,  // ignored for dynamic routing
-        /*my_dev_id*/ 0,            // ignored by dynamic route
-        /*dst_dev_id*/ dst_dev_id,
-        /*dst_mesh_id*/ dst_mesh_id,
-        /*ew_dim*/ 0);
+    fabric_set_mcast_route(
+        reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
+        /*dst_dev_id (ignored)*/ 0,
+        /*dst_mesh_id (ignored)*/ 0,
+        /*e_num_hops*/ e_hops,
+        /*w_num_hops*/ w_hops,
+        /*n_num_hops*/ n_hops,
+        /*s_num_hops*/ s_hops);
 
     sender.open<true>();
 
@@ -84,8 +89,7 @@ void kernel_main() {
         // Compute destination NOC address (DRAM or L1 interleaved)
         uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
 
-        // Build the NOC header for this page
-        fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
+        // Build the NOC header for this page (mcast route already set above)
         header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
 
         // TEMP (2D API): payload then header. Will be a single call after uplift
@@ -105,6 +109,7 @@ void kernel_main() {
 
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
+    // Keep completion as unicast to the single receiver so the RX wait kernel can exit
     fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
     header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
 
