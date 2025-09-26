@@ -1525,8 +1525,7 @@ void write_to_worker_or_fabric_tensix_cores(
         soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
 
     // Check if tensix config is enabled
-    bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool tensix_config_enabled = !tt::tt_metal::MetalContext::instance().get_fabric_tensix_config().is_disabled();
 
     // Get pre-computed translated fabric mux cores from tensix config
     std::unordered_set<CoreCoord> fabric_mux_cores_translated;
@@ -2186,7 +2185,7 @@ void ControlPlane::populate_fabric_connection_info(
         worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
 
     // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
-    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (!fabric_tensix_config.is_disabled()) {
         // dispatcher uses different fabric router, which still has the default buffer size.
         const auto& default_edm_config = fabric_context.get_fabric_router_config();
         fill_connection_info_fields(

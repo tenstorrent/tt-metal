@@ -68,7 +68,7 @@ inline std::string get_core_descriptor_file(
         // Check if fabric tensix is enabled based on fabric tensix config
         tt_fabric::FabricTensixConfig fabric_tensix_config =
             tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-        bool use_fabric_tensix = (fabric_tensix_config == tt_fabric::FabricTensixConfig::MUX);
+        bool use_fabric_tensix = fabric_tensix_config.is_enabled();
 
         switch (arch) {
             default:

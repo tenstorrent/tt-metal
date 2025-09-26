@@ -166,7 +166,9 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         this->router_with_mux_config_[direction] = get_edm_config_options(
             tt::tt_fabric::FabricEriscDatamoverType::Default,
             tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-            tt::tt_fabric::FabricTensixConfig::MUX,
+            tt::tt_fabric::FabricTensixConfig{
+                tt::tt_fabric::FabricTensixConfig::ENABLED,
+                tt::tt_fabric::FabricTensixConfig::SenderChannelExtension::MUX},
             static_cast<eth_chan_directions>(direction));
     }
 
@@ -229,7 +231,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
     eth_chan_directions direction) const {
     auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
     switch (fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::DISABLED:
+        case tt::tt_fabric::FabricTensixConfig::DISABLED_TYPE:
             switch (fabric_edm_type) {
                 case tt::tt_fabric::FabricEriscDatamoverType::Default:
                     TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
@@ -256,7 +258,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
                 default: TT_FATAL(false, "Error, invalid fabric edm type");
             }
             break;
-        case tt::tt_fabric::FabricTensixConfig::MUX:
+        case tt::tt_fabric::FabricTensixConfig::MUX_TYPE:
             TT_FATAL(
                 this->router_with_mux_config_[direction] != nullptr,
                 "Error, fabric router config with mux extension is uninitialized for direction {}",
@@ -330,7 +332,7 @@ void FabricContext::initialize_tensix_config() {
     TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
 
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (!fabric_tensix_config.is_disabled()) {
         // Now it's safe to call get_active_fabric_eth_channels() because
         // configure_routing_tables_for_fabric_ethernet_channels() has already run
         tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();

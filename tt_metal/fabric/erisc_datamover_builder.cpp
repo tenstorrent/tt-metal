@@ -137,8 +137,8 @@ static void update_sender_channel_servicing(
     eth_chan_directions direction,
     Topology topology) {
     switch (fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::MUX: break;
-        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", static_cast<int>(fabric_tensix_config));
+        case tt::tt_fabric::FabricTensixConfig::MUX_TYPE: break;
+        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", fabric_tensix_config);
     }
 
     // Determine which channel corresponds to the current direction
@@ -481,7 +481,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     }
 
     switch (options.fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::MUX: {
+        case tt::tt_fabric::FabricTensixConfig::MUX_TYPE: {
             uint32_t num_sender_channels = this->num_sender_channels_with_tensix_config;
             if (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus) {
                 // extra sender channel for vc1
@@ -706,7 +706,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
     // Update sender channel servicing based on fabric tensix configuration
-    if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (!options.fabric_tensix_config.is_disabled()) {
         // Use default direction (EAST) for the constructor case since direction isn't available here
         update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, options.direction, topology);
     }
@@ -796,7 +796,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-    bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool has_tensix_extension = !options.fabric_tensix_config.is_disabled();
 
     configure_buffer_slots_helper(
         topology,
@@ -1231,8 +1231,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
 
     bool update_pkt_hdr_on_rx_ch = true;
-    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool fabric_tensix_extension_enabled =
+        !tt::tt_metal::MetalContext::instance().get_fabric_tensix_config().is_disabled();
     bool support_pkt_hdr_update_on_sender_channel =
         !fabric_tensix_extension_enabled &&
         (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Mesh);

@@ -856,8 +856,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
         // Terminate fabric tensix configs (mux cores) if enabled
         // TODO: issue #26855, move the termination process to device
-        bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
+        bool tensix_config_enabled = !tt::tt_metal::MetalContext::instance().get_fabric_tensix_config().is_disabled();
         if (tensix_config_enabled) {
             const auto& tensix_config = fabric_context.get_tensix_config();
 

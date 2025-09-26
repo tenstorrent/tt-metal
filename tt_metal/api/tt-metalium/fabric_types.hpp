@@ -5,6 +5,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <functional>
+#include <string>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_fabric {
@@ -26,9 +28,73 @@ enum class FabricConfig : uint32_t {
 
 // tensix extension for fabric routers, used to build connections between worker - fabric router, upstream fabric router
 // - downstream fabric router.
-enum class FabricTensixConfig : uint32_t {
-    DISABLED = 0,  // not using tensix extension
-    MUX = 1,       // using mux kernel as tensix extension
+class FabricTensixConfig {
+public:
+    enum Status : uint32_t {
+        DISABLED = 0,  // not using tensix extension
+        ENABLED = 1,   // using tensix extension
+    };
+
+    enum class SenderChannelExtension : uint32_t {
+        DISABLED = 0,  // not using sender channel extension
+        MUX = 1,       // using mux kernel as sender channel extension
+    };
+
+    // Member variables
+    Status status = DISABLED;
+    SenderChannelExtension sender_channel = SenderChannelExtension::DISABLED;
+
+    // Constructors
+    FabricTensixConfig() = default;
+    FabricTensixConfig(Status s, SenderChannelExtension sc = SenderChannelExtension::DISABLED) :
+        status(s), sender_channel(sc) {}
+
+    // Helper methods
+    bool is_enabled() const { return status == ENABLED; }
+    bool is_disabled() const { return status == DISABLED; }
+    bool has_mux() const { return is_enabled() && sender_channel == SenderChannelExtension::MUX; }
+
+    // Equality operators
+    bool operator==(const FabricTensixConfig& other) const {
+        return status == other.status && sender_channel == other.sender_channel;
+    }
+    bool operator!=(const FabricTensixConfig& other) const { return !(*this == other); }
+
+    // Implicit conversion to int for switch statements (based on whether mux is enabled)
+    operator int() const {
+        if (is_disabled()) {
+            return DISABLED_TYPE;
+        }
+        if (has_mux()) {
+            return MUX_TYPE;
+        }
+        return DISABLED_TYPE;  // default to disabled
+    }
+
+    // String conversion for logging/debugging
+    std::string to_string() const {
+        if (is_disabled()) {
+            return "DISABLED";
+        }
+        if (has_mux()) {
+            return "MUX";
+        }
+        if (is_enabled()) {
+            return "ENABLED";
+        }
+        return "UNKNOWN";
+    }
+
+    // Implicit conversion to string for fmt formatting
+    operator std::string() const { return to_string(); }
+
+    // Direct construction is preferred over factory methods to avoid explosion of methods
+
+    // Enum values for switch statements
+    enum ConfigType : int {
+        DISABLED_TYPE = 0,
+        MUX_TYPE = 1,
+    };
 };
 
 enum class FabricReliabilityMode : uint32_t {
@@ -54,3 +120,16 @@ using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 
 }  // namespace tt::tt_fabric
+
+// Hash specialization for std::unordered_map support
+namespace std {
+template <>
+struct hash<tt::tt_fabric::FabricTensixConfig> {
+    std::size_t operator()(const tt::tt_fabric::FabricTensixConfig& config) const noexcept {
+        // Combine hash values of both members
+        std::size_t h1 = std::hash<uint32_t>{}(static_cast<uint32_t>(config.status));
+        std::size_t h2 = std::hash<uint32_t>{}(static_cast<uint32_t>(config.sender_channel));
+        return h1 ^ (h2 << 1);
+    }
+};
+}  // namespace std

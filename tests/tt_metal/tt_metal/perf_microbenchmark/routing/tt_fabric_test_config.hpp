@@ -101,8 +101,8 @@ static const StringEnumMapper<RoutingType> routing_type_mapper({
 });
 
 static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
-    {"Default", FabricTensixConfig::DISABLED},
-    {"Mux", FabricTensixConfig::MUX},
+    {"Default", FabricTensixConfig{FabricTensixConfig::DISABLED}},
+    {"Mux", FabricTensixConfig{FabricTensixConfig::ENABLED, FabricTensixConfig::SenderChannelExtension::MUX}},
 });
 
 static const StringEnumMapper<FabricReliabilityMode> fabric_reliability_mode_mapper({

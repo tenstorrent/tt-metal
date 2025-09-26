@@ -261,8 +261,8 @@ void build_tt_fabric_program(
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(fabric_node_id.mesh_id);
 
     // check whether using tensix extension for connection between worker and fabric routers.
-    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool fabric_tensix_extension_enabled =
+        !tt::tt_metal::MetalContext::instance().get_fabric_tensix_config().is_disabled();
 
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
@@ -281,10 +281,13 @@ void build_tt_fabric_program(
 
         auto get_fabric_router_config =
             [&](bool fabric_tensix_extension_enabled, bool is_dispatch_link, auto eth_direction) {
-                auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
+                auto fabric_tensix_config =
+                    tt::tt_fabric::FabricTensixConfig{tt::tt_fabric::FabricTensixConfig::DISABLED};
                 // if not the link used by dispatch, get the fabric router config with tensix extension.
                 if (fabric_tensix_extension_enabled && !is_dispatch_link) {
-                    fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
+                    fabric_tensix_config = tt::tt_fabric::FabricTensixConfig{
+                        tt::tt_fabric::FabricTensixConfig::ENABLED,
+                        tt::tt_fabric::FabricTensixConfig::SenderChannelExtension::MUX};
                 }
                 return fabric_context.get_fabric_router_config(
                     fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
@@ -445,8 +448,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     }
 
     // Compile all fabric tensix builders
-    if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-        tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (!tt::tt_metal::MetalContext::instance().get_fabric_tensix_config().is_disabled()) {
         for (auto& [eth_chan, tensix_builder] : tensix_builders) {
             tensix_builder.create_and_compile(device, *fabric_program_ptr);
         }

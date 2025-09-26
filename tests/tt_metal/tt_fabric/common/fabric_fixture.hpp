@@ -157,7 +157,11 @@ protected:
             return;
         }
         BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+            tt::tt_fabric::FabricConfig::FABRIC_1D,
+            std::nullopt,
+            tt::tt_fabric::FabricTensixConfig{
+                tt::tt_fabric::FabricTensixConfig::ENABLED,
+                tt::tt_fabric::FabricTensixConfig::SenderChannelExtension::MUX});
     }
     static void TearDownTestSuite() {
         if (!should_skip_) {
