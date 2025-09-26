@@ -202,7 +202,7 @@ class WanAttention:
 
     def __call__(self, spatial_1BND, N, prompt_1BLP=None, rope_cos=None, rope_sin=None, trans_mat=None):
         """
-        spatial_1BND: fractured N on SP, replicated D on TP
+        spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
         rope_cos: fractured on SP, TP
         rope_sin: fractured on SP, TP
@@ -212,7 +212,7 @@ class WanAttention:
         Otherwise, run cross-attention on prompt.
 
         Outputs:
-        spatial_1BND: fractured N on SP, replicated D on TP
+        spatial_1BND: fractured N on SP, fractured D on TP
         """
 
         kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
@@ -312,40 +312,20 @@ class WanAttention:
 
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial on TP axis before projection
-            spatial_1BND = ttnn.experimental.all_gather_async(
-                spatial_1BND,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
+            spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
         spatial_1BND = self.to_out(
             spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
         )
 
-        if self.parallel_config.tensor_parallel.factor > 1:
-            # Gather spatial on TP axis after projection
-            spatial_1BND = ttnn.experimental.all_gather_async(
-                spatial_1BND,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
-            )
+        # if self.parallel_config.tensor_parallel.factor > 1:
+        #     # Gather spatial on TP axis after projection
+        #     spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+        #         spatial_1BND,
+        #         dim=3,
+        #         mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+        #     )
 
         return spatial_1BND

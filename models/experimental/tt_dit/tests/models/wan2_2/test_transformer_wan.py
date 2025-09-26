@@ -9,7 +9,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ....utils.check import assert_quality
 from ....models.transformers.wan2_2.transformer_wan import WanTransformerBlock, WanTransformer3DModel
 from ....parallel.manager import CCLManager
@@ -154,11 +154,11 @@ def test_wan_transformer_block(
     rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, chunk_size_lcm=256, num_devices=sp_factor)
 
     # Sequence fractured spatial
-    tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
     # Replicated prompt
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
     # Replicated time embedding
-    tt_temb = bf16_tensor(temb_input.unsqueeze(0), device=mesh_device)
+    tt_temb = bf16_tensor(temb_input.unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=-1)
 
     # Rope cos and sin sequence fractured and head fractured
     tt_rope_cos = bf16_tensor(rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
@@ -184,7 +184,7 @@ def test_wan_transformer_block(
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
-    spatial_concat_dims[tp_axis] = 0
+    spatial_concat_dims[tp_axis] = 3
     tt_spatial_out = ttnn.to_torch(
         tt_spatial_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
