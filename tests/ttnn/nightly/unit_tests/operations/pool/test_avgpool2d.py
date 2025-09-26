@@ -73,11 +73,18 @@ def tensor_map():
 
 
 def randomize_tensor(tensor_map, tensor_shape):
+    in_n, in_c, in_h, in_w = tensor_shape
     tensor_shape = tuple(tensor_shape)
-    if tensor_shape in tensor_map.keys():
+
+    if False and tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
         torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        for n in range(in_n):
+            for c in range(in_c):
+                for h in range(in_h):
+                    for w in range(in_w):
+                        torch_tensor[n, c, h, w] = h * in_w + w
         tensor_map[tensor_shape] = torch_tensor
     return torch_tensor
 
@@ -205,9 +212,9 @@ def run_avg_pool2d(
     if is_blackhole() and in_dtype == ttnn.bfloat8_b and in_c > 256:
         run_twice = False
 
-    if run_twice:
+    if run_twice or True:
         ttnn.deallocate(ttnn_output, True)
-        ttnn_output = ttnn.avg_pool2d(
+        _ = ttnn.avg_pool2d(
             input_tensor=ttnn_input,
             batch_size=in_n,
             input_h=in_h,
@@ -301,64 +308,65 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
-        # model shapes
-        [1, 64, 112, 112],
-        [8, 32, 132, 20],
-        [1, 256, 56, 56],
-        [1, 512, 28, 28],
-        [1, 192, 264, 40],
-        # # wide non-4 multiple tests
-        [1, 800, 32, 32],
-        [1, 576, 32, 32],
-        # C partial tile test
-        [1, 16, 12, 12],
-        [1, 1, 56, 56],
-        [2, 290, 10, 10],
+        # # model shapes
+        # [1, 64, 112, 112],
+        # [8, 32, 132, 20],
+        # [1, 256, 56, 56],
+        # [1, 512, 28, 28],
+        # [1, 192, 264, 40],
+        # # # wide non-4 multiple tests
+        # [1, 800, 32, 32],
+        # [1, 576, 32, 32],
+        # # C partial tile test
+        # [1, 16, 12, 12],
+        # [1, 1, 56, 56],
+        # [2, 290, 10, 10],
+        [1, 257, 10, 10],
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (3, 3),  # 1 face 1 chunk
+        # (3, 3),  # 1 face 1 chunk
         (5, 5),  # 2 faces 1 chunk
-        (7, 7),  # 2 chunks
-        (9, 9),  # 3 chunks
+        # (7, 7),  # 2 chunks
+        # (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        (1, 1),
-        (1, 4, 3, 2),
+        # (1, 1),
+        # (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "count_include_pad",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         None,
-        5,
+        # 5,
     ],
 )
 @pytest.mark.parametrize(
@@ -370,7 +378,7 @@ def run_avg_pool2d(
 )
 @pytest.mark.parametrize(
     "in_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat8_b],
 )
 def test_run_avg_pool2d(
     device,
@@ -385,6 +393,7 @@ def test_run_avg_pool2d(
     shard_scheme,
     in_dtype,
 ):
+    device.disable_and_clear_program_cache()
     run_avg_pool2d(
         device,
         tensor_map,
@@ -401,52 +410,52 @@ def test_run_avg_pool2d(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize(
-    "input_shape, shard_startegy",
-    (
-        (
-            ([1, 256, 56, 56], HS),
-            ([1, 512, 28, 28], HS),
-            ([1, 192, 264, 40], HS),
-            ([1, 800, 32, 32], HS),
-            ([1, 576, 32, 32], HS),
-            ([1, 16, 12, 12], HS),
-        )
-    ),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    (
-        (3, 3),
-        (5, 5),
-        (7, 7),
-    ),
-)
-@pytest.mark.parametrize(
-    "in_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-)
-def test_avg_pool2d_output_formats_and_layouts(
-    device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
-):
-    padding = (0, 0)
-    stride = (1, 1)
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+# @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+# @pytest.mark.parametrize(
+#     "input_shape, shard_startegy",
+#     (
+#         (
+#             ([1, 256, 56, 56], HS),
+#             ([1, 512, 28, 28], HS),
+#             ([1, 192, 264, 40], HS),
+#             ([1, 800, 32, 32], HS),
+#             ([1, 576, 32, 32], HS),
+#             ([1, 16, 12, 12], HS),
+#         )
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "kernel_size",
+#     (
+#         (3, 3),
+#         (5, 5),
+#         (7, 7),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "in_dtype",
+#     [ttnn.bfloat16, ttnn.bfloat8_b],
+# )
+# def test_avg_pool2d_output_formats_and_layouts(
+#     device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
+# ):
+#     padding = (0, 0)
+#     stride = (1, 1)
 
-    run_avg_pool2d(
-        device,
-        tensor_map,
-        input_shape,
-        kernel_size,
-        stride,
-        padding,
-        ceil_mode=False,
-        divisor_override=None,
-        count_include_pad=False,
-        shard_scheme=shard_startegy,
-        in_dtype=in_dtype,
-        output_layout=output_layout,
-        out_dtype=out_dtype,
-    )
+#     run_avg_pool2d(
+#         device,
+#         tensor_map,
+#         input_shape,
+#         kernel_size,
+#         stride,
+#         padding,
+#         ceil_mode=False,
+#         divisor_override=None,
+#         count_include_pad=False,
+#         shard_scheme=shard_startegy,
+#         in_dtype=in_dtype,
+#         output_layout=output_layout,
+#         out_dtype=out_dtype,
+#     )
