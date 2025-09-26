@@ -25,15 +25,16 @@ using namespace tt::tt_fabric;
 //   1: PAGE_SIZE
 //
 // RT args (must match host):
-//   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
-//   1: dst_mesh_id    (u32)  // logical (truncated to u16)
-//   2: dst_dev_id     (u32)  // logical (truncated to u16)
-//   3: rx_noc_x       (u32)  // receiver worker XY (for unicast completion)
-//   4: rx_noc_y       (u32)
-//   5: sem_l1_addr    (u32)  // receiver L1 semaphore address (unicast completion)
+//   0: dst_base            (u32)  // receiver buffer base (start of concat buffer)
+//   1: dst_mesh_id         (u32)  // logical (truncated to u16)
+//   2: dst_dev_id          (u32)  // logical (truncated to u16)
+//   3: rank_offset_bytes   (u32)  // this sender's slot offset = rank*S
 //   … fabric-connection args … (inserted by append_fabric_connection_rt_args on host)
-//   … then optional Phase-A diagnostics:
-//      e_hops (u32), w_hops (u32), n_hops (u32), s_hops (u32)
+//   … 2D hops (Phase-A diag) …
+//   … completion fan-out:
+//       num_ranks (u32),
+//       then for each r in [0..num_ranks-1]:
+//         rx_noc_x (u32), rx_noc_y (u32), sem_l1_addr (u32)
 
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
@@ -46,9 +47,7 @@ void kernel_main() {
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint16_t dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
-    const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
-    const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t rank_offset_bytes = get_arg_val<uint32_t>(idx++);
 
     // Build the fabric connection next (these args were appended by the host
     // right after the fixed 6 args).
@@ -86,8 +85,8 @@ void kernel_main() {
         // Pace transmissions so we don’t overrun the fabric send queue.
         sender.wait_for_empty_write_slot();
 
-        // Compute destination NOC address (DRAM or L1 interleaved)
-        uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
+        // Place this sender's slice at [rank_offset_bytes .. rank_offset_bytes+S)
+        uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/rank_offset_bytes, /*noc=*/0);
 
         // Build the NOC header for this page (mcast route already set above)
         header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
@@ -103,18 +102,18 @@ void kernel_main() {
 
     noc_async_writes_flushed();
 
-    // Final signal: bump receiver semaphore so the receiver kernel exits.
-    // In this benchmark we always have a completion semaphore.
-    ASSERT(sem_l1_addr != 0);
-
-    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
-
-    // Keep completion as unicast to the single receiver so the RX wait kernel can exit
-    fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-
-    sender.wait_for_empty_write_slot();
-    sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-
+    // Final signal fan-out: bump EVERY receiver's semaphore (expected=num_ranks).
+    const uint32_t num_ranks = get_arg_val<uint32_t>(idx++);
+    for (uint32_t r = 0; r < num_ranks; ++r) {
+        const uint32_t rx_x = get_arg_val<uint32_t>(idx++);
+        const uint32_t rx_y = get_arg_val<uint32_t>(idx++);
+        const uint32_t sem_l1 = get_arg_val<uint32_t>(idx++);
+        const uint64_t sem_noc = safe_get_noc_addr(rx_x, rx_y, sem_l1, /*NOC_INDEX=*/0);
+        // Keep completion unicast per receiver
+        fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
+        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        sender.wait_for_empty_write_slot();
+        sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    }
     sender.close();
 }
