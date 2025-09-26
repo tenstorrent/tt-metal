@@ -38,6 +38,16 @@ void py_module(nb::module_& m) {
         py_module_base.def("eval", &ModuleBase::eval);
         py_module_base.def("set_run_mode", &ModuleBase::set_run_mode);
         py_module_base.def("get_run_mode", &ModuleBase::get_run_mode);
+        py_module_base.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (ModuleBase::*)(const autograd::TensorPtr&)>(&ModuleBase::operator()),
+            nb::arg("tensor"));
+        py_module_base.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (ModuleBase::*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &ModuleBase::operator()),
+            nb::arg("tensor"),
+            nb::arg("other"));
     }
 
     {
@@ -51,7 +61,6 @@ void py_module(nb::module_& m) {
             nb::init<const autograd::TensorPtr&, const autograd::TensorPtr&>(), nb::arg("weight"), nb::arg("bias"));
         py_linear_layer.def(
             nb::init<const autograd::TensorPtr&, bool>(), nb::arg("weight"), nb::arg("has_bias") = true);
-        py_linear_layer.def("__call__", &LinearLayer::operator());
         py_linear_layer.def("get_weight", &LinearLayer::get_weight);
         py_linear_layer.def("get_weight_numpy", [](const LinearLayer& layer) {
             auto const w = layer.get_weight();
