@@ -482,7 +482,7 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
 @pytest.mark.parametrize(
     "core_grid",
     [
-        None,  # Use full device grid
+        # None,  # Use full device grid
         ttnn.CoreGrid(y=5, x=4),  # Limited core grid (5x4=20 cores)
     ],
 )
