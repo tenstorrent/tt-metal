@@ -57,10 +57,10 @@ def run_yolov6_inference(
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
-    t0 = time.time()
-
     if use_signpost:
         signpost(header="start")
+
+    t0 = time.time()
 
     for _ in range(10):
         _ = performant_runner.run(torch_input_tensor)
