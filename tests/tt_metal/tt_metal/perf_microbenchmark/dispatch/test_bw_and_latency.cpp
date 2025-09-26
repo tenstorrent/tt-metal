@@ -494,7 +494,7 @@ int main(int argc, char** argv) {
         }
 
         if (read_profiler_results) {
-            tt_metal::detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
         }
 
         pass &= mesh_device->close();

@@ -61,11 +61,11 @@ Because METALIUM distinguishes between logical coordinates on host (generally st
 
 ```cpp
 CoreCoord sender_core_physical =
-    device->worker_core_from_logical_core(sender_core_logical);
+    mesh_device->worker_core_from_logical_core(sender_core_logical);
 
 CoreRange receiver_cores_physical = CoreRange(
-    device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
-    device->worker_core_from_logical_core(receiver_cores_logical.end_coord)
+    mesh_device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
+    mesh_device->worker_core_from_logical_core(receiver_cores_logical.end_coord)
 );
 ```
 
@@ -77,10 +77,10 @@ Previous examples allocate a DRAM buffer for vectors.  We can also let DRAM expl
 
 ```cpp
 uint32_t dram_bank_id = 0;
-auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
+auto src0_dram_buffer = MakeBufferBFP16(mesh_device, num_tiles, false);
 ...
 std::vector<bfloat16> identity_tile = create_identity_matrix(32, 32, 32);
-EnqueueWriteBuffer(cq, src0_dram_buffer, identity_tile.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, identity_tile.data(), false);
 ```
 
 Notice we set the `dram_bank_id = 0`.  In this basic DRAM configuration, this happens to be the default bank for our tile, and will be passed later as a runtime argument for our coordinator kernel.  This ensures that when the time comes, the coordinator core can read from `src0_dram_buffer` and retrieve that neat little tile.

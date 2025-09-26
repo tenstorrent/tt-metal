@@ -62,13 +62,6 @@ ReadMeshDeviceProfilerResults
 ENDL
 ETH
 EltwiseUnary
-EnqueueProgram
-EnqueueReadBuffer
-EnqueueReadSubBuffer
-EnqueueRecordEvent
-EnqueueWaitForEvent
-EnqueueWriteBuffer
-EnqueueWriteSubBuffer
 Enum
 Enums
 EventSynchronize

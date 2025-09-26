@@ -1066,7 +1066,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         return dst_noc_unicast_info;
     };
 
-    // Circular Buffer Configs handled in EnqueueProgram
+    // Circular Buffer Configs handled in progrm_dispatch::update_program_dispatch_commands
 
     // Assume here and in command queue that kg_buffers is populated with multicast buffers first then unicast buffers
     // Program Binaries and Go Signals

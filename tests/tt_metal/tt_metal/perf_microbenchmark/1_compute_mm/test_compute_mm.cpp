@@ -65,7 +65,7 @@ using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
 // This benchmark measures the compute performance of matmul. When in the slow
 // dispatch mode, it uses LaunchProgram API and measures performance via device
-// profiler. In the fast dispatch mode, it uses EnqueueProgram API and measures
+// profiler. In the fast dispatch mode, it uses EnqueueMeshWorkload API and measures
 // the execution time. Regarding kernels, the compute kernel used
 // “bmm_large_block_zm_fused_bias_activation.cpp” as is and the data movement
 // kernels were implemented with reference to kernels of
@@ -636,7 +636,7 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::Finish(device->mesh_command_queue());
                 auto t_end = std::chrono::high_resolution_clock::now();
                 log_debug(LogTest, "EnqueueMeshWorkload done");
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end =
