@@ -1,6 +1,7 @@
 import torch
 
 import ttnn
+from models.demos.gpt_oss.moe import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.experimental.stable_diffusion_35_large.tt.substate import substate
 from models.utility_functions import nearest_y
@@ -19,6 +20,7 @@ class Attention:
         ccl_manager,
         tensor_cache_path=None,
         paged_attention_config=None,
+        mesh_config=None,
     ):
         self.layer_idx = layer_idx
         self.use_sliding_window = self.layer_idx % 2 == 0
@@ -26,8 +28,12 @@ class Attention:
         self.head_dim = hf_config.head_dim
         self.num_heads = hf_config.num_attention_heads
         self.num_kv_heads = hf_config.num_key_value_heads
-        self.num_local_heads = self.num_heads // mesh_device.shape[1]
-        self.num_local_kv_heads = self.num_kv_heads // mesh_device.shape[1]
+
+        # Use MeshConfig for clean parallelization
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        self.num_local_heads = self.mesh_config.shard_size(self.num_heads)
+        self.num_local_kv_heads = self.mesh_config.shard_size(self.num_kv_heads)
+
         self.hidden_size = hf_config.hidden_size
         self.ccl_manager = ccl_manager
         self.mesh_device = mesh_device
@@ -53,8 +59,9 @@ class Attention:
         )
         decode_sinks /= self.scaling
 
-        col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-        row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
+        # Clean mesh mapping using MeshConfig
+        col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
+        row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
 
         self.q_proj = ttnn.as_tensor(
             q_proj,
@@ -113,10 +120,8 @@ class Attention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if mesh_device.shape[1] > 1:
-            o_proj_bias = torch.cat(
-                [o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_device.shape[1] - 1), dim=-1
-            )
+        if self.mesh_config.tp > 1:
+            o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (self.mesh_config.tp - 1), dim=-1)
 
         self.o_proj = ttnn.as_tensor(
             o_proj,
@@ -142,7 +147,7 @@ class Attention:
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2),
+            mesh_mapper=self.mesh_config.row_parallel(mesh_device),
             cache_file_name=get_cache_file_name(tensor_cache_path, "decode_sinks"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -151,7 +156,7 @@ class Attention:
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-3),
+            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
             cache_file_name=get_cache_file_name(tensor_cache_path, "sinks"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -174,7 +179,7 @@ class Attention:
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-3),
+            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
             cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -183,7 +188,7 @@ class Attention:
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-3),
+            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
             cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -376,38 +381,10 @@ class Attention:
 
         tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
-        if self.mesh_device.shape[1] > 1:
-            # AllReduce
+        # Clean tensor parallel communication (with performance padding)
+        if self.mesh_config.tp > 1:
             tt_out = ttnn.unsqueeze(tt_out, 0)
-            if tt_out.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
-                tt_out = ttnn.pad(tt_out, [(0, 0), (0, 0), (0, 0), (0, 192)], 0)
-            tt_out_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-                tt_out,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_manager.topology,
-                cluster_axis=1,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            ##ttnn.synchronize_device(self.mesh_device)
-            tt_out.deallocate(True)
-            tt_out = ttnn.experimental.all_gather_async(
-                tt_out_scattered,
-                dim=3,
-                cluster_axis=1,
-                mesh_device=self.ccl_manager.mesh_device,
-                topology=self.ccl_manager.topology,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            ##ttnn.synchronize_device(self.mesh_device)
-            tt_out_scattered.deallocate(True)
-            if tt_out.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
-                tt_out = tt_out[:, :, :, : self.hidden_size]
+            tt_out = self.mesh_config.allreduce(tt_out, self.ccl_manager, pad_size=192)
             tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         return tt_out

@@ -1,6 +1,7 @@
 import torch
 
 import ttnn
+from models.demos.gpt_oss.moe import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_decode_mask
 from models.experimental.stable_diffusion_35_large.tt.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
@@ -21,10 +22,18 @@ class Model:
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         paged_attention_config=None,
+        mesh_config=None,
     ):
         """Original GPT-OSS constructor"""
         self._init_gpt_oss(
-            mesh_device, hf_config, state_dict, ccl_manager, dtype, tensor_cache_path, paged_attention_config
+            mesh_device,
+            hf_config,
+            state_dict,
+            ccl_manager,
+            dtype,
+            tensor_cache_path,
+            paged_attention_config,
+            mesh_config,
         )
 
     @classmethod
@@ -39,6 +48,7 @@ class Model:
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        mesh_config=None,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -56,6 +66,7 @@ class Model:
             dtype=dtype,
             tensor_cache_path=weight_cache_path,
             paged_attention_config=paged_attention_config,
+            mesh_config=mesh_config,  # Pass MeshConfig through
         )
 
         # Add tt_transformers compatible attributes
@@ -75,10 +86,14 @@ class Model:
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         paged_attention_config=None,
+        mesh_config=None,
     ):
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
+
+        # Use MeshConfig for clean parallelization
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
         # Initialize rope embeddings for generator compatibility
         self.rope_embeddings = GptOssRotaryEmbedding(hf_config)
@@ -103,10 +118,17 @@ class Model:
                 dtype=dtype,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
                 paged_attention_config=paged_attention_config,
+                mesh_config=self.mesh_config,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
-        self.norm = RMSNorm(mesh_device, hf_config, substate(state_dict, "model.norm"))
+        self.norm = RMSNorm(
+            mesh_device,
+            hf_config,
+            substate(state_dict, "model.norm"),
+            tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
+            mesh_config=self.mesh_config,
+        )
         self.lm_head_weight = ttnn.as_tensor(
             substate(state_dict, "lm_head")["weight"].transpose(0, 1),
             device=mesh_device,
@@ -398,7 +420,7 @@ class Model:
         pos_idx = current_pos.item() if hasattr(current_pos, "item") else current_pos
         sliding_mask = get_decode_mask(pos_idx, self.hf_config.sliding_window)
         sliding_mask = sliding_mask.repeat(
-            1, self.hf_config.num_attention_heads // self.mesh_device.shape[1], 1, 1
+            1, self.mesh_config.shard_size(self.hf_config.num_attention_heads), 1, 1
         ).transpose(1, 2)
 
         # Pad to tile alignment (TTNN TILE_LAYOUT requires dimensions to be multiples of 32)

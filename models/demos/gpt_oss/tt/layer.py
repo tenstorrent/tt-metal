@@ -18,18 +18,21 @@ class DecoderLayer:
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         paged_attention_config=None,
+        mesh_config=None,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
             hf_config,
             substate(state_dict, "input_layernorm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "input_layernorm"),
+            mesh_config=mesh_config,
         )
         self.post_attention_layernorm = RMSNorm(
             mesh_device,
             hf_config,
             substate(state_dict, "post_attention_layernorm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "post_attention_layernorm"),
+            mesh_config=mesh_config,
         )
         self.mlp = MLP(
             mesh_device,
@@ -38,6 +41,7 @@ class DecoderLayer:
             ccl_manager,
             dtype=dtype,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
+            mesh_config=mesh_config,
         )
 
         self.attention_type = hf_config.layer_types[layer_idx]
@@ -50,6 +54,7 @@ class DecoderLayer:
             ccl_manager,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
             paged_attention_config=paged_attention_config,
+            mesh_config=mesh_config,
         )
         self.mesh_device = mesh_device
 

@@ -23,9 +23,14 @@ def create_tt_model(
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
+    Uses clean MeshConfig abstraction for optimal device parallelization
     """
+    from models.demos.gpt_oss.moe import MeshConfig
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    # Create optimal MeshConfig for the mesh shape
+    mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
     # Create GPT-OSS ModelArgs
     gpt_oss_model_args = ModelArgs(
@@ -49,6 +54,7 @@ def create_tt_model(
         state_dict=state_dict,
         weight_cache_path=gpt_oss_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        mesh_config=mesh_config,  # Pass explicit MeshConfig
     )
 
     # Extract tt_kv_cache like tt_transformers does

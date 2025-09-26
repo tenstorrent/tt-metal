@@ -1,11 +1,21 @@
 import torch
 
 import ttnn
+from models.demos.gpt_oss.moe import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
 class Experts:
-    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager, dtype=ttnn.bfloat16, tensor_cache_path=None):
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=None,
+    ):
         self.intermediate_size = hf_config.intermediate_size
         self.num_experts = hf_config.num_local_experts
         self.hidden_size = hf_config.hidden_size
@@ -14,14 +24,18 @@ class Experts:
         self.mesh_device = mesh_device
         self.num_experts_per_tok = hf_config.num_experts_per_tok
 
-        self.intermediate_size_per_device = self.intermediate_size // mesh_device.shape[1]
+        # Use MeshConfig for clean parallelization
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        self.intermediate_size_per_device = self.mesh_config.shard_size(self.intermediate_size)
 
         gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(1, self.num_experts, self.hidden_size, self.expert_dim)
         up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(1, self.num_experts, self.hidden_size, self.expert_dim)
         gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(1, self.num_experts, 1, self.expert_dim)
         up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(1, self.num_experts, 1, self.expert_dim)
-        col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-        row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
+
+        # Clean mesh mapping using MeshConfig
+        col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
+        row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
         dtype = ttnn.bfloat4_b
         self.gate_proj = ttnn.as_tensor(
             gate_proj,
@@ -72,9 +86,9 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Row-parallel bias must not be replicated. Extend it with zeros for TP devices.
-        if mesh_device.shape[1] > 1:
+        if self.mesh_config.tp > 1:
             down_proj_bias = torch.cat(
-                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (mesh_device.shape[1] - 1), dim=-1
+                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (self.mesh_config.tp - 1), dim=-1
             )
         self.down_proj_bias = ttnn.as_tensor(
             down_proj_bias,
@@ -124,34 +138,9 @@ class Experts:
         routing_weights.deallocate(True)
         next_states = ttnn.sum(next_states, dim=1, keepdim=True)
 
-        if self.mesh_device.shape[1] > 1:
-            # AllReduce
-            if next_states.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
-                next_states = ttnn.pad(next_states, [(0, 0), (0, 0), (0, 0), (0, 192)], 0)
-            next_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-                next_states,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_manager.topology,
-                cluster_axis=1,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            next_states = ttnn.experimental.all_gather_async(
-                next_states_scattered,
-                dim=3,
-                cluster_axis=1,
-                mesh_device=self.ccl_manager.mesh_device,
-                topology=self.ccl_manager.topology,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            if next_states.shape[-2] >= 32 and self.mesh_device.shape[1] == 8:
-                next_states = next_states[:, :, :, : self.hidden_size]
-            next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
+        # Clean tensor parallel communication (with performance padding)
+        next_states = self.mesh_config.allreduce(next_states, self.ccl_manager, pad_size=192)
+        next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
 
         return next_states
 
@@ -233,30 +222,9 @@ class Experts:
         next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
         next_states = ttnn.sum(next_states, dim=1, keepdim=True)
 
-        if self.mesh_device.shape[1] > 1:
-            # AllReduce
-            next_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-                next_states,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_manager.topology,
-                cluster_axis=1,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            next_states = ttnn.experimental.all_gather_async(
-                next_states_scattered,
-                dim=3,
-                cluster_axis=1,
-                mesh_device=self.ccl_manager.mesh_device,
-                topology=self.ccl_manager.topology,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
+        # Clean tensor parallel communication (with performance padding)
+        next_states = self.mesh_config.allreduce(next_states, self.ccl_manager, pad_size=192)
+        next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
 
         return next_states
 
@@ -269,107 +237,4 @@ class Experts:
         return self.run_dense_experts(hidden_states, routing_weights)
 
 
-class SparseExperts(Experts):
-    def __init__(self, mesh_device, hf_config, state_dict, ccl_manager, dtype=ttnn.bfloat16, tensor_cache_path=None):
-        super().__init__(mesh_device, hf_config, state_dict, ccl_manager, dtype, tensor_cache_path)
-        self.num_experts_per_tok = hf_config.num_experts_per_tok
-
-    def __call__(self, hidden_states, routing_weights):
-        batch_size = hidden_states.shape[0]
-        assert batch_size == 1, "batch_size must be 1"
-        seq_len = hidden_states.shape[1]
-        hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
-
-        routing_weights_rm = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
-        output_tile = ttnn.Tile([32, 32])
-        # print("routing_weights_rm", routing_weights_rm)
-        # routing_weights_torch = ttnn.to_torch(routing_weights_rm, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=(1, 8)))
-        # print("routing_weights_torch", routing_weights_torch[0, 0, :, :])
-        # [batch_size, seq_len, 1, hidden_size]
-        gate = ttnn.sparse_matmul(
-            hidden_states_4D,
-            self.gate_proj,
-            sparsity=routing_weights_rm,
-            nnz=self.num_experts_per_tok,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-        )
-        gate = (
-            ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
-            + self.gate_proj_bias
-        )
-        gate = ttnn.clamp(gate, min=None, max=self.limit)
-
-        up = ttnn.sparse_matmul(
-            hidden_states_4D,
-            self.up_proj,
-            sparsity=routing_weights_rm,
-            nnz=self.num_experts_per_tok,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-        )
-        # ttnn.deallocate(hidden_states_4D)
-
-        up = (
-            ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
-            + self.up_proj_bias
-        )
-        up = ttnn.clamp(up, min=-self.limit, max=self.limit)
-
-        glu = gate * ttnn.sigmoid(gate * self.alpha)
-        down_in0 = (up + 1) * glu
-        ttnn.deallocate(glu)
-        ttnn.deallocate(up)
-        ttnn.deallocate(gate)
-        down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, seq_len, self.intermediate_size_per_device))
-
-        down = ttnn.sparse_matmul(
-            down_in0,
-            self.down_proj,
-            sparsity=routing_weights_rm,
-            nnz=self.num_experts_per_tok,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-            is_input_a_sparse=True,
-        )
-        ttnn.deallocate(down_in0)
-        # ttnn.deallocate(routing_weights_rm)
-
-        next_states = (
-            ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size)) + self.down_proj_bias
-        )
-
-        routing_weights = ttnn.permute(routing_weights, (1, 0))
-        routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
-
-        next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
-        next_states = ttnn.sum(next_states, dim=1, keepdim=True)
-
-        if self.mesh_device.shape[1] > 1:
-            # AllReduce
-            next_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-                next_states,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_manager.topology,
-                cluster_axis=1,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            next_states.deallocate(True)
-            next_states = ttnn.experimental.all_gather_async(
-                next_states_scattered,
-                dim=3,
-                cluster_axis=1,
-                mesh_device=self.ccl_manager.mesh_device,
-                topology=self.ccl_manager.topology,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(),
-            )
-            next_states_scattered.deallocate(True)
-            next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
-
-        return next_states
+# SparseExperts removed - logic unified in main Experts class

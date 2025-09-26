@@ -1,15 +1,18 @@
 from torch import nn
 
 import ttnn
+from models.demos.gpt_oss.moe import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None):
+    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None):
         super().__init__()
         torch_weight = state_dict["weight"]
-        # self.is_distributed = mesh_device.shape[1] > 1
-        self.is_distributed = False
+
+        # Use MeshConfig for clean parallelization
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        self.is_distributed = self.mesh_config.tp > 1
         self.tt_weight = ttnn.as_tensor(
             torch_weight.reshape((1, 1, -1, ttnn.TILE_SIZE)),
             device=mesh_device,
@@ -17,14 +20,13 @@ class RMSNorm(nn.Module):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, -2))
+            mesh_mapper=self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2))
             if self.is_distributed
             else None,
         )
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
-        self.mesh_shape = tuple(mesh_device.shape)
 
     def forward(self, x):
         if self.is_distributed:
