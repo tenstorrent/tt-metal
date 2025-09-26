@@ -49,6 +49,7 @@ struct ParsedTrafficPatternConfig {
     std::optional<uint16_t> atomic_inc_val;
     std::optional<uint16_t> atomic_inc_wrap;
     std::optional<uint32_t> mcast_start_hops;
+    std::optional<bool> enable_flow_control;  // NEW: Per-pattern flow control (credit management)
 };
 
 struct ParsedSenderConfig {
@@ -76,6 +77,7 @@ struct TrafficPatternConfig {
     std::optional<uint16_t> atomic_inc_val;
     std::optional<uint16_t> atomic_inc_wrap;
     std::optional<uint32_t> mcast_start_hops;
+    std::optional<bool> enable_flow_control;  // NEW: Per-pattern flow control (credit management)
 };
 
 struct SenderConfig {
@@ -102,6 +104,8 @@ enum class HighLevelTrafficPattern {
     AllDevicesUniformPattern,
 };
 
+// MuxConfig removed - use sensible defaults internally
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
@@ -109,6 +113,7 @@ struct TestFabricSetup {
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
+    bool enable_mux = false;                  // Enable mux for flow control - all config determined internally
 };
 
 struct HighLevelPatternConfig {

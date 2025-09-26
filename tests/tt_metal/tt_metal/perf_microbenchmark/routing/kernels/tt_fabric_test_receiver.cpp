@@ -4,13 +4,18 @@
 
 #include "debug/dprint.h"
 #include "tt_fabric_test_kernels_utils.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 using namespace tt::tt_fabric::fabric_tests;
 
 constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(0);
 constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(1);
 constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(2);
+constexpr bool USE_MUX = get_compile_time_arg_val(3);
+constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(4);
 
+// NOTE: Unified architecture - ReceiverKernelConfig will handle both fabric and mux connections
+// TODO: Implement unified receiver config similar to unified sender config
 using ReceiverKernelConfigType = ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
@@ -33,14 +38,20 @@ void kernel_main() {
     clear_test_results(receiver_config->get_result_buffer_address(), receiver_config->get_result_buffer_size());
     write_test_status(receiver_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
 
+    // Open credit connections for mux mode
+    if constexpr (USE_MUX) {
+        receiver_config->open_credit_connections();
+    }
+
     bool failed = false;
     uint64_t total_packets_received = 0;
+    uint64_t total_credits_returned = 0;
 
     bool packets_left_to_validate = true;
     while (packets_left_to_validate) {
         packets_left_to_validate = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto* traffic_config = receiver_config->traffic_configs[i];
+            auto* traffic_config = receiver_config->traffic_configs()[i];
             if constexpr (!BENCHMARK_MODE) {
                 if (!traffic_config->has_packets_to_validate()) {
                     continue;
@@ -61,15 +72,34 @@ void kernel_main() {
 
                 traffic_config->advance();
                 total_packets_received++;
+
+                // *** KEY ADDITION: Return credit after processing packet (prevents sender buffer wraparound) ***
+                if constexpr (USE_MUX) {
+                    receiver_config->return_credits_to_sender(i, 1);  // Return 1 credit per processed packet
+                    total_credits_returned++;
+                }
+
                 packets_left_to_validate |= traffic_config->has_packets_to_validate();
             } else {
                 total_packets_received += traffic_config->metadata.num_packets;
+
+                // In benchmark mode, return all credits at once
+                if constexpr (USE_MUX) {
+                    receiver_config->return_credits_to_sender(i, traffic_config->metadata.num_packets);
+                    total_credits_returned += traffic_config->metadata.num_packets;
+                }
             }
         }
 
         if (failed) {
             break;
         }
+    }
+
+    // *** IMPORTANT: Flush any remaining accumulated credits and close connections ***
+    if constexpr (USE_MUX) {
+        receiver_config->flush_remaining_credits();
+        receiver_config->close_credit_connections();
     }
 
     // Write test results

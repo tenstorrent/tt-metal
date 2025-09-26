@@ -123,6 +123,24 @@ public:
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
+    void set_enable_mux(bool enable_mux) { enable_mux_ = enable_mux; }
+    bool is_mux_enabled() const { return enable_mux_; }
+    void set_mux_core(tt::tt_fabric::RoutingDirection direction, CoreCoord core) {
+        if (core.x == 0 && core.y == 0) {
+            log_warning(
+                tt::LogTest,
+                "Setting potentially invalid mux core (0,0) for direction {} on device {}",
+                static_cast<int>(direction),
+                fabric_node_id_);
+        }
+        mux_kernels_[direction].core = core;
+        log_debug(
+            tt::LogTest,
+            "Set mux core {} for direction {} on device {}",
+            core,
+            static_cast<int>(direction),
+            fabric_node_id_);
+    }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
@@ -148,11 +166,22 @@ private:
     std::vector<uint32_t> get_fabric_connection_args(CoreCoord core, RoutingDirection direction, uint32_t link_idx);
     std::vector<uint32_t> generate_fabric_connection_args(
         CoreCoord core, const std::vector<std::pair<RoutingDirection, uint32_t>>& fabric_connections);
+    uint32_t calculate_initial_credits(uint32_t buffer_size_bytes, uint32_t packet_size_bytes);
+    std::vector<uint32_t> generate_sender_traffic_config_args(CoreCoord core, const TestTrafficSenderConfig& config);
     void create_sender_kernels();
     void create_receiver_kernels();
     void validate_sender_results() const;
     void validate_receiver_results() const;
     void create_sync_kernel();
+
+    // Mux support methods
+    void setup_mux_channel_assignments();
+    void create_mux_kernels();
+    uint32_t assign_sender_channel(tt::tt_fabric::RoutingDirection direction, CoreCoord sender_core);
+    uint32_t assign_receiver_channel(tt::tt_fabric::RoutingDirection direction, CoreCoord receiver_core);
+    uint32_t get_sender_channel_id(tt::tt_fabric::RoutingDirection direction, CoreCoord sender_core) const;
+    uint32_t get_receiver_channel_id(tt::tt_fabric::RoutingDirection direction, CoreCoord receiver_core) const;
+    std::optional<FabricNodeId> get_dst_fabric_node_for_direction(tt::tt_fabric::RoutingDirection direction) const;
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;
@@ -176,8 +205,412 @@ private:
     uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;
 
+    // Mux support
+    bool enable_mux_ = false;
+    struct MuxKernelInfo {
+        CoreCoord core = {0, 0};  // Initialize to (0,0) for safety checks
+        tt::tt_fabric::RoutingDirection direction;
+        bool is_active = false;
+        uint32_t full_size_channels = 0;
+        uint32_t header_only_channels = 0;
+        std::unique_ptr<tt::tt_fabric::FabricMuxConfig> config;
+    };
+    std::unordered_map<tt::tt_fabric::RoutingDirection, MuxKernelInfo> mux_kernels_;
+
+    struct ChannelAssignment {
+        uint32_t channel_id;
+        CoreCoord assigned_core;
+    };
+
+    // Channel tracking per direction
+    std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<ChannelAssignment>>
+        sender_channel_assignments_;  // Full-size channels
+    std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<ChannelAssignment>>
+        receiver_channel_assignments_;  // Header-only channels
+
     // controller?
 };
+
+// Mux method implementations
+inline void TestDevice::setup_mux_channel_assignments() {
+    log_info(
+        tt::LogTest,
+        "SETTING UP mux channel assignments for device {} with {} senders, {} receivers",
+        fabric_node_id_,
+        senders_.size(),
+        receivers_.size());
+
+    // Initialize mux kernels for all directions
+    constexpr tt::tt_fabric::RoutingDirection directions[] = {
+        tt::tt_fabric::RoutingDirection::N,  // N = 0
+        tt::tt_fabric::RoutingDirection::E,  // E = 2
+        tt::tt_fabric::RoutingDirection::S,  // S = 4
+        tt::tt_fabric::RoutingDirection::W   // W = 8
+    };
+
+    for (auto direction : directions) {
+        mux_kernels_[direction].direction = direction;
+        mux_kernels_[direction].is_active = false;
+        mux_kernels_[direction].full_size_channels = 0;
+        mux_kernels_[direction].header_only_channels = 0;
+    }
+
+    // Assign channels to senders (full-size channels for data)
+    uint32_t total_sender_connections = 0;
+    for (const auto& [core, sender] : senders_) {
+        log_debug(
+            tt::LogTest,
+            "Processing sender on core {} with {} fabric connections",
+            core,
+            sender.fabric_connections_.size());
+        for (const auto& [direction, link_idx] : sender.fabric_connections_) {
+            assign_sender_channel(direction, core);
+            total_sender_connections++;
+        }
+    }
+
+    // Assign channels to receivers (header-only channels for credits)
+    uint32_t total_receiver_connections = 0;
+    for (const auto& [core, receiver] : receivers_) {
+        log_debug(tt::LogTest, "Processing receiver on core {}", core);
+        // For each receiver, determine which direction it should send credits back
+        // This is based on where traffic is coming FROM (reverse direction)
+
+        // For receivers, we need to assign credit return channels to activate mux kernels
+        // For now, simplified logic: if we have receiver configs, assign one credit return direction
+        // TODO: Make this more sophisticated based on actual traffic source topology
+        if (!receiver.configs_.empty()) {
+            log_info(
+                tt::LogTest,
+                "DEVICE {} HAS {} receiver configs - WILL ASSIGN MUX CREDIT CHANNEL (✅ Receivers need mux for "
+                "credits!)",
+                fabric_node_id_,
+                receiver.configs_.size());
+
+            // In a simple point-to-point test, receivers typically send credits back in the reverse direction
+            // For now, just activate mux for credit return in a reasonable direction (e.g., W for eastbound traffic)
+            tt::tt_fabric::RoutingDirection credit_return_direction = tt::tt_fabric::RoutingDirection::W;
+
+            // Assign receiver channel for credit return (this will activate the mux)
+            assign_receiver_channel(credit_return_direction, core);
+            total_receiver_connections++;
+
+            log_info(
+                tt::LogTest,
+                "✅ ASSIGNED receiver channel for credit return in direction {} for receiver on core {} - Device {} "
+                "needs MUX for credits!",
+                static_cast<int>(credit_return_direction),
+                core,
+                fabric_node_id_);
+        } else {
+            log_info(
+                tt::LogTest,
+                "Device {} core {} receiver has NO configs - skipping mux assignment",
+                fabric_node_id_,
+                core);
+        }
+    }
+
+    // Log final channel counts
+    for (const auto& [direction, mux_kernel] : mux_kernels_) {
+        if (mux_kernel.is_active) {
+            log_info(
+                tt::LogTest,
+                "Mux direction {} active: {} full-size channels, {} header-only channels",
+                static_cast<int>(direction),
+                mux_kernel.full_size_channels,
+                mux_kernel.header_only_channels);
+        }
+    }
+
+    log_debug(
+        tt::LogTest,
+        "Mux channel assignment complete for device {} - {} sender connections, {} receiver connections",
+        fabric_node_id_,
+        total_sender_connections,
+        total_receiver_connections);
+}
+
+inline void TestDevice::create_mux_kernels() {
+    log_info(tt::LogTest, "CREATING mux kernels for device {}", fabric_node_id_);
+
+    // First, show which directions have active mux kernels
+    for (const auto& [direction, mux_kernel] : mux_kernels_) {
+        if (mux_kernel.is_active) {
+            log_info(
+                tt::LogTest,
+                "  Device {} direction {} is ACTIVE: {} full-size, {} header-only channels",
+                fabric_node_id_,
+                static_cast<int>(direction),
+                mux_kernel.full_size_channels,
+                mux_kernel.header_only_channels);
+        } else {
+            log_info(tt::LogTest, "  Device {} direction {} is INACTIVE", fabric_node_id_, static_cast<int>(direction));
+        }
+    }
+
+    const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
+    // Mux configuration defaults - sensible values for typical use cases
+    const uint32_t mux_base_l1_address = 0x1000;  // Default base address (TODO: Get from memory allocator)
+    const uint32_t buffer_size_bytes = 2048;      // Default: 2KB buffer per channel
+    const uint8_t buffers_per_channel = 4;        // Default: 4 buffers per channel
+
+    uint32_t active_mux_kernels = 0;
+    for (auto& [direction, mux_kernel] : mux_kernels_) {
+        if (!mux_kernel.is_active) {
+            continue;
+        }
+
+        // Safety check: FabricMuxConfig requires at least one channel
+        if (mux_kernel.full_size_channels == 0 && mux_kernel.header_only_channels == 0) {
+            log_warning(
+                tt::LogTest,
+                "Mux kernel for direction {} is marked active but has no channels - skipping creation",
+                static_cast<int>(mux_kernel.direction));
+            mux_kernel.is_active = false;
+            continue;
+        }
+
+        log_debug(
+            tt::LogTest,
+            "Creating mux kernel for direction {} with {} full-size, {} header-only channels",
+            static_cast<int>(mux_kernel.direction),
+            mux_kernel.full_size_channels,
+            mux_kernel.header_only_channels);
+
+        // Safety check: validate mux core coordinates
+        if (mux_kernel.core.x == 0 && mux_kernel.core.y == 0) {
+            log_warning(
+                tt::LogTest,
+                "Mux kernel for direction {} has uninitialized core coordinates (0,0) - skipping creation",
+                static_cast<int>(mux_kernel.direction));
+            mux_kernel.is_active = false;
+            continue;
+        }
+
+        log_debug(
+            tt::LogTest,
+            "Using mux core {} for direction {} kernel",
+            mux_kernel.core,
+            static_cast<int>(mux_kernel.direction));
+
+        // 1. Create FabricMuxConfig with the channel counts
+        log_info(
+            tt::LogTest,
+            "CREATING FabricMuxConfig: full_size={}, header_only={}, buffers={}, size={}, base=0x{:x}",
+            mux_kernel.full_size_channels,
+            mux_kernel.header_only_channels,
+            buffers_per_channel,
+            buffer_size_bytes,
+            mux_base_l1_address);
+
+        mux_kernel.config = std::make_unique<tt::tt_fabric::FabricMuxConfig>(
+            mux_kernel.full_size_channels,    // num_full_size_channels
+            mux_kernel.header_only_channels,  // num_header_only_channels
+            buffers_per_channel,              // num_buffers_full_size_channel
+            buffers_per_channel,              // num_buffers_header_only_channel
+            buffer_size_bytes,                // buffer_size_bytes_full_size_channel
+            mux_base_l1_address               // base_l1_address
+        );
+
+        // Debug: Check if the config was created successfully
+        auto status_addr = mux_kernel.config->get_status_address();
+        auto termination_addr = mux_kernel.config->get_termination_signal_address();
+        log_info(
+            tt::LogTest, "CREATED FabricMuxConfig: status_addr={}, termination_addr={}", status_addr, termination_addr);
+
+        if (status_addr == 0) {
+            log_error(tt::LogTest, "ERROR: FabricMuxConfig returned status_address=0! Config creation failed.");
+        }
+        if (termination_addr == 0) {
+            log_error(tt::LogTest, "ERROR: FabricMuxConfig returned termination_address=0! Config creation failed.");
+        }
+
+        active_mux_kernels++;
+
+        // 2. Get the destination device for fabric connection
+        // For now, use a simple approach - connect to a neighboring device in the mux direction
+        auto dst_fabric_node_id = get_dst_fabric_node_for_direction(mux_kernel.direction);
+        if (!dst_fabric_node_id.has_value()) {
+            log_debug(
+                tt::LogTest,
+                "No destination device found for direction {}, skipping mux kernel creation",
+                static_cast<int>(mux_kernel.direction));
+            continue;
+        }
+
+        // 3. Get available links for the connection
+        auto available_links = tt::tt_fabric::get_forwarding_link_indices(fabric_node_id_, dst_fabric_node_id.value());
+        if (available_links.empty()) {
+            log_warning(
+                tt::LogTest,
+                "No forwarding links available from {} to {} for direction {}",
+                fabric_node_id_,
+                dst_fabric_node_id.value(),
+                static_cast<int>(mux_kernel.direction));
+            continue;
+        }
+
+        // 4. Get compile-time args from the config and configure for our test environment
+        // Force wait_for_fabric_endpoint_ready to false to avoid hanging on fabric router readiness
+        mux_kernel.config->set_wait_for_fabric_endpoint_ready(false);
+        std::vector<uint32_t> mux_ct_args = mux_kernel.config->get_fabric_mux_compile_time_args();
+
+        // 5. Get run-time args from the config
+        std::vector<uint32_t> mux_rt_args = mux_kernel.config->get_fabric_mux_run_time_args(
+            fabric_node_id_, dst_fabric_node_id.value(), available_links[0], program_handle_, mux_kernel.core);
+
+        // 6. Create the mux kernel
+        auto kernel_handle = tt::tt_metal::CreateKernel(
+            program_handle_,
+            mux_kernel_src,
+            {mux_kernel.core},
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = mux_ct_args,
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+        // 7. Set runtime args
+        tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, mux_kernel.core, mux_rt_args);
+
+        log_debug(
+            tt::LogTest,
+            "Successfully created mux kernel for direction {} on core {}",
+            static_cast<int>(mux_kernel.direction),
+            mux_kernel.core);
+    }
+
+    log_info(
+        tt::LogTest,
+        "Mux kernel creation complete for device {} - {} active mux kernels created",
+        fabric_node_id_,
+        active_mux_kernels);
+}
+
+inline uint32_t TestDevice::assign_sender_channel(tt::tt_fabric::RoutingDirection direction, CoreCoord sender_core) {
+    // Check if this sender core already has a channel assigned for this direction
+    for (const auto& assignment : sender_channel_assignments_[direction]) {
+        if (assignment.assigned_core == sender_core) {
+            log_debug(
+                tt::LogTest,
+                "Reusing existing sender channel {} for core {} in direction {}",
+                assignment.channel_id,
+                sender_core,
+                static_cast<int>(direction));
+            return assignment.channel_id;
+        }
+    }
+
+    // Assign new channel
+    uint32_t channel_id = sender_channel_assignments_[direction].size();
+    sender_channel_assignments_[direction].push_back({channel_id, sender_core});
+
+    // Update mux kernel info
+    mux_kernels_[direction].is_active = true;
+    mux_kernels_[direction].full_size_channels++;
+
+    log_debug(
+        tt::LogTest,
+        "Assigned sender channel {} to core {} for direction {}",
+        channel_id,
+        sender_core,
+        static_cast<int>(direction));
+
+    return channel_id;
+}
+
+inline uint32_t TestDevice::assign_receiver_channel(
+    tt::tt_fabric::RoutingDirection direction, CoreCoord receiver_core) {
+    // Check if this receiver core already has a channel assigned for this direction
+    for (const auto& assignment : receiver_channel_assignments_[direction]) {
+        if (assignment.assigned_core == receiver_core) {
+            log_debug(
+                tt::LogTest,
+                "Reusing existing receiver channel {} for core {} in direction {}",
+                assignment.channel_id,
+                receiver_core,
+                static_cast<int>(direction));
+            return assignment.channel_id;
+        }
+    }
+
+    // Assign new channel
+    uint32_t channel_id = receiver_channel_assignments_[direction].size();
+    receiver_channel_assignments_[direction].push_back({channel_id, receiver_core});
+
+    // Update mux kernel info
+    mux_kernels_[direction].is_active = true;
+    mux_kernels_[direction].header_only_channels++;
+
+    log_debug(
+        tt::LogTest,
+        "Assigned receiver channel {} to core {} for direction {}",
+        channel_id,
+        receiver_core,
+        static_cast<int>(direction));
+
+    return channel_id;
+}
+
+inline uint32_t TestDevice::get_sender_channel_id(
+    tt::tt_fabric::RoutingDirection direction, CoreCoord sender_core) const {
+    auto it = sender_channel_assignments_.find(direction);
+    if (it == sender_channel_assignments_.end()) {
+        TT_THROW("No channel assignments found for direction {}", static_cast<int>(direction));
+    }
+
+    for (const auto& assignment : it->second) {
+        if (assignment.assigned_core == sender_core) {
+            return assignment.channel_id;
+        }
+    }
+
+    TT_THROW("No channel assigned for sender core {} in direction {}", sender_core, static_cast<int>(direction));
+}
+
+inline uint32_t TestDevice::get_receiver_channel_id(
+    tt::tt_fabric::RoutingDirection direction, CoreCoord receiver_core) const {
+    auto it = receiver_channel_assignments_.find(direction);
+    if (it == receiver_channel_assignments_.end()) {
+        TT_THROW("No channel assignments found for direction {}", static_cast<int>(direction));
+    }
+
+    for (const auto& assignment : it->second) {
+        if (assignment.assigned_core == receiver_core) {
+            return assignment.channel_id;
+        }
+    }
+
+    TT_THROW("No channel assigned for receiver core {} in direction {}", receiver_core, static_cast<int>(direction));
+}
+
+inline std::optional<FabricNodeId> TestDevice::get_dst_fabric_node_for_direction(
+    tt::tt_fabric::RoutingDirection direction) const {
+    // This is a simplified approach - in a real implementation, we'd need to:
+    // 1. Look at the actual fabric topology
+    // 2. Find the neighboring device in the specified direction
+    // 3. Return its fabric node ID
+    //
+    // For now, we'll use the route manager to find a destination that uses this direction
+
+    // Check if we have any senders using this direction
+    for (const auto& [core, sender] : senders_) {
+        for (const auto& [sender_direction, link_idx] : sender.fabric_connections_) {
+            if (sender_direction == direction) {
+                // Find a config that uses this direction and return its destination
+                for (const auto& [config, fabric_connection_idx] : sender.configs_) {
+                    if (!config.dst_node_ids.empty()) {
+                        return config.dst_node_ids[0];
+                    }
+                }
+            }
+        }
+    }
+
+    // If no direct destination found, return nullopt - mux kernel creation will skip this direction
+    return std::nullopt;
+}
 
 /* ********************
  * TestWorker Methods *
@@ -498,6 +931,18 @@ inline std::vector<uint32_t> TestDevice::generate_fabric_connection_args(
     return fabric_connection_args;
 }
 
+inline uint32_t TestDevice::calculate_initial_credits(uint32_t buffer_size_bytes, uint32_t packet_size_bytes) {
+    // Calculate how many packets can fit in the buffer
+    uint32_t max_packets_in_buffer = buffer_size_bytes / packet_size_bytes;
+
+    // Use a percentage of the buffer as initial credits to avoid completely filling it
+    const float credit_ratio = 0.8f;  // Sensible default: 80% of buffer capacity
+    uint32_t initial_credits = static_cast<uint32_t>(max_packets_in_buffer * credit_ratio);
+
+    // Ensure at least 1 credit
+    return std::max(1u, initial_credits);
+}
+
 inline void TestDevice::create_sync_kernel() {
     log_debug(tt::LogTest, "creating sync kernel on node: {}", fabric_node_id_);
 
@@ -576,44 +1021,82 @@ inline void TestDevice::create_sync_kernel() {
 }
 
 inline void TestDevice::create_sender_kernels() {
-    // TODO: fetch these dynamically
+    // Unified sender kernel creation - handles both fabric and mux connections based on per-pattern flow control
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
     const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
-
-    // all local senders + one sync core
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size()) + 1;
 
     for (const auto& [core, sender] : this->senders_) {
-        // Get memory layout from sender memory map
         TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
         TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
+
+        // NEW: Determine if any traffic configs need flow control (instead of global mux flag)
+        bool any_traffic_needs_flow_control = false;
+        for (const auto& config : sender.configs_) {
+            if (config.parameters.enable_flow_control) {
+                any_traffic_needs_flow_control = true;
+                break;
+            }
+        }
 
         // Compile-time args
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled,
             is_dynamic_routing_enabled,
-            sender.fabric_connections_.size(),                  /* num fabric connections */
-            sender.configs_.size(),                             /* num traffic configs */
-            (uint32_t)benchmark_mode_,                          /* benchmark mode */
-            (uint32_t)global_sync_,                             /* line sync enabled */
-            num_local_sync_cores,                               /* num local sync cores */
-            sender_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
+            sender.fabric_connections_.size(),                   /* num connections */
+            sender.configs_.size(),                              /* num traffic configs */
+            (uint32_t)benchmark_mode_,                           /* benchmark mode */
+            (uint32_t)global_sync_,                              /* line sync enabled */
+            num_local_sync_cores,                                /* num local sync cores */
+            sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
+            any_traffic_needs_flow_control ? 1u : 0u             /* USE_MUX (informational only) */
         };
 
-        // Runtime args: memory map args, then fabric connection args
+        // Runtime args with connection type information
         std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
 
-        // Add fabric connection args (for WorkerToFabricEdmSender::build_from_args)
-        std::vector<uint32_t> fabric_connection_args;
-        if (!sender.fabric_connections_.empty()) {
-            fabric_connection_args = generate_fabric_connection_args(core, sender.fabric_connections_);
-            rt_args.insert(rt_args.end(), fabric_connection_args.begin(), fabric_connection_args.end());
+        // NEW: Per-connection type determination based on traffic configs that use each connection
+        std::vector<bool> connection_needs_mux(sender.fabric_connections_.size(), false);
+
+        // Determine which connections need mux based on traffic configs
+        for (size_t i = 0; i < sender.configs_.size(); ++i) {
+            const auto& config = sender.configs_[i];
+            if (config.parameters.enable_flow_control) {
+                // This traffic config needs flow control, so its connection needs mux
+                uint8_t connection_idx = config.connection_idx;
+                if (connection_idx < connection_needs_mux.size()) {
+                    connection_needs_mux[connection_idx] = true;
+                }
+            }
         }
 
-        // Local args (all the rest - will be written to local args buffer)
+        // Add connection args with per-connection type flags
+        size_t connection_idx = 0;
+        for (const auto& [direction, link_idx] : sender.fabric_connections_) {
+            bool this_connection_needs_mux = connection_needs_mux[connection_idx];
+
+            // Add connection type flag first
+            rt_args.push_back(this_connection_needs_mux ? 1u : 0u);  // is_mux flag
+
+            if (this_connection_needs_mux) {
+                // TODO: Add proper mux connection args (placeholder for now)
+                log_warning(tt::LogTest, "MUX connection args not yet implemented for connection {}", connection_idx);
+                // For now, add dummy mux connection args to avoid kernel crashes
+                for (int i = 0; i < 12; i++) {
+                    rt_args.push_back(0u);  // Placeholder mux args
+                }
+            } else {
+                // Add fabric connection args (existing logic)
+                auto fabric_conn_args = this->generate_fabric_connection_args(core, {{direction, link_idx}});
+                rt_args.insert(rt_args.end(), fabric_conn_args.begin(), fabric_conn_args.end());
+            }
+            connection_idx++;
+        }
+
+        // Local args for traffic configs (existing logic)
         std::vector<uint32_t> local_args;
 
-        // Add local sync args for regular senders (they participate as sync receivers)
+        // Add local sync args FIRST (parsed first by kernel)
         if (global_sync_) {
             // Add local sync configuration args (same as sync core, but no global sync)
             uint32_t local_sync_val =
@@ -632,52 +1115,74 @@ inline void TestDevice::create_sender_kernels() {
             }
         }
 
-        // Traffic config to fabric connection mapping
-        for (const auto& [_, fabric_connection_idx] : sender.configs_) {
+        // Add traffic config connection mapping AFTER sync args
+        for (size_t i = 0; i < sender.configs_.size(); ++i) {
+            auto fabric_connection_idx = sender.configs_[i].connection_idx;
             local_args.push_back(fabric_connection_idx);
         }
 
-        // Traffic config args
-        if (!sender.configs_.empty()) {
-            // Estimate total size based on first config to reduce reallocations
-            const auto first_traffic_args = sender.configs_[0].first.get_args();
-            local_args.reserve(local_args.size() + sender.configs_.size() * first_traffic_args.size());
-            local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
+        // Add sender traffic config args (including credit management info)
+        for (const auto& config : sender.configs_) {
+            auto traffic_config_args = this->generate_sender_traffic_config_args(core, config);
+            local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
-            for (size_t i = 1; i < sender.configs_.size(); ++i) {
-                const auto traffic_args = sender.configs_[i].first.get_args();
-                local_args.insert(local_args.end(), traffic_args.begin(), traffic_args.end());
-            }
+            // Credit management info is now included in traffic_config_args via TestTrafficSenderConfig::get_args()
         }
 
-        // create kernel with local args
+        // Create kernel using helper (consistent with sync and receiver kernel creation)
         sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
-        log_debug(tt::LogTest, "created sender kernel on core: {}", core);
+
+        log_info(
+            tt::LogTest,
+            "Created sender kernel on core {} (flow_control_patterns={})",
+            core,
+            any_traffic_needs_flow_control);
     }
 }
 
 inline void TestDevice::create_receiver_kernels() {
+    // Unified receiver kernel creation - handles both fabric and mux connections based on per-pattern flow control
     for (const auto& [core, receiver] : this->receivers_) {
-        // Get memory layout from receiver memory map
         TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
         TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
+        // NEW: Determine if any traffic configs need flow control (receivers need mux connections for credit return)
+        bool any_traffic_needs_flow_control = false;
+        for (const auto& config : receiver.configs_) {
+            if (config.parameters.enable_flow_control) {
+                any_traffic_needs_flow_control = true;
+                break;
+            }
+        }
+
         // Compile-time args
         std::vector<uint32_t> ct_args = {
-            receiver.configs_.size(),                             /* num traffic configs */
-            benchmark_mode_ ? 1u : 0u,                            /* benchmark mode */
-            receiver_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
+            receiver.configs_.size(),                              /* num traffic configs */
+            benchmark_mode_ ? 1u : 0u,                             /* benchmark mode */
+            receiver_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
+            any_traffic_needs_flow_control ? 1u : 0u               /* USE_MUX (flow control enabled) */
         };
 
-        // Runtime args: memory map args - receivers don't have fabric connections
+        // Runtime args: memory map args + credit connection args (if flow control enabled)
         std::vector<uint32_t> rt_args = receiver_memory_map_->get_memory_map_args();
 
-        // Local args (all the rest - will be written to local args buffer)
-        std::vector<uint32_t> local_args;
+        // NEW: Add credit connection args if flow control is enabled
+        if (any_traffic_needs_flow_control) {
+            // For each traffic config that needs flow control, add mux connection args for credit return
+            // TODO: Implement proper credit connection args generation
+            // For now, add placeholder connection args
+            for (const auto& config : receiver.configs_) {
+                if (config.parameters.enable_flow_control) {
+                    // Placeholder: Add mux connection args (TODO: implement proper generation)
+                    rt_args.push_back(1u);  // is_mux = true
+                    // TODO: Add proper mux connection arguments here
+                }
+            }
+        }
 
-        // Traffic config args
+        // Local args for traffic configs
+        std::vector<uint32_t> local_args;
         if (!receiver.configs_.empty()) {
-            // Estimate total size based on first config to reduce reallocations
             const auto first_traffic_args = receiver.configs_[0].get_args();
             local_args.reserve(local_args.size() + receiver.configs_.size() * first_traffic_args.size());
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
@@ -690,12 +1195,23 @@ inline void TestDevice::create_receiver_kernels() {
 
         receiver.create_kernel(
             coord_, ct_args, rt_args, local_args, receiver_memory_map_->get_local_args_address(), {});
-        log_debug(tt::LogTest, "created receiver kernel on core: {}", core);
+        log_info(
+            tt::LogTest,
+            "Created receiver kernel on core {} (flow_control_patterns={})",
+            core,
+            any_traffic_needs_flow_control);
     }
 }
 
 inline void TestDevice::create_kernels() {
     log_debug(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
+
+    // Setup mux channel assignments if mux is enabled
+    if (enable_mux_ && !benchmark_mode_) {
+        this->setup_mux_channel_assignments();
+        this->create_mux_kernels();
+    }
+
     // create sync kernels
     if (global_sync_) {
         this->create_sync_kernel();
@@ -761,6 +1277,13 @@ inline std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_directio
         direction,
         this->fabric_node_id_);
     return link_indices;
+}
+
+inline std::vector<uint32_t> TestDevice::generate_sender_traffic_config_args(
+    CoreCoord core, const TestTrafficSenderConfig& config) {
+    // Simple wrapper around TestTrafficSenderConfig::get_args() to match the interface
+    // The credit management info is now included automatically via TestTrafficSenderConfig::get_args()
+    return config.get_args(false);  // false = not a sync config
 }
 
 inline void TestDevice::validate_sender_results() const {

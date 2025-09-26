@@ -151,7 +151,107 @@ public:
     }
 
     void process_traffic_config(TestConfig& config) {
+        // Set mux configuration only for devices that need it
+        // Enable mux flag first (before resource allocation)
+        if (config.fabric_setup.enable_mux && !config.benchmark_mode) {
+            log_info(tt::LogTest, "PROCESSING mux enablement for {} sender configs", config.senders.size());
+
+            // Only enable mux for devices that have sender configurations
+            for (const auto& sender_config : config.senders) {
+                // Enable mux on source device (has senders)
+                auto src_coord = fixture_->get_device_coord(sender_config.device);
+                log_info(tt::LogTest, "PROCESSING sender on device {} (coord {})", sender_config.device, src_coord);
+
+                if (test_devices_.find(src_coord) != test_devices_.end()) {
+                    test_devices_.at(src_coord).set_enable_mux(true);
+                    log_info(tt::LogTest, "ENABLED mux for source device {}", src_coord);
+                } else {
+                    log_warning(tt::LogTest, "Source device {} not found in test_devices_", src_coord);
+                }
+
+                // Enable mux on destination devices (have receivers) by looking at traffic patterns
+                log_info(
+                    tt::LogTest,
+                    "PROCESSING {} traffic patterns for sender {}",
+                    sender_config.patterns.size(),
+                    sender_config.device);
+                for (const auto& pattern : sender_config.patterns) {
+                    if (pattern.destination && pattern.destination->device) {
+                        auto dst_coord = fixture_->get_device_coord(pattern.destination->device.value());
+                        log_info(
+                            tt::LogTest,
+                            "FOUND destination device {} (coord {}) in pattern",
+                            pattern.destination->device.value(),
+                            dst_coord);
+
+                        if (test_devices_.find(dst_coord) != test_devices_.end()) {
+                            test_devices_.at(dst_coord).set_enable_mux(true);
+                            log_info(tt::LogTest, "ENABLED mux for destination device {}", dst_coord);
+                        } else {
+                            log_warning(tt::LogTest, "Destination device {} not found in test_devices_", dst_coord);
+                        }
+                    } else {
+                        log_info(tt::LogTest, "PATTERN has no destination device specified");
+                    }
+                }
+            }
+        } else {
+            log_info(tt::LogTest, "MUX DISABLED - skipping mux enablement");
+        }
+
+        // Allocate resources FIRST (this reserves mux cores for all devices - that's expected)
+        log_info(tt::LogTest, "ALLOCATING resources - will reserve mux cores for all devices");
         this->allocator_->allocate_resources(config);
+
+        // Summary: show which devices have mux enabled after allocation
+        std::vector<MeshCoordinate> mux_enabled_devices;
+        for (const auto& [coord, device] : test_devices_) {
+            if (device.is_mux_enabled()) {
+                mux_enabled_devices.push_back(coord);
+            }
+        }
+        log_info(tt::LogTest, "DEVICES WITH MUX ENABLED: {} total", mux_enabled_devices.size());
+        for (const auto& coord : mux_enabled_devices) {
+            log_info(tt::LogTest, "  - Device {}", coord);
+        }
+
+        // THEN assign mux core coordinates after resources are allocated
+        if (config.fabric_setup.enable_mux && !config.benchmark_mode) {
+            for (auto& [coord, device] : test_devices_) {
+                // Only assign mux cores for devices that have mux enabled
+                if (!device.is_mux_enabled()) {
+                    continue;
+                }
+
+                auto fabric_node_id = fixture_->get_fabric_node_id(coord);
+
+                constexpr tt::tt_fabric::RoutingDirection directions[] = {
+                    tt::tt_fabric::RoutingDirection::N,  // N = 0
+                    tt::tt_fabric::RoutingDirection::E,  // E = 2
+                    tt::tt_fabric::RoutingDirection::S,  // S = 4
+                    tt::tt_fabric::RoutingDirection::W   // W = 8
+                };
+
+                for (auto direction : directions) {
+                    auto mux_core = allocator_->get_mux_core_for_device(fabric_node_id, direction);
+                    if (mux_core.has_value()) {
+                        device.set_mux_core(direction, mux_core.value());
+                        log_debug(
+                            tt::LogTest,
+                            "Assigned mux core {} for direction {} on device {}",
+                            mux_core.value(),
+                            static_cast<int>(direction),
+                            coord);
+                    } else {
+                        log_debug(
+                            tt::LogTest,
+                            "No mux core needed for direction {} on device {}",
+                            static_cast<int>(direction),
+                            coord);
+                    }
+                }
+            }
+        }
         log_debug(tt::LogTest, "Resource allocation complete");
 
         if (config.global_sync) {
@@ -273,6 +373,8 @@ public:
                     .atomic_inc_val = pattern.atomic_inc_val,
                     .atomic_inc_wrap = pattern.atomic_inc_wrap,
                     .mcast_start_hops = pattern.mcast_start_hops,
+                    .enable_flow_control =
+                        pattern.enable_flow_control.value_or(false),  // NEW: Per-pattern flow control
                     .seed = config.seed,
                     .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                     .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
@@ -334,6 +436,32 @@ public:
                 const auto& device_coord = fixture_->get_device_coord(device_id);
                 fixture_->zero_out_buffer_on_cores(
                     device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
+            }
+        }
+
+        // Clear mux sync addresses if mux is enabled (check first device to see if mux is enabled)
+        bool mux_enabled = false;
+        if (!test_devices_.empty()) {
+            auto& first_device = test_devices_.begin()->second;
+            mux_enabled = first_device.is_mux_enabled() && !benchmark_mode_;
+        }
+
+        if (mux_enabled) {
+            log_debug(tt::LogTest, "Clearing mux sync addresses to avoid stale values");
+
+            // Clear the entire mux local address region for all devices with mux enabled
+            for (const auto& [device_coord, device] : test_devices_) {
+                if (fixture_->is_local_fabric_node_id(device.get_node_id()) && device.is_mux_enabled()) {
+                    // Clear the entire mux local address region to ensure no stale sync values
+                    uint32_t mux_region_start = sender_memory_map_.common.mux_local_addresses.start;
+                    uint32_t mux_region_size = sender_memory_map_.common.mux_local_addresses.size;
+
+                    // Use a representative core for the clearing operation (first available core)
+                    std::vector<CoreCoord> clearing_cores = {{0, 0}};  // Use any core for clearing
+                    fixture_->zero_out_buffer_on_cores(device_coord, clearing_cores, mux_region_start, mux_region_size);
+
+                    log_debug(tt::LogTest, "Cleared mux local address region for device {}", device_coord);
+                }
             }
         }
 
@@ -573,8 +701,16 @@ private:
             hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
+
+            log_debug(
+                tt::LogTest,
+                "Routing: src_node_id={}, chip_send_type={}, got {} dst_node_ids",
+                traffic_config.src_node_id,
+                static_cast<int>(traffic_config.parameters.chip_send_type),
+                dst_node_ids.size());
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
+            log_debug(tt::LogTest, "Explicit destinations: got {} dst_node_ids from config", dst_node_ids.size());
 
             // assign hops for 2d LL and 1D
             if (!(fixture_->is_dynamic_routing_enabled())) {
@@ -625,6 +761,7 @@ private:
         for (const auto& dst_node_id : dst_node_ids) {
             if (fixture_->is_local_fabric_node_id(dst_node_id)) {
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
+                log_debug(tt::LogTest, "Creating receiver on dst_node_id={}, dst_coord={}", dst_node_id, dst_coord);
                 this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
             }
         }

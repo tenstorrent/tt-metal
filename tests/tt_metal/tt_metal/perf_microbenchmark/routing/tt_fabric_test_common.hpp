@@ -208,6 +208,10 @@ public:
         return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
     }
 
+    CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const override {
+        return mesh_device_->worker_core_from_logical_core(logical_core);
+    }
+
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
 
     uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const override {

@@ -240,6 +240,7 @@ struct TrafficParameters {
     std::optional<uint16_t> atomic_inc_val;
     std::optional<uint16_t> atomic_inc_wrap;
     std::optional<uint32_t> mcast_start_hops;
+    bool enable_flow_control = false;  // NEW: Per-pattern flow control
 
     // Global context
     uint32_t seed;
@@ -438,6 +439,14 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
         } break;
         default: TT_FATAL(false, "Unsupported noc send type");
+    }
+
+    // NEW: Add credit management info at the end of traffic config args
+    if (!is_sync_config) {
+        bool credit_management_enabled = this->parameters.enable_flow_control;
+        uint32_t credit_capacity = credit_management_enabled ? 16u : 0u;  // Default mux buffer count
+        args.push_back(credit_management_enabled ? 1u : 0u);              // credit_management_enabled
+        args.push_back(credit_capacity);                                  // credit_capacity
     }
 
     return args;

@@ -203,6 +203,8 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
     merged.atomic_inc_wrap = specific.atomic_inc_wrap.has_value() ? specific.atomic_inc_wrap : base.atomic_inc_wrap;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
+    merged.enable_flow_control =
+        specific.enable_flow_control.has_value() ? specific.enable_flow_control : base.enable_flow_control;
 
     // Special handling for nested destination
     if (specific.destination.has_value()) {
