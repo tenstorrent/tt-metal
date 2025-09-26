@@ -74,6 +74,7 @@ struct OpConfig {
         XLOGY,
         LT,
         GT,
+        HYPOT,
     };
 
     template <class EnumT>
