@@ -224,69 +224,145 @@ class Transformer:
             return x
 
         def multi_head_attention(
-            hidden_states, fused_qkv_weight, fused_qkv_bias, self_output_weight, self_output_bias, attention_mask=None
+            hidden_states,
+            fused_qkv_weight,
+            fused_qkv_bias,
+            self_output_weight,
+            self_output_bias,
+            attention_mask=None,
+            prefix="",
         ):
-            batch_size, _, hidden_size = hidden_states.shape
-            head_size = hidden_size // self.heads
+            # batch_size, _, hidden_size = hidden_states.shape
+            # head_size = hidden_size // self.heads
 
-            num_cores_x = 1
+            # num_cores_x = 1
 
-            # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+            # # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
-            fused_qkv_weight = ttnn.transpose(fused_qkv_weight, 0, 1)
-            self_output_weight = ttnn.transpose(self_output_weight, 0, 1)
+            # fused_qkv_weight = ttnn.transpose(fused_qkv_weight, 0, 1)
+            # self_output_weight = ttnn.transpose(self_output_weight, 0, 1)
 
-            fused_qkv_output = ttnn.linear(
-                hidden_states,
-                fused_qkv_weight,
-                bias=fused_qkv_bias,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+            # fused_qkv_output = ttnn.linear(
+            #     hidden_states,
+            #     fused_qkv_weight,
+            #     bias=fused_qkv_bias,
+            #     # memory_config=ttnn.L1_MEMORY_CONFIG,
+            #     dtype=ttnn.bfloat16,
+            #     # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+            # )
+
+            # (
+            #     query,
+            #     key,
+            #     value,
+            # ) = ttnn.transformer.split_query_key_value_and_split_heads(
+            #     fused_qkv_output,
+            #     # memory_config=ttnn.L1_MEMORY_CONFIG,
+            #     num_heads=self.heads,
+            # )
+            # ttnn.deallocate(fused_qkv_output)
+
+            seq_length, batch_size, hidden_size = hidden_states.shape
+
+            self._embed_dim = hidden_size
+            self._head_dim = hidden_size // self.heads
+            self._scale = self._head_dim**-0.5
+            self._attention_dropout = 0.0  # Unused
+
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
             )
 
-            (
-                query,
-                key,
-                value,
-            ) = ttnn.transformer.split_query_key_value_and_split_heads(
-                fused_qkv_output,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
-                num_heads=self.heads,
-            )
-            ttnn.deallocate(fused_qkv_output)
+            # TODO: No KV-caching for now
+            (q_weights, k_weights, v_weights) = fused_qkv_weight
+            (q_bias, k_bias, v_bias) = fused_qkv_bias
 
-            scale = head_size**-0.5
-            query = query * scale
+            # Compute Q, K, V projections
+            q = ttnn.linear(hidden_states, q_weights, bias=q_bias, transpose_b=True)
+            k = ttnn.linear(hidden_states, k_weights, bias=k_bias, transpose_b=True)
+            v = ttnn.linear(hidden_states, v_weights, bias=v_bias, transpose_b=True)
 
-            attention_scores = ttnn.matmul(
-                query,
-                key,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-            )
-            ttnn.deallocate(query)
-            ttnn.deallocate(key)
+            # Reshape to [batch_size, seq_length, num_heads, head_dim]
+            q = ttnn.reshape(q, (seq_length, batch_size * self.heads, self._head_dim))
+            k = ttnn.reshape(k, (seq_length, batch_size * self.heads, self._head_dim))
+            v = ttnn.reshape(v, (seq_length, batch_size * self.heads, self._head_dim))
 
-            attention_probs = ttnn.transformer.attention_softmax(
-                attention_scores, attention_mask=attention_mask, head_size=head_size
+            # Transpose to [batch_size, num_heads, seq_length, head_dim] for attention computation
+            q = ttnn.transpose(q, 0, 1)
+            k = ttnn.transpose(k, 0, 1)
+            v = ttnn.transpose(v, 0, 1)
+
+            print(f"attention_mask.shape: {attention_mask.shape}")
+
+            q = ttnn.reshape(q, [1, q.shape[0], q.shape[1], q.shape[2]])
+            k = ttnn.reshape(k, [1, k.shape[0], k.shape[1], k.shape[2]])
+            v = ttnn.reshape(v, [1, v.shape[0], v.shape[1], v.shape[2]])
+            attention_mask = ttnn.reshape(attention_mask, [1, 1, attention_mask.shape[0], attention_mask.shape[1]])
+
+            # padded_shape = ttnn.pad_to_tile_shape(attention_mask.shape)
+            # attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, padded_shape[2]), (0, padded_shape[3])], -math.inf)
+            # q = ttnn.pad(q, [(0, 0), (0, 0), (0, q.shape[2] - padded_shape[2]), (0, q.shape[3] - padded_shape[3])], -math.inf)
+            # k = ttnn.pad(k, [(0, 0), (0, 0), (0, k.shape[2] - padded_shape[2]), (0, k.shape[3] - padded_shape[3])], -math.inf)
+            # v = ttnn.pad(v, [(0, 0), (0, 0), (0, v.shape[2] - padded_shape[2]), (0, v.shape[3] - padded_shape[3])], -math.inf)
+
+            print(f"q.shape: {q.shape}, k.shape: {k.shape}, v.shape: {v.shape}")
+            # [batch_size * num_heads, seq_length, head_dim]
+
+            # SDPA expectes
+            # q: [b x nqh x s x dh]
+            is_causal = False if attention_mask is None else True
+            context_layer = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=attention_mask is not None,
+                scale=self._scale,
             )
 
-            context_layer = ttnn.matmul(
-                attention_probs,
-                value,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-            )
-            ttnn.deallocate(attention_probs)
+            # # Compute attention scores with proper scaling
+            # attention_scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
+            # attention_scores = attention_scores * self._scale
+
+            # # scale = self._head_dim**-0.5
+            # # q = q * scale
+
+            # # attention_scores = ttnn.matmul(
+            # #     q,
+            # #     k,
+            # #     # memory_config=ttnn.L1_MEMORY_CONFIG,
+            # #     dtype=ttnn.bfloat16,
+            # #     # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+            # # )
+            # ttnn.deallocate(q)
+            # ttnn.deallocate(k)
+
+            # print(f"attention_scores.shape: {attention_scores.shape}")
+
+            # attention_probs = ttnn.transformer.attention_softmax(
+            #     attention_scores, attention_mask=attention_mask, head_size=self._head_dim
+            # )
+
+            # context_layer = ttnn.matmul(
+            #     attention_probs,
+            #     v,
+            #     # memory_config=ttnn.L1_MEMORY_CONFIG,
+            #     dtype=ttnn.bfloat16,
+            #     # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
+            # )
+            # ttnn.deallocate(attention_probs)
 
             context_layer_after_concatenate_heads = ttnn.transformer.concatenate_heads(
                 context_layer,
                 # memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(context_layer)
+
+            print(f"context_layer_after_concatenate_heads.shape: {context_layer_after_concatenate_heads.shape}")
+            print(f"self_output_weight.shape: {self_output_weight.shape}")
+            print(f"self_output_bias.shape: {self_output_bias.shape}")
 
             self_output = ttnn.linear(
                 context_layer_after_concatenate_heads,
@@ -602,9 +678,6 @@ class VisionTransformer:
         zero_tensor = ttnn.zeros(
             shape=(x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=device, layout=ttnn.TILE_LAYOUT
         )
-        assert class_embedding.dtype == zero_tensor.dtype
-
-        assert class_embedding.shape == zero_tensor.shape
 
         class_embedding = ttnn.reshape(class_embedding, zero_tensor.shape)
         class_embedding = class_embedding + zero_tensor
@@ -797,6 +870,8 @@ class CLIP:
         compare_with_reference(x, "text.ln_final(x).pt", "text.final_layer_norm", accuracy_logger=self.accuracy_logger)
 
         # TODO: Change to TTNN
+        # text_projection = ttnn.transpose(self.text_projection, -2, -1)
+
         torch_tokens = ttnn.to_torch(tokens)
         text_projection = ttnn.to_torch(self.text_projection)
         torch_x = ttnn.to_torch(x)
@@ -806,6 +881,9 @@ class CLIP:
         compare_with_reference(
             torch_x, "text.encode_text(x).pt", "text.encode_text(x).pt", accuracy_logger=self.accuracy_logger
         )
+        return ttnn.from_torch(torch_x, device=get_device(), layout=ttnn.TILE_LAYOUT)
+
+        torch_x = torch_x[torch.arange(torch_x.shape[0]), torch_tokens.argmax(dim=-1)] @ text_projection.t()
 
         return ttnn.from_torch(torch_x, device=get_device(), layout=ttnn.TILE_LAYOUT)
 
@@ -852,9 +930,6 @@ class CLIP:
         # compare_with_reference(text_features, "encode_text(tokens).pt", "encode_text(tokens).pt", accuracy_logger=self.accuracy_logger)
 
         # Normalize features
-        assert isinstance(image_features, ttnn.Tensor)
-        assert isinstance(text_features, ttnn.Tensor)
-
         norm_image_features = ttnn.operations.moreh.norm(image_features, p=2.0, dim=1, keepdim=True)
         norm_text_features = ttnn.operations.moreh.norm(text_features, p=2.0, dim=1, keepdim=True)
 
@@ -869,9 +944,6 @@ class CLIP:
         )
 
         # Cosine similarity as logits
-        # TODO: Convert the following to ttnn + figure what each component does
-        import math
-
         logit_scale = math.exp(self.logit_scale)
 
         text_features_t = ttnn.transpose(text_features, 0, 1)
