@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt::tt_metal::Buffer* in0_buffer = input_tensor.buffer();
 
     // Output buffers

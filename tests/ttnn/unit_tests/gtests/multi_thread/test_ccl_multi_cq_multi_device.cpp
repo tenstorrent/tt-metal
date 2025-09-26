@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -193,7 +193,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         }
         futures.clear();
 
-        log_info(LogTest, "EnqueueReadBuffer");
+        log_info(LogTest, "read_buffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
             auto device = devices[i];
@@ -394,7 +394,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         }
         futures.clear();
 
-        log_info(LogTest, "EnqueueReadBuffer");
+        log_info(LogTest, "read_buffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
             auto device = devices[i];
@@ -594,7 +594,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         }
         futures.clear();
 
-        log_info(LogTest, "EnqueueReadBuffer");
+        log_info(LogTest, "read_buffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
             auto device = devices[i];
