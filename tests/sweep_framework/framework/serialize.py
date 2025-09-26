@@ -8,6 +8,7 @@ from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatu
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 from ttnn._ttnn.tensor import DataType, Layout  # make eval("DataType.*"/"Layout.*") resolvable
 from ttnn._ttnn.types import BcastOpMath, BcastOpDim
+import torch
 
 
 def convert_enum_values_to_strings(data):
@@ -112,6 +113,10 @@ def deserialize_structured(object):
             data = json.dumps(data)
         return type.from_json(data)
     else:
+        # Check if the object is a string that should remain a string
+        # Common operation names that should not be evaluated
+        if isinstance(object, str) and object in ["sum", "mean", "max", "min", "std", "var"]:
+            return object
         try:
             return eval(object)
         except:
