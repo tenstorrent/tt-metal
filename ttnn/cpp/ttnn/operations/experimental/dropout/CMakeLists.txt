@@ -6,6 +6,11 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_dropout)
 
 target_sources(
     ttnn_op_experimental_dropout
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES dropout.hpp
     PRIVATE
         device/dropout_device_operation.cpp
         device/dropout_program_factory.cpp
@@ -18,6 +23,18 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_dropout
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/dropout
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_dropout LIBRARY COMPONENT tar)

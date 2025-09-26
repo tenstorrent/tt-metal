@@ -6,6 +6,11 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_rand)
 
 target_sources(
     ttnn_op_rand
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES rand.hpp
     PRIVATE
         rand.cpp
         device/rand_device_operation.cpp
@@ -20,4 +25,4 @@ target_link_libraries(
         TTNN::Core
 )
 
-install(TARGETS ttnn_op_rand LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_rand FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

@@ -14,6 +14,16 @@ set_target_properties(
 target_sources(
     ttnn_op_experimental_ccl
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            all_broadcast_async/device/all_broadcast_async_op.hpp
+            all_gather_async/all_gather_async.hpp
+            all_gather_async/device/all_gather_async_op.hpp
+            common.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp
+            reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -93,6 +103,9 @@ install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)
 install(
     TARGETS
         ttnn_op_experimental_ccl
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl

@@ -6,6 +6,11 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_embedding_backward)
 
 target_sources(
     ttnn_op_embedding_backward
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES embedding_backward.hpp
     PRIVATE
         embedding_backward.cpp
         device/embedding_backward_device_operation.cpp
@@ -18,6 +23,18 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_embedding_backward
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/embedding_backward
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_embedding_backward LIBRARY COMPONENT tar)
