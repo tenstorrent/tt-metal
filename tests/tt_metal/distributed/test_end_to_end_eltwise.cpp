@@ -490,8 +490,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     uint32_t workload_1_src1_val = 5;
 
     // Uniform values passed to the add operation
-    Ce std::vector<uint32_t> add_src0_vec =
-        create_constant_vector_of_bfloat16(add_src0_buf->size(), workload_0_src0_val);
+    std::vector<uint32_t> add_src0_vec = create_constant_vector_of_bfloat16(add_src0_buf->size(), workload_0_src0_val);
     std::vector<uint32_t> add_src1_vec = create_constant_vector_of_bfloat16(add_src1_buf->size(), workload_0_src1_val);
 
     // Uniform values passed to the multiply and subtract operations (the top row runs multiplication with subtraction
