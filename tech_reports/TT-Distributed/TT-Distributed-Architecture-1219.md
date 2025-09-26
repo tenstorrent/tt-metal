@@ -1174,13 +1174,13 @@ EnqueueWriteBuffer(device_0_cq_1_handle, mul_src_1, random_data_1);
 // Record that inputs were written
 EnqueueRecordEvent(device_0_cq_1_handle, device_0_write_event);
 // Wait until inputs were written
-EnqueueWaitForEvent(device_0_cq_0_handle, device_0_write_event);
+device_0_cq_0_handle.enqueue_wait_for_event(device_0_write_event);
 // Run compute
 EnqueueProgram(device_0_cq_0_handle, mul_program);
 // Record that compute was run and is completed
 EnqueueRecordEvent(device_0_cq_0_handle, device_0_compute_event);
 // Wait until compute has completed
-EnqueueWaitForEvent(device_0_cq_1_handle, device_0_compute_event);
+device_0_cq_1_handle.enqueue_wait_for_event(device_0_compute_event);
 // Read outputs
 EnqueueReadBuffer(device_0_cq_1_handle, mul_dst, mul_readback_data);
 

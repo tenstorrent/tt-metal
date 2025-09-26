@@ -532,7 +532,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     EXPECT_THROW(
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false), std::exception);
     // Waiting on an event before the last program was queued does not allow transferring ownership of sub device 2.
-    distributed::EnqueueWaitForEvent(mesh_device->mesh_command_queue(0), early_event);
+    mesh_device->mesh_command_queue(0).enqueue_wait_for_event(early_event);
     EXPECT_THROW(
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false), std::exception);
 
@@ -540,7 +540,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     auto event1 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
     auto event2 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
     log_info(tt::LogTest, "waiting on event2");
-    distributed::EnqueueWaitForEvent(mesh_device->mesh_command_queue(0), event2);
+    mesh_device->mesh_command_queue(0).enqueue_wait_for_event(event2);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false);
 
     distributed::Synchronize(mesh_device.get(), std::nullopt);

@@ -143,7 +143,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventSani
                 auto event = distributed::EnqueueRecordEvent(cqs[i]);
                 EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
                 EXPECT_EQ(event.id(), events_issued_per_cq[i] + 1);
-                distributed::EnqueueWaitForEvent(cqs[i], event);
+                cqs[i].get().enqueue_wait_for_event(event);
                 events_issued_per_cq[i] += num_events_per_cq;
             }
         }
@@ -183,7 +183,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCros
                 auto event = distributed::EnqueueRecordEvent(cqs[cq_idx_record]);
                 EXPECT_EQ(event.mesh_cq_id(), cqs[cq_idx_record].get().id());
                 EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
-                distributed::EnqueueWaitForEvent(cqs[cq_idx_wait], event);
+                cqs[cq_idx_wait].get().enqueue_wait_for_event(event);
 
                 // Note: Removed host sync here since EnqueueRecordEvent creates device-only events
                 // that don't notify the host. Host sync would require EnqueueRecordEventToHost.
@@ -238,7 +238,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
             for (uint i = 0; i < cqs.size(); i++) {
                 auto event = sync_events[i][buf_idx];
-                distributed::EnqueueWaitForEvent(cqs[i], event);
+                cqs[i].get().enqueue_wait_for_event(event);
                 vector<uint32_t> result;
                 distributed::ReadShard(cqs[i], result, buffers[i], zero_coord_, true);  // Blocking.
                 bool local_pass = (srcs[i] == result);
@@ -316,7 +316,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
                 distributed::WriteShard(cq_write, buffers[i], srcs[i], zero_coord_, false);
                 auto event = distributed::EnqueueRecordEvent(cq_write);
-                distributed::EnqueueWaitForEvent(cq_read, event);
+                cq_read.get().enqueue_wait_for_event(event);
                 distributed::ReadShard(cq_read, result, buffers[i], zero_coord_, true);
                 bool local_pass = (srcs[i] == result);
                 log_debug(
@@ -405,7 +405,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                         distributed::MeshEvent event_sync_read_after_write = distributed::EnqueueRecordEvent(cq_write);
 
                         // Issue wait for write to complete, and non-blocking read from the second CQ.
-                        distributed::EnqueueWaitForEvent(cq_read, event_sync_read_after_write);
+                        cq_read.get().enqueue_wait_for_event(event_sync_read_after_write);
                     }
                     distributed::ReadShard(cq_read, read_results.back(), buffers.back(), zero_coord_, false);
                     log_debug(
@@ -420,7 +420,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     // loop's write.
                     if (use_events && j < num_wr_rd_per_buf - 1) {
                         distributed::MeshEvent event_sync_write_after_read = distributed::EnqueueRecordEvent(cq_read);
-                        distributed::EnqueueWaitForEvent(cq_write, event_sync_write_after_read);
+                        cq_write.get().enqueue_wait_for_event(event_sync_write_after_read);
                     }
                 }
 
