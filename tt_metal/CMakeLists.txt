@@ -138,6 +138,8 @@ target_sources(
             ${TT_LLK_HEADERS}
 )
 
+include(CheckFunctionExists)
+
 check_function_exists(
     backtrace
     HAVE_BACKTRACE
