@@ -15,9 +15,9 @@ namespace ttnn::operations::experimental::detail {
 using namespace tt::constants;
 
 tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
-    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids) {
+    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids, const bool& skip_negative_entries) {
     tt::tt_metal::Program program{};
-
+    bool skip_negative_entries_flag = false;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
@@ -38,6 +38,8 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
         }
     }
 
+    skip_negative_entries_flag = skip_negative_entries;
+
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
     uint32_t aligned_input_page_size = round_up_to_mul32(num_input_units * input_unit_size);
@@ -53,14 +55,8 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        src0_cb_index,
-        src_is_dram,
-        aligned_input_page_size,
-        W,
-        H,
-    };
+        src0_cb_index, src_is_dram, aligned_input_page_size, W, H, skip_negative_entries_flag};
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
