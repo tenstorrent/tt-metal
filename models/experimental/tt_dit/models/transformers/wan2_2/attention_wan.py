@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ....layers.normalization import RMSNorm
+from ....layers.normalization import DistributedRMSNorm
 from ....layers.linear import ColParallelLinear
 from ....utils.substate import substate
 from ....utils.tensor import bf16_tensor
@@ -43,10 +43,12 @@ class WanAttention:
             "norm_elementwise_affine": True,
             "bias": False,
             "mesh_device": mesh_device,
+            "mesh_axis": parallel_config.tensor_parallel.mesh_axis,
+            "ccl_manager": ccl_manager,
         }
 
-        self.norm_q = RMSNorm(**rms_kwargs)
-        self.norm_k = RMSNorm(**rms_kwargs)
+        self.norm_q = DistributedRMSNorm(**rms_kwargs)
+        self.norm_k = DistributedRMSNorm(**rms_kwargs)
 
         # Unfused qkv because this might be cross attention
         self.to_q = ColParallelLinear(
@@ -220,55 +222,9 @@ class WanAttention:
         k_1BNF = self.to_k(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
         v_1BNF = self.to_v(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
 
-        # HACK: rmsnorm is not distributed, so gather Q and K before norm, then shard back
-        if self.parallel_config.tensor_parallel.factor > 1:
-            q_1BNF = ttnn.experimental.all_gather_async(
-                q_1BNF,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    q_1BNF.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            )
-            k_1BNF = ttnn.experimental.all_gather_async(
-                k_1BNF,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_1BNF.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            )
-
         # Norm spatial before splitting heads
         q_1BNF = self.norm_q(q_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
         k_1BNF = self.norm_k(k_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-
-        # Shard back
-        if self.parallel_config.tensor_parallel.factor > 1:
-            q_1BNF = self.shard_qk_on_tp(q_1BNF, compute_kernel_config=self.mm_compute_kernel_config)
-            k_1BNF = self.shard_qk_on_tp(k_1BNF, compute_kernel_config=self.mm_compute_kernel_config)
-            # q_1BNF = ttnn.mesh_partition(q_1BNF, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
-
-            # # NOTE: mesh_partition does not support padded shapes, so explicitly pad and unpad
-            # k_N_logical = None
-            # if k_1BNF.shape[2] != k_1BNF.padded_shape[2]:
-            #     k_N_logical = k_1BNF.shape[2]
-            #     padded_shape = (k_1BNF.shape[0], k_1BNF.shape[1], k_1BNF.padded_shape[2], k_1BNF.shape[3])
-            #     k_1BNF = ttnn.reshape(k_1BNF, padded_shape, padded_shape)
-            # k_1BNF = ttnn.mesh_partition(k_1BNF, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
-            # if k_N_logical is not None:
-            #     unpadded_shape = (k_1BNF.shape[0], k_1BNF.shape[1], k_N_logical, k_1BNF.shape[3])
-            #     k_1BNF = ttnn.reshape(k_1BNF, unpadded_shape, k_1BNF.shape)
 
         def create_heads(inp):
             # Unfortunate hack - we don't have a split_heads operation that takes unfused qkv
@@ -276,7 +232,6 @@ class WanAttention:
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 inp,
                 ttnn.concat([inp, inp], dim=-1),
-                None,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_heads,
                 transpose_k_heads=False,
