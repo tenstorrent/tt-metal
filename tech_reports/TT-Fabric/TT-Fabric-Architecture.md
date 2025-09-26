@@ -92,21 +92,21 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [7.3. Fabric Virtual Channels](#fab_vcs)
 
-[7.4. Time To Live (TTL)](#ttl)
-
-[7.5. Timeout](#timeout)
-
-[7.6. Limitations](#limits)
+[7.4. Limitations](#limits)
 
 [8. TT-Fabric Roadmap](#roadmap) 
 
-[8.1 TT-Fabric Model](#model)
+[8.1. Time To Live (TTL)](#ttl)
 
-[8.1.1. Serialization and Visualization](#visualization)
+[8.2. Timeout](#timeout)
 
-[8.1.2. Data Plane Simulator](#simulator)
+[8.3 TT-Fabric Model](#model)
 
-[8.1.3. Modelling External Disruptors and Buffer Limits](#disruptors)
+[8.3.1. Serialization and Visualization](#visualization)
+
+[8.3.2. Data Plane Simulator](#simulator)
+
+[8.3.3. Modelling External Disruptors and Buffer Limits](#disruptors)
 
 [9. System Specification](#system_spec)
 
@@ -890,7 +890,15 @@ Edge disjoint routing uses different entry/exit nodes on network edges for traff
 
 As stated earlier, FVCs guarantee independent progress of traffic relative to other FVCs. Traffic that is expected to contend for network or endpoint resources can be routed via unique FVCs so that one traffic stream does not get stuck behind other traffic that is stalled due to a stalled endpoint.
 
-## 7.4 Time To Live (TTL) <a id="ttl"></a>
+## 7.4 Limitations <a id="limits"></a>
+
+TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
+
+# 8 TT-Fabric Roadmap <a id="roadmap"></a>
+
+The items below are on the TT-Fabric roadmap.
+
+## 8.1 Time To Live (TTL) <a id="ttl"></a>
 
 TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets have a TTL parameter. On traffic initiating end or router, TTL is initialized to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
 
@@ -916,23 +924,15 @@ With a TTL of 10 the packet hops are shown in the table below. As the packet loo
 | 7 | 1 |
 | 11 | 0  Fabric Router at Device 11 drops the packet with expired TTL |
 
-## 7.5 Timeout <a id="timeout"></a>
+## 8.2 Timeout <a id="timeout"></a>
 
 Timeouts are TT-Fabric's last line of defense against deadlocks. Timeout is a detection mechanism rather than a prevention mechanism. Schemes mentioned in previous sections are meant to prevent or minimize deadlocks. If a routing deadlock slips through, TT-Fabric will detect it through timeout. If a packet head is not able to make progress through a fabric router within the specified timeout, it may indicate some deadlock due to resource contention, erroneous routing, stalled endpoint etc. Fabric router encountering routing timeout will drop the packet and drain its data from the fabric buffers. The Fabric router will also notify Control Plane of the event.
 
-## 7.6 Limitations <a id="limits"></a>
-
-TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
-
-
-
-# 8 TT-Fabric Roadmap <a id="roadmap"></a>
-
-## 8.1 TT-Fabric Model <a id="model"></a>
+## 8.3 TT-Fabric Model <a id="model"></a>
 
 TT-Fabric Model is a software functional model of all components of the Fabric. The purpose of the Fabric Model is to fully simulate the ethernet traffic in the Fabric. It will provide a ground truth for the state of any configuration of the Fabric, to help with debug and rerouting decisions. The Fabric Model will include a new piece of software to emulate the physical data plane, but otherwise shares the software components of the TT-Control Plane and Fabric Router.
 
-### 8.1.1 Serialization and Visualization <a id="visualization"></a>
+### 8.3.1 Serialization and Visualization <a id="visualization"></a>
 
 TT-Fabric Model will serialize these components of the Fabric:
 
@@ -945,7 +945,7 @@ TT-Fabric Model will serialize these components of the Fabric:
 * Packet traffic across data plane
   + We should be able to download traffic serialization from software simulator to run on hardware, and vice versa.
 
-### 8.1.2 Data Plane Simulator <a id="simulator"></a>
+### 8.3.2 Data Plane Simulator <a id="simulator"></a>
 
 The data plane simulator will model all paths ethernet packets may take across the hardware, except for NOC activity between a device and the Fabric. Key components:
 
@@ -956,7 +956,7 @@ The data plane simulator will model all paths ethernet packets may take across t
 * Directed single threaded testing for buffer limits and rerouting
 * Random testing with multi-threading. One thread per device to simulate requests to the Fabric and one thread for external disruptors.
 
-### 8.1.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
+### 8.3.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
 
 TT-Fabric Model will have hooks to simulate failed links, to trigger and verify rerouting in the control plane. It will also have SW APIs to simulate back-pressured buffers and VCs, to detect possible deadlock scenarios.
 
