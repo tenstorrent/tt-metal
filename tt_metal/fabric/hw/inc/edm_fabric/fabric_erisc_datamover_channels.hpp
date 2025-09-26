@@ -300,11 +300,13 @@ struct EdmChannelWorkerInterface {
 
     template <bool enable_noc_flush = true>
     FORCE_INLINE void notify_worker_of_read_counter_update() {
+#ifdef ARCH_BLACKHOLE
         // make sure when noc flush is disabled, the read_counter_update_src_address has a valid address for temporarily
         // store src addr
         if constexpr (!enable_noc_flush) {
             ASSERT(read_counter_update_src_address != 0);
         }
+#endif
         noc_inline_dw_write<InlineWriteDst::L1, true, enable_noc_flush>(
             this->cached_worker_semaphore_address,
             local_read_counter.counter,
