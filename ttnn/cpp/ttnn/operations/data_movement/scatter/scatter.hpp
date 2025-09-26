@@ -6,9 +6,11 @@
 
 #include "scatter_enums.hpp"
 
+#include "ttnn/decorators.hpp"
+
 #include <cstdint>
 #include <optional>
-#include "ttnn/decorators.hpp"
+#include <string>
 
 namespace ttnn {
 
@@ -21,7 +23,7 @@ struct ScatterOperation {
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const std::optional<MemoryConfig>& opt_out_memory_config,
-        const std::optional<scatter::ScatterReductionType>& opt_reduction);
+        const std::optional<std::string>& opt_reduction);
 };
 
 }  // namespace operations::data_movement

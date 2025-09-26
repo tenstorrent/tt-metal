@@ -6,6 +6,7 @@
 
 #include "device/scatter_device_operation.hpp"
 
+#include "scatter/scatter_enums.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/expand/expand.hpp"
@@ -152,7 +153,7 @@ Tensor TOSAScatterOperation::invoke(
         processed_index_tensor,
         processed_source_tensor,
         final_memory_config,
-        std::nullopt);
+        scatter::ScatterReductionType::INVALID);
     return CMAKE_UNIQUE_NAMESPACE::post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
 }
 

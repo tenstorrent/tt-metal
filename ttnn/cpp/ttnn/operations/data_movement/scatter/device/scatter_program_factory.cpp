@@ -123,7 +123,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         index_stick_size_bytes,
         source_stick_size_bytes,
         output_stick_size_bytes,
-        input_shape.rank()};
+        input_shape.rank(),
+        static_cast<uint32_t>(args.opt_reduction)};
     tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*index_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
@@ -170,8 +171,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             sticks_per_core,
             input_and_output_chunk_size,
         };
-        // std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(writer_runtime_args));
-        // std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(writer_runtime_args));
 
         SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
 
