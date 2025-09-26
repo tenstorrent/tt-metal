@@ -51,7 +51,8 @@ void py_module(nb::module_& mod) {
     auto eltwise_unary_with_param = static_cast<nb::class_<EltwiseUnaryWithParam>>(mod.attr("EltwiseUnaryWithParam"));
     eltwise_unary_with_param.def(nb::init<UnaryOpType>())
         .def(nb::init<UnaryOpType, float>())
-        .def(nb::init<UnaryOpType, int>())
+        .def(nb::init<UnaryOpType, int32_t>())
+        .def(nb::init<UnaryOpType, uint32_t>())
         .def(nb::init<UnaryWithParam>())
         .def(
             "__init__",
@@ -60,7 +61,12 @@ void py_module(nb::module_& mod) {
             })
         .def(
             "__init__",
-            [](EltwiseUnaryWithParam* t, std::pair<UnaryOpType, int> arg) {
+            [](EltwiseUnaryWithParam* t, std::pair<UnaryOpType, int32_t> arg) {
+                new (t) EltwiseUnaryWithParam{arg.first, static_cast<float>(arg.second)};
+            })
+        .def(
+            "__init__",
+            [](EltwiseUnaryWithParam* t, std::pair<UnaryOpType, uint32_t> arg) {
                 new (t) EltwiseUnaryWithParam{arg.first, static_cast<float>(arg.second)};
             })
         //.def(nb::init<>([](std::pair<UnaryOpType, float> arg) { return EltwiseUnaryWithParam{arg.first, arg.second};
@@ -72,7 +78,8 @@ void py_module(nb::module_& mod) {
     // Can take in just the op type, or sequence container of op type and param value
     nb::implicitly_convertible<UnaryOpType, EltwiseUnaryWithParam>();
     nb::implicitly_convertible<std::pair<UnaryOpType, float>, EltwiseUnaryWithParam>();
-    nb::implicitly_convertible<std::pair<UnaryOpType, int>, EltwiseUnaryWithParam>();
+    nb::implicitly_convertible<std::pair<UnaryOpType, int32_t>, EltwiseUnaryWithParam>();
+    nb::implicitly_convertible<std::pair<UnaryOpType, uint32_t>, EltwiseUnaryWithParam>();
     nb::implicitly_convertible<UnaryWithParam, EltwiseUnaryWithParam>();
 }
 
