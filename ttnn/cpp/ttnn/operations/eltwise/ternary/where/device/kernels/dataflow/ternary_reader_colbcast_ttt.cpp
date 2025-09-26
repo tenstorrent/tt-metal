@@ -116,7 +116,7 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
 #if SRC_BCAST_A
                         cb_reserve_back(predicate_cb, onetile);
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
                         uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
                         noc_async_read_tile(tile_offset + th, s0, l1_write_addr_predicate);
                         noc_async_read_barrier();
@@ -126,7 +126,7 @@ void kernel_main() {
 #endif
 #if SRC_BCAST_B
                         cb_reserve_back(true_cb, onetile);
-#if !SRC_SHARDED_TRUE
+#if !SRC_SHARDED_B
                         uint32_t l1_write_addr_true = get_write_ptr(true_cb);
                         noc_async_read_tile(true_tile_offset + th, s1, l1_write_addr_true);
                         noc_async_read_barrier();
@@ -138,7 +138,7 @@ void kernel_main() {
                         // False tensor broadcast (same as true tensor)
 #if SRC_BCAST_C
                         cb_reserve_back(false_cb, onetile);
-#if !SRC_SHARDED_FALSE
+#if !SRC_SHARDED_C
                         uint32_t l1_write_addr_false = get_write_ptr(false_cb);
                         noc_async_read_tile(false_tile_offset + th, s2, l1_write_addr_false);
                         noc_async_read_barrier();
@@ -150,7 +150,7 @@ void kernel_main() {
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_A
                             cb_reserve_back(predicate_cb, onetile);
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
                             uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
                             noc_async_read_tile(tile_offset + tw, s0, l1_write_addr_predicate);
                             noc_async_read_barrier();
@@ -159,7 +159,7 @@ void kernel_main() {
 #endif
 #if !SRC_BCAST_B
                             cb_reserve_back(true_cb, onetile);
-#if !SRC_SHARDED_TRUE
+#if !SRC_SHARDED_B
                             uint32_t l1_write_addr_true = get_write_ptr(true_cb);
                             noc_async_read_tile(true_tile_offset + tw, s1, l1_write_addr_true);
                             noc_async_read_barrier();
@@ -170,7 +170,7 @@ void kernel_main() {
                             // False tensor non-broadcast (same as true tensor)
 #if !SRC_BCAST_C
                             cb_reserve_back(false_cb, onetile);
-#if !SRC_SHARDED_FALSE
+#if !SRC_SHARDED_C
                             uint32_t l1_write_addr_false = get_write_ptr(false_cb);
                             noc_async_read_tile(false_tile_offset + tw, s2, l1_write_addr_false);
                             noc_async_read_barrier();
@@ -182,17 +182,17 @@ void kernel_main() {
                         if (dst_shard_width == 0) {
                             start_tw = 0;
                         }
-#if !SRC_BCAST_A && !SRC_SHARDED_PREDICATE
+#if !SRC_BCAST_A && !SRC_SHARDED_A
                         tile_offset += Wt;
 #endif
-#if !SRC_BCAST_B && !SRC_SHARDED_TRUE
+#if !SRC_BCAST_B && !SRC_SHARDED_B
                         true_tile_offset += Wt;
 #endif
-#if !SRC_BCAST_C && !SRC_SHARDED_FALSE
+#if !SRC_BCAST_C && !SRC_SHARDED_C
                         false_tile_offset += Wt;
 #endif
                     }
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
 #if SRC_BCAST_A
                     // same as following logically
                     // tile_offset += HtWt;
@@ -202,14 +202,14 @@ void kernel_main() {
                     tile_offset += next_c_shift;
 #endif
 #endif
-#if !SRC_SHARDED_TRUE
+#if !SRC_SHARDED_B
 #if SRC_BCAST_B
                     true_tile_offset += true_c_stride;
 #else
                     true_tile_offset += true_next_c_shift;
 #endif
 #endif
-#if !SRC_SHARDED_FALSE
+#if !SRC_SHARDED_C
 #if SRC_BCAST_C
                     false_tile_offset += false_c_stride;
 #else
@@ -217,33 +217,33 @@ void kernel_main() {
 #endif
 #endif
                 }
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
                 tile_offset += next_n_shift;
 #endif
-#if !SRC_SHARDED_TRUE
+#if !SRC_SHARDED_B
                 true_tile_offset += true_next_n_shift;
 #endif
-#if !SRC_SHARDED_FALSE
+#if !SRC_SHARDED_C
                 false_tile_offset += false_next_n_shift;
 #endif
             }
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
             tile_offset += next_d_shift;
 #endif
-#if !SRC_SHARDED_TRUE
+#if !SRC_SHARDED_B
             true_tile_offset += true_next_d_shift;
 #endif
-#if !SRC_SHARDED_FALSE
+#if !SRC_SHARDED_C
             false_tile_offset += false_next_d_shift;
 #endif
         }
-#if !SRC_SHARDED_PREDICATE
+#if !SRC_SHARDED_A
         tile_offset += next_nd_shift;
 #endif
-#if !SRC_SHARDED_TRUE
+#if !SRC_SHARDED_B
         true_tile_offset += true_next_nd_shift;
 #endif
-#if !SRC_SHARDED_FALSE
+#if !SRC_SHARDED_C
         false_tile_offset += false_next_nd_shift;
 #endif
     }
