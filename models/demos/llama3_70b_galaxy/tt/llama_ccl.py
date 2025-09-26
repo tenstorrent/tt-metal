@@ -243,6 +243,15 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, 32, 128 * 1024)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        persistent_buffers["SAMPLING"] = tt_buffer
 
         # Binary Mult + Silu
         tt_buffer = ttnn.from_torch(
