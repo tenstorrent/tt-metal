@@ -56,8 +56,11 @@ void kernel_main() {
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(2);
     DPRINT << "EPS: " << eps << ENDL();
-    // generate_bcast_col_scalar(eps_cb_id, eps);
-    generate_reduce_scaler(eps_cb_id, eps);
+    if (use_welford) {
+        generate_bcast_row_scalar(eps_cb_id, eps);
+    } else {
+        generate_bcast_col_scalar(eps_cb_id, eps);
+    }
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
