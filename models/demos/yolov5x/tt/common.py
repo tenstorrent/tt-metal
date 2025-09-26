@@ -8,13 +8,6 @@ import math
 import ttnn
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 def deallocate_tensors(*tensors):
     for t in tensors:
@@ -178,8 +171,6 @@ class TtnnBottleneck:
         )
 
     def __call__(self, input_tensor):
-        if use_signpost:
-            signpost(header="BottleNeck")
         cv1 = self.cv1(input_tensor)
         cv1 = self.cv2(cv1)
         if self.use_block_shard:

@@ -7,13 +7,6 @@ import ttnn
 from models.demos.yolov5x.tt.common import TtnnBottleneck, TtYOLOv5xConv2D, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtnnC3:
     def __init__(self, shortcut=True, n=4, device=None, parameters=None, conv_pt=None, use_block_shard=False):
@@ -64,8 +57,6 @@ class TtnnC3:
         ]
 
     def __call__(self, input_tensor):
-        if use_signpost:
-            signpost(header="C3")
         m_out = self.cv1(input_tensor)
 
         for m in self.m:

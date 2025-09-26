@@ -7,13 +7,6 @@ import ttnn
 from models.demos.yolov5x.tt.common import TtYOLOv5xConv2D
 from models.experimental.yolo_common.yolo_utils import concat
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtnnDetect:
     def __init__(self, device=None, parameters=None, conv_pt=None):
@@ -125,8 +118,6 @@ class TtnnDetect:
         self.strides = conv_pt.strides
 
     def __call__(self, y1, y2, y3):
-        if use_signpost:
-            signpost(header="Detect")
         x1 = self.cv2_0_0(y1)
         x1 = self.cv2_0_1(x1)
         x1 = self.cv2_0_2(x1)

@@ -7,13 +7,6 @@ import ttnn
 from models.demos.yolov5x.tt.common import TtYOLOv5xConv2D, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtnnSPPF:
     def __init__(self, device=None, parameters=None, conv_pt=None):
@@ -40,8 +33,6 @@ class TtnnSPPF:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="SPPF")
         cv1 = self.cv1(x)
         cv1 = ttnn.sharded_to_interleaved(cv1, memory_config=ttnn.L1_MEMORY_CONFIG)
         cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
