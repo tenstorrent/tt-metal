@@ -59,14 +59,6 @@ jobs:
             timeout: 15
           # - name: t3000 fast fabric tests
           #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"
-        exclude:
-          - runner-group:
-              name: LoudBox unit tests
-              runner-label: BH-LoudBox
-            test-group:
-              name: ccl nightly tests
-              cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
-              timeout: 30
     name: ${{ inputs.arch }} ${{ matrix.runner-group.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
