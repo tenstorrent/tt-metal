@@ -96,7 +96,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         }
     }
     const auto num_chips = cluster_desc->get_all_chips().size();
-    TT_ASSERT(num_chips > 0, "No chips detected in the cluster");
+    TT_FATAL(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {

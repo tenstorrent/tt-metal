@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 // sine
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sine_init() {

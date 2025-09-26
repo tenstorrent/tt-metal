@@ -84,7 +84,7 @@ void kernel_main() {
 
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     if constexpr (is_2d_fabric) {
-        fabric_set_unicast_route(dst_device_id, (LowLatencyMeshPacketHeader*)packet_header);
+        fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dst_device_id, dst_mesh_id);
     } else {
         packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
     }

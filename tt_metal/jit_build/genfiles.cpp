@@ -8,7 +8,6 @@
 #include <data_format.hpp>
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
-#include <utils.hpp>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -20,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build_options.hpp"

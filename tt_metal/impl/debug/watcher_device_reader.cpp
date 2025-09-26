@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
