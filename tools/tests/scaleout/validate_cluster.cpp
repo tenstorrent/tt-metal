@@ -42,7 +42,7 @@ int main(int argc, char* argv[]) {
         cabling_descriptor_path.has_value() || fsd_path.has_value(),
         "Cluster Validation requires either Cabling Spec + Deployment Spec or a Factory System Descriptor.");
 
-    bool fail_on_warning = test_args::has_command_option(input_args, "--hard-fail");
+    // bool fail_on_warning = test_args::has_command_option(input_args, "--hard-fail");
     bool log_ethernet_metrics = test_args::has_command_option(input_args, "--log-ethernet-metrics");
     bool print_connectivity = test_args::has_command_option(input_args, "--print-connectivity");
 
