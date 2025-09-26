@@ -250,7 +250,7 @@ For mesh execution, we add the program to a mesh workload and enqueue it for exe
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, /*blocking=*/false);
 
     // Add program to mesh workload and execute
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
