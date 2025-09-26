@@ -5,6 +5,7 @@
 import math
 
 import ttnn
+import torch
 from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors, sharded_concat, sharded_concat_2
 from models.demos.yolov11m.tt.ttnn_yolov11_c2psa import TtnnC2PSA
 from models.demos.yolov11m.tt.ttnn_yolov11_c3k2 import TtnnC3k2
@@ -57,9 +58,35 @@ class TtnnYoloV11:
             # No padding needed, use input as is
             x = input
             min_channels = c  # Update min_channels to actual channels
+        # Debug: Check diversity before permute operation
+        x_pre_permute_debug = ttnn.to_torch(x)
+        x_pre_permute_flat = x_pre_permute_debug.flatten()
+        x_pre_permute_unique = torch.unique(x_pre_permute_flat)
+        print(f"🔍 [RESHAPE DEBUG] BEFORE PERMUTE: {len(x_pre_permute_unique)} unique values out of {len(x_pre_permute_flat)} total")
+        print(f"    Range: [{x_pre_permute_flat.min()}, {x_pre_permute_flat.max()}], Mean: {x_pre_permute_flat.mean()}")
+        print(f"    Dtype: {x_pre_permute_debug.dtype}, Shape: {x_pre_permute_debug.shape}")
+        
         x = ttnn.permute(x, (0, 2, 3, 1))
+        
+        # Debug: Check diversity after permute operation  
+        x_post_permute_debug = ttnn.to_torch(x)
+        x_post_permute_flat = x_post_permute_debug.flatten()
+        x_post_permute_unique = torch.unique(x_post_permute_flat)
+        print(f"🔍 [RESHAPE DEBUG] AFTER PERMUTE: {len(x_post_permute_unique)} unique values out of {len(x_post_permute_flat)} total")
+        print(f"    Range: [{x_post_permute_flat.min()}, {x_post_permute_flat.max()}], Mean: {x_post_permute_flat.mean()}")
+        print(f"    Dtype: {x_post_permute_debug.dtype}, Shape: {x_post_permute_debug.shape}")
+        print(f"🔍 [PERMUTE KILLER] DIVERSITY LOSS: {len(x_pre_permute_unique)} → {len(x_post_permute_unique)} ({100*(len(x_pre_permute_unique)-len(x_post_permute_unique))/len(x_pre_permute_unique):.2f}% loss)")
+        
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
+        
         x = self.conv1(self.device, x)
+        
+        # Debug: Check diversity after CONV1 (shows impact of conv layer precision)
+        x_conv1_debug = ttnn.to_torch(x)
+        x_conv1_flat = x_conv1_debug.flatten()
+        x_conv1_unique = torch.unique(x_conv1_flat)
+        print(f"🔍 [CONV DEBUG] AFTER CONV1: {len(x_conv1_unique)} unique values out of {len(x_conv1_flat)} total")
+        print(f"    Range: [{x_conv1_flat.min()}, {x_conv1_flat.max()}], Mean: {x_conv1_flat.mean()}")
         x = self.conv2(self.device, x)
         x = self.c3k2_1(self.device, x)
         x = self.conv3(self.device, x)
