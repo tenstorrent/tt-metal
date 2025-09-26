@@ -1,5 +1,10 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from models.experimental.stable_diffusion_xl_refiner.tt.components.convolution_layer import ConvolutionLayer
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_downsample_config
+from .components.weight_loader import WeightLoader
 
 
 class TtDownsample2D:
@@ -24,10 +29,13 @@ class TtDownsample2D:
         # Order of layers:
         # 1. conv_layer
 
+        # Load weights
+        self.weight_loader = WeightLoader(self, state_dict, self.module_path)
+
         self.conv_layer = ConvolutionLayer(
             self.device,
-            state_dict[f"{self.module_path}.conv.weight"],
-            state_dict[f"{self.module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+            self.weight_loader.conv_weight,
+            self.weight_loader.conv_bias,
             self.block_config.conv,
         )
 

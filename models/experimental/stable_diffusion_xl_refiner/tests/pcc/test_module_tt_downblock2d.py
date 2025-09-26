@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import gc
 from loguru import logger
 import torch
@@ -71,7 +75,6 @@ def test_downblock2d_refiner(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     B, C, H, W = list(ttnn_input_tensor.shape)
-    print(f"B, C, H, W: {B, C, H, W}")
 
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
@@ -84,7 +87,6 @@ def test_downblock2d_refiner(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    print(f"B, C, H, W before downblock: {B, C, H, W}")
     ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)

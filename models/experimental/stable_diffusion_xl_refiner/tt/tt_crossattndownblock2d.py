@@ -63,14 +63,12 @@ class TtCrossAttnDownBlock2D(LightweightModule):
             hidden_states = attn.forward(hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states)
             # Create a copy of the tensor to avoid aliasing issues with hidden_states
             residual = ttnn.clone(hidden_states)
-            # residual = ttnn.to_memory_config(residual_copy, ttnn.DRAM_MEMORY_CONFIG)
             residuals = residuals + (residual,)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
             # Create a copy of the tensor to avoid aliasing issues with hidden_states
             residual = ttnn.clone(hidden_states)
-            # residual = ttnn.to_memory_config(residual_copy, ttnn.DRAM_MEMORY_CONFIG)
             residuals = residuals + (residual,)
 
         return hidden_states, [C, H, W], residuals

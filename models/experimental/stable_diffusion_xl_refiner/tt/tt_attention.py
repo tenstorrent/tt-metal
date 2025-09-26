@@ -1,8 +1,13 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+from .components.weight_loader import WeightLoader
 
 
 class TtAttention(LightweightModule):
@@ -15,22 +20,13 @@ class TtAttention(LightweightModule):
     ):
         super().__init__()
         self.device = device
-
         self.heads = num_attn_heads
 
-        print(f"Initializing TtAttention with {self.heads} heads")
-
-        q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
-        k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
-        v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
-
-        print(module_path)
-
-        out_weights = state_dict[f"{module_path}.to_out.0.weight"].unsqueeze(0).unsqueeze(0)
-        out_bias = state_dict[f"{module_path}.to_out.0.bias"]
+        self.weight_loader = WeightLoader(self, state_dict, module_path)
 
         self.is_self_attention = (
-            q_weights.shape[-1] == k_weights.shape[-1] and q_weights.shape[-1] == v_weights.shape[-1]
+            self.weight_loader.q_weights.shape[-1] == self.weight_loader.k_weights.shape[-1]
+            and self.weight_loader.q_weights.shape[-1] == self.weight_loader.v_weights.shape[-1]
         )
 
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -43,9 +39,9 @@ class TtAttention(LightweightModule):
         if self.is_self_attention == True:
             fused_qkv_weights = torch.cat(
                 [
-                    torch.transpose(q_weights, -2, -1),
-                    torch.transpose(k_weights, -2, -1),
-                    torch.transpose(v_weights, -2, -1),
+                    torch.transpose(self.weight_loader.q_weights, -2, -1),
+                    torch.transpose(self.weight_loader.k_weights, -2, -1),
+                    torch.transpose(self.weight_loader.v_weights, -2, -1),
                 ],
                 dim=-1,
             )
@@ -53,19 +49,18 @@ class TtAttention(LightweightModule):
                 fused_qkv_weights, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
             )
         else:
-            self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, ttnn.bfloat16)
-            self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, ttnn.bfloat16)
-            self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, ttnn.bfloat16)
+            self.tt_q_weights, _ = prepare_linear_params(device, self.weight_loader.q_weights, None, ttnn.bfloat16)
+            self.tt_k_weights, _ = prepare_linear_params(device, self.weight_loader.k_weights, None, ttnn.bfloat16)
+            self.tt_v_weights, _ = prepare_linear_params(device, self.weight_loader.v_weights, None, ttnn.bfloat16)
 
-        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat16)
+        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
+            device, self.weight_loader.out_weights, self.weight_loader.out_bias, ttnn.bfloat16
+        )
 
     def forward(self, hidden_states, encoder_hidden_states=None):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         B = list(hidden_states.shape)[0]
-        print(f"Entering TtAttention forward")
-        print(f"Hidden states shape: {hidden_states.shape}")
-        print(f"Encoder hidden states shape: {encoder_hidden_states.shape}")
 
         if self.is_self_attention:
             qkv_fused = ttnn.matmul(

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import gc
 from loguru import logger
 import torch
@@ -13,46 +17,15 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, block_id, block, pcc",
     [
-        # # Up blocks
-        # # UpBlock2D - 3 x ResnetBlock2D
-        # # [(1, 3072, 16, 16), (1, 1536)]	[(1, 1536, 16, 16)]
-        # ((1, 3072, 16, 16), (1, 1536), 0, 0, True, "up_blocks", 0.997),
         # # UpBlock2D - Upsample2D
         # # [(1, 1536, 16, 16)] [(1, 1536, 32, 32)]
         ((1, 1536, 16, 16), 0, "up_blocks", 0.999),
-        # # CrossAttnUpBlock2D - 3 x Transformer2DModel
-        # # CrossAttnUpBlock2D - 2 x ResnetBlock2D
-        # # [(1, 3072, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        # ((1, 3072, 32, 32), (1, 1536), 1, 0, True, "up_blocks", 0.998),
-        # # CrossAttnUpBlock2D - ResnetBlock2D
-        # # [(1, 2304, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        # ((1, 2304, 32, 32), (1, 1536), 1, 2, True, "up_blocks", 0.998),
         # # CrossAttnUpBlock2D - Upsample2D
         # # [(1, 1536, 32, 32)]	[(1, 1536, 64, 64)]
         ((1, 1536, 32, 32), 1, "up_blocks", 0.999),
-        # # CrossAttnUpBlock2D - 3 x Transformer2DModel
-        # # CrossAttnUpBlock2D - ResnetBlock2D
-        # # [(1, 2304, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        # ((1, 2304, 64, 64), (1, 1536), 2, 0, True, "up_blocks", 0.998),
-        # # CrossAttnUpBlock2D - ResnetBlock2D
-        # # [(1, 1536, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        # ((1, 1536, 64, 64), (1, 1536), 2, 1, True, "up_blocks", 0.998),
-        # # CrossAttnUpBlock2D - ResnetBlock2D
-        # # [(1, 1152, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        # ((1, 1152, 64, 64), (1, 1536), 2, 2, True, "up_blocks", 0.999),
         # # CrossAttnUpBlock2D - Upsample2D
         # # [(1, 768, 64, 64)]	[(1, 768, 128, 128)]
         ((1, 768, 64, 64), 2, "up_blocks", 0.999),
-        # # UpBlock2D - ResnetBlock2D
-        # # [(1, 1152, 128, 128), (1, 1536)]	[(1, 384, 128, 128)]
-        # ((1, 1152, 128, 128), (1, 1536), 3, 0, True, "up_blocks", 0.999),
-        # # UpBlock2D - 2 x ResnetBlock2D
-        # # [(1, 768, 128, 128), (1, 1536)]	[(1, 384, 128, 128)]
-        # ((1, 768, 128, 128), (1, 1536), 3, 1, True, "up_blocks", 0.999),
-        # # CrossAttnMidBlock2D - 2 x ResnetBlock2D
-        # # [(1, 1536, 16, 16), (1, 1536)]	[(1, 1536, 16, 16)]
-        # ((1, 1536, 16, 16), (1, 1536), 0, 0, False, "mid_block", 0.997),
-        # [(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch.nn as nn
 import ttnn
 from .tt_config import get_resnet_config
@@ -5,7 +9,7 @@ from .components.tt_components import (
     ResNetTimeEmbedding,
     ResNetShortcutConnection,
 )
-from .components.weight_loader import ResNetWeightLoader
+from .components.weight_loader import WeightLoader
 from .components.convolution_layer import ConvolutionLayer
 from .components.group_normalization_layer import GroupNormalizationLayer
 
@@ -38,7 +42,7 @@ class TtResnetBlock2D(nn.Module):
         # 5. conv2d_2
         # 6. shortcut (if use_conv_shortcut is True)
 
-        self.weight_loader = ResNetWeightLoader(state_dict, self.module_path, self.use_conv_shortcut)
+        self.weight_loader = WeightLoader(self, state_dict, self.module_path, use_conv_shortcut=self.use_conv_shortcut)
 
         self.norm_layer_1 = GroupNormalizationLayer(
             self.device,

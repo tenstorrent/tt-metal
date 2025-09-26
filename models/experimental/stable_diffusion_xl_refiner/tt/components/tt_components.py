@@ -1,10 +1,12 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_linear_params,
 )
 from models.experimental.stable_diffusion_xl_refiner.tt.components.convolution_layer import ConvolutionLayer
-
-# TODO: Remove hardcoded values
 
 
 # ResNet components
@@ -52,8 +54,6 @@ class ResNetShortcutConnection:
 
 
 # Transformer components
-
-
 class TransformerBlockLayerNorm:
     def __init__(self, device, weights, bias, eps=1e-5):
         self.device = device

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from dataclasses import dataclass
 from typing import Tuple
@@ -30,7 +34,7 @@ def make_norm_config(
 
 
 class GroupNormalizationLayer:
-    def __init__(self, device, weights, bias, norm_config):
+    def __init__(self, device, weights, bias, norm_config=make_norm_config()):
         self.device = device
 
         # From norm_config
@@ -38,9 +42,6 @@ class GroupNormalizationLayer:
         self.norm_groups = norm_config.num_groups
         self.norm_eps = norm_config.eps
         self.num_out_blocks = norm_config.num_out_blocks
-        print(
-            f"GroupNormalizationLayer: sharded={self.sharded}, num_groups={self.norm_groups}, eps={self.norm_eps}, num_out_blocks={self.num_out_blocks}"
-        )
 
         if self.sharded:
             self.core_grid = ttnn.CoreGrid(y=8, x=8)
@@ -48,18 +49,10 @@ class GroupNormalizationLayer:
             self.core_grid = norm_config.core_grid
 
         # Prepare normalization parameters
-        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(  # Copy paste from group_norm_DRAM tests
-            device, weights, bias, self.core_grid.y
-        )
-        self.input_mask = prepare_gn_mask(  # Copy paste from group_norm_DRAM tests
-            device, weights.shape[0], self.norm_groups, self.core_grid.y
-        )
+        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, weights, bias, self.core_grid.y)
+        self.input_mask = prepare_gn_mask(device, weights.shape[0], self.norm_groups, self.core_grid.y)
 
     def apply(self, hidden_states, B, C, H, W):
-        # Handle case where hidden_states might be a tuple (tensor, shape)
-        if isinstance(hidden_states, (tuple, list)):
-            hidden_states = hidden_states[0]
-
         if self.sharded:
             return self._apply_sharded_norm(hidden_states, B, C, H, W)
         else:
@@ -73,9 +66,7 @@ class GroupNormalizationLayer:
         sharded_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
-        hidden_states = ttnn.to_layout(
-            hidden_states, ttnn.ROW_MAJOR_LAYOUT
-        )  # Do I need this? Cannot do inplace on TILE_LAYOUT
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
         hidden_states = ttnn.group_norm(
@@ -87,6 +78,7 @@ class GroupNormalizationLayer:
             memory_config=sharded_mem_config,
             core_grid=self.core_grid,
             epsilon=self.norm_eps,
+            inplace=True,
         )
         return ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -97,7 +89,7 @@ class GroupNormalizationLayer:
             input_mask=self.input_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Copy paste from group_norm_DRAM tests
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             core_grid=self.core_grid,
             epsilon=self.norm_eps,
             inplace=False,

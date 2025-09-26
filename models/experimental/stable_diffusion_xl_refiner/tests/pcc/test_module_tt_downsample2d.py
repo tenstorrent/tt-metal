@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import gc
 from loguru import logger
 import torch
@@ -13,36 +17,15 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, block_id, block, pcc",
     [
-        # # Down blocks
-        # # DownBlock2D - 2 x ResnetBlock2D
-        # # [(1, 384, 128, 128), (1, 1536)]	[(1, 384, 128, 128)]
-        # ((1, 384, 128, 128), (1, 1536), 0, 0, "down_blocks", 0.999),
         # # DownBlock2D - Downsample2D
         # # [(1, 384, 128, 128)] [(1, 384, 64, 64)]
         ((1, 384, 128, 128), 0, "down_blocks", 0.999),
-        # # CrossAttnDownBlock2D - 2 x Transformer2DModel
-        # # CrossAttnDownBlock2D - ResnetBlock2D
-        # # [(1, 384, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        # ((1, 384, 64, 64), (1, 1536), 1, 0, "down_blocks", 0.998),
-        # # CrossAttnDownBlock2D - ResnetBlock2D
-        # # [(1, 768, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        # ((1, 768, 64, 64), (1, 1536), 1, 1, "down_blocks", 0.999),
         # # CrossAttnDownBlock2D - Downsample2D
         # # [(1, 768, 64, 64)] [(1, 768, 32, 32)]
         ((1, 768, 64, 64), 1, "down_blocks", 0.999),
-        # # CrossAttnDownBlock2D - 2 x Transformer2DModel
-        # # CrossAttnDownBlock2D - ResnetBlock2D
-        # # [(1, 768, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        # ((1, 768, 32, 32), (1, 1536), 2, 0, "down_blocks", 0.998),
-        # # CrossAttnDownBlock2D - ResnetBlock2D
-        # # [(1, 1536, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        # ((1, 1536, 32, 32), (1, 1536), 2, 1, "down_blocks", 0.997),
         # # CrossAttnDownBlock2D - Downsample2D
         # # [(1, 1536, 32, 32)] [(1, 1536, 16, 16)]
         ((1, 1536, 32, 32), 2, "down_blocks", 0.999),
-        # # DownBlock2D - 2 x ResnetBlock2D
-        # # [(1, 1536, 16, 16), (1, 1536)]	[(1, 1536, 16, 16)]
-        # ((1, 1536, 16, 16), (1, 1536), 3, 0, "down_blocks", 0.994),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

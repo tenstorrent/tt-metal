@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from dataclasses import dataclass
 from typing import Tuple
@@ -65,7 +69,7 @@ def make_conv_config(
 
 
 class ConvolutionLayer:
-    def __init__(self, device, weights, bias, conv_config):
+    def __init__(self, device, weights, bias, conv_config=make_conv_config()):
         self.device = device
         self.conv_config = conv_config
         self.split_in = conv_config.split_in
@@ -76,10 +80,12 @@ class ConvolutionLayer:
         # Prepare conv parameters
         if self.split_conv:
             self.tt_weights, self.tt_bias, self.conv_params = prepare_split_conv_params(
-                weights, bias, ttnn.bfloat16, self.split_in, self.split_out
+                weights, bias, conv_config.conv_w_dtype, self.split_in, self.split_out
             )
         else:
-            self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(weights, bias, ttnn.bfloat16)
+            self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
+                weights, bias, conv_config.conv_w_dtype
+            )
 
     def apply(self, hidden_states, B, C, H, W):
         if self.split_conv:
@@ -100,7 +106,7 @@ class ConvolutionLayer:
             compute_config=self.conv_config.compute_config,
             conv_config=self.conv_config.conv2d_config,
             conv_params=self.conv_params,
-            conv_dtype=ttnn.bfloat16,
+            conv_dtype=self.conv_config.conv_output_dtype,
             stride=self.conv_config.stride,
             padding=self.conv_config.padding,
             dilation=self.conv_config.dilation,
@@ -129,7 +135,7 @@ class ConvolutionLayer:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             return_output_dim=True,
             return_weights_and_bias=True,
-            dtype=ttnn.bfloat16,
+            dtype=self.conv_config.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
         return hidden_states, [C, H, W]

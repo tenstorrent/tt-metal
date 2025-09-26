@@ -1,6 +1,11 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.experimental.stable_diffusion_xl_refiner.tt.components.convolution_layer import ConvolutionLayer
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_upsample_config
+from .components.weight_loader import WeightLoader
 
 
 class TtUpsample2D:
@@ -27,10 +32,12 @@ class TtUpsample2D:
         # Order of layers:
         # 1. conv_layer
 
+        self.weight_loader = WeightLoader(self, state_dict, self.module_path)
+
         self.conv_layer = ConvolutionLayer(
             self.device,
-            state_dict[f"{self.module_path}.conv.weight"],
-            state_dict[f"{self.module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+            self.weight_loader.conv_weight,
+            self.weight_loader.conv_bias,
             self.block_config.conv,
         )
 
@@ -39,11 +46,7 @@ class TtUpsample2D:
 
         # TILE_LAYOUT Fails on one of the cases bcs 16x16 is not tile alligned
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        print(f"Shape before upsample: {hidden_states.shape}")
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
-        print(f"Shape after upsample: {hidden_states.shape}")
         B, H, W, C = list(hidden_states.shape)
-        print(f"B, C, H, W after upsample: {B, C, H, W}")
         hidden_states, [C, H, W] = self.conv_layer.apply(hidden_states, B, C, H, W)
-        print(f"B, C, H, W after conv: {B, C, H, W}")
         return hidden_states, [C, H, W]

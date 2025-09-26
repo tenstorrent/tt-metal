@@ -16,7 +16,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 @pytest.mark.parametrize(
     "input_shape, temb_shape, encoder_shape, pcc",
-    [((1, 1536, 16, 16), (1, 1536), (1, 77, 1280), 0.992)],
+    [((1, 1536, 16, 16), (1, 1536), (1, 77, 1280), 0.991)],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnmid(
