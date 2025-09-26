@@ -37,7 +37,12 @@ def run_sum(
     )(input_shape)
 
     if dim is None:
-        torch_output_tensor = torch.sum(torch_input_tensor_a)
+        if keepdim:
+            # When dim=None and keepdim=True, sum over all dimensions but keep dimensions
+            all_dims = tuple(range(len(input_shape)))
+            torch_output_tensor = torch.sum(torch_input_tensor_a, dim=all_dims, keepdim=keepdim)
+        else:
+            torch_output_tensor = torch.sum(torch_input_tensor_a)
     else:
         dim = dim % len(input_shape)
         torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
@@ -80,7 +85,12 @@ def run_prod(
     )(input_shape)
 
     if dim is None:
-        torch_output_tensor = torch.prod(torch_input_tensor_a)
+        if keepdim:
+            # When dim=None and keepdim=True, prod over all dimensions but keep dimensions
+            all_dims = tuple(range(len(input_shape)))
+            torch_output_tensor = torch.prod(torch_input_tensor_a, dim=all_dims, keepdim=keepdim)
+        else:
+            torch_output_tensor = torch.prod(torch_input_tensor_a)
     else:
         dim = dim % len(input_shape)
         torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
