@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
@@ -385,6 +385,24 @@ void RunTimeOptions::ParseInspectorEnv() {
             inspector_settings.warn_on_write_exceptions = false;
         }
     }
+
+    const char* inspector_rpc_server_host_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_HOST");
+    if (inspector_rpc_server_host_str != nullptr) {
+        inspector_settings.rpc_server_host = std::string(inspector_rpc_server_host_str);
+    }
+
+    const char* inspector_rpc_server_port_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_PORT");
+    if (inspector_rpc_server_port_str != nullptr) {
+        inspector_settings.rpc_server_port = static_cast<uint16_t>(std::stoul(inspector_rpc_server_port_str));
+    }
+
+    const char* inspector_rpc_str = getenv("TT_METAL_INSPECTOR_RPC");
+    if (inspector_rpc_str != nullptr) {
+        inspector_settings.rpc_server_enabled = true;
+        if (std::strncmp(inspector_rpc_str, "0", 1) == 0) {
+            inspector_settings.rpc_server_enabled = false;
+        }
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
@@ -407,7 +425,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
         }
     }
     for (auto& core_type_and_cores : feature_targets[feature].cores) {
-        if (core_type_and_cores.second.size() > 0) {
+        if (!core_type_and_cores.second.empty()) {
             feature_targets[feature].enabled = true;
         }
     }
@@ -504,7 +522,7 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
     }
 
     // Default is no chips are specified is all
-    if (chips.size() == 0) {
+    if (chips.empty()) {
         feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <event.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <chrono>

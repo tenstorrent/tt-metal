@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import (
     run_reduce_scatter_test,
     run_reduce_scatter_sharded_test,

@@ -84,7 +84,7 @@ MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::comput
 
 MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    TT_FATAL(tensor_args.output_tensors.size() > 0, "Invalid number of output tensors.");
+    TT_FATAL(!tensor_args.output_tensors.empty(), "Invalid number of output tensors.");
     return tensor_args.output_tensors;
 }
 

@@ -74,7 +74,7 @@ jobs:
         run: npm install
       - name: Download previous workflow data artifact (if any)
         if: ${{ steps.prev.outputs.run_id != '' }}
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: workflow-data
           path: ${{ github.workspace }}/prev
@@ -98,7 +98,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download workflow data
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: workflow-data
           path: ${{ github.workspace }}
@@ -136,7 +136,7 @@ jobs:
         if: ${{ steps.analyze.outputs.regressed_workflows != '[]' }}
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          slack_webhook_url: ${{ secrets.SLACK_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
           regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
 
   handle-failures:

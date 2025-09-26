@@ -14,12 +14,7 @@ enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, C
 
 static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
 
-enum class HalProcessorClassType : uint8_t {
-    DM = 0,
-    // Setting this to 2 because we currently treat brisc and ncrisc as two unique processor classes on Tensix
-    // TODO: Uplift view of Tensix processor classes to be 1 DM class with 2 processor types
-    COMPUTE = 2
-};
+enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
 
 enum class HalL1MemAddrType : uint8_t {
     BASE,
@@ -52,6 +47,7 @@ enum class HalL1MemAddrType : uint8_t {
     TENSIX_FABRIC_CONNECTIONS,
     TENSIX_ROUTING_PATH_1D,
     TENSIX_ROUTING_PATH_2D,
+    TENSIX_EXIT_NODE_TABLE,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 

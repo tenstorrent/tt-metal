@@ -47,7 +47,7 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         "Unsupported input tensor memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
-    if (output_tensors.size() > 0) {
+    if (!output_tensors.empty()) {
         TT_FATAL(
             output_tensors.size() == 2,
             "Error, Number of output tensors should be 2 but has {}",

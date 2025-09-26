@@ -98,7 +98,7 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
 
     for (size_t idx = 0; idx < output_specs.size(); idx++) {
         if (tensor_args.output_tensors.at(idx).has_value()) {
-            ret.push_back(tensor_args.output_tensors.at(idx).value());
+            ret.push_back(tensor_args.output_tensors.at(idx));
         } else if (output_specs[idx].has_value()) {
             ret.push_back(create_device_tensor(*output_specs[idx], device));
         } else {

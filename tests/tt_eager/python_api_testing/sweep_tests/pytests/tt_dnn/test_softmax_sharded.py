@@ -16,9 +16,9 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-from models.utility_functions import print_diff_argmax, comp_pcc
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.utility_functions import is_wormhole_b0, is_blackhole
+from models.common.utility_functions import print_diff_argmax, comp_pcc
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 # only use certain tests for CI to reduce run time
 # grid_sizes = [(i, j) for i in range(1, 13) for j in range(1, 9)] # (1,1) to (12,8)

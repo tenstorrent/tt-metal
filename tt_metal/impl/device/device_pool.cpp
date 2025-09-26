@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "device_impl.hpp"
@@ -795,23 +795,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
         devices_to_close.push_back(mmio_device_id);
         mmio_devices_to_close.insert(mmio_device_id);
-    }
-
-    // Global Sync across all devices that are being closed
-    // We need to ensure that commands sent to each device have been completed
-    // before closing any device + modifying routing info.
-    // If this is not done, non-blocking CCLs followed by a close will hang, since
-    // the main thread will modify device state while the CCL is running on device.
-    // On TG - this should not be done on MMIO mapped devices, since we don't run
-    // any workloads on them
-    if (!skip_synchronize) {
-        for (const auto& dev_id : devices_to_close) {
-            auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
-                continue;
-            }
-            Synchronize(dev);    // Synchronize device
-        }
     }
 
     // TODO(MO): Remove when legacy non-mesh device is removed

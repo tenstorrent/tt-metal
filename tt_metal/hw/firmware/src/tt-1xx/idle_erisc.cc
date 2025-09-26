@@ -78,17 +78,6 @@ void set_deassert_addresses() {
 #endif
 }
 
-void init_sync_registers() {
-    volatile tt_reg_ptr uint* tiles_received_ptr;
-    volatile tt_reg_ptr uint* tiles_acked_ptr;
-    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-        tiles_received_ptr[0] = 0;
-        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-        tiles_acked_ptr[0] = 0;
-    }
-}
-
 inline void run_subordinate_eriscs(uint32_t enables) {
 #if defined(ARCH_BLACKHOLE)
     if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
@@ -140,7 +129,6 @@ int main() {
 
     DeviceProfilerInit();
     while (1) {
-        init_sync_registers();
         // Wait...
         WAYPOINT("GW");
         while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {

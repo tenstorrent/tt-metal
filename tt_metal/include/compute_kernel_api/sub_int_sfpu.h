@@ -8,10 +8,6 @@
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_sub_int.h"
 #include "llk_math_eltwise_binary_sfpu_rsub_int32.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {

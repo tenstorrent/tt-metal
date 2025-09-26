@@ -10,7 +10,7 @@ from transformers import BloomConfig, BloomForCausalLM, BloomForQuestionAnswerin
 
 from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
     enable_persistent_kernel_cache,

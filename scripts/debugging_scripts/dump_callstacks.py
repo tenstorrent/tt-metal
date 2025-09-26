@@ -5,12 +5,12 @@
 
 """
 Usage:
-    dump_callstacks [--full_callstack] [--gdb_callstack] [--active_cores]
+    dump_callstacks [--full-callstack] [--gdb-callstack] [--active-cores]
 
 Options:
-    --full_callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
-    --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
-    --active_cores     Only dump callstacks for cores running kernels.
+    --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
+    --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
+    --active-cores     Only dump callstacks for cores running kernels.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
@@ -308,9 +308,9 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
 
 
 def run(args, context: Context):
-    full_callstack = args["--full_callstack"]
-    gdb_callstack = args["--gdb_callstack"]
-    active_cores = args["--active_cores"]
+    full_callstack = args["--full-callstack"]
+    gdb_callstack = args["--gdb-callstack"]
+    active_cores = args["--active-cores"]
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)

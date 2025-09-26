@@ -148,9 +148,9 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tile_size(cb_data_format);
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
-    const auto intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_format);
+    const auto intermed_single_tile_size = tt::tile_size(intermed_cb_format);
 
     const uint32_t cb_usage =
         (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size +

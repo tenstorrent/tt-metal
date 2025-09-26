@@ -29,11 +29,11 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
 
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
+    const uint32_t input_tile_size = tt::tile_size(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_row_size = tt::datum_size(intermediary_format) * TILE_WIDTH;
-    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const auto all_cores = a.shard_spec()->grid;
     const auto create_circular_buffer = [&program, &all_cores](

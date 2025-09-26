@@ -24,7 +24,7 @@
 #include <cstring>
 #include <iostream>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -469,8 +469,8 @@ void run_test(
 
     log_info(tt::LogAlways, "Launching programs");
 
-    tt_metal::distributed::MeshWorkload local_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::MeshWorkload remote_workload = tt_metal::distributed::CreateMeshWorkload();
+    tt_metal::distributed::MeshWorkload local_workload;
+    tt_metal::distributed::MeshWorkload remote_workload;
     tt_metal::distributed::AddProgramToMeshWorkload(
         local_workload,
         std::move(test_resources.local_device.program),

@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     is_wormhole_b0,
     is_blackhole,
@@ -20,7 +20,7 @@ from models.utility_functions import (
     run_for_wormhole_b0,
 )
 from loguru import logger
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 
 
 # TODO (7735): Switch to new interleaved_to_sharded with sharded_mem_config input and re-enable BLOCK sharded tests
@@ -2526,7 +2526,6 @@ def test_unused_cores(device):
             grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))}),
             shard_shape=[32, 64],
             shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            shard_mode=ttnn.ShardMode.PHYSICAL,
         ),
     )
 

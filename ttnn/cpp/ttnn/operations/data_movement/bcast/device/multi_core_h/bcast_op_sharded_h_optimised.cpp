@@ -8,7 +8,6 @@
 #include <tt-metalium/host_api.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -44,9 +43,9 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     auto b_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
     auto out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t input1_tile_size = tt::tile_size(b_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 

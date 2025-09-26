@@ -74,7 +74,7 @@ public:
     // Returns logical shard shape from shard spec shape
     Shape2D get_logical_shard_shape() const;
 
-    // Returns physical shard shape based on ShardMode, shard shape, and alignment
+    // Returns physical shard shape based on shard shape and alignment
     Shape2D get_physical_shard_shape() const;
 
     Shape2D compute_page_shape(const Shape2D& physical_size) const;

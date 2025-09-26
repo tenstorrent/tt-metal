@@ -6,7 +6,7 @@
 
 #include <cstddef>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>

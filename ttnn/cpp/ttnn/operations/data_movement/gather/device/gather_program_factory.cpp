@@ -6,7 +6,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::data_movement::gather::program {
@@ -334,7 +333,7 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
             if (core_grid_calculated_columns_number != 0) {
                 const CoreRange additional_range(
                     {0, core_grid_calculated_rows_number},
-                    {core_grid_calculated_columns_number, core_grid_calculated_rows_number});
+                    {core_grid_calculated_columns_number - 1, core_grid_calculated_rows_number});
                 core_range = core_range.merge(CoreRangeSet(additional_range));
             }
         }

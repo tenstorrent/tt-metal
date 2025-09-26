@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import cast
 
 import torch
-import ttnn.experimental
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -23,7 +22,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     MAX_BATCH_SIZE,
     even_int_div,
     find_largest_divisor,
-    save_and_get_path,
+    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -61,24 +60,29 @@ class Embedding(AbstractModule):
         assert (
             torch_weight.shape[-1] % mesh_device.get_num_devices() == 0
         ), "Embedding weight last dimension must be divisible by the number of devices"
-        torch_weight = torch_weight.reshape((*torch_weight.shape[:-1], mesh_device.shape[1], -1))
-
-        # Convert to TTNN tensor with 1D sharding across final dimension
-        ttnn_weight = ttnn.as_tensor(
-            torch_weight,
-            dtype=ttnn.bfloat16,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (2, 1)),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        ttnn_weight = ttnn.reshape(
-            ttnn_weight, (hf_config.vocab_size, even_int_div(hf_config.hidden_size, mesh_device.get_num_devices()))
-        )  # Remove the extra dimension added for sharding
 
         # Save to disk with standard naming - "embedding" must match the op name used in the model config
         # so that RunConfig can populate it with the actual weight tensors at runtime
-        return {"embedding": {"weight": save_and_get_path(output_path / "embedding.weight", ttnn_weight)}}
+        return {
+            "embedding": {
+                "weight": shard_and_save(
+                    output_path / "embedding.weight",
+                    # Convert to TTNN tensor with 1D sharding across final dimension
+                    torch_weight.reshape(
+                        hf_config.vocab_size,
+                        mesh_device.shape[1],
+                        mesh_device.shape[0],
+                        even_int_div(hf_config.hidden_size, mesh_device.get_num_devices()),
+                    ),
+                    shard_dims=(2, 1),
+                    mesh_device=mesh_device,
+                    remove_dims=(True, True),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            }
+        }
 
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelPrefillConfig:
@@ -151,6 +155,7 @@ class Embedding(AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(0),
                 "num_links": ccl.get_max_links(0),
             },
         }

@@ -42,10 +42,10 @@ template <typename T>
 static void test_single_core_reshard(
     const InputOutputBufferParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
     MemoryConfig input_mem_config = params.input_shard_spec
-                                        ? MemoryConfig(params.input_buffer_type, *params.input_shard_spec)
+                                        ? MemoryConfig(params.input_buffer_type, params.input_shard_spec)
                                         : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.input_buffer_type);
     MemoryConfig output_mem_config = params.output_shard_spec
-                                         ? MemoryConfig(params.output_buffer_type, *params.output_shard_spec)
+                                         ? MemoryConfig(params.output_buffer_type, params.output_shard_spec)
                                          : MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.output_buffer_type);
 
     TensorSpec input_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), input_mem_config));
@@ -116,7 +116,7 @@ static void test_single_core_reshard(
     output_runtime_args.push_back(output_buffer->num_pages());
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
@@ -192,7 +192,7 @@ static void test_multi_core_copy(
         SetRuntimeArgs(program, kernel_id, core, runtime_args);
     }
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
@@ -301,7 +301,7 @@ static void test_multi_core_interleaved_copy(
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
     }
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
@@ -392,7 +392,7 @@ static void test_single_core_copy(
     std::vector<uint32_t> output_runtime_args{output_buffer->address()};
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 

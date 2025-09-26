@@ -9,7 +9,7 @@ namespace tt::tt_fabric {
 
 // 1D routing specialization
 template <>
-void routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
+void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim, bool is_torus) {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
@@ -21,21 +21,20 @@ void routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 
 // 1D compressed routing specialization. No-op
 template <>
-void routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
+void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim, bool is_torus) {
     // No-op
 }
 
 // 2D compressed routing specialization
 template <>
-void routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
+void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim, bool is_torus) {
     // Calculate NS dimension size (assuming rectangular grid)
     uint16_t ns_dim = num_chips / ew_dim;
-
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
-            // Self route - no movement needed
+            // Noop to self
             paths[dst_chip_id].set(0, 0, 0, 0, 0);
             continue;
         }
@@ -78,7 +77,7 @@ void routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
                 ew_direction = (dst_row > src_row) ? 0 : 1;  // Reverse direction for wrap
             }
         } else {
-            // Mesh topology: original implementation
+            // Mesh topology
             ns_hops = (dst_col != src_col) ? ((dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col)) : 0;
             ew_hops = (dst_row != src_row) ? ((dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row)) : 0;
 
@@ -89,7 +88,7 @@ void routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             ew_direction = (dst_row > src_row) ? 1 : 0;
         }
 
-        uint8_t turn_after_ns = ns_hops;  // XY routing: complete NS first, then EW
+        uint8_t turn_after_ns = ns_hops;  // XY routing: NS first, then EW
         paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
     }
 }

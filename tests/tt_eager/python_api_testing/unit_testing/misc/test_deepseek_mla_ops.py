@@ -21,7 +21,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.tt.mla import MLA
@@ -31,7 +31,7 @@ from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
     apply_rotary_emb,
 )
-from models.utility_functions import nearest_y
+from models.common.utility_functions import nearest_y
 from transformers import AutoConfig
 from types import SimpleNamespace
 

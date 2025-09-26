@@ -7,7 +7,7 @@
 #include "device/softmax_operation_types.hpp"
 #include "device/softmax_device_operation.hpp"
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 

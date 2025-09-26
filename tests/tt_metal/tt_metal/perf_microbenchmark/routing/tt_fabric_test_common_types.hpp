@@ -117,7 +117,8 @@ struct HighLevelPatternConfig {
 };
 
 struct ParsedTestConfig {
-    std::string name;
+    std::string name;               // Original base name for golden lookup
+    std::string parametrized_name;  // Enhanced name for debugging and logging
     TestFabricSetup fabric_setup;
     std::optional<std::string> on_missing_param_policy;
     std::optional<ParsedTrafficPatternConfig> defaults;
@@ -138,7 +139,8 @@ struct ParsedTestConfig {
 };
 
 struct TestConfig {
-    std::string name;
+    std::string name;               // Original base name for golden lookup
+    std::string parametrized_name;  // Enhanced name for debugging and logging
     TestFabricSetup fabric_setup;
     std::optional<std::string> on_missing_param_policy;
     std::optional<TrafficPatternConfig> defaults;

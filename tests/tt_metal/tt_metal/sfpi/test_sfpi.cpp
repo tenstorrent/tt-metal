@@ -9,7 +9,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 #include <algorithm>
@@ -38,7 +37,7 @@ bool runTest(
     std::vector<uint32_t> compile_args{args_addr};
 
     auto program(tt::tt_metal::CreateProgram());
-    distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
+    distributed::MeshWorkload workload;
     CreateKernel(
         program,
         path,

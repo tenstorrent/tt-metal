@@ -75,7 +75,6 @@ def test_max_pool2d_with_indices(device):
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
             [1280, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
     ttnn_input = ttnn.from_torch(

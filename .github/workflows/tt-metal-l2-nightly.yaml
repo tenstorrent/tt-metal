@@ -54,7 +54,7 @@ on:
         description: 'Test timeout in minutes'
         required: false
         type: number
-        default: 120
+        default: 150
 
 
 jobs:

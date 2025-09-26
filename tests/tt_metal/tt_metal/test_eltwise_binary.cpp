@@ -22,7 +22,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     auto& cq = mesh_device->mesh_command_queue();
 
     distributed::MeshWorkload mesh_workloads[] = {
-        distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload()};
+        distributed::MeshWorkload(), distributed::MeshWorkload(), distributed::MeshWorkload()};
     auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
         log_info(LogTest, "====================================================================");

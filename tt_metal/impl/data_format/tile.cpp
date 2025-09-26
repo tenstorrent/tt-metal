@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"

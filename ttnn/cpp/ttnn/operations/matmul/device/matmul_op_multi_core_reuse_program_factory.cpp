@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -36,9 +35,9 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::Buffer* out_buffer) {
     tt_metal::Program program{};
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_cb_data_format);
-    uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_cb_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_cb_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_cb_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer

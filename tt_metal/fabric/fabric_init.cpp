@@ -199,7 +199,7 @@ void build_tt_fabric_program(
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
         // results are inclusive of the mmio_device_id so they will never be zero
-        TT_ASSERT(tunnels_from_mmio.size() > 0);
+        TT_ASSERT(!tunnels_from_mmio.empty());
         return (tunnels_from_mmio.size() - 1) > 0;
     }();
 
@@ -335,8 +335,7 @@ void build_tt_fabric_program(
     }
 
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_galaxy =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
     auto build_downstream_connections = [&](tt::tt_fabric::chan_id_t eth_chan_dir1,
                                             tt::tt_fabric::chan_id_t eth_chan_dir2) {

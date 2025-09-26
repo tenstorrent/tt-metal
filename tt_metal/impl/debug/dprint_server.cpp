@@ -27,7 +27,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
@@ -515,7 +515,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
 
     // One file per risc auto-generates the output files and ignores the env var for it. Print a warning if both are
     // specified just in case.
-    if (file_name != "" && one_file_per_risc) {
+    if (!file_name.empty() && one_file_per_risc) {
         log_warning(
             tt::LogMetal,
             "Both TT_METAL_DPRINT_FILE_NAME and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
@@ -533,7 +533,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
     std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
-    if (file_name != "" && !one_file_per_risc) {
+    if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }
     stream_ = outfile_ ? outfile_ : &cout;

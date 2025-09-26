@@ -18,11 +18,11 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       if: ${{ inputs.is_profiler == 'false' }}
       with:
         name: TTMetal_build_any
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       if: ${{ inputs.is_profiler == 'true' }}
       with:
         name: TTMetal_build_any_profiler

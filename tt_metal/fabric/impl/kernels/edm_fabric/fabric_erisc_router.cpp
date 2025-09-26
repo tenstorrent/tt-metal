@@ -2874,6 +2874,12 @@ void kernel_main() {
         }
     }
 
+    // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
+    // for connection.
+    if constexpr (num_downstream_tensix_connections) {
+        wait_for_notification((uint32_t)edm_local_tensix_sync_ptr_addr, num_downstream_tensix_connections);
+    }
+
     if constexpr (is_2d_fabric) {
         uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
         uint32_t edm_index = 0;

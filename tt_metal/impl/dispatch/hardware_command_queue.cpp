@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffers/dispatch.hpp"
 #include "cq_shared_state.hpp"
 #include "device/dispatch.hpp"
@@ -425,7 +425,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     if (program.impl().get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
         program.impl().allocate_kernel_bin_buf_on_device(device_);
-        if (program.impl().get_program_transfer_info().binary_data.size()) {
+        if (!program.impl().get_program_transfer_info().binary_data.empty()) {
             const BufferRegion buffer_region(0, program.impl().get_kernels_buffer(device_)->size());
             this->enqueue_write_buffer(
                 *program.impl().get_kernels_buffer(device_),

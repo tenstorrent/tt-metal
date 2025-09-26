@@ -22,6 +22,10 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     const float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
 
+    // TODO: switch to stable softmax once accuracy issue in tutorial is fixed
+    // See issue: #28525
+    const bool numeric_stable = false;
+
     if constexpr (in_place) {
         TT_FATAL(
             attention_mask.has_value(),
@@ -33,7 +37,7 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
             normalization::SoftmaxDefaultProgramConfig{},
             causal_mask.value_or(false),
             compute_kernel_config,
-            false);
+            numeric_stable);
     } else {
         if (not attention_mask.has_value()) {
             auto output_tensor = ttnn::multiply(input_tensor, head_size);
@@ -49,7 +53,7 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
         memory_config.value_or(input_tensor.memory_config()),
         causal_mask.value_or(false),
         compute_kernel_config,
-        false);
+        numeric_stable);
 }
 
 template struct ExecuteAttentionSoftmax<false>;

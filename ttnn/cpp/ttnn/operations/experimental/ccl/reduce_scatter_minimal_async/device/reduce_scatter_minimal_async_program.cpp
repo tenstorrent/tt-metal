@@ -17,7 +17,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -429,17 +428,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
 
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in4;
-    static constexpr auto num_packet_headers_storable = 4;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
-
     TT_FATAL(
         !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
         "Input tensor width ({}) must be divisible by tile width ({}).",
@@ -610,19 +598,17 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
-                    ring_index,                       // my_chip_id
-                    reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-                    num_packet_headers_storable,      // num_packet_headers_storable
-                    compute_output_cb_index,          // cb_compute_output_id
-                    reader_output_cb_index,           // cb_reader_output_id
-                    tile_granularity,                 // packet_size_in_pages
-                    page_size,                        // tensor0_page_size
-                    input_tensor_Wt,                  // input_tensor_Wt
-                    batch_slice_num_pages,            // batch_slice_num_pages
-                    ring_size,                        // ring_size
-                    num_batches,                      // num_batches
-                    num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
-                    dir,                              // direction
+                    ring_index,                     // my_chip_id
+                    compute_output_cb_index,        // cb_compute_output_id
+                    reader_output_cb_index,         // cb_reader_output_id
+                    tile_granularity,               // packet_size_in_pages
+                    page_size,                      // tensor0_page_size
+                    input_tensor_Wt,                // input_tensor_Wt
+                    batch_slice_num_pages,          // batch_slice_num_pages
+                    ring_size,                      // ring_size
+                    num_batches,                    // num_batches
+                    num_tiles_to_write_per_packet,  // num_tiles_to_write_per_packet
+                    dir,                            // direction
                     chunks_per_sync_val,
                 };
                 append_fabric_mux_connection_ct_args(
@@ -951,17 +937,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
 
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in4;
-    static constexpr auto num_packet_headers_storable = 4;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
-
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -1173,19 +1148,17 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
-                    ring_index,                       // my_chip_id
-                    reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-                    num_packet_headers_storable,      // num_packet_headers_storable
-                    compute_output_cb_index,          // cb_compute_output_id
-                    reader_output_cb_index,           // cb_reader_output_id
-                    tile_granularity,                 // packet_size_in_pages
-                    page_size,                        // tensor0_page_size
-                    input_tensor_Wt,                  // input_tensor_Wt
-                    batch_slice_num_pages,            // batch_slice_num_pages
-                    ring_size,                        // ring_size
-                    num_batches,                      // num_batches
-                    tiles_to_write_per_packet,        // contig_pages_advanced
-                    is_forward,                       // direction
+                    ring_index,                 // my_chip_id
+                    compute_output_cb_index,    // cb_compute_output_id
+                    reader_output_cb_index,     // cb_reader_output_id
+                    tile_granularity,           // packet_size_in_pages
+                    page_size,                  // tensor0_page_size
+                    input_tensor_Wt,            // input_tensor_Wt
+                    batch_slice_num_pages,      // batch_slice_num_pages
+                    ring_size,                  // ring_size
+                    num_batches,                // num_batches
+                    tiles_to_write_per_packet,  // contig_pages_advanced
+                    is_forward,                 // direction
                     is_first_device_in_direction,
                     num_targets_in_direction,
                     num_intermediate_reduction_steps,
@@ -1309,7 +1282,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
 
-            const auto& barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
+            const auto& barrier_semaphore =
+                static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
             const auto& semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
             // update senders
             uint32_t core_idx = 0;

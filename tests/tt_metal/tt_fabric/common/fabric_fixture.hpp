@@ -116,7 +116,7 @@ public:
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program
             auto& program_copy = program;
-            auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+            auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
             tt::tt_metal::distributed::AddProgramToMeshWorkload(
                 mesh_workload,
                 std::move(program_copy),
@@ -151,9 +151,8 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
-                tt::tt_metal::ClusterType::GALAXY ||
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             should_skip_ = true;
             return;
         }

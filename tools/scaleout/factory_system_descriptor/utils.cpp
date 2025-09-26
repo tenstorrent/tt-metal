@@ -161,7 +161,7 @@ void validate_fsd_against_gsd(
         }
     }
     if (strict_validation) {
-        if (fsd_board_types.size() != 0) {
+        if (!fsd_board_types.empty()) {
             throw std::runtime_error("Expected all board types to be found in FSD");
         }
     }

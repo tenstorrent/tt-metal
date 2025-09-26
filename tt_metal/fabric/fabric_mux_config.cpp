@@ -217,7 +217,6 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
-    append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
 }
 
@@ -232,7 +231,6 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
-    append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
 }
 

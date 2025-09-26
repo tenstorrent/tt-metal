@@ -8,7 +8,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from loguru import logger
 
 

@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 
 
 @pytest.mark.parametrize(

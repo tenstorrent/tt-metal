@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     dequantize_state_dict,
     get_model_config,
+    get_test_weight_config,
     load_state_dict,
     paged_cache_from_torch,
     run_reference_with_attention,
@@ -76,10 +77,12 @@ def test_forward_pass(
     batch_size,
     hf_config_short,
     tmp_path,
+    cache_path,
     mesh_device,
     ccl,
     model_path,
     module_path,
+    force_recalculate_weight_config,
     set_deterministic_env,
 ):
     # Hardcoded arguments; can later change them to test arguments if needed
@@ -115,6 +118,10 @@ def test_forward_pass(
         )
         input_cache = torch_cache_from_transformers_single_layer(input_cache, layer_idx)
         output_cache = torch_cache_from_transformers_single_layer(output_cache, layer_idx)
+
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
     else:
         # TODO: once reference IO is integrated, remove generating it
         reference_model = DeepseekV3Attention(hf_config_short, layer_idx=layer_idx).eval().to(torch.bfloat16)
@@ -141,7 +148,14 @@ def test_forward_pass(
     paged_input_cache, torch_page_table = paged_cache_from_torch(input_cache, dp_factor, paged_config, user_id)
 
     # Set up model config
-    weight_config = MLA.convert_weights(hf_config_short, [state_dict] * mesh_device.shape[0], tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        MLA,
+        hf_config_short,
+        (state_dict,) * mesh_device.shape[0],
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+    )
     model_config = get_model_config(MLA, mode, hf_config_short, mesh_device)
     model_state = MLA.create_state(
         hf_config_short, paged_config, mesh_device, ccl, (paged_input_cache,) * mesh_device.shape[0]

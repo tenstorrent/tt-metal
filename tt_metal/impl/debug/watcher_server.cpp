@@ -19,7 +19,7 @@
 #include <thread>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug/ring_buffer.h"
 #include "debug_helpers.hpp"
@@ -528,7 +528,7 @@ void WatcherServer::Impl::poll_watcher_data() {
         fprintf(logfile_, "-----\n");
         fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
 
-        if (device_id_to_reader_.size() == 0) {
+        if (device_id_to_reader_.empty()) {
             fprintf(logfile_, "No active devices\n");
         }
 

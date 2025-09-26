@@ -90,11 +90,14 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         input_tensor.memory_config().shard_spec()->shape[1]};
 
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
-        output_memory_config_.shard_spec()->grid,
-        shard_shape,
-        shard_shape,
-        output_memory_config_.shard_spec()->orientation});
-    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
+        output_memory_config_.shard_spec()->grid, shard_shape, output_memory_config_.shard_spec()->orientation});
+    auto padded_output_shape = output_shape;
+    padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
+    padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
+    return {TensorSpec(
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape))};
 }
 
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(

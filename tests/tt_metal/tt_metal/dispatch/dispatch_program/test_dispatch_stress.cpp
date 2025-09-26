@@ -81,7 +81,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         SetRuntimeArgs(program, ncrisc_kid, core, ncrisc_rt_args);
     }
 
-    distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
+    distributed::MeshWorkload workload;
     distributed::AddProgramToMeshWorkload(
         workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);

@@ -32,7 +32,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -75,9 +74,9 @@ void RunDelayTestOnCore(
     const uint32_t NUM_TILES = 4;
     const uint32_t DRAM_BUFFER_SIZE =
         SINGLE_TILE_SIZE * NUM_TILES;  // NUM_TILES of FP16_B, hard-coded in the reader/writer kernels
-    const uint32_t PAGE_SIZE = DRAM_BUFFER_SIZE;
+    const uint32_t PAGE_SZE = DRAM_BUFFER_SIZE;
 
-    distributed::DeviceLocalBufferConfig dram_config{.page_size = PAGE_SIZE, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = PAGE_SZE, .buffer_type = tt_metal::BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = DRAM_BUFFER_SIZE};
 
     auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());

@@ -6,7 +6,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -353,7 +352,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
     tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {page_size_input, input_shape.rank()};
+    std::vector<uint32_t> reader_compile_time_args = {page_size_input, input_shape.rank(), a.element_size()};
     TensorAccessorArgs(*a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -876,7 +875,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

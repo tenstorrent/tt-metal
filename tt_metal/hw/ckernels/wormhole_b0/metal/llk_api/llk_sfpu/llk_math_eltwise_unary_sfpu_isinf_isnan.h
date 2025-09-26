@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 // isinf
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_isinf_init() {

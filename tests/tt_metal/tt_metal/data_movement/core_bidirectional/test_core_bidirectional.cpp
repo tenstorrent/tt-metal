@@ -161,7 +161,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
     tt_metal::detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_read_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)

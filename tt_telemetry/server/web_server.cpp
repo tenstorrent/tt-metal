@@ -6,7 +6,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
-#include <iostream>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <sstream>
@@ -16,14 +16,14 @@
 #include <httplib.h>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
 
 using json = nlohmann::json;
 
-class TelemetryServer: public TelemetrySubscriber {
+class WebServer : public TelemetrySubscriber {
 private:
     httplib::Server server_;
     std::vector<httplib::DataSink*> sse_clients_;       // initial snapshot sent, able to receive all delta updates
@@ -34,17 +34,8 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     std::string metal_home_;
 
-    // Telemetry data
-    std::unordered_map<size_t, std::string> bool_metric_name_by_id_;
-    std::unordered_map<size_t, bool> bool_metric_value_by_id_;
-    std::unordered_map<size_t, std::string> uint_metric_name_by_id_;
-    std::unordered_map<size_t, uint16_t> uint_metric_units_by_id_;
-    std::unordered_map<size_t, uint64_t> uint_metric_value_by_id_;
-    std::unordered_map<size_t, std::string> double_metric_name_by_id_;
-    std::unordered_map<size_t, uint16_t> double_metric_units_by_id_;
-    std::unordered_map<size_t, double> double_metric_value_by_id_;
-    std::unordered_map<uint16_t, std::string> metric_unit_display_label_by_code_;
-    std::unordered_map<uint16_t, std::string> metric_unit_full_label_by_code_;
+    // Accumulated telemetry data
+    TelemetrySnapshot telemetry_state_;
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
@@ -56,29 +47,8 @@ private:
             return;
         }
 
-        // Construct snapshot from current data
-        TelemetrySnapshot full_snapshot;
-        for (const auto &[id, name]: bool_metric_name_by_id_) {
-            full_snapshot.bool_metric_ids.push_back(id);
-            full_snapshot.bool_metric_names.push_back(name);
-            full_snapshot.bool_metric_values.push_back(bool_metric_value_by_id_[id]);
-        }
-        for (const auto &[id, name]: uint_metric_name_by_id_) {
-            full_snapshot.uint_metric_ids.push_back(id);
-            full_snapshot.uint_metric_names.push_back(name);
-            full_snapshot.uint_metric_units.push_back(uint_metric_units_by_id_[id]);
-            full_snapshot.uint_metric_values.push_back(uint_metric_value_by_id_[id]);
-        }
-        for (const auto& [id, name] : double_metric_name_by_id_) {
-            full_snapshot.double_metric_ids.push_back(id);
-            full_snapshot.double_metric_names.push_back(name);
-            full_snapshot.double_metric_units.push_back(double_metric_units_by_id_[id]);
-            full_snapshot.double_metric_values.push_back(double_metric_value_by_id_[id]);
-        }
-
-        // Include cached unit label maps
-        full_snapshot.metric_unit_display_label_by_code = metric_unit_display_label_by_code_;
-        full_snapshot.metric_unit_full_label_by_code = metric_unit_full_label_by_code_;
+        // Use current accumulated telemetry data
+        TelemetrySnapshot full_snapshot = telemetry_state_;
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
 
@@ -109,58 +79,6 @@ private:
         return snapshot;
     }
 
-    void update_telemetry_state_from_snapshot(std::shared_ptr<TelemetrySnapshot> snapshot) {
-        TT_ASSERT(snapshot->bool_metric_ids.size() == snapshot->bool_metric_values.size());
-        if (snapshot->bool_metric_names.size() > 0) {
-            TT_ASSERT(snapshot->bool_metric_ids.size() == snapshot->bool_metric_names.size());
-        }
-        TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_values.size());
-        if (snapshot->uint_metric_names.size() > 0) {
-            TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_names.size());
-            TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_units.size());
-        }
-        TT_ASSERT(snapshot->double_metric_ids.size() == snapshot->double_metric_values.size());
-        if (snapshot->double_metric_names.size() > 0) {
-            TT_ASSERT(snapshot->double_metric_ids.size() == snapshot->double_metric_names.size());
-            TT_ASSERT(snapshot->double_metric_ids.size() == snapshot->double_metric_units.size());
-        }
-
-        // Cache unit label maps when any names are populated
-        if (snapshot->uint_metric_names.size() > 0 || snapshot->double_metric_names.size() > 0) {
-            metric_unit_display_label_by_code_ = snapshot->metric_unit_display_label_by_code;
-            metric_unit_full_label_by_code_ = snapshot->metric_unit_full_label_by_code;
-        }
-
-        for (size_t i = 0; i < snapshot->bool_metric_ids.size(); i++) {
-            size_t idx = snapshot->bool_metric_ids[i];
-            if (snapshot->bool_metric_names.size() > 0) {
-                // Names were included, which indicates new metrics added!
-                bool_metric_name_by_id_[idx] = snapshot->bool_metric_names[i];
-            }
-            bool_metric_value_by_id_[idx] = snapshot->bool_metric_values[i];
-        }
-
-        for (size_t i = 0; i < snapshot->uint_metric_ids.size(); i++) {
-            size_t idx = snapshot->uint_metric_ids[i];
-            if (snapshot->uint_metric_names.size() > 0) {
-                // Names were included, which indicates new metrics added!
-                uint_metric_name_by_id_[idx] = snapshot->uint_metric_names[i];
-                uint_metric_units_by_id_[idx] = snapshot->uint_metric_units[i];
-            }
-            uint_metric_value_by_id_[idx] = snapshot->uint_metric_values[i];
-        }
-
-        for (size_t i = 0; i < snapshot->double_metric_ids.size(); i++) {
-            size_t idx = snapshot->double_metric_ids[i];
-            if (snapshot->double_metric_names.size() > 0) {
-                // Names were included, which indicates new metrics added!
-                double_metric_name_by_id_[idx] = snapshot->double_metric_names[i];
-                double_metric_units_by_id_[idx] = snapshot->double_metric_units[i];
-            }
-            double_metric_value_by_id_[idx] = snapshot->double_metric_values[i];
-        }
-    }
-
     void send_snapshot_to_clients(std::shared_ptr<TelemetrySnapshot> snapshot) {
         // Serialize
         json j = *snapshot;
@@ -189,7 +107,7 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 continue;
             }
-            update_telemetry_state_from_snapshot(snapshot);
+            telemetry_state_.merge_from(*snapshot);
             send_snapshot_to_clients(snapshot);
         }
     }
@@ -230,7 +148,7 @@ private:
     }
 
 public:
-    TelemetryServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
+    WebServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
         if (!metal_home.empty()) {
             metal_home_ = metal_home;
         } else {
@@ -344,7 +262,7 @@ public:
                             new_sse_clients_.end());
                     }
 
-                    std::cout << "Connection finished" << std::endl;
+                    log_info(tt::LogAlways, "Connection finished");
 
                     return true;
                 }
@@ -362,15 +280,14 @@ public:
 
         // Start telemetry broadcasting thread
         running_ = true;
-        telemetry_thread_ = std::thread(&TelemetryServer::broadcast_telemetry, this);
+        telemetry_thread_ = std::thread(&WebServer::broadcast_telemetry, this);
 
-        std::cout << "Starting telemetry server on port " << port << "..." << std::endl;
-        std::cout << "API endpoints:" << std::endl;
-        std::cout << "  GET  /                - Web UI (serves static/index.html)" << std::endl;
-        std::cout << "  GET  /<path>          - Static assets (serves static/<path>)" << std::endl;
-        std::cout << "  GET  /api/status      - Server status" << std::endl;
-        std::cout << "  GET  /api/telemetry   - Current telemetry" << std::endl;
-        std::cout << "  GET  /api/stream      - Real-time stream (SSE)" << std::endl;
+        log_info(tt::LogAlways, "Starting telemetry server on port {}...", port);
+        log_info(tt::LogAlways, "API endpoints:");
+        log_info(tt::LogAlways, "  GET  /                - Web UI (serves static/index.html)");
+        log_info(tt::LogAlways, "  GET  /<path>          - Static assets (serves static/<path>)");
+        log_info(tt::LogAlways, "  GET  /api/status      - Server status");
+        log_info(tt::LogAlways, "  GET  /api/stream      - Real-time stream (SSE)");
 
         server_.listen("0.0.0.0", port);
     }
@@ -388,12 +305,10 @@ public:
         pending_snapshots_.push(std::move(telemetry));
     }
 
-    ~TelemetryServer() {
-        stop();
-    }
+    ~WebServer() { stop(); }
 };
 
-static bool web_server_thread(std::shared_ptr<TelemetryServer> server, uint16_t port) {
+static bool web_server_thread(std::shared_ptr<WebServer> server, uint16_t port) {
     try {
         server->start(port);
     } catch (const std::exception& e) {
@@ -405,7 +320,7 @@ static bool web_server_thread(std::shared_ptr<TelemetryServer> server, uint16_t 
 
 std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_web_server(
     uint16_t port, const std::string& metal_home) {
-    auto server = std::make_shared<TelemetryServer>(metal_home);
+    auto server = std::make_shared<WebServer>(metal_home);
     auto subscriber = static_pointer_cast<TelemetrySubscriber>(server);
     auto future = std::async(std::launch::async, web_server_thread, server, port);
     return std::make_pair(std::move(future), subscriber);

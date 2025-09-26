@@ -985,7 +985,7 @@ public:
         const auto& neighbors = control_plane_ptr_->get_chip_neighbors(src_node_id, direction);
         TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
         TT_FATAL(
-            neighbors.begin()->second.size() >= 1,
+            !neighbors.begin()->second.empty(),
             "Expected at least 1 neighbor chip for {} in direction: {}",
             src_node_id,
             direction);

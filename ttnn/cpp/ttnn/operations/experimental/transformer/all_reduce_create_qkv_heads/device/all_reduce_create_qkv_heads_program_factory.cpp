@@ -44,7 +44,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
-    const uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
     const uint32_t head_tiles = head_dim / tt::constants::TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
 
@@ -71,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
     tt::DataFormat cb_batch_offset_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(batch_offset_tensor.dtype());
-    uint32_t single_batch_offset_tile_size = tt::tt_metal::detail::TileSize(cb_batch_offset_data_format);
+    uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
     batch_offset_index_stick_size = batch_offset_tensor.buffer()->aligned_page_size();
 
     tt::tt_metal::CircularBufferConfig cb_batch_offset_config_reader =

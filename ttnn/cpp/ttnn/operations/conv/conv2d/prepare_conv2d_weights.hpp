@@ -180,6 +180,45 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::array<uint32_t, 4> padding_n4;
     // This conv will go through auto shard codepath for matmul based convs
     const bool interleaved_mm_conv;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "input_channels_alignment",
+        "weights_bias_dtype",
+        "weight_block_h_ntiles",
+        "weight_block_w_ntiles",
+        "input_parallel_config",
+        "output_parallel_config",
+        "groups",
+        "act_block_h_ntiles",
+        "input_width",
+        "has_bias",
+        "parameters_on_device",
+        "enable_kernel_stride_folding",
+        "full_inner_dim",
+        "kernel_size",
+        "stride",
+        "padding_n4",
+        "interleaved_mm_conv");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->input_channels_alignment),
+            std::cref(this->weights_bias_dtype),
+            std::cref(this->weight_block_h_ntiles),
+            std::cref(this->weight_block_w_ntiles),
+            std::cref(this->input_parallel_config),
+            std::cref(this->output_parallel_config),
+            std::cref(this->groups),
+            std::cref(this->act_block_h_ntiles),
+            std::cref(this->input_width),
+            std::cref(this->has_bias),
+            std::cref(this->parameters_on_device),
+            std::cref(this->enable_kernel_stride_folding),
+            std::cref(this->full_inner_dim),
+            std::cref(this->kernel_size),
+            std::cref(this->stride),
+            std::cref(this->padding_n4),
+            std::cref(this->interleaved_mm_conv));
+    }
 };
 
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(

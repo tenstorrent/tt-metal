@@ -2,18 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 
-static auto make_ordered_ethernet_connections(const auto &unordered_connections) {
-    std::map<
-        tt::umd::chip_id_t,
-        std::map<
-            tt::umd::ethernet_channel_t,
-            std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>
-        >
-    > ordered_connections;
+template <typename ChipId>
+static std::
+    map<tt::umd::chip_id_t, std::map<tt::umd::ethernet_channel_t, std::tuple<ChipId, tt::umd::ethernet_channel_t>>>
+    make_ordered_ethernet_connections(
+        const std::unordered_map<
+            tt::umd::chip_id_t,
+            std::unordered_map<tt::umd::ethernet_channel_t, std::tuple<ChipId, tt::umd::ethernet_channel_t>>>&
+            unordered_connections) {
+    std::map<tt::umd::chip_id_t, std::map<tt::umd::ethernet_channel_t, std::tuple<ChipId, tt::umd::ethernet_channel_t>>>
+        ordered_connections;
 
     for (const auto& [chip_id, channel_map] : unordered_connections) {
         for (const auto& [channel, connection_tuple] : channel_map) {
@@ -29,6 +31,12 @@ std::map<
     std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
 get_ordered_ethernet_connections(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     return make_ordered_ethernet_connections(cluster->get_cluster_description()->get_ethernet_connections());
+}
+
+std::map<tt::umd::chip_id_t, std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
+get_ordered_ethernet_connections_to_remote_devices(const std::unique_ptr<tt::umd::Cluster>& cluster) {
+    return make_ordered_ethernet_connections(
+        cluster->get_cluster_description()->get_ethernet_connections_to_remote_devices());
 }
 
 bool is_ethernet_endpoint_up(

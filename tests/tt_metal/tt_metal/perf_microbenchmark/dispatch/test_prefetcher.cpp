@@ -28,7 +28,7 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "common.h"
 #include <tt-metalium/core_coord.hpp>
@@ -47,7 +47,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE \
     tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST)

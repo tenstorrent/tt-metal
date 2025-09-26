@@ -75,19 +75,6 @@ std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_inte
     return internal_connections;
 }
 
-// Helper function to create both ports and internal connections efficiently
-std::pair<
-    std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
-    std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>
-create_ports_and_connections(
-    const std::function<std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>()>&
-        ports_func,
-    PortType connection_port_type) {
-    auto ports = ports_func();
-    auto internal_connections = create_internal_connections_from_ports(ports, connection_port_type);
-    return {ports, internal_connections};
-}
-
 }  // anonymous namespace
 
 Board::Board(

@@ -56,10 +56,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     };
 
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
+    const uint32_t input_tile_size = tt::tile_size(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
-    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const uint32_t cb_in_total_size = total_tiles_per_core * input_tile_size;

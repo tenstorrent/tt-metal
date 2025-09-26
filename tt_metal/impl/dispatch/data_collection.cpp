@@ -17,12 +17,13 @@
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
-#include <kernel.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include "impl/program/program_impl.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 
@@ -86,7 +87,7 @@ public:
 
     void DumpStats(std::ofstream& outfile) const {
         // Only dump if this has data
-        if (data.size() == 0) {
+        if (data.empty()) {
             return;
         }
         outfile << fmt::format("\t{} stats:\n", type);

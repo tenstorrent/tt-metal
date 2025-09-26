@@ -56,9 +56,9 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    const auto target_tile_size = tt_metal::detail::TileSize(target_data_format);
-    const auto data_tile_size = tt_metal::detail::TileSize(data_format);
-    const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
+    const auto target_tile_size = tt::tile_size(target_data_format);
+    const auto data_tile_size = tt::tile_size(data_format);
+    const auto intermed_tile_size = tt::tile_size(intermed_data_format);
 
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);

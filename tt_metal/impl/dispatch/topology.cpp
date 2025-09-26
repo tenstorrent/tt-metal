@@ -17,7 +17,7 @@
 #include <unordered_set>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
@@ -653,7 +653,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
 void populate_cq_static_args(IDevice* device) {
     TT_ASSERT(
-        node_id_to_kernel.size() > 0,
+        !node_id_to_kernel.empty(),
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>();

@@ -71,6 +71,8 @@ jobs:
         test-group:
           - name: tt-cnn pipeline unit tests
             cmd: pytest models/tt_cnn/tests/test_pipeline.py
+          - name: tt-cnn builder unit tests
+            cmd: pytest models/tt_cnn/tests/test_builder.py
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
@@ -107,7 +109,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06ECNVR0EN # Evan Smal
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

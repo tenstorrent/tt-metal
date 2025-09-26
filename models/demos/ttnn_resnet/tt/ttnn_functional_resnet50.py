@@ -497,9 +497,7 @@ class resnet50:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
             # otherwise act block h is not big enough for the reuse
-            enable_activation_reuse=(
-                not is_blackhole_p100(device) and (not is_wormhole_b0() or device.get_num_devices() <= 8)
-            ),
+            enable_activation_reuse=(not is_wormhole_b0() or device.get_num_devices() <= 8),
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
