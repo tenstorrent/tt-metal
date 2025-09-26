@@ -106,7 +106,10 @@ jobs:
             cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     # ttnn group 1 is timing out on CIv2: https://github.com/tenstorrent/tt-metal/issues/29443
-    runs-on: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
+    runs-on:
+      - in-service
+      - cloud-virtual-machine
+      - ${{ inputs.runner-label }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
