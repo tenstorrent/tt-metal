@@ -12,11 +12,6 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     exit 1
 fi
 
-if [[ -z "$ARCH_NAME" ]]; then
-    echo "Must provide ARCH_NAME in environment" 1>&2
-    exit 1
-fi
-
 export TT_METAL_CLEAR_L1=1
 
 # Not super obvious which test is which during runtime unless you count, so occasionally sprinkle echo statements
