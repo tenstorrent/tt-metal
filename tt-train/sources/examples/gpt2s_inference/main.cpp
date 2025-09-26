@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
+#include "ops/sampling_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -43,7 +44,6 @@ int main(int argc, char **argv) {
     app.add_option("--safetensors", safetensors_path, "Path to the model safetensors file")
         ->default_val(safetensors_path);
     app.add_option("--temperature", temperature, "Sampling temperature")->default_val(temperature);
-    app.add_option("--tokens", tokens_to_generate, "Number of tokens to generate")->default_val(tokens_to_generate);
     CLI11_PARSE(app, argc, argv);
 
     // Set up device and context
@@ -64,12 +64,18 @@ int main(int argc, char **argv) {
     fmt::print("Overriding vocab size to be divisible by 32\n");
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
 
-    config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), 32U);
+    uint32_t original_vocab_size = tokenizer->get_vocab_size();
+    uint32_t padded_vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), 32U);
+
+    config.vocab_size = padded_vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
 
     Model model = ttml::models::gpt2::create(config);
 
     model->load_from_safetensors(safetensors_path);
+
+    // Disable gradient calculations
+    ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::DISABLED);
 
     // Prepare prompt
     if (prompt.empty()) {
@@ -108,15 +114,30 @@ int main(int argc, char **argv) {
     auto mask_tensor = ttml::autograd::create_tensor(
         ttml::core::from_vector(mask, ttnn::Shape({1, 1, max_sequence_length, max_sequence_length}), device));
 
+    // Create a large negative mask for out-of-vocab logits
+    auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
+
+    auto argmax_zeros =
+        ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
+
+    auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
+        vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
+
+    auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
+
+    auto logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
+
+    auto logits_padding_mask_autograd = ttml::autograd::create_tensor(logits_padding_mask);
+
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
         // Forward pass
         auto output = run_model(model, prompt_tensor, mask_tensor);
 
         // Sample next token
-        auto next_token_tensor = ttml::ttnn_fixed::sample(
-            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), std::nullopt);
+        auto next_token_tensor = ttml::ops::sample_op(
+            output, temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask_autograd);
 
-        auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor);
+        auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor->get_value());
         uint32_t next_token_id = next_token_vector[0];
 
         // Append and print
