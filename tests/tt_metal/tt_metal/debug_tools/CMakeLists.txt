@@ -22,38 +22,43 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp
 )
 
-# Create the test executable
-add_executable(unit_tests_debug_tools ${UNIT_TESTS_DEBUG_TOOLS_SRC})
+function(create_unit_test_executable)
+    set(exec_name unit_tests_debug_tools)
 
-# Enable unity build for the executable
-TT_ENABLE_UNITY_BUILD(unit_tests_debug_tools)
+    # Create the test executable
+    add_executable(${exec_name} ${UNIT_TESTS_DEBUG_TOOLS_SRC})
 
-# Link libraries
-target_link_libraries(unit_tests_debug_tools PRIVATE test_metal_common_libs)
+    # Enable unity build for the executable
+    TT_ENABLE_UNITY_BUILD(${exec_name})
 
-# Set include directories
-target_include_directories(
-    unit_tests_debug_tools
-    BEFORE
-    PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-        ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
-)
+    # Link libraries
+    target_link_libraries(${exec_name} PRIVATE test_metal_common_libs)
 
-# Set runtime output directory
-set_target_properties(
-    unit_tests_debug_tools
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tt_metal
-)
+    # Set include directories
+    target_include_directories(
+        ${exec_name}
+        BEFORE
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/common
+    )
+
+    # Set runtime output directory
+    set_target_properties(
+        ${exec_name}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal
+    )
+endfunction()
+
+create_unit_test_executable()
 
 
-
-
+# Inspector unit tests
 set(UNIT_TESTS_INSPECTOR_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/inspector/test_rpc_startup.cpp
 )
