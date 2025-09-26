@@ -24,10 +24,7 @@ FORCE_INLINE void process_mish_tiles() {
     tile_regs_acquire();
 
     copy_tile_to_dst_init_short(cb_input);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        copy_tile(cb_input, i, i);
-    }
-
+    copy_block_matmul_partials(cb_input, 0, 0, num_tiles);
     exp_tile_init<1u>();
     for (uint32_t i = 0; i < num_tiles; ++i) {
         exp_tile<1u>(i);
@@ -51,9 +48,7 @@ FORCE_INLINE void process_mish_tiles() {
     tile_regs_commit();
     tile_regs_wait();
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        pack_tile(i, cb_output);
-    }
+    pack_tile_block(0, cb_output, num_tiles);
 
     tile_regs_release();
     cb_pop_front(cb_input, num_tiles);
@@ -68,6 +63,7 @@ void MAIN {
     init_sfpu(cb_input, cb_output);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        cb_reserve_back(cb_output, per_core_block_dim);
         constexpr uint32_t chunk_size = 8;
         constexpr uint32_t full_chunks = per_core_block_dim / chunk_size;
         constexpr uint32_t leftover_tiles = per_core_block_dim % chunk_size;
@@ -78,6 +74,7 @@ void MAIN {
         if constexpr (leftover_tiles > 0) {
             process_mish_tiles<leftover_tiles>();
         }
+        cb_push_back(cb_output, per_core_block_dim);
     }
 }
 }  // namespace NAMESPACE
