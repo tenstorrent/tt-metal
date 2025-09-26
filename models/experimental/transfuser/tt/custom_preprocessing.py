@@ -1,15 +1,8 @@
 import ttnn
 import torch
 
-from ttnn.model_preprocessing import convert_torch_model_to_ttnn_model, fold_batch_norm2d_into_conv2d
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
-# from models.experimental.panoptic_deeplab.reference.decoder import DecoderModel
-# from models.experimental.panoptic_deeplab.reference.aspp import ASPPModel
-# from models.experimental.panoptic_deeplab.reference.head import HeadModel
-# from models.experimental.panoptic_deeplab.reference.res_block import ResModel
-# from models.experimental.panoptic_deeplab.reference.resnet52_stem import DeepLabStem
-# from models.experimental.panoptic_deeplab.reference.resnet52_bottleneck import Bottleneck
-# from models.experimental.panoptic_deeplab.reference.resnet52_backbone import ResNet52BackBone as TorchBackbone
 from models.experimental.transfuser.reference.transfuser_backbone import TransfuserBackbone
 from models.experimental.transfuser.reference.common import Conv2d
 
@@ -33,18 +26,33 @@ def custom_preprocessor(
             )
         parameters["weight"] = ttnn.from_torch(weight, mesh_mapper=mesh_mapper)
         parameters["bias"] = ttnn.from_torch(torch.reshape(bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper)
-    elif isinstance(
-        model,
-        (TransfuserBackbone,),
-    ):
-        # Let the sub-modules handle their own preprocessing
-        for child_name, child in model.named_children():
-            parameters[child_name] = convert_torch_model_to_ttnn_model(
-                child,
-                name=f"{name}.{child_name}",
-                custom_preprocessor=custom_preprocessor_func,
-                convert_to_ttnn=convert_to_ttnn,
-                ttnn_module_args=ttnn_module_args,
+    # elif isinstance(
+    #     model,
+    #     (TransfuserBackbone,),
+    # ):
+    #     # Let the sub-modules handle their own preprocessing
+    #     for child_name, child in model.named_children():
+    #         parameters[child_name] = convert_torch_model_to_ttnn_model(
+    #             child,
+    #             name=f"{name}.{child_name}",
+    #             custom_preprocessor=custom_preprocessor_func,
+    #             convert_to_ttnn=convert_to_ttnn,
+    #             ttnn_module_args=ttnn_module_args,
+    #         )
+    elif isinstance(model, TransfuserBackbone):
+        if hasattr(model, "image_encoder") and hasattr(model.image_encoder, "features"):
+            weight, bias = fold_batch_norm2d_into_conv2d(
+                model.image_encoder.features.conv1, model.image_encoder.features.bn1
+            )
+            parameters["image_encoder"] = {}
+            parameters["image_encoder"]["features"] = {}
+            parameters["image_encoder"]["features"]["conv1"] = {}
+            parameters["image_encoder"]["features"]["conv1"]["weight"] = ttnn.from_torch(
+                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+            )
+            bias = bias.reshape((1, 1, 1, -1))
+            parameters["image_encoder"]["features"]["conv1"]["bias"] = ttnn.from_torch(
+                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
             )
     return parameters
 
