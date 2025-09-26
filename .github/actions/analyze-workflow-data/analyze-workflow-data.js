@@ -336,31 +336,31 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
 
           // A) info: ... until backtrace:
           for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
-            if (infoRegex.test(lines[i])) {
+            if (infoRegex.test(lines[i])) { // test if the line contains info:
               // Guardrail: only consider this an error snippet if nearby lines include
               // a failure marker or a backtrace. Scan a small window ahead.
-              const upper = Math.min(lines.length, i + 200);
+              const upper = Math.min(lines.length, i + 200); // set the upper limit to the length of the lines array or the index plus 200
               let windowHasFailure = false;
-              for (let k = i; k < upper; k++) {
-                const ln = lines[k];
-                if (backtraceRegex.test(ln) || failureMarkers.some(rx => rx.test(ln))) {
-                  windowHasFailure = true;
+              for (let k = i; k < upper; k++) { // iterate through the lines in the window
+                const ln = lines[k]; // get the line
+                if (backtraceRegex.test(ln)) { // test if the line contains backtrace
+                  windowHasFailure = true; // set the window has failure to true
                   break;
                 }
               }
-              if (!windowHasFailure) continue;
+              if (!windowHasFailure) continue; // if the window has no failure, continue to the next line
 
-              const block = [lines[i].trim()];
-              let j = i + 1;
+              const block = [lines[i].trim()]; // add the line to the block
+              let j = i + 1; // set the index to the next line
               while (j < lines.length && !backtraceRegex.test(lines[j]) && collected.length < maxCount) {
-                if (lines[j].trim() !== '') block.push(lines[j].trim());
+                if (lines[j].trim() !== '') block.push(lines[j].trim()); // if the line is not empty, add it to the block
                 j++;
               }
-              const testLabel = extractTestLabelBackward(lines, i);
-              const textBlock = block.join('\n');
-              const fileBase = path.basename(p, path.extname(p));
-              const finalLabel = testLabel ? `${fileBase}:\n${testLabel}` : `${fileBase}:\nno label found`;
-              collected.push({ snippet: textBlock.length > 600 ? textBlock.slice(0, 600) + '…' : textBlock, label: finalLabel });
+              const testLabel = extractTestLabelBackward(lines, i); // extract the test label from the lines
+              const textBlock = block.join('\n'); // join the block into a single string
+              const fileBase = path.basename(p, path.extname(p)); // get the base name of the log file
+              const finalLabel = testLabel ? `${fileBase}:\n${testLabel}` : `${fileBase}:\nno label found`; // set the final label to the file base and test label if the test label is not empty, otherwise set it to the file base and no label found
+              collected.push({ snippet: textBlock.length > 600 ? textBlock.slice(0, 600) + '…' : textBlock, label: finalLabel }); // add the snippet to the collected snippets. if the text block is longer than 600 characters, truncate it to 600 characters
               foundInFile++;
               i = j;
             }
@@ -368,10 +368,10 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
 
           // No other passes by design (keep it simple): only info..backtrace blocks
 
-          core.info(`Parsed log file: ${p} → found ${foundInFile} snippet(s)`);
+          core.info(`Parsed log file: ${p} → found ${foundInFile} snippet(s)`); // log the number of snippets found in the file
         } catch (_) { /* ignore */ }
       }
-      if (collected.length >= maxCount) break;
+      if (collected.length >= maxCount) break; // if the collected snippets are greater than or equal to the max count, break the loop
     }
   }
 
