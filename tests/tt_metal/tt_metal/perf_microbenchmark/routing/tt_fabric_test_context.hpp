@@ -147,12 +147,24 @@ public:
         device_global_sync_cores_.clear();
         device_local_sync_cores_.clear();
         this->allocator_->reset();
+
+        // Reset memory maps for next test run
+        sender_memory_map_.reset();
+
         reset_local_variables();
     }
 
     void process_traffic_config(TestConfig& config) {
+        // NOTE: Flow control (mux) is now handled automatically based on per-pattern enable_flow_control
+        // via the FabricConnectionManager during kernel creation. No global enable_mux flag needed.
+
+        // Allocate resources
+        log_info(tt::LogTest, "Allocating resources for test config");
         this->allocator_->allocate_resources(config);
         log_debug(tt::LogTest, "Resource allocation complete");
+
+        // Transfer mux cores from allocator to devices
+        setup_mux_cores();
 
         if (config.global_sync) {
             // set it only after the test_config is built since it needs set the sync value during expand the high-level
@@ -273,6 +285,7 @@ public:
                     .atomic_inc_val = pattern.atomic_inc_val,
                     .atomic_inc_wrap = pattern.atomic_inc_wrap,
                     .mcast_start_hops = pattern.mcast_start_hops,
+                    .enable_flow_control = config.enable_flow_control,  // Propagate from test-level config
                     .seed = config.seed,
                     .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                     .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
@@ -336,6 +349,8 @@ public:
                     device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
             }
         }
+
+        // NOTE: Mux sync address clearing is now handled by FabricConnectionManager when mux connections are detected
 
         log_debug(
             tt::LogTest,
@@ -494,6 +509,21 @@ public:
 
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
 
+    void setup_mux_cores() {
+        // Transfer allocated mux cores from allocator to each device
+        for (auto& [coord, device] : test_devices_) {
+            auto node_id = device.get_node_id();
+            auto mux_cores = allocator_->get_mux_cores_for_device(node_id);
+
+            if (!mux_cores.empty()) {
+                log_debug(tt::LogTest, "Setting up {} mux cores for device {}", mux_cores.size(), node_id);
+
+                // Set all mux cores at once
+                device.set_mux_cores(mux_cores);
+            }
+        }
+    }
+
     bool has_test_failures() const { return has_test_failures_; }
 
     const std::vector<std::string>& get_all_failed_tests() const { return all_failed_tests_; }
@@ -573,8 +603,16 @@ private:
             hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
+
+            log_debug(
+                tt::LogTest,
+                "Routing: src_node_id={}, chip_send_type={}, got {} dst_node_ids",
+                traffic_config.src_node_id,
+                static_cast<int>(traffic_config.parameters.chip_send_type),
+                dst_node_ids.size());
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
+            log_debug(tt::LogTest, "Explicit destinations: got {} dst_node_ids from config", dst_node_ids.size());
 
             // assign hops for 2d LL and 1D
             if (!(fixture_->is_dynamic_routing_enabled())) {
@@ -616,6 +654,25 @@ private:
             .atomic_inc_address = atomic_inc_address,
             .payload_buffer_size = payload_buffer_size};
 
+        // NEW: Add credit flow info if flow control is enabled
+        if (traffic_config.parameters.enable_flow_control) {
+            // Allocate unique credit address for this sender traffic config
+            uint32_t credit_addr = sender_memory_map_.allocate_credit_address();
+
+            // Sender gets the reception address and expected receiver count
+            sender_config.sender_credit_info = SenderCreditInfo{
+                .expected_receiver_count = static_cast<uint32_t>(dst_node_ids.size()),
+                .credit_reception_address = credit_addr};
+
+            // Base receiver credit info (will be customized per receiver device)
+            receiver_config.receiver_credit_info = ReceiverCreditInfo{
+                .sender_node_id = traffic_config.src_node_id,
+                .sender_logical_core = src_logical_core,
+                .sender_noc_encoding = fixture_->get_worker_noc_encoding(src_logical_core),
+                .credit_return_address = credit_addr,
+                .hops = std::nullopt};  // Will be set per receiver in the loop below
+        }
+
         if (fixture_->is_local_fabric_node_id(src_node_id)) {
             const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
             auto& src_test_device = this->test_devices_.at(src_coord);
@@ -625,7 +682,29 @@ private:
         for (const auto& dst_node_id : dst_node_ids) {
             if (fixture_->is_local_fabric_node_id(dst_node_id)) {
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
-                this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
+                log_debug(tt::LogTest, "Creating receiver on dst_node_id={}, dst_coord={}", dst_node_id, dst_coord);
+
+                // Create a copy of receiver config for this specific receiver device
+                TestTrafficReceiverConfig per_receiver_config = receiver_config;
+
+                // Calculate reverse hops for this specific receiver device (if flow control enabled)
+                if (traffic_config.parameters.enable_flow_control &&
+                    per_receiver_config.receiver_credit_info.has_value()) {
+                    std::optional<std::unordered_map<RoutingDirection, uint32_t>> reverse_hops = std::nullopt;
+
+                    // Calculate reverse hops from this receiver device back to the sender
+                    if (dst_node_id != src_node_id) {
+                        // For inter-chip traffic, calculate reverse hops from this receiver back to sender
+                        if (!fixture_->is_dynamic_routing_enabled()) {
+                            reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
+                        }
+                    }
+
+                    // Update the receiver credit info with device-specific reverse hops
+                    per_receiver_config.receiver_credit_info->hops = reverse_hops;
+                }
+
+                this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, per_receiver_config);
             }
         }
     }

@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "debug/dprint.h"
 #include "tt_fabric_test_kernels_utils.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 using namespace tt::tt_fabric::fabric_tests;
 
@@ -14,7 +16,9 @@ constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(4);
 constexpr bool LINE_SYNC = get_compile_time_arg_val(5);
 constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(6);
 constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(7);
+constexpr bool USE_MUX = get_compile_time_arg_val(8);
 
+// NOTE: Unified architecture - SenderKernelConfig now handles both fabric and mux connections
 using SenderKernelConfigType = SenderKernelConfig<
     NUM_FABRIC_CONNECTIONS,
     NUM_TRAFFIC_CONFIGS,
@@ -29,15 +33,26 @@ static_assert(
     "SenderKernelConfig size exceeds allocated kernel config buffer size");
 
 void kernel_main() {
+    DPRINT << "=== SENDER KERNEL STARTED ===" << ENDL();
     size_t rt_args_idx = 0;
 
+    DPRINT << "Building CommonMemoryMap..." << ENDL();
     // Get kernel config address from runtime args
     CommonMemoryMap common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
+    DPRINT << "CommonMemoryMap built, rt_args_idx=" << (uint32_t)rt_args_idx << ENDL();
+
     uint32_t kernel_config_address = common_memory_map.kernel_config_base;
+    DPRINT << "kernel_config_address=" << kernel_config_address << ENDL();
+
+    DPRINT << "About to construct SenderKernelConfigType, rt_args_idx=" << (uint32_t)rt_args_idx << ENDL();
+    DPRINT << "USE_MUX=" << (uint32_t)USE_MUX << " NUM_FABRIC_CONNECTIONS=" << (uint32_t)NUM_FABRIC_CONNECTIONS
+           << ENDL();
 
     // Use placement new to construct config in L1 memory
     auto* sender_config = new (reinterpret_cast<void*>(kernel_config_address))
         SenderKernelConfigType(SenderKernelConfigType::build_from_args(common_memory_map, rt_args_idx));
+
+    DPRINT << "SenderKernelConfigType constructed successfully!" << ENDL();
 
     // Clear test results area and mark as started
     clear_test_results(sender_config->get_result_buffer_address(), sender_config->get_result_buffer_size());
@@ -59,17 +74,38 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
     while (packets_left_to_send) {
         packets_left_to_send = false;
+
+        // Update credits from receivers (for mux mode)
+        if constexpr (USE_MUX) {
+            sender_config->update_credits_from_mux();
+        }
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto* traffic_config = sender_config->traffic_config_ptrs[i];
+            auto* traffic_config = sender_config->traffic_config_ptrs()[i];
             if (!traffic_config->has_packets_to_send()) {
                 continue;
             }
 
-            // TODO: might want to check if the buffer has wrapped or not
-            // if wrapped, then wait for credits from the receiver
+            if constexpr (USE_MUX) {
+                // *** CREDIT FLOW CONTROL: Check credits before sending (prevents buffer wraparound) ***
+                uint8_t connection_idx = sender_config->traffic_config_to_fabric_connection_map()[i];
+                if (!sender_config->has_credits_for_connection(connection_idx)) {
+                    // No credits available - prevents buffer wraparound!
+                    packets_left_to_send = true;  // Keep trying
+                    continue;
+                }
 
-            // Always send exactly one packet per config per round
-            traffic_config->send_one_packet<BENCHMARK_MODE>();
+                // Send packet through mux connection and consume credit
+                sender_config->send_one_packet_through_mux(i);
+                sender_config->consume_credit(connection_idx);
+            } else {
+                // Original behavior for direct fabric connections
+                // TODO: might want to check if the buffer has wrapped or not
+                // if wrapped, then wait for credits from the receiver
+
+                // Always send exactly one packet per config per round
+                traffic_config->template send_one_packet<BENCHMARK_MODE>();
+            }
+
             packets_left_to_send |= traffic_config->has_packets_to_send();
         }
     }
@@ -87,7 +123,7 @@ void kernel_main() {
 
     // Collect results from all traffic configs
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-        auto* traffic_config = sender_config->traffic_config_ptrs[i];
+        auto* traffic_config = sender_config->traffic_config_ptrs()[i];
         total_packets_sent += traffic_config->num_packets_processed;
     }
 
@@ -97,6 +133,11 @@ void kernel_main() {
 
     // Mark test as passed
     write_test_status(sender_config->get_result_buffer_address(), TT_FABRIC_STATUS_PASS);
+
+    // Terminate mux connections using distributed coordination
+    if constexpr (USE_MUX) {
+        sender_config->terminate_mux_connections();
+    }
 
     // Make sure all the noc txns are done
     noc_async_full_barrier();

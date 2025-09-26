@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <set>
 #include <tt-metalium/host_api.hpp>
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_interfaces.hpp"
@@ -163,6 +164,11 @@ public:
     CoreCoord reserve_receiver_core(const std::optional<CoreCoord>& specified_core);
     CoreResources& get_or_create_core_resources(const CoreCoord& core, CoreType core_type);
 
+    // Mux support
+    void reserve_mux_cores();
+    const std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord>& get_mux_cores() const;
+    bool has_mux_cores() const { return mux_reservation_.is_enabled; }
+
     const FabricNodeId node_id_;
     uint32_t l1_alignment_;
     uint32_t payload_chunk_size_;
@@ -172,6 +178,13 @@ public:
     std::array<CorePool, 2> core_pools_;                           // Indexed by CoreType
     std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_configs
     std::unordered_map<CoreCoord, CoreResources> core_resources_;  // map core -> its memory allocator
+
+    // Mux core reservation
+    struct MuxReservation {
+        std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> reserved_cores;
+        bool is_enabled = false;
+    };
+    MuxReservation mux_reservation_;
 
 private:
     void reserve_core_internal(const CoreCoord& core, CoreType core_type);
@@ -384,6 +397,44 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
     get_or_create_core_resources(core, core_type);
 }
 
+inline void TestDeviceResources::reserve_mux_cores() {
+    if (mux_reservation_.is_enabled) {
+        return;  // Already reserved
+    }
+
+    // Reserve 4 cores for mux (N, E, S, W directions)
+    TT_FATAL(
+        pristine_cores_.size() >= 4, "Not enough pristine cores available for mux reservation on device {}", node_id_);
+
+    constexpr tt::tt_fabric::RoutingDirection directions[] = {
+        tt::tt_fabric::RoutingDirection::N,
+        tt::tt_fabric::RoutingDirection::E,
+        tt::tt_fabric::RoutingDirection::S,
+        tt::tt_fabric::RoutingDirection::W};
+
+    for (auto direction : directions) {
+        mux_reservation_.reserved_cores[direction] = pristine_cores_.back();
+        pristine_cores_.pop_back();
+    }
+
+    mux_reservation_.is_enabled = true;
+
+    log_info(
+        tt::LogTest,
+        "Reserved mux cores on device {}: N={}, E={}, S={}, W={}",
+        node_id_,
+        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::N],
+        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::E],
+        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::S],
+        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::W]);
+}
+
+inline const std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord>& TestDeviceResources::get_mux_cores()
+    const {
+    TT_FATAL(mux_reservation_.is_enabled, "Mux cores not reserved on device {}", node_id_);
+    return mux_reservation_.reserved_cores;
+}
+
 // ======================================================================================
 // Global Allocator
 // ======================================================================================
@@ -400,6 +451,10 @@ public:
     void allocate_resources(TestConfig& test_config);
     void reset();
 
+    // Public interface for mux core access
+    std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> get_mux_cores_for_device(
+        const FabricNodeId& node_id) const;
+
 private:
     TestDeviceResources& get_or_create_device_resources(const FabricNodeId& node_id);
 
@@ -410,6 +465,7 @@ private:
     const ReceiverMemoryMap& receiver_memory_map_;
     std::optional<CoreCoord> worker_grid_size_;
     std::unordered_map<FabricNodeId, std::unique_ptr<TestDeviceResources>> all_device_resources_;
+    bool enable_flow_control_ = false;  // Set during allocate_resources, used during device creation
 };
 
 inline GlobalAllocator::GlobalAllocator(
@@ -446,10 +502,20 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
             policies_.receiver_config,
             receiver_memory_map_.payload_chunks,
             receiver_memory_map_.atomic_counters));
+
+    // Reserve mux cores if flow control is enabled
+    if (enable_flow_control_) {
+        inserted_it->second->reserve_mux_cores();
+        log_debug(tt::LogTest, "Reserved mux cores for device {} (flow control enabled)", node_id);
+    }
+
     return *inserted_it->second;
 }
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
+    // Store flow control flag for use during device creation
+    enable_flow_control_ = test_config.enable_flow_control;
+
     // PASS 0: Reserve sync cores for synchronization
     for (auto& sync_sender : test_config.global_sync_configs) {
         auto& device_resources = get_or_create_device_resources(sync_sender.device);
@@ -674,6 +740,21 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 inline void GlobalAllocator::reset() {
     all_device_resources_.clear();
     worker_grid_size_ = std::nullopt;
+    enable_flow_control_ = false;
+}
+
+inline std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> GlobalAllocator::get_mux_cores_for_device(
+    const FabricNodeId& node_id) const {
+    auto it = all_device_resources_.find(node_id);
+    if (it == all_device_resources_.end()) {
+        return {};  // Device not found, return empty map
+    }
+
+    if (!it->second->has_mux_cores()) {
+        return {};  // No mux cores reserved for this device
+    }
+
+    return it->second->get_mux_cores();
 }
 
 }  // namespace tt::tt_fabric::fabric_tests

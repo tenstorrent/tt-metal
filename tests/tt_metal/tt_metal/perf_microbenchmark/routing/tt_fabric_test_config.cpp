@@ -132,6 +132,10 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }
+    if (pattern_yaml["enable_flow_control"]) {
+        config.enable_flow_control = parse_scalar<bool>(pattern_yaml["enable_flow_control"]);
+        log_info(tt::LogTest, "Flow control enabled for pattern: {}", config.enable_flow_control.value());
+    }
     return config;
 }
 
@@ -215,6 +219,10 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
 
     if (test_yaml["sync"]) {
         test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
+    }
+
+    if (test_yaml["enable_flow_control"]) {
+        test_config.enable_flow_control = parse_scalar<bool>(test_yaml["enable_flow_control"]);
     }
 
     return test_config;
@@ -317,6 +325,8 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
             "Invalid torus_config '{}'. Supported values are: 'X', 'Y', 'XY'",
             config);
     }
+
+    // NOTE: Mux configuration is now handled automatically per-pattern via enable_flow_control
 
     return fabric_setup;
 }

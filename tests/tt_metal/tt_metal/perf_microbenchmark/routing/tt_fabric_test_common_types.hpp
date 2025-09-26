@@ -102,6 +102,8 @@ enum class HighLevelTrafficPattern {
     AllDevicesUniformPattern,
 };
 
+// MuxConfig removed - use sensible defaults internally
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
@@ -109,6 +111,7 @@ struct TestFabricSetup {
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
+    // NOTE: Flow control is now handled per-pattern via enable_flow_control
 };
 
 struct HighLevelPatternConfig {
@@ -134,6 +137,7 @@ struct ParsedTestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
+    bool enable_flow_control = false;  // Enable flow control (mux) for all patterns in this test
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
@@ -156,6 +160,7 @@ struct TestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
+    bool enable_flow_control = false;  // Enable flow control (mux) for all patterns in this test
     uint32_t seed{};
 };
 

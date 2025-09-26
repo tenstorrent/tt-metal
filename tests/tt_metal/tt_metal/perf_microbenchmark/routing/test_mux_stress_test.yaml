@@ -1,0 +1,30 @@
+Tests:
+  - name: "mux_stress_test_small"
+    enable_flow_control: true  # Enable flow control (mux) for this test
+    fabric_setup:
+      topology: Mesh
+      routing_type: LowLatency
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 5000  # Can now handle much higher packet counts with mux flow control
+
+    patterns:
+      - type: all_to_all
+
+  - name: "mux_stress_test_large"
+    enable_flow_control: true  # Enable flow control (mux) for this test
+    fabric_setup:
+      topology: Mesh
+      routing_type: LowLatency
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 10000  # Large stress test
+
+    patterns:
+      - type: all_to_all
