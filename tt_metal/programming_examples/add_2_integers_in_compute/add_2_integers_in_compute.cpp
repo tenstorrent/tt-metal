@@ -86,7 +86,7 @@ int main() {
     // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
-    
+
     // Create kernels using binary path if prefix is set, otherwise compile from source
     KernelHandle binary_reader_kernel_id;
     if (kernel_binary_prefix) {
@@ -95,7 +95,8 @@ int main() {
             program,
             "reader_binary_1_tile",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
+            "tt_metal/programming_examples/add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp");
     } else {
         binary_reader_kernel_id = CreateKernel(
             program,
@@ -111,7 +112,8 @@ int main() {
             program,
             "writer_1_tile",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
+            "tt_metal/programming_examples/add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp");
     } else {
         unary_writer_kernel_id = CreateKernel(
             program,
@@ -128,7 +130,8 @@ int main() {
             program,
             "add_2_tiles",
             core,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
+            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false},
+            "tt_metal/programming_examples/add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp");
     } else {
         eltwise_binary_kernel_id = CreateKernel(
             program,

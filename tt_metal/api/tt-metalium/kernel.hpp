@@ -54,11 +54,12 @@ struct KernelSource {
 
     std::string source_;
     SourceType source_type_;
+    std::string original_path_;
     // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
     // if source_type_ is BINARY_PATH, path_ points to the precompiled binary file/directory
     std::filesystem::path path_;
 
-    KernelSource(const std::string& source, const SourceType& source_type);
+    KernelSource(const std::string& source, const SourceType& source_type, const std::string& original_path = "");
 
     std::string name() const {
         std::string name;

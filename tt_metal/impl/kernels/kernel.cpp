@@ -74,8 +74,8 @@ std::vector<fs::path> source_search_paths(const fs::path& given_file_name) {
 }
 }  // namespace
 
-KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
-    source_(source), source_type_(source_type) {
+KernelSource::KernelSource(const std::string& source, const SourceType& source_type, const std::string& original_path) :
+    source_(source), source_type_(source_type), original_path_(original_path) {
     if (source_type == FILE_PATH) {
         auto search_paths = source_search_paths(source);
         auto itr = std::ranges::find_if(search_paths, [](const auto& path) { return fs::exists(path); });
@@ -117,7 +117,13 @@ std::string KernelSource::generate_elf_path(
 
         // Construct full path matching JIT structure: prefix/kernel_full_name/processor_dir/processor_dir.elf
         // kernel_full_name already contains trailing slash
-        return fmt::format("{}{}{}/{}.elf", device_prefix, kernĻel_full_name, processor_dir, processor_dir);
+        return fmt::format(
+            "{}/{}/kernels/{}{}/{}.elf",
+            device_prefix,
+            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
+            kernel_full_name,
+            processor_dir,
+            processor_dir);
     } else {
         // For JIT-compiled kernels, return the provided target path
         return jit_target_path;
@@ -278,7 +284,15 @@ void KernelImpl::process_named_compile_time_args(
 bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
     // If kernel source is a binary path, check if the binary actually exists
     if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
-        return std::filesystem::exists(this->kernel_src_.path_);
+        // Check all expected binaries for this kernel type
+        for (int i = 0; i < this->expected_num_binaries(); ++i) {
+            int processor_index = this->get_kernel_processor_type(i);
+            if (!std::filesystem::exists(
+                    this->kernel_src_.generate_elf_path(device, this, processor_index, this->kernel_src_.path_))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     const uint32_t core_type =
@@ -386,6 +400,9 @@ std::string ComputeKernel::config_hash() const {
 
 std::string Kernel::compute_hash() const {
     size_t define_hash_value = 0;
+    std::string kernel_src = (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH)
+                                 ? this->kernel_src_.original_path_
+                                 : this->kernel_src_.source_;
     for (const auto& [define, value] : this->defines_) {
         tt::utils::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
     }
@@ -394,7 +411,7 @@ std::string Kernel::compute_hash() const {
 
     return fmt::format(
         "{}_{}_{}_{}_{}",
-        std::hash<std::string>{}(this->kernel_src_.source_),
+        std::hash<std::string>{}(kernel_src),
         fmt::join(this->compile_time_args_, "_"),
         define_hash_value,
         named_args_hash_value,
@@ -552,7 +569,7 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*b
     if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
         return;
     }
-    
+
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
@@ -570,7 +587,7 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
     if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
         return;
     }
-    
+
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t erisc_core_type =
@@ -588,7 +605,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
         return;
     }
-    
+
     jit_build_genfiles_triscs_src(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
@@ -611,7 +628,7 @@ void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memo
 }
 
 void DataMovementKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "cannot read binaries for kernel {}", this->name());
     std::vector<const ll_api::memory*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
@@ -642,7 +659,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
 
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "cannot read binaries for kernel {}", this->name());
     std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -685,7 +702,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "cannot read binaries for kernel {}", this->name());
     std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -700,7 +717,7 @@ void ComputeKernel::read_binaries(IDevice* device) {
             this,
             trisc_id,
             jit_target_path);
-        
+
         auto load_type = MetalContext::instance()
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)

@@ -1395,15 +1395,15 @@ KernelHandle CreateKernelFromBinary(
     Program& program,
     const std::string& kernel_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
-
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::string& original_path) {
     // Get the device from the program to retrieve the binary path prefix
     // Note: This assumes the program is associated with a device at this point
     // The actual path construction will happen inside the kernel implementation
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
 
     // Pass kernel_name as the source - the actual path construction will happen in the kernel
-    KernelSource kernel_src(kernel_name, KernelSource::BINARY_PATH);
+    KernelSource kernel_src(kernel_name, KernelSource::BINARY_PATH, original_path);
 
     return std::visit(
         ttsl::overloaded{

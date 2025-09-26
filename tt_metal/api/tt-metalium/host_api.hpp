@@ -926,7 +926,8 @@ KernelHandle CreateKernelFromBinary(
     Program& program,
     const std::string& kernel_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::string& original_path = "");
 
 }  // namespace experimental
 
