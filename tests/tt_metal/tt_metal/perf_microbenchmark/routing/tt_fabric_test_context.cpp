@@ -248,7 +248,7 @@ TrafficPatternConfig TestContext::fetch_first_traffic_pattern(const TestConfig& 
 std::string TestContext::fetch_pattern_test_type(const TrafficPatternConfig& pattern, auto lambda_test_type) {
     const auto& test_type = lambda_test_type(pattern);
     TT_FATAL(test_type.has_value(), "Test type not found in pattern");
-    return enchantum::to_string(test_type.value()).data();
+    return std::string(enchantum::to_string(test_type.value()));
 }
 
 std::string TestContext::fetch_pattern_ftype(const TrafficPatternConfig& pattern) {
