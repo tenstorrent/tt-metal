@@ -13,7 +13,6 @@ from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE
 from models.demos.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
 from models.demos.yolov5x.tt.common import get_mesh_mappers
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_yolov5x_inference(

@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 from tracy.process_model_log import get_samples_per_s
 
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler, skip_for_grayskull
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
@@ -132,7 +132,6 @@ def test_mamba_perf_e2e(
         )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(600)
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(

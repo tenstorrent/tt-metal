@@ -7,7 +7,6 @@ import torch
 import random
 from functools import partial
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -35,7 +34,6 @@ mem_configs = [
     "dst_mem_config",
     mem_configs,
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done")
 class TestFrac:
     def test_run_frac(
         self,

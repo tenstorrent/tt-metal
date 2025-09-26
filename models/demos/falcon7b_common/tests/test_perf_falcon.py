@@ -4,13 +4,7 @@
 
 import pytest
 
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    is_blackhole,
-    is_e75,
-    is_wormhole_b0,
-    skip_for_grayskull,
-)
+from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_e75, is_wormhole_b0
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -183,7 +177,6 @@ class TestParametrized:
         ],
     )
     @pytest.mark.parametrize("mesh_device", (1,), indirect=True)
-    @skip_for_grayskull()
     def test_perf_wh_bare_metal(
         self,
         model_version,
@@ -245,7 +238,6 @@ class TestParametrized:
         ],
         indirect=["mesh_device"],
     )
-    @skip_for_grayskull()
     def test_perf_t3000_bare_metal(
         self,
         model_version,

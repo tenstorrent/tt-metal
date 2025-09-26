@@ -8,7 +8,6 @@ from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
@@ -25,7 +24,6 @@ def ttnn_to_torch(input):
     return input
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, memory_layout, buffer_type, shard_end_core, shard_shape, out_channels, use_in_shortcut, block_name, block_index, resnet_index",

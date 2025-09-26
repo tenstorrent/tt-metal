@@ -5,7 +5,6 @@
 import pytest
 import ttnn
 
-from models.common.utility_functions import skip_for_grayskull
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (

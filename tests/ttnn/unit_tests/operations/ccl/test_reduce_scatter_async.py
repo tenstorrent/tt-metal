@@ -7,7 +7,6 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
@@ -282,7 +281,6 @@ def run_reduce_scatter_test(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -363,7 +361,6 @@ def test_line_reduce_scatter_async_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_input_shape, dim, layout",
     [
@@ -429,7 +426,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_input_shape, dim, layout",
     [
@@ -491,7 +487,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
