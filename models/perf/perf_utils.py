@@ -127,7 +127,7 @@ def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_
             all_passed = False
             print(f"{red_color_code}{fail_label} The following models failed '{col}' checks:{reset_color_code}")
             for model_name, measured, expected in slow_measured[col]:
-                tolerance_range = f"[{expected * 0.9:.{float_precision}f}, {expected:.{float_precision}f}]"
+                tolerance_range = f"[{expected * threshold:.{float_precision}f}, {expected:.{float_precision}f}]"
                 if measured > expected:
                     status = "regression"
                 else:
