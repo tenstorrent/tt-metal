@@ -49,9 +49,11 @@ namespace tt {
 
 namespace tt_metal {
 
-static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
+namespace {
+kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
+}  // namespace
 
 tracy::TTDeviceMarkerType get_marker_type_from_packet_type(kernel_profiler::PacketTypes packet_type) {
     switch (packet_type) {
