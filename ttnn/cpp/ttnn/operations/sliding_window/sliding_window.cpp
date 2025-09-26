@@ -4,6 +4,7 @@
 #include "sliding_window.hpp"
 #include <cstdint>
 #include <vector>
+#include <cmath>
 #include <tt_stl/assert.hpp>
 
 using namespace tt::tt_metal;
@@ -460,7 +461,9 @@ static std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::ve
     for (const auto& config : serialized_configs) {
         max_size = std::max(max_size, config.size());
     }
-    max_size = round((max_size + 1) / 2) * 2;  // Align to 32 bytes by adding a value - do we need to do this?
+    max_size = static_cast<size_t>(
+        std::round((static_cast<double>(max_size) + 1.0) / 2.0) *
+        2.0);  // Align to 32 bytes by adding a value - do we need to do this?
     for (std::vector<uint16_t>& config : serialized_configs) {
         TT_ASSERT(config.size() <= max_size);
         config.resize(max_size, 0);
