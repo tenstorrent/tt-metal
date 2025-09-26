@@ -224,15 +224,15 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::cr
 tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at {} is called", coord);
-    auto target_device_coord = coord;
+    const auto& target_device_coord = coord;
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensors[0], this->cluster_axis);
 
     log_debug(tt::LogOp, "Getting forward neighbor for {}", coord);
-    std::optional<MeshCoordinate> forward_coord =
+    const std::optional<MeshCoordinate> forward_coord =
         ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
 
     log_debug(tt::LogOp, "Getting backward neighbor for {}", coord);
-    std::optional<MeshCoordinate> backward_coord =
+    const std::optional<MeshCoordinate> backward_coord =
         ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
