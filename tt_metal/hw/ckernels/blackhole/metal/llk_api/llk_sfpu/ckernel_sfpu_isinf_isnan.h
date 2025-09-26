@@ -35,53 +35,80 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isinf() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v == std::numeric_limits<float>::infinity() || v == -std::numeric_limits<float>::infinity()) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        vFloat in = dst_reg[0];
+        sfpi::vInt exp = sfpi::exexp(in);
+        sfpi::vInt man = sfpi::exman9(in);
+        vFloat out = sfpi::vConst0;
+        v_if(exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
-
-        dst_reg[0] = v;
+        dst_reg[0] = out;
         dst_reg++;
     }
 }
 
+/* Checks if the sign bit of the floating point number in DEST
+is positive. Checks if the exponent is 128 and mantissa is 0.
+If all of the three conditions are met, the number is marked as
+positive infinity, so '1' is written in the location of the DEST
+where the number was stored. Otherwise, `0` is written instead
+of the number.
+*/
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isposinf() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v == std::numeric_limits<float>::infinity()) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        vFloat in = dst_reg[0];
+        sfpi::vInt exp = sfpi::exexp(in);
+        sfpi::vInt man = sfpi::exman9(in);
+        vFloat out = sfpi::vConst0;
+        vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000;  // returns 0 for +ve value
+        v_if(signbit == 0 && exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
-        dst_reg[0] = v;
+        dst_reg[0] = out;
         dst_reg++;
     }
 }
 
+/* Checks if the sign bit of the floating point number in DEST
+is negative. Checks if the exponent is 128 and mantissa is 0.
+If all of the three conditions are met, the number is marked as
+negative infinity, so '1' is written in the location of the DEST
+where the number was stored. Otherwise, `0` is written instead
+of the number.
+*/
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isneginf() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v == -std::numeric_limits<float>::infinity()) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        vFloat in = dst_reg[0];
+        sfpi::vInt exp = sfpi::exexp(in);
+        sfpi::vInt man = sfpi::exman9(in);
+        vFloat out = sfpi::vConst0;
+        vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000;  // returns 0 for +ve value
+        v_if(signbit == 0x80000000 && exp == 128 && man == 0) { out = sfpi::vConst1; }
         v_endif;
-        dst_reg[0] = v;
+        dst_reg[0] = out;
         dst_reg++;
     }
 }
 
+/* Checks if the exponent is 128 and mantissa is not 0.
+If both conditions are met, the number is marked as
+nan, so '1' is written in the location of the DEST
+where the number was stored. Otherwise, `0` is written instead
+of the number.
+*/
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isnan() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v == std::numeric_limits<float>::quiet_NaN() || v == std::numeric_limits<float>::signaling_NaN()) {
-            v = 1.0f;
-        }
-        v_else { v = 0.0f; }
+        vFloat in = dst_reg[0];
+        sfpi::vInt exp = sfpi::exexp(in);
+        sfpi::vInt man = sfpi::exman9(in);
+        vFloat out = sfpi::vConst0;
+        v_if(exp == 128 && man != 0) { out = sfpi::vConst1; }
         v_endif;
-        dst_reg[0] = v;
+        dst_reg[0] = out;
         dst_reg++;
     }
 }
