@@ -574,14 +574,13 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
-
-        #phi-1
+        # phi-1
         ("dense", "wo"),
-        ("layernorm","attention_norm"),
+        ("layernorm", "attention_norm"),
         ("input_layernorm", "attention_norm"),
         ("final_layernorm", "norm"),
-        ("fc1","w1"),
-        ("fc2","w2"),
+        ("fc1", "w1"),
+        ("fc2", "w2"),
     ]
     # "weight": "emb.weight",  # For host embeddings
     return replace_keys(loaded_weights, replacements)
@@ -603,11 +602,11 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "attention.wq.weight": "self_attn.q_proj.weight",
         "attention.wk.weight": "self_attn.k_proj.weight",
         "attention.wv.weight": "self_attn.v_proj.weight",
-        "attention.wo.weight": "self_attn.dense.weight",# "attention.wo.weight": "self_attn.o_proj.weight",
+        "attention.wo.weight": "self_attn.dense.weight",  # "attention.wo.weight": "self_attn.o_proj.weight",
         "attention.wq.bias": "self_attn.q_proj.bias",
         "attention.wk.bias": "self_attn.k_proj.bias",
         "attention.wv.bias": "self_attn.v_proj.bias",
-        "attention.wo.bias": "self_attn.dense.bias",# "attention.wo.bias": "self_attn.o_proj.bias",
+        "attention.wo.bias": "self_attn.dense.bias",  # "attention.wo.bias": "self_attn.o_proj.bias",
         "attention.q_norm.weight": "self_attn.q_norm.weight",
         "attention.k_norm.weight": "self_attn.k_norm.weight",
         "attention.wo.bias": "self_attn.o_proj.bias",
@@ -642,8 +641,6 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         # Fused qkv mapping
         "wqkv.weight": "qkv_proj.weight",
         "wqkv.bias": "qkv_proj.bias",
-
-        
         # "wo.bias": "dense.bias",
         # "wo.weight": "dense.weight",
         # Host embeddings
@@ -704,8 +701,10 @@ def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
             converted_weights[key] = tensor
     return converted_weights
 
+
 def reverse_permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+
 
 def permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)

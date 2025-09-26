@@ -60,7 +60,9 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix_ref = model_args.get_ref_state_dict_prefix("mlp", 0)
     partial_state_dict_ref = {
-        k[len(first_layer_prefix_ref) + 1 :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix_ref))
+        k[len(first_layer_prefix_ref) + 1 :]: v
+        for k, v in state_dict_ref.items()
+        if (k.startswith(first_layer_prefix_ref))
     }
 
     reference_model = model_args.reference_mlp()

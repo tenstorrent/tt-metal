@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -61,7 +62,7 @@ class RMSNorm(LightweightModule):
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
         self.base_model_name = base_model_name
-        self.layernorm_model = ["phi-1","phi-1.5"]
+        self.layernorm_model = ["phi-1", "phi-1.5"]
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -78,8 +79,10 @@ class RMSNorm(LightweightModule):
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
         torch_bias = (
-            state_dict[bias_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
-        ) if bias_name in state_dict else None
+            (state_dict[bias_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT]))
+            if bias_name in state_dict
+            else None
+        )
 
         # Add offset before caching
         if add_unit_offset:
@@ -97,15 +100,19 @@ class RMSNorm(LightweightModule):
             cache_file_name=None if weight_cache_path is None else weight_cache_path / weight_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
-        self.bias = ttnn.as_tensor(
-            torch_bias,
-            device=device,
-            dtype=weight_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=weight_memory_config,
-            cache_file_name=None,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        ) if torch_bias is not None else None
+        self.bias = (
+            ttnn.as_tensor(
+                torch_bias,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            )
+            if torch_bias is not None
+            else None
+        )
 
         if self.is_distributed:
             self.weight_distributed = ttnn.as_tensor(
@@ -123,17 +130,21 @@ class RMSNorm(LightweightModule):
                     else None
                 ),
             )
-            self.bias_distributed = ttnn.as_tensor(
-                torch_bias,
-                device=device,
-                dtype=weight_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=weight_memory_config,
-                cache_file_name=None,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
-                if is_mesh_device
-                else None,
-            ) if torch_bias is not None else None
+            self.bias_distributed = (
+                ttnn.as_tensor(
+                    torch_bias,
+                    device=device,
+                    dtype=weight_dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=weight_memory_config,
+                    cache_file_name=None,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+                    if is_mesh_device
+                    else None,
+                )
+                if torch_bias is not None
+                else None
+            )
 
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config
@@ -153,7 +164,7 @@ class RMSNorm(LightweightModule):
         distributed = self.is_distributed and self.is_distributed(mode)
         if self.base_model_name is None or self.base_model_name not in self.layernorm_model:
             norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
-        else:  
+        else:
             norm = self._distributed_rmsnorm if distributed else ttnn.layer_norm
         weight = self.weight_distributed if distributed else self.weight
         bias = self.bias_distributed if distributed else self.bias
@@ -187,9 +198,13 @@ class RMSNorm(LightweightModule):
 
         # Run distributed rmsnorm part 1
         if self.base_model_name is None or self.base_model_name not in self.layernorm_model:
-            tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+            tt_stats = ttnn.rms_norm_pre_all_gather(
+                inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+            )
         else:
-            tt_stats = ttnn.layer_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+            tt_stats = ttnn.layer_norm_pre_all_gather(
+                inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+            )
         # AllGather stats
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
@@ -225,9 +240,8 @@ class RMSNorm(LightweightModule):
 
         return tt_out
 
+
 class LayerNorm(LightweightModule):
-
-
     def __init__(
         self,
         device,
@@ -269,8 +283,10 @@ class LayerNorm(LightweightModule):
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
         torch_bias = (
-            state_dict[bias_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
-        ) if bias_name in state_dict else None
+            (state_dict[bias_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT]))
+            if bias_name in state_dict
+            else None
+        )
 
         # Add offset before caching
         if add_unit_offset:
@@ -290,15 +306,19 @@ class LayerNorm(LightweightModule):
             cache_file_name=cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
-        self.bias = ttnn.as_tensor(
-            torch_bias,
-            device=device,
-            dtype=weight_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=weight_memory_config,
-            cache_file_name=cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        ) if torch_bias is not None else None
+        self.bias = (
+            ttnn.as_tensor(
+                torch_bias,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=cache_name,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            )
+            if torch_bias is not None
+            else None
+        )
 
         if self.is_distributed:
             self.weight_distributed = ttnn.as_tensor(
@@ -312,17 +332,21 @@ class LayerNorm(LightweightModule):
                 if is_mesh_device
                 else None,
             )
-            self.bias_distributed = ttnn.as_tensor(
-                torch_bias,
-                device=device,
-                dtype=weight_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=weight_memory_config,
-                cache_file_name=cache_name,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
-                if is_mesh_device
-                else None,
-            ) if torch_bias is not None else None
+            self.bias_distributed = (
+                ttnn.as_tensor(
+                    torch_bias,
+                    device=device,
+                    dtype=weight_dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=weight_memory_config,
+                    cache_file_name=cache_name,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+                    if is_mesh_device
+                    else None,
+                )
+                if torch_bias is not None
+                else None
+            )
 
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config
@@ -365,7 +389,14 @@ class LayerNorm(LightweightModule):
             return x
 
     def _distributed_layernorm(
-        self, inp, epsilon=None, weight=None, bias=None, program_config=None, memory_config=None, compute_kernel_config=None
+        self,
+        inp,
+        epsilon=None,
+        weight=None,
+        bias=None,
+        program_config=None,
+        memory_config=None,
+        compute_kernel_config=None,
     ):
         assert program_config is None, "Distributed layerNorm does not support sharded inputs"
         assert memory_config is None, "Distributed layerNorm does not support sharded outputs"

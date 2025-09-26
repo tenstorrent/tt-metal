@@ -90,7 +90,7 @@ def test_decoder_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_rot_mats(
-        head_dim=int (model_args.head_dim * model_args.partial_rotary_factor),
+        head_dim=int(model_args.head_dim * model_args.partial_rotary_factor),
         device=mesh_device,
         seq_len=max_seq_len,
         theta=model_args.rope_theta,

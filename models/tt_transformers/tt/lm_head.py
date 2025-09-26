@@ -113,9 +113,8 @@ class LMHead(LightweightModule):
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-
                     )
-                )if tt_output_bias is not None else None
+                ) if tt_output_bias is not None else None
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -151,7 +150,7 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor):
         outputs = []
         bias_list = self.output_bias if len(self.output_bias) > 0 else [None] * len(self.output_weights)
-        
+
         for weight, bias, pc in zip(self.output_weights, bias_list, self.program_configs):
             output = ttnn.linear(
                 x,

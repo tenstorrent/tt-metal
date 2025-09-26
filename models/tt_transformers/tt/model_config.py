@@ -29,12 +29,12 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_hf_to_meta_mllama,
-    split_hf_keys,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
+    split_hf_keys,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
@@ -1534,7 +1534,7 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps",text_config.get("layer_norm_eps")))
+        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps")))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
@@ -1838,7 +1838,7 @@ class ModelArgs:
         layer_prefix = f"model.layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
-            "mlp": "mlp",  
+            "mlp": "mlp",
             "attention": "attention",
             "self_attn": "self_attn",
             "TransformerBlock": "",
@@ -2016,6 +2016,7 @@ class ModelArgs:
             fuse_batch=False,
         )
         # end Porting mixtral to llama
+
     def load_state_dict_ref(self):
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
@@ -2047,11 +2048,9 @@ class ModelArgs:
         state_dict_ref = state_dict.copy()
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
-
             state_dict_ref = standardize_hf_keys(state_dict_ref)
             # state_dict_ref = convert_hf_to_meta_ref(state_dict_ref, self.head_dim)
-            state_dict_ref = split_hf_keys(state_dict_ref)  
-
+            state_dict_ref = split_hf_keys(state_dict_ref)
 
         keys_dict = list(state_dict_ref.keys())[:]
         remv = [f"model.layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2059,7 +2058,7 @@ class ModelArgs:
             if any([r in k for r in remv]):
                 state_dict_ref.pop(k)
 
-        return  state_dict_ref
+        return state_dict_ref
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
@@ -2587,7 +2586,7 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            if hasattr(model.model, 'norm'):
+            if hasattr(model.model, "norm"):
                 layer = model.model.norm
             else:
                 layer = model.model.final_layernorm
@@ -2678,9 +2677,7 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
             use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb 
-            )
+            wrapper = HfAttentionWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def set_tg_attention_config(self):

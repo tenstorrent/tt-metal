@@ -5,7 +5,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -45,7 +45,7 @@ class TransformerBlock(LightweightModule):
         self.current = 0
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
-        self.parallel_model = ["phi-1","phi-1.5"]
+        self.parallel_model = ["phi-1", "phi-1.5"]
 
         self.layer_num = layer_num
 
@@ -118,7 +118,7 @@ class TransformerBlock(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
-        
+
         if f"layers.{self.layer_num}.ffn_norm" in state_dict:
             self.ff_norm = DistributedNorm(
                 RMSNorm(
@@ -311,7 +311,9 @@ class TransformerBlock(LightweightModule):
 
         # phi-1 uses MHA and MLP layers in a parallel configuration (see the phi-1 paper for details)
         else:
-            input_mem_cfg = self.model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            input_mem_cfg = (
+                self.model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            )
             if self.args.is_multichip and not self.args.is_distributed_norm(mode):
                 x = ttnn.experimental.all_gather_async(
                     x,
@@ -354,7 +356,7 @@ class TransformerBlock(LightweightModule):
             ttnn.deallocate(attn_out)
             ttnn.deallocate(feed_forward_hidden_states)
             ttnn.deallocate(x_new)
-            
+
             ttnn.deallocate(x)
 
         return out  # fractured across devices

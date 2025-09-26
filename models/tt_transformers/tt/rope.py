@@ -385,7 +385,6 @@ class RotarySetup(LightweightModule):
         partial_rotary_factor: float = 1.0,  # use 1.0 for full rotary, < 1.0 for partial rotary
         datatype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
-        
         super().__init__()
 
         self.batch_size = batch_size
@@ -402,7 +401,7 @@ class RotarySetup(LightweightModule):
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
-            head_dim=int (head_dim * partial_rotary_factor),
+            head_dim=int(head_dim * partial_rotary_factor),
             device=device,
             seq_len=max_seq_len,
             theta=rope_theta,
