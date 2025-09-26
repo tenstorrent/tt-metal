@@ -74,7 +74,7 @@ class Generator:
         **kwargs,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_host(
-            prefill_ids, page_table=page_table, user_id=user_id
+            prefill_ids, page_table=page_table, user_id=user_id, prefill_seq_len=prefill_ids.shape[-1]
         )
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
@@ -180,7 +180,7 @@ class Generator:
         model_id=-1,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_host(
-            prefill_ids, page_table=page_table, user_id=user_id
+            prefill_ids, page_table=page_table, user_id=user_id, prefill_seq_len=prefill_ids.shape[-1]
         )
 
         device_inputs = copy_host_to_device(host_inputs, device_tensors=device_inputs)
