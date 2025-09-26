@@ -57,11 +57,8 @@ endfunction()
 
 create_unit_test_executable()
 
-
 # Inspector unit tests
-set(UNIT_TESTS_INSPECTOR_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/inspector/test_rpc_startup.cpp
-)
+set(UNIT_TESTS_INSPECTOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/inspector/test_rpc_startup.cpp)
 
 # Create the test executable
 add_executable(unit_tests_inspector ${UNIT_TESTS_INSPECTOR_SRC})
