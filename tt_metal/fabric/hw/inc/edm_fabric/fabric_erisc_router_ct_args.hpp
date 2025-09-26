@@ -391,7 +391,7 @@ constexpr size_t control_channel_local_buffer_remote_read_counter_base_address =
 constexpr size_t control_channel_staging_packet_buffer_address =
     get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 15);
 
-constexpr size_t control_channel_current_fsm_type_address =
+constexpr size_t control_channel_common_fsm_log_address =
     get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 16);
 constexpr size_t control_channel_heartbeat_fsm_log_address =
     get_compile_time_arg_val(CONTROL_CHANNEL_CT_ARGS_START_IDX + 17);

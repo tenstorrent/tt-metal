@@ -661,7 +661,8 @@ struct ControlPacketHeader {
     ControlPacketType type;
     ControlPacketSubType sub_type;
     ControlPacketContext context;
-    uint8_t reserved[12];
+    uint32_t sequence_id;
+    uint8_t reserved[8];
 };
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check

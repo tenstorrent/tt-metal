@@ -242,6 +242,12 @@ enum class RerouteFSMState : uint8_t {
     COMPLETED = 2,
 };
 
+struct CommonFSMLog {
+    FSMType current_fsm_type;
+    uint8_t padding_0[3];
+    uint32_t last_processed_sequence_id;
+};
+
 struct FSMLog {
     uint8_t current_state;
     uint8_t padding_0[3];

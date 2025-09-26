@@ -284,8 +284,8 @@ std::size_t FabricControlChannelConfig::setup_addresses(std::size_t l1_start_add
     this->staging_packet_buffer_address = next_l1_addr;
     next_l1_addr += FabricControlChannelConfig::buffer_slot_size;
 
-    this->current_fsm_type_address = next_l1_addr;
-    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->common_fsm_log_address = next_l1_addr;
+    next_l1_addr += sizeof(tt::tt_fabric::CommonFSMLog);
     this->heartbeat_fsm_log_address = next_l1_addr;
     next_l1_addr += sizeof(tt::tt_fabric::FSMLog);
     this->reroute_fsm_log_address = next_l1_addr;
@@ -313,7 +313,7 @@ void FabricControlChannelConfig::get_compile_time_args(std::vector<uint32_t>& ct
         this->local_buffer_remote_write_counter_base_address,
         this->local_buffer_remote_read_counter_base_address,
         this->staging_packet_buffer_address,
-        this->current_fsm_type_address,
+        this->common_fsm_log_address,
         this->heartbeat_fsm_log_address,
         this->reroute_fsm_log_address};
     ct_args.insert(ct_args.end(), control_channel_args.begin(), control_channel_args.end());

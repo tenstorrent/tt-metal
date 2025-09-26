@@ -23,6 +23,8 @@ public:
 
     bool write_packet_to_router(ControlPacketHeader& packet, FabricNodeId& node_id, chan_id_t eth_chan_id);
 
+    CommonFSMLog get_common_fsm_log(FabricNodeId& node_id, chan_id_t eth_chan_id) const;
+
 private:
     HostToRouterCommConfig* host_to_router_comm_config_ptr_;
 

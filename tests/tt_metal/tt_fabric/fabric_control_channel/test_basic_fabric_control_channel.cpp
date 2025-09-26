@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/fabric/control_channel_interface.hpp"
 #include <vector>
+#include <chrono>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -31,8 +32,7 @@ struct TestEndPoint {
     chan_id_t channel_id;
 };
 
-// sets up the heartbeat check b/w any two routers
-void setup_heartbeat_check() {}
+uint32_t generate_sequence_id() { return std::chrono::system_clock::now().time_since_epoch().count(); }
 
 std::vector<std::pair<TestEndPoint, TestEndPoint>> generate_test_endpoints(
     FabricControlChannelBaseFixture* fixture, TestType test_type) {
@@ -81,15 +81,28 @@ void run_heartbeat_check_point_to_point(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& control_channel_interface = control_plane.get_control_channel_interface();
 
+    const auto sequence_id = generate_sequence_id();
+    log_info(tt::LogTest, "Requesting heartbeat check for sequence id: {}", sequence_id);
     const auto result = control_channel_interface.request_remote_heartbeat_check(
-        initiator_endpoint.node_id, initiator_endpoint.channel_id, target_endpoint.node_id, target_endpoint.channel_id);
+        initiator_endpoint.node_id,
+        initiator_endpoint.channel_id,
+        target_endpoint.node_id,
+        target_endpoint.channel_id,
+        sequence_id);
 
     log_info(tt::LogTest, "Heartbeat check result: {}", result);
 
-    EXPECT_EQ(result, ControlChannelResult::SUCCESS);
+    // poll for completion on the initiator endpoint
+    const auto initiator_completion_result = control_channel_interface.poll_for_remote_heartbeat_request_completion(
+        initiator_endpoint.node_id, initiator_endpoint.channel_id, sequence_id);
+    EXPECT_EQ(initiator_completion_result, ControlChannelResult::SUCCESS);
+    log_info(tt::LogTest, "Initiator result: {}", initiator_completion_result);
 
-    // need a way to wait for the heartbeat check to complete
-    // we can also check for the number of credits in the host buffer
+    // also check for completion on the target endpoint
+    // no need to poll for completion on the target endpoint
+    const bool target_completed = control_channel_interface.check_remote_heartbeat_request_completed(
+        target_endpoint.node_id, target_endpoint.channel_id, sequence_id);
+    EXPECT_EQ(target_completed, true);
 }
 
 void run_heartbeat_check(

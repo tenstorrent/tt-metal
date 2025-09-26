@@ -259,7 +259,7 @@ struct FabricControlChannelConfig {
     std::size_t staging_packet_buffer_address = 0;
 
     // FSM logging
-    std::size_t current_fsm_type_address = 0;
+    std::size_t common_fsm_log_address = 0;
     std::size_t heartbeat_fsm_log_address = 0;
     std::size_t reroute_fsm_log_address = 0;
 

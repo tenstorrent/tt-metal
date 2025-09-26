@@ -15,13 +15,14 @@ namespace tt::tt_fabric {
 
 namespace {
 
-std::vector<uint32_t> read_core_helper(const FabricNodeId& node_id, chan_id_t eth_chan_id, uint32_t address) {
+void read_core_helper(
+    const FabricNodeId& node_id, chan_id_t eth_chan_id, uint32_t address, void* out_ptr, size_t size) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto virtual_eth_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_chan_id);
-    return cluster.read_core(physical_chip_id, virtual_eth_core, address, sizeof(uint32_t));
+    cluster.read_core(out_ptr, size, tt_cxy_pair(physical_chip_id, virtual_eth_core), address);
 }
 
 void write_core_helper(
@@ -62,9 +63,26 @@ bool HostToRouterCommInterface::write_packet_to_router(
     return true;
 }
 
+CommonFSMLog HostToRouterCommInterface::get_common_fsm_log(FabricNodeId& node_id, chan_id_t eth_chan_id) const {
+    CommonFSMLog common_fsm_log;
+    read_core_helper(
+        node_id,
+        eth_chan_id,
+        host_to_router_comm_config_ptr_->get_common_fsm_log_address(),
+        &common_fsm_log,
+        sizeof(CommonFSMLog));
+    return common_fsm_log;
+}
+
 uint32_t HostToRouterCommInterface::get_router_read_counter(FabricNodeId& node_id, chan_id_t eth_chan_id) const {
-    return read_core_helper(
-        node_id, eth_chan_id, host_to_router_comm_config_ptr_->get_router_read_counter_address())[0];
+    uint32_t read_counter;
+    read_core_helper(
+        node_id,
+        eth_chan_id,
+        host_to_router_comm_config_ptr_->get_router_read_counter_address(),
+        &read_counter,
+        sizeof(uint32_t));
+    return read_counter;
 }
 
 bool HostToRouterCommInterface::has_space_for_packet(

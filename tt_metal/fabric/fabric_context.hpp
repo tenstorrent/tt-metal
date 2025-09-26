@@ -27,7 +27,7 @@ public:
         size_t buffer_base_address,
         size_t router_write_counter_address,
         size_t router_read_counter_address,
-        size_t current_fsm_type_address,
+        size_t common_fsm_log_address,
         size_t heartbeat_fsm_log_address,
         size_t reroute_fsm_log_address);
 
@@ -35,7 +35,7 @@ public:
     size_t get_buffer_base_address() const;
     size_t get_router_write_counter_address() const;
     size_t get_router_read_counter_address() const;
-    size_t get_current_fsm_type_address() const;
+    size_t get_common_fsm_log_address() const;
     size_t get_heartbeat_fsm_log_address() const;
     size_t get_reroute_fsm_log_address() const;
 
@@ -44,7 +44,7 @@ private:
     size_t buffer_base_address_ = 0;
     size_t router_write_counter_address_ = 0;
     size_t router_read_counter_address_ = 0;
-    size_t current_fsm_type_address_ = 0;
+    size_t common_fsm_log_address_ = 0;
     size_t heartbeat_fsm_log_address_ = 0;
     size_t reroute_fsm_log_address_ = 0;
 };

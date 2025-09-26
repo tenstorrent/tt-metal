@@ -25,14 +25,14 @@ HostToRouterCommConfig::HostToRouterCommConfig(
     size_t buffer_base_address,
     size_t router_write_counter_address,
     size_t router_read_counter_address,
-    size_t current_fsm_type_address,
+    size_t common_fsm_log_address,
     size_t heartbeat_fsm_log_address,
     size_t reroute_fsm_log_address) :
     num_buffer_slots_(num_buffer_slots),
     buffer_base_address_(buffer_base_address),
     router_write_counter_address_(router_write_counter_address),
     router_read_counter_address_(router_read_counter_address),
-    current_fsm_type_address_(current_fsm_type_address),
+    common_fsm_log_address_(common_fsm_log_address),
     heartbeat_fsm_log_address_(heartbeat_fsm_log_address),
     reroute_fsm_log_address_(reroute_fsm_log_address) {}
 
@@ -44,7 +44,7 @@ size_t HostToRouterCommConfig::get_router_write_counter_address() const { return
 
 size_t HostToRouterCommConfig::get_router_read_counter_address() const { return router_read_counter_address_; }
 
-size_t HostToRouterCommConfig::get_current_fsm_type_address() const { return current_fsm_type_address_; }
+size_t HostToRouterCommConfig::get_common_fsm_log_address() const { return common_fsm_log_address_; }
 
 size_t HostToRouterCommConfig::get_heartbeat_fsm_log_address() const { return heartbeat_fsm_log_address_; }
 
@@ -222,7 +222,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         control_channel_config.host_buffer_base_address,
         control_channel_config.host_buffer_remote_write_counter_address,
         control_channel_config.host_buffer_remote_read_counter_address,
-        control_channel_config.current_fsm_type_address,
+        control_channel_config.common_fsm_log_address,
         control_channel_config.heartbeat_fsm_log_address,
         control_channel_config.reroute_fsm_log_address);
 }

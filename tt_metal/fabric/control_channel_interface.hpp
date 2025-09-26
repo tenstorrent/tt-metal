@@ -38,7 +38,18 @@ public:
         FabricNodeId& initiator_node,
         chan_id_t initiator_channel,
         FabricNodeId& target_node,
-        chan_id_t target_channel) const;
+        chan_id_t target_channel,
+        uint32_t sequence_id) const;
+
+    bool check_remote_heartbeat_request_completed(
+        FabricNodeId& node_id, chan_id_t eth_chan_id, uint32_t sequence_id) const;
+
+    ControlChannelResult poll_for_remote_heartbeat_request_completion(
+        FabricNodeId& node_id,
+        chan_id_t eth_chan_id,
+        uint32_t sequence_id,
+        uint32_t timeout_ms = 5000,
+        uint32_t poll_interval_ms = 100) const;
 
     // Low-level packet sending (for advanced users)
     ControlChannelResult send_control_packet(
@@ -50,7 +61,8 @@ private:
         FabricNodeId& initiator_node,
         chan_id_t initiator_channel,
         FabricNodeId& target_node,
-        chan_id_t target_channel) const;
+        chan_id_t target_channel,
+        uint32_t sequence_id) const;
 
     HostToRouterCommInterface* host_to_router_comm_interface_ptr_;
 };

@@ -461,8 +461,6 @@ public:
         static_cast<Derived*>(this)->process(packet_header, staging_packet_address);
     }
 
-    bool is_active() const { return static_cast<Derived*>(this)->is_active(); }
-
     bool has_outbound_packet() const { return has_outbound_packet_; }
 
     void clear_outbound_packet() { has_outbound_packet_ = false; }
@@ -541,6 +539,7 @@ private:
         request_packet->dst_node_id = packet_header->context.remote_heartbeat_packet_context.target_node_id;
         request_packet->src_channel_id = packet_header->dst_channel_id;
         request_packet->dst_channel_id = packet_header->context.remote_heartbeat_packet_context.target_channel_id;
+        request_packet->sequence_id = packet_header->sequence_id;
 
         pending_heartbeat_mask_ = 1 << packet_header->context.remote_heartbeat_packet_context.target_channel_id;
         has_outbound_packet_ = true;
@@ -554,6 +553,7 @@ private:
         response_packet->dst_node_id = packet_header->src_node_id;
         response_packet->src_channel_id = packet_header->dst_channel_id;
         response_packet->dst_channel_id = packet_header->src_channel_id;
+        response_packet->sequence_id = packet_header->sequence_id;
 
         has_outbound_packet_ = true;
     }
@@ -598,11 +598,16 @@ class FSMManager {
 public:
     FSMManager() = default;
 
-    FORCE_INLINE void init() { active_fsm_type_ = FSMType::NONE; }
+    void init() {
+        reset_active_fsm_type();
+        auto* log_ptr = reinterpret_cast<tt_l1_ptr CommonFSMLog*>(common_fsm_log_address_);
+        log_ptr->current_fsm_type = FSMType::NONE;
+        log_ptr->last_processed_sequence_id = 0;
+    }
 
     FORCE_INLINE bool is_any_fsm_active() const { return active_fsm_type_ != FSMType::NONE; }
 
-    FORCE_INLINE void activate_fsm(ControlPacketType packet_type) {
+    void activate_fsm(ControlPacketType packet_type) {
         // TODO: do we really need to check here if any FSM is active?
         if (is_any_fsm_active()) {
             return;
@@ -621,19 +626,27 @@ public:
         }
     }
 
-    FORCE_INLINE void process(ControlPacketHeader* packet_header) {
+    void process(ControlPacketHeader* packet_header) {
         switch (active_fsm_type_) {
             case FSMType::REMOTE_HEARTBEAT:
                 remote_heartbeat_fsm_context_.process(packet_header, staging_packet_address_);
+                if (!remote_heartbeat_fsm_context_.is_active()) {
+                    post_fsm_completion_actions(packet_header);
+                }
                 break;
-            case FSMType::REROUTE: reroute_fsm_context_.process(packet_header, staging_packet_address_); break;
+            case FSMType::REROUTE:
+                reroute_fsm_context_.process(packet_header, staging_packet_address_);
+                if (!reroute_fsm_context_.is_active()) {
+                    post_fsm_completion_actions(packet_header);
+                }
+                break;
             default: __builtin_unreachable();
         }
 
-        *reinterpret_cast<tt_l1_ptr uint32_t*>(current_fsm_type_address_) = static_cast<uint32_t>(active_fsm_type_);
+        log_current_fsm_type();
     }
 
-    FORCE_INLINE bool has_outbound_packet() const {
+    bool has_outbound_packet() const {
         switch (active_fsm_type_) {
             case FSMType::REMOTE_HEARTBEAT: return remote_heartbeat_fsm_context_.has_outbound_packet();
             case FSMType::REROUTE: return reroute_fsm_context_.has_outbound_packet();
@@ -641,7 +654,7 @@ public:
         }
     }
 
-    FORCE_INLINE void clear_outbound_packet() {
+    void clear_outbound_packet() {
         switch (active_fsm_type_) {
             case FSMType::REMOTE_HEARTBEAT: remote_heartbeat_fsm_context_.clear_outbound_packet(); break;
             case FSMType::REROUTE: reroute_fsm_context_.clear_outbound_packet(); break;
@@ -653,11 +666,26 @@ public:
 
 private:
     static constexpr uint32_t staging_packet_address_ = control_channel_staging_packet_buffer_address;
-    static constexpr uint32_t current_fsm_type_address_ = control_channel_current_fsm_type_address;
+    static constexpr uint32_t common_fsm_log_address_ = control_channel_common_fsm_log_address;
 
     FSMType active_fsm_type_ = FSMType::NONE;
     RemoteHeartbeatFSMContext remote_heartbeat_fsm_context_;
     RerouteFSMContext reroute_fsm_context_;
+
+    FORCE_INLINE void log_current_fsm_type() const {
+        reinterpret_cast<tt_l1_ptr CommonFSMLog*>(common_fsm_log_address_)->current_fsm_type = active_fsm_type_;
+    }
+
+    FORCE_INLINE void log_completed_sequence_id(uint32_t sequence_id) const {
+        reinterpret_cast<tt_l1_ptr CommonFSMLog*>(common_fsm_log_address_)->last_processed_sequence_id = sequence_id;
+    }
+
+    FORCE_INLINE void reset_active_fsm_type() { active_fsm_type_ = FSMType::NONE; }
+
+    void post_fsm_completion_actions(ControlPacketHeader* packet_header) {
+        log_completed_sequence_id(packet_header->sequence_id);
+        reset_active_fsm_type();
+    }
 };
 
 class FabricControlChannel {
@@ -804,10 +832,7 @@ private:
         fsm_manager_.process(packet_header);
     }
 
-    FORCE_INLINE InterfaceType get_outbound_interface_type(ControlPacketHeader* packet_header) {
-        InterfaceType outbound_interface_type = InterfaceType::NONE;
-        uint8_t downstream_channel_id = INVALID_DIRECTION;
-
+    InterfaceType get_outbound_interface_type(ControlPacketHeader* packet_header) {
         const auto dst_chip_id = packet_header->dst_node_id.chip_id;
         const auto dst_mesh_id = packet_header->dst_node_id.mesh_id;
         const auto dst_channel_id = packet_header->dst_channel_id;
@@ -815,6 +840,7 @@ private:
         const tt_l1_ptr fabric_router_l1_config_t* routing_table =
             reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
+        uint8_t downstream_channel_id = INVALID_DIRECTION;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             // inter-mesh routing
             downstream_channel_id = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
@@ -826,6 +852,7 @@ private:
             downstream_channel_id = dst_channel_id;
         }  // else the packet is destined for the same router
 
+        InterfaceType outbound_interface_type = InterfaceType::NONE;
         if (downstream_channel_id == MY_ETH_CHANNEL) {
             outbound_interface_type = InterfaceType::ETH;
         } else if (downstream_channel_id != INVALID_DIRECTION) {
@@ -835,7 +862,7 @@ private:
         return outbound_interface_type;
     }
 
-    FORCE_INLINE bool forward_control_packet(ControlPacketHeader* packet_header) {
+    bool forward_control_packet(ControlPacketHeader* packet_header) {
         const auto outbound_interface_type = get_outbound_interface_type(packet_header);
         bool success = true;
 
