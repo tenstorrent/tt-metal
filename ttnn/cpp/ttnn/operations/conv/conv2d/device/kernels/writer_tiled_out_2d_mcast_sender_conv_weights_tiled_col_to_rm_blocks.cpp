@@ -56,8 +56,8 @@ void kernel_main() {
 #else
     constexpr bool split_reader_enabled = false;
 #endif
-    // Without split reader, weight tensor args start at 35
-    constexpr auto s_weight_args = TensorAccessorArgs<35>();
+    // Without split reader, weight tensor args start at 36
+    constexpr auto s_weight_args = TensorAccessorArgs<36>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
