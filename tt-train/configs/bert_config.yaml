@@ -1,0 +1,22 @@
+# BERT Model Configuration
+# Based on BERT-base architecture
+
+# Model architecture
+vocab_size: 30522
+max_sequence_length: 512
+embedding_dim: 768
+intermediate_size: 3072
+num_heads: 12
+num_blocks: 12
+
+# Training parameters
+dropout_prob: 0.1
+layer_norm_eps: 1e-12
+
+# BERT-specific features
+use_token_type_embeddings: true
+type_vocab_size: 2  # For sentence A/B (NSP task)
+use_pooler: true    # For classification tasks
+
+# Framework settings
+runner_type: "default"  # or "memory_efficient"
