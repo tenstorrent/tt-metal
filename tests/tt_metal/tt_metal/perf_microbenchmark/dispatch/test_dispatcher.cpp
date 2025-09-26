@@ -485,7 +485,7 @@ int main(int argc, char** argv) {
             exit(-1);
         }
 
-        uint32_t dram_data_addr = l1_buf_base;
+        uint32_t dram_data_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         uint32_t l1_data_addr = l1_buf_base;
 
         // Separate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
