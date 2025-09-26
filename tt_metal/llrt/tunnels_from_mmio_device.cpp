@@ -4,7 +4,7 @@
 
 #include "tunnels_from_mmio_device.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace tt::llrt {
 

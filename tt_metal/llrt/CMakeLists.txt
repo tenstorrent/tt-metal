@@ -9,7 +9,6 @@ set(LLRT_SRC
     tt_elffile.cpp
     tt_memory.cpp
     hal.cpp
-    utils.cpp
     tunnels_from_mmio_device.cpp
 )
 
