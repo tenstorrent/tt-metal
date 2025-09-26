@@ -7,6 +7,7 @@ const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 // Constants for pagination and filtering
 const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
@@ -113,6 +114,7 @@ async function run() {
     const rawCachePath = core.getInput('cache-path', { required: false });
     const defaultOutputPath = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'workflow-data.json');
     const outputPath = rawCachePath && rawCachePath.trim() ? rawCachePath : defaultOutputPath;
+    const testRunIdInput = core.getInput('test_run_id') || process.env.TEST_RUN_ID || '';
     // Create authenticated Octokit client
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
     // Load previous cache if it exists
@@ -121,6 +123,93 @@ async function run() {
 
     core.info(`Restored previousRuns count: ${previousRuns.length}`);
     core.info(`Latest cached run date: ${latestCachedDate}`);
+    // Test mode: download workflow-data.json artifact from a specific run and exit early
+    // TODO: Remove this once we're done testing
+    if (testRunIdInput) {
+      const runId = parseInt(testRunIdInput, 10);
+      if (Number.isNaN(runId)) {
+        throw new Error(`Invalid test_run_id: ${testRunIdInput}`);
+      }
+      core.info(`[TEST MODE] Using workflow-data.json from run_id=${runId}`);
+      const owner = github.context.repo.owner;
+      const repo = github.context.repo.repo;
+      const { data: artifactsResp } = await octokit.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: runId, per_page: 100 });
+      const artifacts = artifactsResp.artifacts || [];
+      if (artifacts.length === 0) {
+        throw new Error(`No artifacts found for run_id=${runId}`);
+      }
+      // Find an artifact zip that contains workflow-data.json
+      let found = false;
+      const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'wfzip-'));
+      for (const art of artifacts) {
+        try {
+          const resp = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: art.id, archive_format: 'zip' });
+          const zipPath = path.join(tmpDir, `${art.name}.zip`);
+          fs.writeFileSync(zipPath, Buffer.from(resp.data));
+          // Extract artifact to a temp dir and search for workflow JSON file
+          const extractDir = path.join(tmpDir, art.name);
+          if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+          // Avoid buffering large stdout/stderr to prevent ENOBUFS
+          execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+          // Search recursively for workflow JSON
+          const targetNames = new Set(['workflow-data.json', 'workflow.json']);
+          const stack = [extractDir];
+          let foundPath;
+          while (stack.length && !foundPath) {
+            const dir = stack.pop();
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) {
+                stack.push(p);
+              } else if (ent.isFile() && targetNames.has(ent.name)) {
+                foundPath = p;
+                break;
+              }
+            }
+          }
+          if (foundPath) {
+            const jsonBuf = fs.readFileSync(foundPath);
+            // Ensure output directory exists
+            const outputDir = path.dirname(outputPath);
+            if (!fs.existsSync(outputDir)) {
+              fs.mkdirSync(outputDir, { recursive: true });
+            }
+            fs.writeFileSync(outputPath, jsonBuf);
+            core.info(`[TEST MODE] Wrote ${outputPath} from ${path.basename(foundPath)} in artifact ${art.name}`);
+            // Compute outputs from content
+            let grouped;
+            try {
+              grouped = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+            } catch (e) {
+              throw new Error(`Parsed JSON invalid at ${outputPath}: ${e.message}`);
+            }
+            const workflowCount = Array.isArray(grouped) ? grouped.length : 0;
+            let totalRuns = 0;
+            if (Array.isArray(grouped)) {
+              for (const entry of grouped) {
+                if (Array.isArray(entry) && Array.isArray(entry[1])) {
+                  totalRuns += entry[1].length;
+                }
+              }
+            }
+            core.setOutput('total-runs', totalRuns);
+            core.setOutput('workflow-count', workflowCount);
+            core.setOutput('cache-path', outputPath);
+            found = true;
+            break;
+          }
+        } catch (e) {
+          core.warning(`[TEST MODE] Failed processing artifact ${art.name}: ${e.message}`);
+        }
+      }
+      if (!found) {
+        throw new Error(`[TEST MODE] Could not find workflow-data.json in any artifacts for run_id=${runId}`);
+      }
+      // Exit early
+      return;
+    }
+    // TODO: Remove this once we're done testing
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
 
     // 1. Fetch runs for each event type separately
