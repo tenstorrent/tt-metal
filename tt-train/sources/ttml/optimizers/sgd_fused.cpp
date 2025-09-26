@@ -44,10 +44,6 @@ void SGDFused::step() {
         print_stats();
     }
 
-    TT_FATAL(!(m_config.nesterov && m_config.dampening != 0.0), "Nesterov momentum requires zero dampening");
-    TT_FATAL(!(m_config.nesterov && m_config.momentum <= 0.0), "Nesterov momentum requires a positive momentum");
-    const bool use_momentum = (m_config.momentum > 0.0F);
-
     for (const auto& [name, theta_ptr] : m_parameters) {
         if (!theta_ptr->is_grad_initialized()) {
             continue;
@@ -56,16 +52,9 @@ void SGDFused::step() {
         auto param_in = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
         auto param_out = param_in;
 
-        std::optional<ttnn::Tensor> momentum = std::nullopt;
-        // momentum buffers are lazily initialized
-        if (use_momentum) {
-            auto it = m_momentum.find(name);
-            if (it == m_momentum.end()) {
-                auto buf = autograd::create_tensor(
-                    core::zeros_like(param_in),
-                    /* requires_grad */ false);
-                it = m_momentum.emplace(name, std::move(buf)).first;
-            }
+        std::optional<ttnn::Tensor> momentum;
+
+        if (auto it = m_momentum.find(name); it != m_momentum.end()) {
             momentum = it->second->get_value(autograd::PreferredPrecision::FULL);
         }
 
