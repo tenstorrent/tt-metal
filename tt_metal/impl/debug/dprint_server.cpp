@@ -176,7 +176,7 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
     uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
 
     // Read any error codes and handle accordingly
-    enum tt::CBIndex cb = static_cast<tt::CBIndex>(ts->cb_id);
+    tt::CBIndex cb = static_cast<tt::CBIndex>(ts->cb_id);
     switch (ts->return_code) {
         case DPrintOK: break;  // Continue to print the tile slice
         case DPrintErrorBadPointer: {
