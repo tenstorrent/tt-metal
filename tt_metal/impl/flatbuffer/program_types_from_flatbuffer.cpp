@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "program_types_from_flatbuffer.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "base_types_from_flatbuffer.hpp"
 
 namespace tt::tt_metal {
