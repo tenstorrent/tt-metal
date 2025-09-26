@@ -12,7 +12,7 @@ import ttnn
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterable, Iterator, Mapping
+    from collections.abc import Collection, Iterable, Iterator, Mapping, MutableSequence
     from typing import Any
 
     import torch
@@ -79,23 +79,26 @@ class Module:
         """Prepare Torch state dict before loading."""
 
     def _load_torch_state_dict_inner(
-        self, state_dict: Mapping[str, torch.Tensor], *, module_key_prefix: str
-    ) -> IncompatibleKeys:
+        self,
+        state_dict: Mapping[str, torch.Tensor],
+        *,
+        module_key_prefix: str,
+        missing_keys: MutableSequence[str],
+        unexpected_keys: MutableSequence[str],
+    ) -> None:
         state_dict = dict(state_dict)
         self._prepare_torch_state(state_dict)
-
-        unexpected_keys = []
-        missing_keys = []
 
         for name, child in self.named_children():
             child_state = pop_substate(state_dict, name)
 
             if isinstance(child, Module):
-                child_missing, child_unexpected = child._load_torch_state_dict_inner(  # noqa: SLF001
-                    child_state, module_key_prefix=f"{module_key_prefix}{name}."
+                child._load_torch_state_dict_inner(  # noqa: SLF001
+                    child_state,
+                    module_key_prefix=f"{module_key_prefix}{name}.",
+                    missing_keys=missing_keys,
+                    unexpected_keys=unexpected_keys,
                 )
-                missing_keys.extend(f"{name}.{k}" for k in child_missing)
-                unexpected_keys.extend(f"{name}.{k}" for k in child_unexpected)
             else:  # legacy
                 child.load_state_dict(child_state)
 
@@ -107,14 +110,18 @@ class Module:
                     msg = f"while loading {module_key_prefix}{name}: {err}"
                     raise ParameterLoadingError(msg) from err
             else:
-                missing_keys.append(name)
+                missing_keys.append(f"{module_key_prefix}{name}")
 
-        unexpected_keys.extend(state_dict.keys())
-
-        return IncompatibleKeys(missing_keys, unexpected_keys)
+        for name in state_dict:
+            unexpected_keys.append(f"{module_key_prefix}{name}")
 
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
-        missing_keys, unexpected_keys = self._load_torch_state_dict_inner(state_dict, module_key_prefix="")
+        missing_keys = []
+        unexpected_keys = []
+
+        self._load_torch_state_dict_inner(
+            state_dict, module_key_prefix="", missing_keys=missing_keys, unexpected_keys=unexpected_keys
+        )
 
         error_msg = ""
         if strict and missing_keys:
