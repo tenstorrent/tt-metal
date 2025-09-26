@@ -25,7 +25,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include <tt_stl/math.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
