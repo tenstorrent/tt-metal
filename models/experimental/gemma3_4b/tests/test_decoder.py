@@ -16,13 +16,11 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.common.utility_functions import skip_for_grayskull
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.rope import RotarySetup
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [

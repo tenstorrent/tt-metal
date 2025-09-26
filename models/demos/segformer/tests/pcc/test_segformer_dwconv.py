@@ -7,7 +7,6 @@ import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_torch_model
 from models.demos.segformer.reference.segformer_dwconv import SegformerDWConv
 from models.demos.segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
@@ -35,7 +34,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, seq_len, dim, height, width, block_i, dwconv_i",
     [

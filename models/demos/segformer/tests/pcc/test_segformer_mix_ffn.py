@@ -7,7 +7,6 @@ import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_mixffn import SegformerMixFFN
 from models.demos.segformer.tests.pcc.test_segformer_dwconv import (
@@ -51,7 +50,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "in_features, hidden_features, out_features, batch_size, seq_len, height, width, block_i, mixffn_i",
     [

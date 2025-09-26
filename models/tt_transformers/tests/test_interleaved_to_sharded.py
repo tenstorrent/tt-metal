@@ -8,13 +8,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [

@@ -9,7 +9,7 @@ import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.common.utility_functions import torch_random, is_wormhole_b0, skip_for_grayskull
+from models.common.utility_functions import torch_random, is_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_sizes", [(1,)])
@@ -314,7 +314,6 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
-@skip_for_grayskull()
 def test_linear_with_fp32_dest_acc_and_bias(device):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])

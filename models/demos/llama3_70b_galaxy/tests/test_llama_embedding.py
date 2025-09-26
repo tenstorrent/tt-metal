@@ -12,12 +12,10 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.llama_common import HostEmbedding
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
