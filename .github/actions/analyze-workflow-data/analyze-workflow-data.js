@@ -153,9 +153,9 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', '); // If the names array is not empty, join the names with a comma
     }
     const owner = escapeHtml(ownerDisplay);
-    return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td>${owner}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`;
+    return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td>${owner}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`; // Return the table row. this is formatted so that word wrapping occurs
   }).join('\n');
-  return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Owner</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Owner</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`; // Return the table
 }
 
 function renderCommitsTable(commits) {
@@ -163,11 +163,11 @@ function renderCommitsTable(commits) {
     return '<em>None</em>';
   }
   const rows = commits.map(c => {
-    const short = escapeHtml(c.short || (c.sha ? c.sha.substring(0, 7) : ''));
-    const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : undefined);
-    const who = c.author_login ? `@${escapeHtml(c.author_login)}` : escapeHtml(c.author_name || 'unknown');
-    const whoHtml = c.author_login && c.author_url ? `<a href="${c.author_url}">${who}</a>` : who;
-    const shaHtml = url ? `<a href="${url}"><code>${short}</code></a>` : `<code>${short}</code>`;
+    const short = escapeHtml(c.short || (c.sha ? c.sha.substring(0, 7) : '')); // Return the short SHA of the commit using c.short if available. otherwise use the first 7 characters of the SHA
+    const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : undefined); // Return the URL of the commit or build it from the sha if the url is not available
+    const who = c.author_login ? `@${escapeHtml(c.author_login)}` : escapeHtml(c.author_name || 'unknown'); // return the author login name if available, otherwise use their display name, but default to unknown if nothing is available
+    const whoHtml = c.author_login && c.author_url ? `<a href="${c.author_url}">${who}</a>` : who; // if author login and url are available, make the author login name a clickable link
+    const shaHtml = url ? `<a href="${url}"><code>${short}</code></a>` : `<code>${short}</code>`; // if the sha url is available, make the sha a clickable link
     return `<tr><td>${shaHtml}</td><td>${whoHtml}</td></tr>`;
   }).join('\n');
   return `<table><thead><tr><th>SHA</th><th>Author</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -190,19 +190,19 @@ async function fetchPRInfo(github, context, commitSha) {
       owner: context.repo.owner,
       repo: context.repo.repo,
       commit_sha: commitSha,
-    });
+    }); // listPullRequestsAssociatedWithCommit is a GitHub API call to get the PRs associated with a commit
     if (prs.length > 0) {
-      const pr = prs[0];
-      return {
-        prNumber: `[#${pr.number}](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${pr.number})`,
-        prTitle: pr.title || EMPTY_VALUE,
-        prAuthor: pr.user?.login || 'unknown'
+      const pr = prs[0]; // get the first PR (usually the only one)
+      return { // return the PR number, title, and author
+        prNumber: `[#${pr.number}](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${pr.number})`, // make a link to the PR attached to the commit number
+        prTitle: pr.title || EMPTY_VALUE, // return the PR title or EMPTY_VALUE if the PR title is not available
+        prAuthor: pr.user?.login || 'unknown' // return the PR author or 'unknown' if the PR author is not available
       };
     }
   } catch (e) {
-    core.warning(`Could not fetch PR for commit ${commitSha}: ${e.message}`);
+    core.warning(`Could not fetch PR for commit ${commitSha}: ${e.message}`); // if there is an error, log it
   }
-  return { prNumber: EMPTY_VALUE, prTitle: EMPTY_VALUE, prAuthor: EMPTY_VALUE };
+  return { prNumber: EMPTY_VALUE, prTitle: EMPTY_VALUE, prAuthor: EMPTY_VALUE }; //return nothing if there is no PR
 }
 
 /**
@@ -211,18 +211,18 @@ async function fetchPRInfo(github, context, commitSha) {
  */
 async function fetchCommitAuthor(octokit, context, commitSha) {
   try {
-    const { data } = await octokit.rest.repos.getCommit({
+    const { data } = await octokit.rest.repos.getCommit({ // getCommit is a GitHub API call to get the commit associated with a commit SHA
       owner: context.repo.owner,
       repo: context.repo.repo,
       ref: commitSha,
     });
-    const login = data.author?.login;
-    const htmlUrl = data.author?.html_url;
-    const name = data.commit?.author?.name;
+    const login = data.author?.login; // return the author login name if available
+    const htmlUrl = data.author?.html_url; // return the author profile URL if available
+    const name = data.commit?.author?.name; // return the author display name if available
     return { login, name, htmlUrl };
   } catch (e) {
-    core.warning(`Could not fetch commit author for ${commitSha}: ${e.message}`);
-    return { login: undefined, name: undefined, htmlUrl: undefined };
+    core.warning(`Could not fetch commit author for ${commitSha}: ${e.message}`); // if there is an error, log it
+    return { login: undefined, name: undefined, htmlUrl: undefined }; // return nothing if there is no author
   }
 }
 
@@ -231,39 +231,39 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
  * Returns an array of strings (snippets).
  */
 async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3) {
-  const owner = context.repo.owner;
-  const repo = context.repo.repo;
+  const owner = context.repo.owner; // return the owner of the repository
+  const repo = context.repo.repo; // return the repository name
   try {
-    await core.startGroup(`Extracting error snippets for run ${runId}`);
-    const { data } = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId });
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `runlogs-${runId}-`));
-    const zipPath = path.join(tmpDir, 'run_logs.zip');
-    fs.writeFileSync(zipPath, Buffer.from(data));
-    const extractDir = path.join(tmpDir, 'extract');
-    fs.mkdirSync(extractDir, { recursive: true });
-    execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-    let snippets = findErrorSnippetsInDir(extractDir, maxSnippets);
-    core.info(`Total snippets collected: ${snippets.length}`);
+    await core.startGroup(`Extracting error snippets for run ${runId}`); // start a group to log the error snippets (we log this to the console)
+    const { data } = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId }); // downloadWorkflowRunLogs is a GitHub API call to download the logs for a run
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `runlogs-${runId}-`)); // create a temporary directory to store the logs
+    const zipPath = path.join(tmpDir, 'run_logs.zip'); // create a path to the zip file
+    fs.writeFileSync(zipPath, Buffer.from(data)); // write the logs to the zip file in the temporary directory
+    const extractDir = path.join(tmpDir, 'extract'); // create a path to the extract directory
+    fs.mkdirSync(extractDir, { recursive: true }); // create the extract directory
+    execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' }); // unzip the zip file to the extract directory. ignore the child process' IO
+    let snippets = findErrorSnippetsInDir(extractDir, maxSnippets); // find the error snippets in the extract directory
+    core.info(`Total snippets collected: ${snippets.length}`); // log the total number of snippets collected
 
     // Query job/step status once to validate findings and/or provide fallback
     let hasFailingJob = false;
     let failingLabel = 'no failing job detected';
     let apiCheckSucceeded = false;
     try {
-      const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
-      const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-      let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled');
-      let failingStep = undefined;
-      if (!failingJob) {
+      const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId }); // listJobsForWorkflowRun is a GitHub API call to list the jobs for a workflow run
+      const jobs = Array.isArray(data.jobs) ? data.jobs : []; // return the jobs array if it is an array, otherwise return an empty array
+      let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled'); // find the failing job. the assumption is a job is failing if the conclusion isn't success, skipped, or cancelled
+      let failingStep = undefined; // initialize the failing step to undefined
+      if (!failingJob) { // if there is no failing job, find the failing step (sometimes a job might pass while a step fails I guess)
         for (const job of jobs) {
           const step = (job.steps || []).find(s => s.conclusion === 'failure');
-          if (step) { failingJob = job; failingStep = step; break; }
+          if (step) { failingJob = job; failingStep = step; break; } // if the step is a failure, set the failing job and step
         }
       }
       apiCheckSucceeded = true;
       if (failingJob) {
         hasFailingJob = true;
-        failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`;
+        failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`; // set the failing label to the job name and step name if the step is a failure
       }
     } catch (e) {
       core.info(`Job status lookup failed for run ${runId}: ${e.message}`);
