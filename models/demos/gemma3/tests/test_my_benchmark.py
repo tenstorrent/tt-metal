@@ -79,20 +79,40 @@ def test_perf_gemma_vision(
     second_key = "second_iter"  # TODO menjaj
     cpu_key = "ref_key"  # TODO menjaj
 
-    nr_iter = 10
-    keys = ["total_run", "model_load_and_initialization", "model_forward", "postprocessing_and_transfer"]
+    nr_iter_e2e = 10
+    nr_forward_iterations = 15
+    keys_e2e = ["total_run", "model_load_and_initialization", "postprocessing_and_transfer"]
+    key_model_forward = "model_forward"
 
-    for i in range(nr_iter):
-        profiler.start("total_run" + str(i), iteration=i)
-        run_model(mesh_device=mesh_device, bsz=bsz, profiler=profiler, iteration=i)
-        profiler.end("total_run" + str(i), iteration=i)
+    for cur_e2e_iteration in range(nr_iter_e2e):
+        if cur_e2e_iteration == 0:
+            nr_forward_iterations_actual = nr_forward_iterations
+        else:
+            nr_forward_iterations_actual = 1
 
-    for key in keys:
-        measurements = [profiler.get_duration(key + str(i), i) for i in range(nr_iter)]
-        mean = sum(measurements) / len(measurements)
-        std = sum([(i - mean) ** 2 for i in measurements]) ** (0.5)
+        profiler.start("total_run" + str(cur_e2e_iteration), iteration=cur_e2e_iteration)
+        run_model(
+            mesh_device=mesh_device,
+            bsz=bsz,
+            profiler=profiler,
+            cur_e2e_iteration=cur_e2e_iteration,
+            nr_forward_iterations=nr_forward_iterations_actual,
+            key_model_forward=key_model_forward,
+        )
+        profiler.end("total_run" + str(cur_e2e_iteration), iteration=cur_e2e_iteration)
+
+    measurements = dict()
+    for key in keys_e2e + [key_model_forward + "_compile"]:
+        measurements[key] = [profiler.get_duration(key + str(i), i) for i in range(nr_iter_e2e)]
+    measurements[key_model_forward + "_inference"] = [
+        profiler.get_duration(key_model_forward + "_inference" + str(i), i) for i in range(nr_forward_iterations - 1)
+    ]
+
+    for key, val in measurements.items():
+        mean = sum(val) / len(val)
+        std = sum([(i - mean) ** 2 for i in val]) ** (0.5)
         std_as_percent = std / mean * 100
-        print("measurements for", key, measurements)
+        print("measurements for", key, val)
         print("stats for", key, f": {mean=} {std=} {std_as_percent=}%")
         print()
         print()
@@ -180,20 +200,13 @@ benchmark_data.add_measurement(profiler, 0, step_name, f"ttft_estimate_80l_{gala
 """
 
 
-def run_model(mesh_device, bsz, profiler, iteration):
+def run_model(mesh_device, bsz, profiler, cur_e2e_iteration, nr_forward_iterations, key_model_forward):
     # copied large part of the function from https://github.com/tenstorrent/tt-metal/blob/1566d9ae155c4aba5432f874d375dfbae5d551cd/models/demos/gemma3/tests/test_vision_cross_attention_transformer.py#L30C5-L30C22
 
-    profiler.start("model_load_and_initialization" + str(iteration), iteration)
+    profiler.start("model_load_and_initialization" + str(cur_e2e_iteration), cur_e2e_iteration)
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
-
-    vision_first_layer_prefix = "model.vision_tower.vision_model."
-    vision_partial_state_dict = {
-        k[len(vision_first_layer_prefix) :]: v
-        for k, v in state_dict.items()
-        if (k.startswith(vision_first_layer_prefix))
-    }
 
     image_size = model_args.vision_chunk_size
     in_channels = model_args.vision_in_channels
@@ -210,19 +223,29 @@ def run_model(mesh_device, bsz, profiler, iteration):
         return_intermediate=False,
     )
 
-    profiler.end("model_load_and_initialization" + str(iteration), iteration)
+    profiler.end("model_load_and_initialization" + str(cur_e2e_iteration), cur_e2e_iteration)
 
-    profiler.start("model_forward" + str(iteration), iteration)
-    test_output = test_gemma_vision(input_tensor)
-    profiler.end("model_forward" + str(iteration), iteration)
+    for cur_forward_iteration in range(nr_forward_iterations):
+        if cur_forward_iteration == 0:
+            str_for_profiler = key_model_forward + "_compile" + str(cur_e2e_iteration)
+            index_for_profiler = cur_e2e_iteration
+        else:
+            str_for_profiler = (
+                key_model_forward + "_inference" + str(cur_forward_iteration - 1)
+            )  # i-1 instead of i because we want to be able to iterate from 0 so its more clean
+            index_for_profiler = cur_forward_iteration - 1
 
-    profiler.start("postprocessing_and_transfer" + str(iteration), iteration)
+        profiler.start(str_for_profiler, index_for_profiler)
+        test_output = test_gemma_vision(input_tensor)
+        profiler.end(str_for_profiler, index_for_profiler)
+
+    profiler.start("postprocessing_and_transfer" + str(cur_e2e_iteration), cur_e2e_iteration)
     out = ttnn.from_device(test_output)
 
     tt_output_torch = ttnn.to_torch(
         out,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )[0, :, :, :]
-    profiler.end("postprocessing_and_transfer" + str(iteration), iteration)
+    profiler.end("postprocessing_and_transfer" + str(cur_e2e_iteration), cur_e2e_iteration)
 
     return tt_output_torch
