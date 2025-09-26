@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
         tt_metal::distributed::Finish(device->mesh_command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+        tt_metal::ReadMeshDeviceProfilerResults(*device);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);

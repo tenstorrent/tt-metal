@@ -176,8 +176,8 @@ void run(
         tt::tt_metal::distributed::Finish(device0->mesh_command_queue());
         tt::tt_metal::distributed::Finish(device1->mesh_command_queue());
     }
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device0->get_devices()[0]);
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device1->get_devices()[0]);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device0);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device1);
 }
 
 int main(int argc, char** argv) {

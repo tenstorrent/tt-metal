@@ -377,7 +377,7 @@ void build_and_run_roundtrip_latency_test(
 
     // Read profiler results
     for (const auto& [mesh_device_ptr, program_ptr] : device_program_map) {
-        tt::tt_metal::detail::ReadDeviceProfilerResults(mesh_device_ptr->get_devices()[0]);
+        tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device_ptr);
     }
 }
 

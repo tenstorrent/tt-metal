@@ -104,7 +104,6 @@ void benchmark_args_combinations_single_core(
     // Extract local single-device buffer concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
     const auto input_device_buffer = input_mesh_buffer->get_device_buffer(mesh_coordinate);
-    const auto local_device = input_device_buffer->device();
 
     auto profiler_dir = res_path + "/" + params.test_name;
     tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
@@ -154,7 +153,7 @@ void benchmark_args_combinations_single_core(
         Finish(mesh_device_->mesh_command_queue());
         log_info(tt::LogTest, "Program finished!");
     }
-    tt::tt_metal::detail::ReadDeviceProfilerResults(local_device);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device_);
 }
 
 void benchmark_all_args_combinations_single_core(
