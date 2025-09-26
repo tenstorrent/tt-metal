@@ -75,7 +75,7 @@ def create_yolov11_input_tensors(
         print(f"🔍 [PREPROCESSING DEBUG - ELSE] AFTER ttnn.from_torch: {len(post_conversion_unique)} unique values out of {len(post_conversion_flat)} total")
         print(f"    Range: [{post_conversion_flat.min()}, {post_conversion_flat.max()}], Mean: {post_conversion_flat.mean()}")
         print(f"    Dtype: {post_conversion_debug.dtype}")
-        print(f"🔍 [PREPROCESSING DEBUG - ELSE] DIVERSITY LOSS: {len(pre_conversion_unique)} → {len(post_conversion_unique)} ({100*(len(pre_conversion_unique)-len(post_conversion_unique))/len(pre_conversion_unique):.2f}% loss)")
+        print(f"🔍 [PREPROCESSING DEBUG - ELSE] DIVERSITY LOSS: {len(torch_input_tensor)} → {len(post_conversion_unique)} ({100*(len(pre_conversion_unique)-len(post_conversion_unique))/len(pre_conversion_unique):.2f}% loss)")
     return torch_input_tensor, ttnn_input_tensor
 
 
