@@ -98,7 +98,6 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         auto py_gpt2 = static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(
             py_gpt2_module.attr("GPT2Transformer"));
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
-        py_gpt2.def("__call__", &models::gpt2::Transformer::operator());
     }
 
     {
@@ -128,7 +127,6 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
-        py_llama.def("__call__", &models::llama::Llama::operator());
     }
 
     {
@@ -155,7 +153,6 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         auto py_mlp = static_cast<nb::class_<ttml::modules::MultiLayerPerceptron, ttml::modules::ModuleBase>>(
             py_mlp_module.attr("MultiLayerPerceptron"));
         py_mlp.def(nb::init<const ttml::modules::MultiLayerPerceptronParameters&>());
-        py_mlp.def("__call__", &ttml::modules::MultiLayerPerceptron::operator());
     }
 }
 
