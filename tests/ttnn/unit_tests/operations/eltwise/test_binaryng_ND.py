@@ -91,11 +91,22 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, alpha, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     else:
         torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-        output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+        if ttnn_fn == ttnn.hypot:
+            output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            output_tensor = ttnn_fn(
+                input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None
+            )
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+    # Use ULP comparison for hypot, PCC for other operations
+    if ttnn_fn == ttnn.hypot:
+        from tests.ttnn.utils_for_testing import assert_with_ulp
+
+        assert_with_ulp(ttnn.from_torch(output_tensor, layout=ttnn.TILE_LAYOUT, device=device), torch_output_tensor)
+    else:
+        assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
 
 
 @pytest.mark.parametrize(
