@@ -632,6 +632,10 @@ int main(int argc, char** argv) {
             {"NUM_WORKER_CORES_TO_MCAST", "0"},
             {"IS_D_VARIANT", "1"},
             {"IS_H_VARIANT", "1"},
+            {"DISPATCH_SHARED_REGION",
+             std::to_string(MetalContext::instance()
+                                .dispatch_mem_map(CoreType::WORKER)
+                                .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_SHARED_REGION))},
         };
 
         std::vector<uint32_t> spoof_prefetch_compile_args = {
