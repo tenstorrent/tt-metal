@@ -322,12 +322,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_kb(
     uint32_t cb_page_size = output_bytes_per_row;
 
     // Align to 32-byte boundaries for optimal DRAM memory controller performance
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? tt::tt_metal::hal::get_dram_alignment()
-                                    : tt::tt_metal::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? tt::tt_metal::hal::get_dram_alignment()
-                                    : tt::tt_metal::hal::get_l1_alignment();
+    auto src_buffer_alignment = input_tensor.buffer()->alignment();
+    auto dst_buffer_alignment = output_tensor.buffer()->alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     uint32_t cb_page_size_aligned = tt::round_up(cb_page_size, alignment);
