@@ -7,11 +7,17 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev, skip_for_n_or_less_dev
+from models.common.utility_functions import (
+    skip_for_blackhole,
+    skip_for_wormhole_b0,
+    skip_for_n_dev,
+    skip_for_n_or_less_dev,
+)
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_dev(8)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
@@ -84,6 +90,8 @@ def test_all_gather_2d(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if bh_2d_mesh_device.shape[0] != 1 and bh_2d_mesh_device.shape[1] != 1:
+        pytest.skip("2D dynamic requires one dimension to be 1")
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0

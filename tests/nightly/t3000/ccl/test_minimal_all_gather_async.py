@@ -44,7 +44,6 @@ def run_all_gather_impl(
     skip_check=False,
     num_l1_banks=64,
     all_gather_function=ttnn.experimental.all_gather_async,
-    num_l1_banks=64,
 ):
     torch.manual_seed(0)
 
