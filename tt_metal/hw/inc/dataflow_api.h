@@ -2306,7 +2306,7 @@ public:
         uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
         uint64_t src_noc_addr{get_src_ptr(src, src_args)};
         uint32_t dst_local_l1_addr{get_dst_ptr(dst, dst_args)};
-        noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size, noc_id_, read_req_vc);
+        noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size_bytes, noc_id_, read_req_vc);
     }
 
     template <
@@ -2323,7 +2323,7 @@ public:
         uint32_t vc = NOC_UNICAST_WRITE_VC) const {
         uint32_t src_local_l1_addr{get_src_ptr(src, src_args)};
         uint64_t dst_noc_addr{get_dst_ptr(dst, dst_args)};
-        noc_async_write<max_page_size, enable_noc_tracing>(src_local_l1_addr, dst_noc_addr, size, noc_id_, vc);
+        noc_async_write<max_page_size, enable_noc_tracing>(src_local_l1_addr, dst_noc_addr, size_bytes, noc_id_, vc);
     }
 
     void async_read_barrier() const { noc_async_read_barrier(noc_id_); }
