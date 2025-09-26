@@ -71,7 +71,7 @@ uint32_t Hal::get_total_num_risc_processors() const {
 
 uint32_t HalCoreInfoType::get_processor_index(
     HalProcessorClassType processor_class, uint32_t processor_type_idx) const {
-    uint32_t processor_class_idx = utils::underlying_type<HalProcessorClassType>(processor_class);
+    uint32_t processor_class_idx = ttsl::as_underlying_type<HalProcessorClassType>(processor_class);
     uint32_t processor_index = 0;
     for (uint32_t i = 0; i < processor_class_idx; i++) {
         processor_index += this->get_processor_types_count(i);

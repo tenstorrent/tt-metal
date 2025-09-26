@@ -153,9 +153,9 @@ void run(
         tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device1->shape().dims());
     tt::tt_metal::distributed::MeshCoordinateRange device_range1 =
         tt::tt_metal::distributed::MeshCoordinateRange(zero_coord1, zero_coord1);
-    tt::tt_metal::distributed::MeshWorkload mesh_workload0 = tt::tt_metal::distributed::CreateMeshWorkload();
+    tt::tt_metal::distributed::MeshWorkload mesh_workload0;
     tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload0, std::move(program0), device_range0);
-    tt::tt_metal::distributed::MeshWorkload mesh_workload1 = tt::tt_metal::distributed::CreateMeshWorkload();
+    tt::tt_metal::distributed::MeshWorkload mesh_workload1;
     tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload1, std::move(program1), device_range1);
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
@@ -176,8 +176,8 @@ void run(
         tt::tt_metal::distributed::Finish(device0->mesh_command_queue());
         tt::tt_metal::distributed::Finish(device1->mesh_command_queue());
     }
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device0->get_devices()[0]);
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device1->get_devices()[0]);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device0);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device1);
 }
 
 int main(int argc, char** argv) {

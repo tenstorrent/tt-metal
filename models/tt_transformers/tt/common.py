@@ -745,3 +745,30 @@ def hf_multimodal_encode(messages, processor):
             mask=None,
         ),
     )
+
+
+def get_decode_mask(args, mesh_device, paged_attention_config=None):
+    """Function to create a decoding mask for the attention mechanism."""
+    if paged_attention_config is not None:
+        max_seq_len = (paged_attention_config.max_num_blocks * paged_attention_config.block_size) // args.max_batch_size
+    else:
+        max_seq_len = args.max_seq_len
+    mask = torch.triu(
+        torch.full(
+            (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+            -float("inf"),
+            dtype=torch.bfloat16,
+        ),
+        diagonal=1,
+    )
+    if args.sliding_window > 0:
+        mask += torch.tril(
+            torch.full(
+                (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+                -float("inf"),
+                dtype=torch.bfloat16,
+            ),
+            diagonal=-args.sliding_window,
+        )
+
+    return mask
