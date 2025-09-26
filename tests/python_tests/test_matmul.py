@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import List
+
 import torch
 
 from helpers.device import (
@@ -8,14 +10,14 @@ from helpers.device import (
     collect_results,
     write_stimuli_to_l1,
 )
-from helpers.dimensions import (
-    calculate_matmul_dimensions,
-)
 from helpers.format_arg_mapping import DestAccumulation, MathFidelity, format_dict
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.matmul_sweep import (
+    generate_matmul_dimension_combinations,
+    generate_tile_dims,
+)
 from helpers.param_config import (
-    generate_format_aware_matmul_combinations,
     input_output_formats,
     parametrize,
 )
@@ -23,6 +25,35 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+
+def generate_format_aware_matmul_combinations(
+    formats_list: List[FormatConfig],
+    dest_acc_modes: List[DestAccumulation],
+):
+    """
+    Generate matmul dimension combinations for multiple tiles.
+
+    Rules:
+    1. Format outliers (Float16_b->Float16, Bfp8_b->Float16) MUST use dest_acc=Yes
+    2. Running matmul tests on DestSync.Half, max tile count is 8
+    3. When dest_acc=Yes: max 4 tiles (32-bit dest register)
+    4. When dest_acc=No: max 8 tiles (16-bit dest register)
+
+    Returns: List of (format, dest_acc, dimensions) tuples
+    """
+    combinations = []
+
+    for fmt in formats_list:
+        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
+
+        for dest_acc in dest_acc_modes:
+            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+            dimensions_list = generate_matmul_dimension_combinations(max_tiles)
+            combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
+
+    return combinations
+
 
 # Generate format-aware combinations
 MATMUL_FORMATS = input_output_formats(
@@ -32,7 +63,6 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
     MATMUL_FORMATS, DEST_ACC_MODES
@@ -74,7 +104,7 @@ def test_matmul(
     )
 
     # Calculate all matmul dimensions using helper function
-    matmul_dims = calculate_matmul_dimensions(input_A_dimensions, input_B_dimensions)
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
@@ -104,13 +134,13 @@ def test_matmul(
         "testname": test_name,
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
-        "tile_cnt": matmul_dims["output_tile_cnt"],
+        "tile_cnt": matmul_dims.output_tile_cnt,
         "input_A_dimensions": input_A_dimensions,
         "input_B_dimensions": input_B_dimensions,
-        "output_dimensions": matmul_dims["output_dimensions"],
-        "rt_dim": matmul_dims["rt_dim"],
-        "ct_dim": matmul_dims["ct_dim"],
-        "kt_dim": matmul_dims["kt_dim"],
+        "output_dimensions": matmul_dims.output_dimensions,
+        "rt_dim": matmul_dims.rt_dim,
+        "ct_dim": matmul_dims.ct_dim,
+        "kt_dim": matmul_dims.kt_dim,
     }
 
     # Use the new helper function for writing stimuli
@@ -127,7 +157,7 @@ def test_matmul(
     run_test(test_config, boot_mode)
 
     res_from_L1 = collect_results(
-        formats, tile_count=matmul_dims["output_tile_cnt"], address=res_address
+        formats, tile_count=matmul_dims.output_tile_cnt, address=res_address
     )
     assert len(res_from_L1) == len(golden_tensor)
 
