@@ -45,7 +45,7 @@ void kernel_main() {
 
         if (src_mesh_id == dst_mesh_id) {
 #ifdef FABRIC_2D
-            routing_success = fabric_set_unicast_route(dst_fabric_dev_id, actual_packet_header);
+            routing_success = fabric_set_unicast_route(actual_packet_header, dst_fabric_dev_id, dst_mesh_id);
             fabric_set_unicast_route(expected_packet_header, src_fabric_dev_id, dst_fabric_dev_id, dst_mesh_id, ew_dim);
 #else
             uint8_t distance_in_hops = (dst_fabric_dev_id > src_fabric_dev_id)

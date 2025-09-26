@@ -116,6 +116,8 @@ enum class UnaryOpType {
     CELU,
     CLAMP_TSS,
     SELU,
+    RPOW,
+    CBRT,
 };
 
 enum class VecMode {

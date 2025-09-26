@@ -33,7 +33,6 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {

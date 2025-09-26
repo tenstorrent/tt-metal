@@ -5,7 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <stdint.h>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -115,15 +115,6 @@ static void configure_risc_settings(
 static uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     return is_2D_routing ? direction : 0;
-}
-
-static uint32_t get_vc1_connected_sender_channel(Topology topology) {
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        return FabricEriscDatamoverConfig::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
-        return FabricEriscDatamoverConfig::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
-    }
-    return 0;
 }
 
 static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
@@ -298,8 +289,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
     this->edm_local_sync_address = termination_signal_address + field_size;
-    this->edm_local_tensix_sync_address = edm_local_sync_address + field_size;
-    this->edm_status_address = edm_local_tensix_sync_address + field_size;
+    this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
 
@@ -353,6 +343,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
+
+    // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
+    // the hang is root caused for multiprocess test.
+    this->edm_local_tensix_sync_address = buffer_address;
+    buffer_address += field_size;
 
     // Channel Allocations
     this->max_l1_loading_size =

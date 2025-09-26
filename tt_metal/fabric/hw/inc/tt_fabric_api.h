@@ -232,14 +232,27 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 }
 
 // Overload: Fill route_buffer of LowLatencyMeshPacketHeader and initialize hop_index/branch offsets for 2D.
-bool fabric_set_unicast_route(uint16_t dst_dev_id, volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header) {
+bool fabric_set_unicast_route(
+    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id = MAX_NUM_MESHES) {
     auto* routing_info =
 #if defined(COMPILE_FOR_ERISC)
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D);
+        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D);
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D);
+        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D);
 #else
-        reinterpret_cast<tt_l1_ptr routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    if (routing_table->my_mesh_id != dst_mesh_id) {
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
+        // inter-mesh routing: update dst_dev_id to be exit node dev id for the target mesh
+        // ASSERT(dst_mesh_id < MAX_NUM_MESHES); // dst_mesh_id must be valid if specified
+        // tt_l1_ptr exit_node_table_t* exit_node_table =
+        //     reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+        // dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+    }
 #endif
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
@@ -288,11 +301,13 @@ bool fabric_set_unicast_route(uint16_t target_num, volatile tt_l1_ptr LowLatency
     } else {
         auto* routing_info =
 #if defined(COMPILE_FOR_ERISC)
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D);
+            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(
+                MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D);
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D);
+            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(
+                MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D);
 #else
-            reinterpret_cast<tt_l1_ptr routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
 #endif
         if constexpr (target_as_dev) {
             tt_l1_ptr tensix_routing_l1_info_t* routing_table =

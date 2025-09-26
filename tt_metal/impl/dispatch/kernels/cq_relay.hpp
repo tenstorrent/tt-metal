@@ -96,7 +96,7 @@ public:
                 true);
 #else
             tt::tt_fabric::fabric_set_unicast_route(
-                to_dev_id, (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr);
+                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
 #endif
 #endif
         } else {

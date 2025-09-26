@@ -6,7 +6,7 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 
 #include <vector>
