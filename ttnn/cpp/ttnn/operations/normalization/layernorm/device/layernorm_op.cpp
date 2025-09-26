@@ -194,6 +194,9 @@ void LayerNorm::validate(
                     TT_FATAL(
                         a.device()->arch() == tt::ARCH::WORMHOLE_B0,
                         "Welford's algorithm for Layernorm is only supported on Wormhole");
+                    TT_FATAL(
+                        this->distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+                        "Welford's algorithm is not supported for distributed layernorm");
                 }
                 if (program_config.inplace) {
                     TT_FATAL(
