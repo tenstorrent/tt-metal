@@ -20,8 +20,6 @@
 namespace ttnn {
 namespace ccl {
 
-std::vector<IDevice*> get_devices(const MeshDevice& mesh_device, const MeshCoordinate& coord, const std::optional<uint32_t>& cluster_axis);
-
 uint32_t get_topological_dimension(
     const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 

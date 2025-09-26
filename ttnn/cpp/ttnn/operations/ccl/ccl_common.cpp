@@ -19,17 +19,6 @@
 namespace ttnn {
 namespace ccl {
 
-std::vector<IDevice*> get_devices(
-    const MeshDevice& mesh_device, const MeshCoordinate& coord, const std::optional<uint32_t>& cluster_axis) {
-    const auto& mesh_view = mesh_device.get_view();
-    if (cluster_axis.has_value()) {
-        TT_FATAL(cluster_axis.value() == 0 || cluster_axis.value() == 1, "Cluster axis must be 0 or 1");
-        return cluster_axis.value() == 0 ? mesh_view.get_devices_on_row(coord[0])
-                                         : mesh_view.get_devices_on_column(coord[1]);
-    }
-    return mesh_view.get_devices();
-}
-
 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis) {
     auto mesh_shape = tensor.device()->shape();
