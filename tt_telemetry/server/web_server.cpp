@@ -16,7 +16,7 @@
 #include <httplib.h>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>

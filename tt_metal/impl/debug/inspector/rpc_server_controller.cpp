@@ -33,6 +33,7 @@ void RpcServerController::start(const std::string& host, uint16_t port) {
 
     should_stop = false;
     is_running = true;
+    server_start_finished = false;
     server_thread = std::thread(&RpcServerController::run_server, this);
 
     // Wait for server to start or fail

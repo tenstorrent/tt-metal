@@ -18,7 +18,7 @@
 #include <vector>
 #include <atomic>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "core_coord.hpp"
@@ -34,7 +34,6 @@
 #include "semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "util.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
@@ -358,7 +357,7 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     ZoneScoped;
     HalProgrammableCoreType programmable_core_type =
-        ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
+        ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     return base_addr + get_program_config(
                            MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
@@ -386,7 +385,7 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     ZoneScoped;
     HalProgrammableCoreType programmable_core_type =
-        ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
+        ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     return base_addr + get_program_config(
                            MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),

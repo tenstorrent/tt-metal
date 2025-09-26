@@ -26,20 +26,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
-// cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
-//         = exp[ (1/3)*log[a] ]
-Tensor _cbrt(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    constexpr float scale = (float)(1.0 / 3.0);
-    Tensor t_ln_input = ttnn::log(
-        ttnn::abs(input_tensor, output_mem_config), true, output_mem_config);  // negative log is not useful here
-    Tensor t1 = ttnn::multiply(t_ln_input, scale, std::nullopt, output_mem_config);
-    t_ln_input.deallocate();
-    Tensor t2 = ttnn::exp(t1, false, output_mem_config);
-    t1.deallocate();
-    Tensor t3 = ttnn::multiply(t2, ttnn::sign(input_tensor, output_mem_config), std::nullopt, output_mem_config);
-    return t3;
-}
-
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
 Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
