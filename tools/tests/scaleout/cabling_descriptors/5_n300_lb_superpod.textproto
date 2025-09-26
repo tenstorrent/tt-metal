@@ -5,19 +5,6 @@ graph_templates {
       name: "node1"
       node_ref { node_descriptor: "N300_LB" }
     }
-    children {
-      name: "node2"
-      node_ref { node_descriptor: "N300_LB" }
-    }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-        connections {
-          port_a { path: ["node1"] tray_id: 2 port_id: 1 }
-          port_b { path: ["node2"] tray_id: 2 port_id: 1 }
-        }
-      }
-    }
   }
 }
 
@@ -27,9 +14,5 @@ root_instance {
   child_mappings {
     key: "node1"
     value { host_id: 0 }
-  }
-  child_mappings {
-    key: "node2"
-    value { host_id: 1 }
   }
 }

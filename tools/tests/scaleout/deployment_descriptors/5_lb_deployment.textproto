@@ -6,11 +6,3 @@ hosts: {
   node_type: "N300_LB"
   host: "metal-wh-15"
 }
-hosts: {
-  hall: "SC_Floor_5"
-  aisle: "A"
-  rack: 1
-  shelf_u: 12
-  node_type: "N300_LB"
-  host: "metal-wh-14"
-}
