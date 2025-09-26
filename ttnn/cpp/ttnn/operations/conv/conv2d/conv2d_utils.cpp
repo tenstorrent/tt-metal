@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <optional>
 #include <tuple>
-#include <tt_stl/math.hpp>
 
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_types.hpp>
