@@ -203,40 +203,45 @@ class WanTransformerBlock:
         identity_state = {"weight": identity_tensor}
         self.shard_spatial_on_tp.load_state_dict(identity_state)
 
-        self.scale_shift_table = bf16_tensor(state_dict["scale_shift_table"], device=self.mesh_device)
+        self.scale_shift_table_11TD = bf16_tensor(
+            state_dict["scale_shift_table"].unsqueeze(0),
+            device=self.mesh_device,
+            shard_dim=-1,
+            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+        )
 
     def __call__(self, spatial_1BND, prompt_1BLP, temb_1BTD, N, rope_cos, rope_sin, trans_mat):
         """
-        spatial_1BND: fractured N on SP, replicated D on TP
+        spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
-        temb_1BTD: replicated on SP, replicated D on TP
+        temb_1BTD: replicated on SP, fractured D on TP
         N: logical sequence length of the spatial input
         rope_cos_BANH: fractured N on SP, A (num_heads) on TP
         rope_sin_BANH: fractured N on SP, A (num_heads) on TP
         trans_mat: replicated on SP, replicated D on TP
 
         Outputs:
-        spatial_1BND: fractured N on SP, replicated D on TP
+        spatial_1BND: fractured N on SP, fractured D on TP
         """
 
         assert temb_1BTD.shape[2] == 6, "wan2.2 14b expects 6 chunks in timestep embedding"
 
-        shifted_temb_1BTD = self.scale_shift_table + temb_1BTD
+        shifted_temb_1BTD = self.scale_shift_table_11TD + temb_1BTD
         shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
             shifted_temb_1BTD, 6, dim=2
         )
 
         # DistributedLayerNorm workaround
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_sharded_1BND = self.shard_spatial_on_tp(
-                spatial_1BND, compute_kernel_config=self.ff_compute_kernel_config
-            )
-        else:
-            spatial_sharded_1BND = spatial_1BND
+        # if self.parallel_config.tensor_parallel.factor > 1:
+        #     spatial_sharded_1BND = self.shard_spatial_on_tp(
+        #         spatial_1BND, compute_kernel_config=self.ff_compute_kernel_config
+        #     )
+        # else:
+        #     spatial_sharded_1BND = spatial_1BND
 
-        spatial_normed_1BND = self.norm1(
-            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
-        )
+        spatial_normed_1BND = self.norm1(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
+        spatial_normed_1BND = spatial_normed_1BND * (1.0 + scale_msa_1B1D) + shift_msa_1B1D
+
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
                 spatial_normed_1BND,
@@ -251,7 +256,6 @@ class WanTransformerBlock:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-        spatial_normed_1BND = spatial_normed_1BND * (1.0 + scale_msa_1B1D) + shift_msa_1B1D
 
         # Self attention on spatial
         spatial_attn_1BND = self.attn1(
@@ -267,15 +271,13 @@ class WanTransformerBlock:
 
         # Cross attention on prompt
         # DistributedLayerNorm workaround
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_sharded_1BND = self.shard_spatial_on_tp(
-                spatial_1BND, compute_kernel_config=self.ff_compute_kernel_config
-            )
-        else:
-            spatial_sharded_1BND = spatial_1BND
-        spatial_normed_1BND = self.norm2(
-            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
-        )
+        # if self.parallel_config.tensor_parallel.factor > 1:
+        #     spatial_sharded_1BND = self.shard_spatial_on_tp(
+        #         spatial_1BND, compute_kernel_config=self.ff_compute_kernel_config
+        #     )
+        # else:
+        #     spatial_sharded_1BND = spatial_1BND
+        spatial_normed_1BND = self.norm2(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
                 spatial_normed_1BND,
@@ -300,15 +302,16 @@ class WanTransformerBlock:
 
         # Feed Forward
         # DistributedLayerNorm workaround
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_sharded_1BND = self.shard_spatial_on_tp(
-                spatial_1BND, compute_kernel_config=self.ff_compute_kernel_config
-            )
-        else:
-            spatial_sharded_1BND = spatial_1BND
-        spatial_normed_1BND = self.norm3(
-            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
-        )
+        # if self.parallel_config.tensor_parallel.factor > 1:
+        #     spatial_sharded_1BND = self.shard_spatial_on_tp(
+        #         spatial_1BND, compute_kernel_config=self.ff_compute_kernel_config
+        #     )
+        # else:
+        #     spatial_sharded_1BND = spatial_1BND
+        spatial_normed_1BND = self.norm3(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
+
+        spatial_normed_1BND = spatial_normed_1BND * (1 + c_scale_msa_1B1D) + c_shift_msa_1B1D
+
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
                 spatial_normed_1BND,
@@ -323,28 +326,26 @@ class WanTransformerBlock:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-
-        spatial_normed_1BND = spatial_normed_1BND * (1 + c_scale_msa_1B1D) + c_shift_msa_1B1D
         # NOTE: Cannot set core_grid for FF or you get L1 OOM. Needs to be fixed.
         spatial_ff_1BND = self.ff(
             spatial_normed_1BND, core_grid=None, compute_kernel_config=self.ff_compute_kernel_config
         )
 
-        if self.parallel_config.tensor_parallel.factor > 1:
-            # Gather spatial fractured on hidden dim
-            spatial_ff_1BND = ttnn.experimental.all_gather_async(
-                spatial_ff_1BND,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_ff_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            )
+        # if self.parallel_config.tensor_parallel.factor > 1:
+        #     # Gather spatial fractured on hidden dim
+        #     spatial_ff_1BND = ttnn.experimental.all_gather_async(
+        #         spatial_ff_1BND,
+        #         persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+        #             spatial_ff_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+        #         ),
+        #         dim=3,
+        #         multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+        #             self.parallel_config.tensor_parallel.mesh_axis
+        #         ),
+        #         num_links=self.ccl_manager.num_links,
+        #         topology=self.ccl_manager.topology,
+        #         cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+        #     )
 
         spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
 
