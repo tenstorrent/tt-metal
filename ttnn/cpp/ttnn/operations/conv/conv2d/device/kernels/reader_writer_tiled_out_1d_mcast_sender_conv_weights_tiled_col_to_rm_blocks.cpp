@@ -36,9 +36,9 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t weights_size_h = get_compile_time_arg_val(27);
 
 #ifdef ACTIVATION_REUSE
-    constexpr uint32_t weights_size_h = get_compile_time_arg_val(27);
     constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(28);
     constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(29);
     constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(30) == 1;
@@ -47,9 +47,14 @@ void kernel_main() {
     constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(33);
     constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(34) == 1;
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(35) == 1;
-#endif
-#endif
     constexpr uint32_t ct_arg_idx = 36;
+#else
+    constexpr uint32_t ct_arg_idx = 28;
+#endif
+#else
+    constexpr uint32_t ct_arg_idx = 18;
+#endif
+
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 

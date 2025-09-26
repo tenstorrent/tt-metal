@@ -53,11 +53,14 @@ void kernel_main() {
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
+
+    constexpr uint32_t ct_arg_idx = 28;
 #else
     constexpr bool split_reader_enabled = false;
+    constexpr uint32_t ct_arg_idx = 18;
 #endif
-    // Without split reader, weight tensor args start at 36
-    constexpr auto s_weight_args = TensorAccessorArgs<36>();
+
+    constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
