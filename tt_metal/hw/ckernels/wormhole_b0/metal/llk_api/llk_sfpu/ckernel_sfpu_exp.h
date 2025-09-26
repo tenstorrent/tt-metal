@@ -47,12 +47,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // of staying at 0. This overflow happens when `log2(e) * val < 127.0f`, which correspond to `val < 88.0f`
     // Would it be possible to call minmax ?
     // could also add SKIP_POSITIVE_CHECK here.
-    // TODO: Could compute abs (setsgn) and clamp to 88.8f in a single branch / SFPSWAP
-    v_if(val < -88.0f) { val = -88.f; }
-    v_endif;
 
-    v_if(val > 88.8f) { val = 88.8f; }
-    v_endif;
+    sfpi::vFloat val_positive = setsgn(val, 0);
+    sfpi::vFloat clamp_threshold = sfpi::vFloat(88.8f);
+    vec_min_max(val_positive, clamp_threshold);
+    val = setsgn(val_positive, val);
 
     // Idea: Loop unrolling + Loop splitting to reduce overhead of loading constants
 
