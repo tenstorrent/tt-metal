@@ -3,7 +3,7 @@ This is the VisionEmbedding implementation for the Gemma-3-4b-it
 This implementation combines patch_conv followed by Embeddings as a submodule.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
