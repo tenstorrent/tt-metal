@@ -51,7 +51,7 @@
 #include "semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "utils.hpp"
+#include <tt_stl/enum.hpp>
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -1064,7 +1064,7 @@ KernelHandle CreateEthernetKernel(
     }
 
     TT_FATAL(
-        utils::underlying_type<DataMovementProcessor>(config.processor) <
+        ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
             MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "

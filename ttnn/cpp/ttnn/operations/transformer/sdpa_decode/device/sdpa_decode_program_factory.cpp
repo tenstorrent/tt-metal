@@ -11,7 +11,6 @@
 #include "sdpa_decode_op.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -421,7 +420,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     if (use_cur_pos_tensor) {
         auto pos_buffer = cur_pos_tensor.value().buffer();
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
-        pos_tensor_tile_size = tt_metal::detail::TileSize(pos_df);
+        pos_tensor_tile_size = tt::tile_size(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
 
         // cb pos

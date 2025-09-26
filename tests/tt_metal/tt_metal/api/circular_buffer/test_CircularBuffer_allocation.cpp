@@ -33,7 +33,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/util.hpp>
 
 // Access to internal API: ProgramImpl::get_cb_base_addr
 #include "impl/program/program_impl.hpp"
@@ -220,7 +219,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         Program program;
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
-        uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
+        uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
         auto buffer_size = page_size * 128;
         tt::tt_metal::InterleavedBufferConfig buff_config{

@@ -42,8 +42,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     CoreCoord end_core = cores[num_cores - 1];
     if (output.layout() == Layout::TILE) {
-        input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;

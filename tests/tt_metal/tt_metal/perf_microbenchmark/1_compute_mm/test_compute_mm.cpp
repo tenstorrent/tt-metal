@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -58,7 +57,6 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -360,7 +358,7 @@ int main(int argc, char** argv) {
         if (single_core) {
             data_format = dtype == 0 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
         }
-        uint32_t single_tile_size = tt_metal::detail::TileSize(data_format);
+        uint32_t single_tile_size = tt::tile_size(data_format);
         TT_ASSERT(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048));
 
         auto grid_size = device->compute_with_storage_grid_size();
