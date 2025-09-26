@@ -53,32 +53,37 @@ void py_module(nb::module_& m) {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
         py_binary.def(
             "add",
-            [](const autograd::TensorPtr& a, const autograd::AutocastTensor& b) { return ttml::ops::add(a, b); },
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::AutocastTensor&)>(
+                &ops::operator+),
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
             "add",
-            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::add(a, b); },
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &ops::operator+),
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
             "mul",
-            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::mul(a, b); },
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &ops::operator*),
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
             "mul",
-            [](const autograd::TensorPtr& a, float b) { return ttml::ops::mul(a, b); },
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, float)>(ops::operator*),
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
             "sub",
-            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::sub(a, b); },
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &ttml::ops::operator-),
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
             "div",
-            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::div(a, b); },
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &ttml::ops::operator/),
             nb::arg("a"),
             nb::arg("b"));
     }
