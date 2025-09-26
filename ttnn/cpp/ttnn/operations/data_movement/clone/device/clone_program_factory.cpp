@@ -40,8 +40,10 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_units);
 
+    auto alignment = input.buffer()->alignment();
+
     uint32_t src_cb_id = CBIndex::c_4;
-    uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
+    uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
     auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
                              .set_page_size(src_cb_id, aligned_input_unit_size);
     CreateCircularBuffer(program, all_cores, src_cb_config);
@@ -49,7 +51,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     uint32_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
         dst_cb_id = CBIndex::c_20;
-        uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
+        uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
         auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
                                  .set_page_size(dst_cb_id, aligned_output_unit_size);
         CreateCircularBuffer(program, all_cores, dst_cb_config);
