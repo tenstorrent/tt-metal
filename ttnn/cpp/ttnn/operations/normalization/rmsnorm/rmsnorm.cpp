@@ -31,8 +31,10 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
 
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
+        // Note: Use fast_and_approximate_mode divide as fast_and_approximate_mode=true version does not work
+        // with row-col bcast (Issue #28961)
         auto result = ttnn::divide(
-            input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
+            input_tensor, ttnn::abs(input_tensor, output_memory_config), std::nullopt, output_memory_config);
 
         if (weight.has_value()) {
             result = ttnn::multiply(result, weight.value(), /*alpha=*/std::nullopt, output_memory_config);

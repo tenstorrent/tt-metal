@@ -1425,11 +1425,11 @@ void bind_binary_operation_with_fast_approx(
                     dtype,
                     memory_config,
                     output_tensor,
+                    fast_and_approximate_mode,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode);
+                    use_legacy);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -1461,11 +1461,11 @@ void bind_binary_operation_with_fast_approx(
                     dtype,
                     memory_config,
                     output_tensor,
+                    fast_and_approximate_mode,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode);
+                    use_legacy);
             },
             py::arg("input_tensor_a"),
             py::arg("value"),
@@ -1808,11 +1808,11 @@ void bind_inplace_operation_with_fast_approx(
                 return self(
                     input_tensor_a,
                     input_tensor_b,
+                    fast_and_approximate_mode,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode);
+                    use_legacy);
             },
             py::arg("input_a"),
             py::arg("input_b"),
@@ -1836,11 +1836,11 @@ void bind_inplace_operation_with_fast_approx(
                 return self(
                     input_tensor_a,
                     value,
+                    fast_and_approximate_mode,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode);
+                    use_legacy);
             },
             py::arg("input_a"),
             py::arg("value"),
