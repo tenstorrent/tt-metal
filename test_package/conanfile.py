@@ -17,6 +17,10 @@ class TestPackageConan(ConanFile):
     def requirements(self):
         self.requires(self.tested_reference_str)
 
+    def build_requirements(self):
+        self.tool_requires("ninja/[>=1.11.1]")
+        self.tool_requires("cmake/[>=3.25]")
+
     def layout(self):
         cmake_layout(self)
 

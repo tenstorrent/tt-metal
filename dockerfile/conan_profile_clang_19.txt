@@ -13,5 +13,8 @@ CC=clang-19
 CXX=clang++-19
 
 [tool_requires]
-cmake/[>=3.25]
-ninja/[>=1.11.1]
+bzip2/*: cmake/[>=3.25]
+capstone/*: cmake/[>=3.25]
+expat/*: cmake/[>=3.25]
+sqlite3/*: cmake/[>=3.25]
+zlib/*: cmake/[>=3.25]

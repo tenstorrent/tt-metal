@@ -44,6 +44,7 @@ class TTMetaliumConan(ConanFile):
             "ttnn/**",
             "tt_metal/**",
             "tt_stl/**",
+            "tools/**",
             "CMakePresets.json",
             "cmake/**",
             "third_party/**",
