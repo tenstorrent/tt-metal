@@ -159,6 +159,44 @@ inline void packer_addr_counter_init()
     TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
 }
 
+// This function saves the exponential section size/required offsets to GPR for reconfiguring
+// of data format for packer. These registers are not explicitly used by the packer during
+// operation, thus we do not need to use a semaphore to wait for the packer to finish before
+// performing these MMIOs.
+template <bool reconfiguring>
+inline void cache_exponential_section_sizes_in_gprs(const uint num_faces = 4, const bool partial_face = false)
+{
+    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces > 2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+
+    if constexpr (!reconfiguring)
+    {
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = (1 + 0 + 48) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    }
+
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = (1 + ((num_faces > 2) ? 2 : 0) + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+
+    if constexpr (!reconfiguring)
+    {
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = (1 + 1 + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = (1 + 0 + 24) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    }
+
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = (1 + ((num_faces > 2) ? 2 : 0) + 4) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+
+    if constexpr (!reconfiguring)
+    {
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = (1 + 1 + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = (1 + 0 + 12) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        sync_regfile_write(p_gpr_pack::EXP3_SEC_SIZE_BFP2);
+    }
+    else
+    {
+        sync_regfile_write(p_gpr_pack::EXP1_SEC_SIZE_BFP2);
+    }
+}
+
 inline void set_packer_strides(const uint pack_src_format, [[maybe_unused]] const uint pack_dst_format)
 {
     uint x_stride = (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float32)   ? 4
@@ -311,18 +349,7 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
         }
     }
 
-    // Save to GPR for quick data format reconfig
-    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces > 2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = (1 + 0 + 48) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = (1 + ((num_faces > 2) ? 2 : 0) + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = (1 + 1 + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = (1 + 0 + 24) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = (1 + ((num_faces > 2) ? 2 : 0) + 4) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = (1 + 1 + 8) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = (1 + 0 + 12) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    sync_regfile_write(p_gpr_pack::EXP3_SEC_SIZE_BFP2);
+    cache_exponential_section_sizes_in_gprs<false>(num_faces, partial_face);
 }
 
 inline void set_packer_l1_offset(const uint pack_dst_format, const uint face_r_dim = FACE_R_DIM)
@@ -354,7 +381,13 @@ inline void set_packer_l1_offset(const uint pack_dst_format, const uint face_r_d
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void reconfig_packer_data_format(const uint pack_src_format, const uint pack_dst_format, const uint tile_size = 0, const uint face_r_dim = FACE_R_DIM)
+inline void reconfig_packer_data_format(
+    const uint pack_src_format,
+    const uint pack_dst_format,
+    const uint tile_size    = 0,
+    const uint face_r_dim   = FACE_R_DIM,
+    const uint num_faces    = 4,
+    const bool partial_face = false)
 {
     // Configure packers
     pack_config_u config;
@@ -363,11 +396,27 @@ inline void reconfig_packer_data_format(const uint pack_src_format, const uint p
     config.f.uncompress      = 1;
     config.f.out_data_format = pack_dst_format;
     config.f.in_data_format  = pack_src_format;
+
+    // Wait till packer is done before changing config registers
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO); // 16-bit write
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
+
+    // Some initialization methods modify this configuration register, so need to set it again
+    // Number of reads per face used for resetting tile position generator for edge masks
+    pack_counters_u pack_counters;
+    pack_counters.val                       = 0;
+    pack_counters.f.pack_reads_per_xy_plane = face_r_dim;
+    TT_SETDMAREG(0, LOWER_HALFWORD(pack_counters.val), 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(pack_counters.val), 0, HI_16(p_gpr_pack::TMP0));
+
+    for (uint i = 0; i < 4; i++)
+    {
+        TT_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i); // disable auto last generation
+    }
 
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
@@ -396,6 +445,11 @@ inline void reconfig_packer_data_format(const uint pack_src_format, const uint p
 
     if (IS_BFP_FORMAT(pack_dst_format))
     {
+        cache_exponential_section_sizes_in_gprs<true>(num_faces, partial_face);
+
+        // Wait till the MMIO is finished
+        TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::TRISC_CFG);
+
         // Override exp section size for packers 1,2,3
         // Tile header + exp size + datum size
         TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
@@ -459,11 +513,7 @@ inline void reconfig_packer_data_format(const uint pack_src_format, const uint p
         }
     }
 
-    // Flush packer pipeline before strides gasket alu format change
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_src_format);
-
-    tensix_sync(); // FIXME: why stallwait on cfg write doesn't work!
 
     // Set packer strides
     set_packer_strides(pack_src_format, pack_dst_format);
