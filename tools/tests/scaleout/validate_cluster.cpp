@@ -148,8 +148,7 @@ int main(int argc, char* argv[]) {
                       << std::endl;
             std::cout << unexpected_status_log.str() << std::endl;
         }
-        distributed_context.barrier();
     }
-
+    distributed_context.barrier();
     return 0;
 }
