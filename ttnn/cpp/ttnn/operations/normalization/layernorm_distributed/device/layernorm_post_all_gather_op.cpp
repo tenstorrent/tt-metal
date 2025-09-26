@@ -8,7 +8,6 @@
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 
 #include <optional>
 

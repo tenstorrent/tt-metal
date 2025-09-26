@@ -5,7 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <stdint.h>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -115,15 +115,6 @@ static void configure_risc_settings(
 static uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     return is_2D_routing ? direction : 0;
-}
-
-static uint32_t get_vc1_connected_sender_channel(Topology topology) {
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        return FabricEriscDatamoverConfig::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
-        return FabricEriscDatamoverConfig::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
-    }
-    return 0;
 }
 
 static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
@@ -298,8 +289,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
     this->edm_local_sync_address = termination_signal_address + field_size;
-    this->edm_local_tensix_sync_address = edm_local_sync_address + field_size;
-    this->edm_status_address = edm_local_tensix_sync_address + field_size;
+    this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
 
@@ -351,6 +341,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->receiver_channels_downstream_flow_control_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
+        buffer_address += field_size;
+    }
+
+    // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
+    // the hang is root caused for multiprocess test.
+    this->edm_local_tensix_sync_address = buffer_address;
+    buffer_address += field_size;
+
+    // location for temporarily store the src address when performing inline writes to L1 with spoof
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        this->notify_worker_of_read_counter_update_src_address = buffer_address;
         buffer_address += field_size;
     }
 
@@ -1265,7 +1266,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     bool vc1_has_different_downstream_dest =
         fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
 
-    const std::vector<uint32_t> main_args = {
+    const std::vector<uint32_t> main_args_part1 = {
         num_sender_channels,
         num_receiver_channels,
         config.num_fwd_paths,
@@ -1280,8 +1281,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
-        vc1_has_different_downstream_dest,
+        vc1_has_different_downstream_dest};
 
+    const std::vector<uint32_t> main_args_part2 = {
         config.skip_receiver_channel_1_connection,
         config.skip_sender_channel_1_connection,
         config.skip_sender_vc1_channel_connection,
@@ -1312,6 +1314,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->edm_local_sync_ptr,
         this->edm_local_tensix_sync_ptr,
         this->edm_status_ptr,
+
+        config.notify_worker_of_read_counter_update_src_address,
+        0x7a9b3c4d,  // special tag marker to catch incorrect ct args
 
         // fabric counters
         FabricEriscDatamoverConfig::enable_fabric_counters,
@@ -1376,35 +1381,32 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
-    // Add main arguments to ct_args
-    ct_args.insert(ct_args.end(), main_args.begin(), main_args.end());
+    // Add first part of main arguments to ct_args
+    ct_args.insert(ct_args.end(), main_args_part1.begin(), main_args_part1.end());
 
     // insert the sender channel num buffers
-    // Index updated to account for 23 stream ID arguments + 1 marker + 1 downstream tensix connections
-    const size_t sender_channel_num_buffers_idx = 39;  // 14 + 23 + 1 + 1
     ct_args.insert(
-        ct_args.begin() + sender_channel_num_buffers_idx,
+        ct_args.end(),
         this->sender_channels_num_buffers.begin(),
         this->sender_channels_num_buffers.begin() + num_sender_channels);
     // insert the receiver channel num buffers
-    const size_t receiver_channel_num_buffers_idx = sender_channel_num_buffers_idx + num_sender_channels;
     ct_args.insert(
-        ct_args.begin() + receiver_channel_num_buffers_idx,
+        ct_args.end(),
         this->receiver_channels_num_buffers.begin(),
         this->receiver_channels_num_buffers.begin() + num_receiver_channels);
     // insert the remote receiver channel num buffers
-    const size_t remote_receiver_channel_num_buffers_idx = receiver_channel_num_buffers_idx + num_receiver_channels;
     ct_args.insert(
-        ct_args.begin() + remote_receiver_channel_num_buffers_idx,
+        ct_args.end(),
         this->remote_receiver_channels_num_buffers.begin(),
         this->remote_receiver_channels_num_buffers.begin() + num_receiver_channels);
     // insert the downstream sender channel num buffers
-    const size_t downstream_sender_channel_num_buffers_idx =
-        remote_receiver_channel_num_buffers_idx + num_receiver_channels;
     ct_args.insert(
-        ct_args.begin() + downstream_sender_channel_num_buffers_idx,
+        ct_args.end(),
         this->downstream_sender_channels_num_buffers.begin(),
         this->downstream_sender_channels_num_buffers.begin() + config.num_fwd_paths);
+
+    // Add second part of main arguments to ct_args
+    ct_args.insert(ct_args.end(), main_args_part2.begin(), main_args_part2.end());
 
     for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
