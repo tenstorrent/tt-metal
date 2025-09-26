@@ -10,6 +10,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 #include "device/pool_op.hpp"
+#include <vector>
 
 namespace ttnn {
 namespace operations::pool {
@@ -20,7 +21,7 @@ struct MaxPoolWithIndicesResult {
 };
 
 struct MaxPool2DOp {
-    static std::variant<Tensor, MaxPoolWithIndicesResult> invoke(
+    static std::vector<Tensor> invoke(
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,
