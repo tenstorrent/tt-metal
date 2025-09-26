@@ -2229,7 +2229,6 @@ void FabricUnicastCommon(
     append_routing_plane_connection_manager_rt_args(
         src_fabric_node_id,
         dest_fabric_node_ids,
-        {},
         sender_program,
         sender_kernel,
         {sender_logical_core},
@@ -2401,7 +2400,6 @@ void FabricMulticastCommon(
     append_routing_plane_connection_manager_rt_args(
         src_fabric_node_id,
         dest_fabric_node_ids,
-        {},
         sender_program,
         sender_kernel,
         {sender_logical_core},
