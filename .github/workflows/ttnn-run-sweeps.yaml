@@ -640,9 +640,21 @@ jobs:
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
 
-          # Separate slow modules that should run in their own batch
-          slow_modules = ['conv2d.full.conv2d_sliding_window']
-          regular_modules = [m for m in modules if m not in slow_modules]
+          # Modules that need to be split by suite due to long execution times
+          suite_split_modules = {
+              'conv2d.full.conv2d_sliding_window': [
+                  'sliding_window_suite_0',
+                  'sliding_window_suite_1',
+                  'sliding_window_suite_2',
+                  'sliding_window_suite_3',
+                  'sliding_window_suite_4',
+                  'sliding_window_suite_5',
+                  'sliding_window_suite_6'
+              ]
+          }
+
+          # Remove suite-split modules from regular processing
+          regular_modules = [m for m in modules if m not in suite_split_modules.keys()]
 
           # Use smaller batch size for comprehensive runs (Friday night schedule or manual comprehensive dispatch)
           # Use larger batch size for nightly runs (Thursday schedule or manual nightly dispatch)
@@ -654,10 +666,11 @@ jobs:
           # Create batches for regular modules
           batches = [",".join(regular_modules[i:i+BATCH_SIZE]) for i in range(0, len(regular_modules), BATCH_SIZE)]
 
-          # Add slow modules as individual batches
-          for slow_module in slow_modules:
-              if slow_module in modules:  # Only add if the module exists
-                  batches.append(slow_module)
+          # Add suite-split modules as individual suite batches
+          for module_name, suites in suite_split_modules.items():
+              if module_name in modules:  # Only add if the module exists
+                  for suite in suites:
+                      batches.append(f"{module_name}:{suite}")
 
           print(json.dumps({"module": modules, "batches": batches}))
           PY
@@ -798,10 +811,21 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (batch)
         run: |
-          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
-            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
+          BATCH="${{ matrix.batch }}"
+
+          # Check if batch contains colon (suite-specific execution)
+          if [[ "$BATCH" == *":"* ]]; then
+            MODULE_NAME="${BATCH%:*}"
+            SUITE_NAME="${BATCH#*:}"
+            # Suite-specific execution doesn't need nightly restriction
+            python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
           else
-            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+            # Regular batch execution
+            if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
+            else
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+            fi
           fi
       - name: Compute artifact suffix
         shell: bash
