@@ -213,8 +213,8 @@ def run_avg_pool2d(
         run_twice = False
 
     if run_twice or True:
-        ttnn.deallocate(ttnn_output, True)
-        _ = ttnn.avg_pool2d(
+        # ttnn.deallocate(ttnn_output, True)
+        ttnn_output = ttnn.avg_pool2d(
             input_tensor=ttnn_input,
             batch_size=in_n,
             input_h=in_h,
