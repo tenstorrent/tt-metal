@@ -584,7 +584,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
 // transaction at the same time. If one port on the receipient has no back-pressure then the transaction will hang
 // because there is no mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate
 // inline writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
-template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -593,7 +593,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
