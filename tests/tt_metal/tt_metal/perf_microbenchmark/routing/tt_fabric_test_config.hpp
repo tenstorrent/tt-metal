@@ -592,6 +592,8 @@ private:
 
             // Convert to resolved TestConfig
             TestConfig resolved_test = resolve_test_config(iteration_test);
+            // Set iteration number explicitly, because it doesn't make sense to have it in ParsedTestConfig
+            resolved_test.iteration_number = i;
 
             validate_test(resolved_test);
             expanded_tests.push_back(resolved_test);

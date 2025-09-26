@@ -141,6 +141,7 @@ struct ParsedTestConfig {
 struct TestConfig {
     std::string name;               // Original base name for golden lookup
     std::string parametrized_name;  // Enhanced name for debugging and logging
+    uint32_t iteration_number = 0; // For multi-iteration tests, notes the specific iteration of this test
     TestFabricSetup fabric_setup;
     std::optional<std::string> on_missing_param_policy;
     std::optional<TrafficPatternConfig> defaults;
