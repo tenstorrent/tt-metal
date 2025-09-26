@@ -23,7 +23,7 @@ constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
 constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(6);
+constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(8);
 constexpr uint32_t input_tensor_C = get_compile_time_arg_val(9);
@@ -76,7 +76,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -99,8 +99,7 @@ void kernel_main() {
     arg_idx += intermediate_rt_increment;
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto intermediate_tensor_addrgen =
-        TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, input_tensor_page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
 
     ReduceScatterOpReceiver matmul_receiver;
@@ -190,8 +189,8 @@ void kernel_main() {
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
                     uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
-                    noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
-                    l1_write_addr += input_tensor_page_size;
+                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                    l1_write_addr += page_size;
                     tiles_read++;
 
                     pages_read_in_row++;
@@ -210,8 +209,8 @@ void kernel_main() {
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
                         uint64_t intermediate_noc_read_addr =
                             get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
-                        noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, input_tensor_page_size);
-                        intermediate_l1_write_addr += input_tensor_page_size;
+                        noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
+                        intermediate_l1_write_addr += page_size;
 
                         intermediate_pages_read_in_row++;
                         if (intermediate_pages_read_in_row == slice_Wt) {
