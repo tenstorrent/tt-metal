@@ -117,6 +117,15 @@ static uint32_t get_worker_connected_sender_channel(const eth_chan_directions di
     return is_2D_routing ? direction : 0;
 }
 
+static uint32_t get_vc1_connected_sender_channel(Topology topology) {
+    if (topology == tt::tt_fabric::Topology::Ring) {
+        return FabricEriscDatamoverConfig::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
+    } else if (topology == tt::tt_fabric::Topology::Torus) {
+        return FabricEriscDatamoverConfig::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
+    }
+    return 0;  // invalid
+}
+
 static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
     uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
     // if without vc1, return worker channel, otherwise return vc1 channel
@@ -1230,6 +1239,14 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     size_t receiver_channel_num_buffers =
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
 
+    const auto remote_routing_direction =
+        control_plane.get_forwarding_direction(this->peer_fabric_node_id, this->local_fabric_node_id);
+    auto remote_eth_direction =
+        control_plane.routing_direction_to_eth_direction(remote_routing_direction.value_or(RoutingDirection::E));
+    auto remote_worker_sender_channel = get_worker_connected_sender_channel(remote_eth_direction, topology);
+    auto remote_vc1_sender_channel =
+        this->dateline_connection ? remote_worker_sender_channel : get_vc1_connected_sender_channel(topology);
+
     bool update_pkt_hdr_on_rx_ch = true;
     bool fabric_tensix_extension_enabled =
         !tt::tt_metal::MetalContext::instance().get_fabric_tensix_config().is_disabled();
@@ -1279,7 +1296,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
-        vc1_has_different_downstream_dest};
+        vc1_has_different_downstream_dest,
+        this->has_tensix_extension,
+        remote_vc1_sender_channel,
+        remote_worker_sender_channel};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.skip_receiver_channel_1_connection,
