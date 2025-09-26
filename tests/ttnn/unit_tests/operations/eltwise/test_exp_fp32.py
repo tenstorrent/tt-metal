@@ -96,3 +96,42 @@ def test_exp_arange_masking(device):
     plot_graphs_exp_fp32(input_tensor, golden, result)
 
     assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 1, 5, 5])),),
+)
+@pytest.mark.parametrize(
+    "input_val",
+    [
+        (-0.0),
+        (0.0),
+        (1.0),
+        (-1.0),
+        (float("-inf")),
+        (float("inf")),
+        (float("nan")),
+    ],
+)
+def test_exp_fill_val_bf16(input_shapes, input_val, device):
+    torch_input = torch.ones(input_shapes, dtype=torch.bfloat16) * input_val
+
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden = golden_function(torch_input, device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.exp(tt_in)
+    result = ttnn.to_torch(tt_result)
+    torch.set_printoptions(precision=10)
+    print("Input : ", torch_input)
+    print("Torch : ", golden)
+    print("TTNN : ", result)
+    assert_with_ulp(golden, result, 1)
