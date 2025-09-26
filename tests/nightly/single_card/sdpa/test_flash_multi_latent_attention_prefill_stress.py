@@ -75,6 +75,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent
         128,
     ],
 )
+@pytest.mark.timeout(120)
 def test_flash_mla_prefill_stress(
     device,
     batch,
