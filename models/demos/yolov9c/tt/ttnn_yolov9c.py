@@ -87,8 +87,8 @@ class TtYOLOv9cConv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=enable_weights_double_buffer,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
@@ -154,7 +154,7 @@ class TtYOLOv9cConv2D:
                 x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
                 x = x[:, :, :hw, :]
         else:
-            self.enable_autopad = True
+            self.enable_autopad = False
             padding = autopad(self.kernel_size, pad=None, dilation=1) if self.enable_autopad else self.padding
             x, [output_height, output_width], [self.weight, self.bias] = ttnn.conv_transpose2d(
                 input_tensor=x,
@@ -174,14 +174,11 @@ class TtYOLOv9cConv2D:
                 compute_config=self.compute_config,
                 return_output_dim=True,
                 return_weights_and_bias=True,
-                output_padding=(1, 1),
+                output_padding=(0, 0),
                 dilation=(1, 1),
                 mirror_kernel=True,
                 dtype=self.activation_dtype,
             )
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.reshape(x, (x.shape[0], output_height, output_width, x.shape[3]))
-            x = ttnn.pad(x, ((0, 0), (0, 1), (0, 1), (0, 0)), value=0.0)
 
         return x
 
@@ -207,6 +204,8 @@ class TtnnRepconv:
         conv1_out = self.conv1(x)
         conv2_out = self.conv2(x)
         x = ttnn.silu(conv1_out + conv2_out)
+        ttnn.deallocate(conv1_out)
+        ttnn.deallocate(conv2_out)
 
         return x
 
@@ -262,7 +261,16 @@ class TtnnRepcsp:
         ttnn.deallocate(cv1_out)
 
         cv2_out = self.cv2(x)
-        concat_out = concat(-1, True, m_out, cv2_out)
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                m_out.memory_config().shard_spec.shape[0],
+                2 * m_out.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=m_out.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        concat_out = ttnn.concat([m_out, cv2_out], dim=-1, memory_config=output_sharded_memory_config)
 
         ttnn.deallocate(m_out)
         ttnn.deallocate(cv2_out)
@@ -282,6 +290,8 @@ class TtnnRepncspelan4:
         conv_pt,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         use_1d_systolic_array=True,
+        shard_layout_k4=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout_c4=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         conv_parameter.cv1.conv["out_channels"] //= 2
         self.cv1_a = TtYOLOv9cConv2D(
@@ -317,6 +327,7 @@ class TtnnRepncspelan4:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv3.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=shard_layout_k4,
         )
         self.cv4 = TtYOLOv9cConv2D(
             device=device,
@@ -324,6 +335,7 @@ class TtnnRepncspelan4:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv4",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=shard_layout_c4,
         )
 
     def __call__(self, x):
@@ -338,7 +350,26 @@ class TtnnRepncspelan4:
         cv5_out = self.k4(cv4_out)
         ttnn.deallocate(cv4_out)
 
-        x = concat(-1, True, y1, y2, cv3_out, cv5_out)
+        if cv3_out.memory_config() != y1.memory_config():
+            y1 = ttnn.to_memory_config(y1, memory_config=cv3_out.memory_config())
+
+        if cv3_out.memory_config() != y2.memory_config():
+            y2 = ttnn.to_memory_config(y2, memory_config=cv3_out.memory_config())
+
+        if cv3_out.memory_config() != cv5_out.memory_config():
+            cv5_out = ttnn.to_memory_config(cv5_out, memory_config=cv3_out.memory_config())
+
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                cv3_out.memory_config().shard_spec.shape[0],
+                4 * cv3_out.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=cv3_out.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        x = ttnn.concat([y1, y2, cv3_out, cv5_out], dim=-1, memory_config=output_sharded_memory_config)
 
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
@@ -350,7 +381,15 @@ class TtnnRepncspelan4:
 
 
 class TtnnADown:
-    def __init__(self, device, conv_parameter, parameters, conv_pt, use_1d_systolic_array=True):
+    def __init__(
+        self,
+        device,
+        conv_parameter,
+        parameters,
+        conv_pt,
+        use_1d_systolic_array=True,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ):
         self.conv_parameter = conv_parameter
         self.cv1 = TtYOLOv9cConv2D(
             device=device,
@@ -360,6 +399,7 @@ class TtnnADown:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=use_1d_systolic_array,
             core_count=64,
+            shard_layout=shard_layout,
         )
         self.cv2 = TtYOLOv9cConv2D(
             device=device,
@@ -420,6 +460,7 @@ class TtnnSPPELAN:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )
         self.cv5 = TtYOLOv9cConv2D(
             device=device,
@@ -427,13 +468,14 @@ class TtnnSPPELAN:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv5",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
         x = self.cv1(x)
         x1 = x
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x)
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         TILE_WIDTH = 32
         in_c = self.conv_parameter.cv1.conv.out_channels
@@ -505,12 +547,14 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.0.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv2_0_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv2[0][2],
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv2.0.2",
             device=device,
+            deallocate_activation=True,
             is_detect=True,
         )
 
@@ -529,6 +573,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.1.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv2_1_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv2[1][2],
@@ -536,6 +581,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.1.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv2_2_0 = TtYOLOv9cConv2D(
@@ -553,6 +599,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.2.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv2_2_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv2[2][2],
@@ -560,6 +607,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv2.2.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv3_0_0 = TtYOLOv9cConv2D(
@@ -569,6 +617,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.0.0",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_0_1 = TtYOLOv9cConv2D(
             device=device,
@@ -577,6 +626,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.0.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_0_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[0][2],
@@ -584,6 +634,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.0.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv3_1_0 = TtYOLOv9cConv2D(
@@ -593,6 +644,8 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.1.0",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_1_1 = TtYOLOv9cConv2D(
             device=device,
@@ -601,6 +654,8 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.1.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_1_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[1][2],
@@ -608,6 +663,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.1.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv3_2_0 = TtYOLOv9cConv2D(
@@ -616,7 +672,9 @@ class TtnnDetect:
             parameters=parameters,
             conv_pth=f"{conv_pt}.cv3.2.0",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3_2_1 = TtYOLOv9cConv2D(
             device=device,
@@ -625,6 +683,8 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.2.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             is_detect=True,
+            deallocate_activation=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_2 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3[2][2],
@@ -632,6 +692,7 @@ class TtnnDetect:
             conv_pth=f"{conv_pt}.cv3.2.2",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
         self.dfl = TtYOLOv9cConv2D(
             conv=conv_parameter.dfl.conv,
@@ -688,6 +749,7 @@ class TtnnDetect:
 
         ya = ttnn.permute(ya, (0, 2, 1))
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
+        ya = ttnn.permute(ya, (0, 1, 3, 2))
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -695,8 +757,7 @@ class TtnnDetect:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
-        ya = ttnn.softmax(ya, dim=2, compute_kernel_config=compute_kernel_config)
-        ya = ttnn.permute(ya, (0, 1, 3, 2))
+        ya = ttnn.softmax_in_place(ya, numeric_stable=False, compute_kernel_config=compute_kernel_config)
 
         c = self.dfl(ya)
 
@@ -750,6 +811,7 @@ class TtnnProto:
             config_override={"act_block_h": 32},
             conv_transpose=True,
             is_detect=True,
+            deallocate_activation=True,
         )
 
         self.cv2 = TtYOLOv9cConv2D(
@@ -759,8 +821,9 @@ class TtnnProto:
             conv_pth=f"{conv_pt}.cv2",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             config_override={"act_block_h": 32},
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            is_dfl=True,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            is_detect=True,
+            deallocate_activation=True,
         )
         self.cv3 = TtYOLOv9cConv2D(
             conv=conv_parameter.cv3.conv,
@@ -768,6 +831,7 @@ class TtnnProto:
             conv_pth=f"{conv_pt}.cv3",
             device=device,
             is_detect=True,
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
@@ -850,25 +914,64 @@ class YoloV9:
             parameters=parameters,
             conv_pth="model.1",
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )  # 1
         self.repncspelan4_1 = TtnnRepncspelan4(device, parameters.conv_args[2], parameters, "model.2")  # 2
         self.adown_1 = TtnnADown(
-            device, parameters.conv_args[3], parameters, "model.3", use_1d_systolic_array=False
+            device,
+            parameters.conv_args[3],
+            parameters,
+            "model.3",
         )  # 3
         self.repncspelan4_2 = TtnnRepncspelan4(device, parameters.conv_args[4], parameters, "model.4")  # 4
-        self.adown_2 = TtnnADown(device, parameters.conv_args[5], parameters, "model.5")  # 5
-        self.repncspelan4_3 = TtnnRepncspelan4(device, parameters.conv_args[6], parameters, "model.6")  # 6
+        self.adown_2 = TtnnADown(
+            device, parameters.conv_args[5], parameters, "model.5", shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )  # 5
+        self.repncspelan4_3 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[6],
+            parameters,
+            "model.6",
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 6
         self.adown_3 = TtnnADown(device, parameters.conv_args[7], parameters, "model.7")  # 7
-        self.repncspelan4_4 = TtnnRepncspelan4(device, parameters.conv_args[8], parameters, "model.8")  # 8
+        self.repncspelan4_4 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[8],
+            parameters,
+            "model.8",
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 8
         self.ttnn_sppelan = TtnnSPPELAN(device, parameters.conv_args[9], parameters, "model.9")  # 9
-        self.repncspelan4_5 = TtnnRepncspelan4(device, parameters.conv_args[12], parameters, "model.12")  # 12
-        self.repncspelan4_6 = TtnnRepncspelan4(
-            device, parameters.conv_args[15], parameters, "model.15", use_1d_systolic_array=False
-        )  # 15
+        self.repncspelan4_5 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[12],
+            parameters,
+            "model.12",
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 12
+        self.repncspelan4_6 = TtnnRepncspelan4(device, parameters.conv_args[15], parameters, "model.15")  # 15
         self.adown_6 = TtnnADown(device, parameters.conv_args[16], parameters, "model.16")  # 16
-        self.repncspelan4_7 = TtnnRepncspelan4(device, parameters.conv_args[18], parameters, "model.18")  # 18
+        self.repncspelan4_7 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[18],
+            parameters,
+            "model.18",
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 18
         self.adown_7 = TtnnADown(device, parameters.conv_args[19], parameters, "model.19")  # 19
-        self.repncspelan4_8 = TtnnRepncspelan4(device, parameters.conv_args[21], parameters, "model.21")  # 21
+        self.repncspelan4_8 = TtnnRepncspelan4(
+            device,
+            parameters.conv_args[21],
+            parameters,
+            "model.21",
+            shard_layout_k4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_c4=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )  # 21
         if enable_segment:
             self.segment_detect = TtnnSegment(device, parameters.model_args.model[22], parameters, "model.22")  # 22
         else:
@@ -912,11 +1015,23 @@ class YoloV9:
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 13
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        x = concat(-1, True, x, x4)  # 14
-        x = ttnn.sharded_to_interleaved(x)
+
+        x = ttnn.to_memory_config(x, x4.memory_config())
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                x.memory_config().shard_spec.shape[0],
+                2 * x.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=x.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.concat([x, x4], dim=-1, memory_config=output_sharded_memory_config)  # 14
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(x4)
 
-        x = interleaved_to_sharded(x)
         x = self.repncspelan4_6(x)  # 15
         x16 = x
         x = self.adown_6(x)  # 16

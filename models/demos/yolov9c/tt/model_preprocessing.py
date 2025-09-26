@@ -311,10 +311,20 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5, weights_mesh_mapp
 
     return (
         ttnn.from_torch(
-            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+            a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=weights_mesh_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         ),
         ttnn.from_torch(
-            b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+            b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=weights_mesh_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         ),
     )
 
