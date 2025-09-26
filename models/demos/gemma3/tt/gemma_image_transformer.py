@@ -3,7 +3,7 @@ This is the Entire ImageTransformer for Gemma-3-4b-it.
 We have adapted the TtGemmaImageTransformerBlock from TtLlamaImageTransformerBlock
 with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
 """
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
