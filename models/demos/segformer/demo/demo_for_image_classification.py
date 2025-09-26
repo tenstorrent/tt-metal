@@ -4,7 +4,6 @@
 
 
 import pytest
-import torch
 from loguru import logger
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -34,9 +33,9 @@ def run_segformer_classification_demo(
 
     for iter in range(iterations):
         torch_input_tensor, labels = get_batch(data_loader, resolution)
-        torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        # torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor_permuted,
+            torch_input_tensor,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             device=device,

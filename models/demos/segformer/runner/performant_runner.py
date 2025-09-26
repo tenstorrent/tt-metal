@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import ttnn
 from models.demos.segformer.runner.performant_runner_infra import create_test_infra
 
@@ -82,6 +84,10 @@ class SegformerTrace2CQ:
         ttnn.release_trace(self.device, self.tid)
 
     def run(self, torch_input_tensor=None):
+        start_time = time.time()
         tt_inputs_host, _ = self.test_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
+        print("setup l1 sharded input time:", time.time() - start_time, "seconds")
+        exec_trace = time.time()
         output = self.execute_segformer_trace_2cqs_inference(tt_inputs_host)
+        print("exec trace function time:", time.time() - exec_trace, "seconds")
         return output
