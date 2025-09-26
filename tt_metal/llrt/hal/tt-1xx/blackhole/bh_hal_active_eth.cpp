@@ -113,16 +113,21 @@ HalCoreInfoType create_active_eth_mem_map() {
     std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
         // DM
         {
-            // BH active ethernet runs idle erisc FW on the second ethernet
-            // TODO: add config for ERISC0
-            // ERISC1
+            // ERISC0
             {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
              .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-             .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
+             .fw_launch_addr = MEM_AERISC_VOID_LAUNCH_FLAG,
              .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // ERISC1
+            {.fw_base_addr = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = SUBORDINATE_AERISC_RESET_PC,
+             .fw_launch_addr_value = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
         },
     };
+
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,

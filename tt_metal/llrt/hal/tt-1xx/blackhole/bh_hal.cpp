@@ -64,7 +64,8 @@ class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
-        if (params.is_fw) {
+        if (params.is_fw && !(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0)) {
+            // active eth0 being shared with base fw has it's own crt0
             objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
@@ -122,10 +123,24 @@ public:
     std::vector<std::string> srcs(const Params& params) const override {
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            if (params.is_fw) {
-                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-            } else {
-                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
+            switch (params.processor_id) {
+            case 0:
+                if (params.is_fw) {
+                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
+                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                } else {
+                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
+                }
+                break;
+            case 1:
+                if (params.is_fw) {
+                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
+                } else {
+                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
+                }
+                break;
+            default:
+                TT_THROW("Unkown processor id {}", params.processor_id);
             }
         }
         return srcs;
@@ -158,8 +173,14 @@ public:
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
-                return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
-                                    : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+                switch (params.processor_id) {
+                    case 0:
+                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
+                                            : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+                    case 1:
+                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_aerisc.ld"
+                                            : "runtime/hw/toolchain/blackhole/kernel_subordinate_aerisc.ld";
+                }
             case HalProgrammableCoreType::IDLE_ETH:
                 switch (params.processor_id) {
                     case 0:
@@ -186,7 +207,7 @@ public:
             // build.cpp used to distinguish "active_erisc" and "erisc" and use
             // that to determine what object files to link.
             // This is no longer necessary, but only to keep the target names unchanged.
-            return "active_erisc";
+            return params.processor_id == 0 ? "active_erisc" : "subordinate_active_erisc";
         }
         return HalJitBuildQueryBase::target_name(params);
     }
@@ -242,11 +263,13 @@ void Hal::initialize_bh() {
 
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool has_shared_local_mem) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-            // For RISC0 we have a shared local memory with base firmware so offset by that
-            // if (has_shared_local_mem) {
-            //     addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
-            // }
             // Move addresses in the local memory range to l1 (copied by kernel)
+            // For firmware with base fw, __ldm_data is already offset by base fw.
+            // So we need to undo that offset here to get the correct relocation address
+            // for copying by the kernel to local memory.
+            if (has_shared_local_mem) {
+                addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
+            }
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
 
@@ -291,8 +314,7 @@ void Hal::initialize_bh() {
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
             case DispatchFeature::ETH_MAILBOX_API: return true;
-            // Active eth kernel config buffer is not needed until 2 ERISCs
-            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
