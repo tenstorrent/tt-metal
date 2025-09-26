@@ -381,7 +381,7 @@ int main() {
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
                     if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
                         DeviceIncrementTraceCount();
-                        DeviceTraceProfilerInit();
+                        DeviceTraceOnlyProfilerInit();
                     }
                     uint32_t go_message_index = mailboxes->go_message_index;
                     // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
