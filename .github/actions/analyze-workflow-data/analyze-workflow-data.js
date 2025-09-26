@@ -295,8 +295,8 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3
  */
 function findErrorSnippetsInDir(rootDir, maxCount) {
   // Relaxed: match anywhere on the line (after prefix stripping)
-  const infoRegex = /info:/i;
-  const backtraceRegex = /backtrace:/i;
+  const infoRegex = /info:/;
+  const backtraceRegex = /backtrace:/;
   // Failure markers used both in primary and fallback passes
   const failureMarkers = [
     /\bFAILED\b/i,          // pytest summary and generic FAILED
