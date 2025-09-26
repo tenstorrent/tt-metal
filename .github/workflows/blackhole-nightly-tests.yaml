@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        card_type: ["p150b"]  # use CIv2 runner
+        card_type: ["P100", "p150b"]  # use CIv2 runner
     secrets: inherit
     with:
       runner-label: ${{ matrix.card_type }}
