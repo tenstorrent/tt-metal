@@ -697,7 +697,6 @@ class MochiPipeline(DiffusionPipeline):
         else:
             # unscale/denormalize the latents
             # denormalize with the mean and std if available and not None
-            breakpoint()
             has_latents_mean = hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None
             has_latents_std = hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None
             if has_latents_mean and has_latents_std:

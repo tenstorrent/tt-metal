@@ -18,6 +18,10 @@ if TYPE_CHECKING:
     pass
 
 
+def get_padded_size(numerator, denominator):
+    return ((numerator + denominator - 1) // denominator) * denominator
+
+
 class Conv1x1:
     def __init__(
         self,
@@ -775,7 +779,7 @@ class MochiVAEDecoder:
         if self.output_nonlinearity == "silu":
             x_tile_NTHWC = ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)
             ttnn.deallocate(x_NTHWC)
-            x_tile_NTHWC = ttnn.silu(x_tile_NTHWC, output_tensor=x_tile_NTWHC)  # in-place
+            x_tile_NTHWC = ttnn.silu(x_tile_NTHWC, output_tensor=x_tile_NTHWC)  # in-place
             x_NTHWC = ttnn.to_layout(x_tile_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tile_NTHWC)
         else:
@@ -788,6 +792,8 @@ class MochiVAEDecoder:
 
     def decode(self, x_NTHWC, return_dict):
         N, C, T, H, W = x_NTHWC.shape
+        x_NTHWC = x_NTHWC.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
         num_devices_T = self.mesh_device.shape[self.parallel_config.time_parallel.mesh_axis]
         if T % num_devices_T:
             padded_T = get_padded_size(T, num_devices_T)
@@ -820,43 +826,44 @@ class MochiVAEDecoder:
             (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C),
         )
 
-        x_NTHWC = ttnn.from_torch(
+        tt_x_NTHWC = ttnn.from_torch(
             x_NTHWC,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[2, 1]),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[1, 2]),
         )
-        x_NTHWC = ttnn.squeeze(x_NTHWC, 2)
 
-        logger.info(f"Input shape: {torch_input.shape}")
-        logger.info("Run TtDecoder forward")
+        tt_x_NTHWC = ttnn.squeeze(tt_x_NTHWC, 2)
 
-        x_NTHWC = self(x_NTHWC)
-        logger.info("End TtDecoder forward")
-        x_NTHWC = ttnn.unsqueeze(x_NTHWC, 2)
+        tt_x_NTHWC = self(tt_x_NTHWC)
+
+        tt_x_NTHWC = ttnn.unsqueeze(tt_x_NTHWC, 2)
 
         # Convert TT output to torch tensor
-        x_NTWHC = ttnn.to_torch(
-            x_NTHWC,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
+        x_NTHWC_torch = ttnn.to_torch(
+            tt_x_NTHWC,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[1, 2]
+            ),
         )
+        ttnn.deallocate(tt_x_NTHWC)
 
         # unpad tt output
         expected_T = 168  # ref_output.shape[2]
         expected_padded_T = get_padded_size(expected_T, num_devices_T)
         expected_H = 480 // num_devices_H  # ref_output.shape[3] // num_devices_H
-        expected_W = 848 // num_deivces_W  # ref_output.shape[4] // num_devices_W
-        x_NTHWC = torch.reshape(
-            x_NTHWC,
+        expected_W = 848 // num_devices_W  # ref_output.shape[4] // num_devices_W
+        x_NTHWC_torch = torch.reshape(
+            x_NTHWC_torch,
             (N, expected_padded_T, num_devices_H, num_devices_W, expected_H, expected_W, 3),  # ref_output.shape[1]),
         )
-        x_NTHWC = x_NTHWC.permute(0, 1, 2, 4, 3, 5, 6)
-        x_NTHWC = torch.reshape(
-            x_NTHWC,
+        x_NTHWC_torch = x_NTHWC_torch.permute(0, 1, 2, 4, 3, 5, 6)
+        x_NTHWC_torch = torch.reshape(
+            x_NTHWC_torch,
             (N, expected_padded_T, num_devices_H * expected_H, num_devices_W * expected_W, 3),  # ref_output.shape[1]),
         )
-        x_NTHWC = x_NTHWC.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+        x_NTHWC_torch = x_NTHWC_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
 
-        return x_NTHWC
+        return [x_NTHWC_torch]
