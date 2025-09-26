@@ -99,7 +99,7 @@ class Generator:
             rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
-            user_id=user_id,  # user_id
+            user_id=user_id,
             kv_cache=kv_cache,
         )
 
@@ -185,7 +185,7 @@ class Generator:
 
         device_inputs = copy_host_to_device(host_inputs, device_tensors=device_inputs)
 
-        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=True)
+        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
 
@@ -230,7 +230,13 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             page_table_user = (
-                self._get_prefill_user_page_table(page_table[idx : idx + 1], kv_cache[model_id], seq_len)
+                self._get_prefill_user_page_table(
+                    page_table[idx : idx + 1],
+                    kv_cache[model_id],
+                    seq_len,
+                    trace_enabled=enable_trace,
+                    prefill_seq_len=prefill_seq_len,
+                )
                 if page_table is not None
                 else None
             )
@@ -1562,10 +1568,16 @@ class Generator:
 
         return generation
 
-    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
+    def _get_prefill_user_page_table(
+        self, page_table, kv_cache, prefill_len, trace_enabled=False, prefill_seq_len=None
+    ):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
-        num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        num_blocks = 0
+        if trace_enabled:
+            num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+        else:
+            num_blocks = num_blocks_in_seq(prefill_len, block_size)
         return page_table[:, :num_blocks]
 
     ## Destructor
