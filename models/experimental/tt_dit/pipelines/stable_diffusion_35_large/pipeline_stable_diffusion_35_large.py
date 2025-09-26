@@ -100,9 +100,24 @@ def create_pipeline(
     sp_config=None,
     tp_config=None,
     num_links=None,
-    model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
+    model_checkpoint_path=None,
     use_cache=False,
 ):
+    # Determine model checkpoint path from environment variables or use default
+    if model_checkpoint_path is None:
+        import os
+
+        # Check for MODEL environment variable first (for Docker containers)
+        model_env = os.getenv("MODEL")
+        if model_env == "stable-diffusion-3.5-large":
+            # Use the mounted path in Docker container
+            model_checkpoint_path = (
+                "/root/.cache/huggingface/hub/models--stabilityai--stable-diffusion-3.5-large/snapshots/main"
+            )
+        else:
+            # Default to HuggingFace model identifier for local development
+            model_checkpoint_path = "stabilityai/stable-diffusion-3.5-large"
+
     # defatult config per mesh shape
     default_config = {
         (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
@@ -272,7 +287,7 @@ class StableDiffusion3Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
-        assert "stabilityai/stable-diffusion-3.5-large" in str(model_checkpoint_path)
+        assert "stable-diffusion-3.5-large" in str(model_checkpoint_path)
 
         if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
