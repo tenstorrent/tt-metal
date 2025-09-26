@@ -123,10 +123,10 @@ HalCoreInfoType create_active_eth_mem_map() {
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
-        processor_classes,
-        mem_map_bases,
-        mem_map_sizes,
-        fw_mailbox_addr,
+        std::move(processor_classes),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory()};

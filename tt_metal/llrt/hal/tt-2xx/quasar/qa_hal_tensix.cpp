@@ -119,10 +119,10 @@ HalCoreInfoType create_tensix_mem_map() {
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
-        processor_classes,
-        mem_map_bases,
-        mem_map_sizes,
-        fw_mailbox_addr,
+        std::move(processor_classes),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory()};
