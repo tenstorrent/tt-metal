@@ -3,8 +3,8 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.detr3d.ttnn.transformer import TTNNMultiheadAttention
-from models.experimental.detr3d.reference.detr3d_model import TransformerDecoderLayer
-from models.experimental.detr3d.ttnn.transformer import TTTransformerDecoderLayer
+from models.experimental.detr3d.reference.detr3d_model import TransformerDecoderLayer, TransformerEncoderLayer
+from models.experimental.detr3d.ttnn.transformer import TTTransformerDecoderLayer, TTTransformerEncoderLayer
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
@@ -358,3 +358,105 @@ def test_transformer_decoder_layer_inference(
         logger.warning("TransformerDecoderLayer Test Failed!")
 
     assert passing, f"PCC value is lower than 0.99. Check implementation! {pcc_message}"
+
+
+@torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "batch_size, seq_len, d_model, nhead, normalize_before",
+    [
+        (1, 32, 256, 4, True),
+        (1, 128, 256, 4, False),
+        # (2, 32, 512, 8, True),
+        # Add only the combinations you care about
+    ],
+)
+def test_transformer_encoder_layer_inference(
+    batch_size,
+    seq_len,
+    d_model,
+    nhead,
+    normalize_before,
+):
+    """Test TTTransformerEncoderLayer against PyTorch reference implementation"""
+
+    dtype = ttnn.bfloat16
+    dim_feedforward = d_model * 4
+
+    # Initialize reference model
+    reference_model = TransformerEncoderLayer(
+        d_model, nhead, dim_feedforward, dropout=0.0, normalize_before=normalize_before
+    ).eval()
+
+    # Create test inputs
+    src_input = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
+
+    # Create positional embeddings
+    pos = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
+
+    # Get reference output with explicit None masks
+    with torch.no_grad():
+        ref_output = reference_model(
+            src_input,
+            src_mask=None,
+            src_key_padding_mask=None,
+            pos=pos,
+        )
+
+    mesh_device = ttnn.open_device(device_id=0, l1_small_size=32768)
+    # preprocessor = create_transformer_encoder_layer_preprocessor(mesh_device)
+    preprocessor = create_transformer_decoder_layer_preprocessor(mesh_device)
+    parameters = preprocessor(reference_model, "encoder_layer", {})
+
+    # Initialize TTNN model with preprocessed parameters
+    tt_model = TTTransformerEncoderLayer(
+        mesh_device,
+        d_model,
+        nhead,
+        dim_feedforward,
+        normalize_before=normalize_before,
+        parameters=parameters,  # Pass preprocessed weights
+    )
+
+    # Convert inputs to TTNN tensors
+    tt_src = ttnn.from_torch(
+        src_input.permute(1, 0, 2),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_pos = ttnn.from_torch(
+        pos.permute(1, 0, 2),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Run TTNN model
+    tt_output = tt_model(tt_src, pos=tt_pos, return_attn_weights=False)
+
+    if isinstance(ref_output, tuple):
+        ref_output = ref_output[0]  # Get the tensor, ignore attention weights
+
+    # Convert back to torch for comparison
+    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output_torch = torch.permute(tt_output_torch, (1, 0, 2))
+
+    # Compare outputs
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc=0.99)
+
+    logger.info(f"Output PCC: {pcc_message}")
+    logger.info(comp_allclose(ref_output, tt_output_torch))
+    logger.info(f"Batch: {batch_size}, Seq: {seq_len}, D_model: {d_model}, Heads: {nhead}")
+    logger.info(f"Normalize before: {normalize_before}")
+
+    if passing:
+        logger.info("TransformerEncoderLayer Test Passed!")
+    else:
+        logger.warning("TransformerEncoderLayer Test Failed!")
+
+    assert passing, f"PCC value is lower than 0.99. Check implementation! {pcc_message}"
+
+    ttnn.close_device(mesh_device)
