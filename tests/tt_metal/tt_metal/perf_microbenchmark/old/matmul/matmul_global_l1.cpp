@@ -12,7 +12,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -90,10 +89,10 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt::DataFormat output_data_format) {
     tt_metal::Program program{};
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = tt::tile_size(bias_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
@@ -1119,7 +1118,7 @@ int main(int argc, char** argv) {
         tt_metal::distributed::Finish(device->mesh_command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+        tt_metal::ReadMeshDeviceProfilerResults(*device);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);

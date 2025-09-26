@@ -14,7 +14,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -706,8 +705,7 @@ int main(int argc, char** argv) {
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
-
+        uint32_t single_tile_size = tt::tile_size(tile_format);
 
         TT_FATAL(in1_size % single_tile_size == 0, "input size is not aligned to tile size");
         ////////////////////////////////////////////////////////////////////////////
@@ -911,7 +909,7 @@ int main(int argc, char** argv) {
             }
             tt_metal::distributed::Finish(device->mesh_command_queue());
             for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
             }
         }
 
