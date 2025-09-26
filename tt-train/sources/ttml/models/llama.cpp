@@ -38,7 +38,6 @@ static std::vector<float> pad_and_resize_flat(
         return flat;
     }
     
-    
     // Create output tensor with target dimensions
     std::vector<float> out(static_cast<size_t>(target_rows * target_cols), 0.0f);
     
@@ -52,13 +51,19 @@ static std::vector<float> pad_and_resize_flat(
         }
     }
     
+    // Initialize random number generator once if we need to fill additional space
+    bool need_random_fill = (target_rows > rows) || (target_cols > cols);
+    std::mt19937 gen;
+    std::normal_distribution<float> dist(0.0f, 0.02f); // Small random values
+    
+    if (need_random_fill) {
+        std::random_device rd;
+        gen.seed(rd());
+    }
+    
     // For additional rows (if target_rows > rows), use small random initialization
     // instead of zeros to avoid dead neurons
     if (target_rows > rows) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<float> dist(0.0f, 0.02f); // Small random values
-        
         for (int64_t r = copy_rows; r < target_rows; ++r) {
             for (int64_t c = 0; c < target_cols; ++c) {
                 out[r * target_cols + c] = dist(gen);
@@ -68,10 +73,6 @@ static std::vector<float> pad_and_resize_flat(
     
     // For additional columns (if target_cols > cols), use small random initialization
     if (target_cols > cols) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<float> dist(0.0f, 0.02f); // Small random values
-        
         for (int64_t r = 0; r < copy_rows; ++r) {
             for (int64_t c = copy_cols; c < target_cols; ++c) {
                 out[r * target_cols + c] = dist(gen);
@@ -151,6 +152,11 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
     fmt::print("    Theta: {}\n", theta);
 
+    // Safely calculate vocab_size divisible by 32, avoiding potential overflow
+    if (vocab_size > UINT32_MAX - 31) {
+        throw std::logic_error(fmt::format(
+            "Vocab size {} is too large and would cause overflow when rounding to 32", vocab_size));
+    }
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
         throw std::logic_error(fmt::format(
@@ -319,6 +325,10 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
     // Track which parameters have been used
     std::set<std::string> used_parameters;
     
+    // Store k_proj and v_proj weights for combining into kv_linear (thread-safe local variables)
+    std::map<int, std::vector<float>> k_weights, v_weights;
+    std::map<int, std::array<int64_t, 2>> k_shapes, v_shapes;
+    
     auto get_parameter = [&parameters, &used_parameters](const std::string &name) -> ttml::autograd::TensorPtr {
         auto it = parameters.find(name);
         if (it == parameters.end()) {
@@ -327,8 +337,57 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
         used_parameters.insert(name);
         return it->second;
     };
+    
+    // Helper function to combine k and v weights when both are available
+    auto try_combine_kv_weights = [&](int layer_idx) {
+        if (k_weights.find(layer_idx) != k_weights.end() && 
+            v_weights.find(layer_idx) != v_weights.end()) {
+            
+            auto block_name = fmt::format("llama/llama_block_{}/attention/kv_linear/weight", layer_idx);
+            auto out_tensor1 = get_parameter(block_name);
+            auto target_shape = out_tensor1->get_value().logical_shape();
+            auto target_rows = target_shape[-2];
+            auto target_cols = target_shape[-1];
+            
+            // Get k and v weights and shapes
+            auto& k_weight = k_weights[layer_idx];
+            auto& v_weight = v_weights[layer_idx];
+            auto k_shape = k_shapes[layer_idx];
+            auto v_shape = v_shapes[layer_idx];
+            
+            // Validate that k and v have the same input dimension (columns)
+            if (k_shape[1] != v_shape[1]) {
+                throw std::runtime_error(fmt::format(
+                    "Layer {}: k_proj and v_proj input dimensions must match. k_shape[1]={}, v_shape[1]={}",
+                    layer_idx, k_shape[1], v_shape[1]));
+            }
+            
+            // Concatenate along the output dimension (rows): [k_weights; v_weights]
+            std::vector<float> combined_weight;
+            combined_weight.reserve(k_weight.size() + v_weight.size());
+            combined_weight.insert(combined_weight.end(), k_weight.begin(), k_weight.end());
+            combined_weight.insert(combined_weight.end(), v_weight.begin(), v_weight.end());
+            
+            // Resize to match target shape
+            auto combined_rows = k_shape[0] + v_shape[0];
+            auto combined_cols = k_shape[1];
+            auto resized_weight = pad_and_resize_flat(
+                combined_weight, combined_rows, combined_cols, target_rows, target_cols);
+            
+            out_tensor1->set_value(core::from_vector(
+                resized_weight, target_shape, out_tensor1->get_value().device()));
+            
+            // Clean up stored weights
+            k_weights.erase(layer_idx);
+            v_weights.erase(layer_idx);
+            k_shapes.erase(layer_idx);
+            v_shapes.erase(layer_idx);
+            
+            fmt::print("Successfully combined k_proj and v_proj weights for layer {}\n", layer_idx);
+        }
+    };
     serialization::SafetensorSerialization::TensorCallback loading_callback =
-        [&parameters, &get_parameter, &config](
+        [&parameters, &get_parameter, &config, &k_weights, &v_weights, &k_shapes, &v_shapes, &try_combine_kv_weights](
             const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
             fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
             std::vector<float> float_vec;
@@ -474,53 +533,16 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                         resized_weight, target_shape, out_tensor1->get_value().device()));
                 }
                 // For GroupedQueryAttention, k_proj and v_proj are combined into kv_linear
-                // We need to handle them together when both are available
-                static std::map<int, std::vector<float>> k_weights, v_weights;
-                static std::map<int, std::array<int64_t, 2>> k_shapes, v_shapes;
-                
+                // Store weights and try to combine when both are available
                 if (info.name == layer_pfx + ".self_attn.k_proj.weight" || info.name == layers_pfx + ".self_attn.k_proj.weight") {
                     k_weights[i] = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
                     k_shapes[i] = {info.shape[1], info.shape[0]}; // transposed shape
+                    try_combine_kv_weights(i); // Try to combine if v_proj is already loaded
                 }
                 if (info.name == layer_pfx + ".self_attn.v_proj.weight" || info.name == layers_pfx + ".self_attn.v_proj.weight") {
                     v_weights[i] = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
                     v_shapes[i] = {info.shape[1], info.shape[0]}; // transposed shape
-                    
-                    // When we have both k and v weights, combine them into kv_linear
-                    if (k_weights.find(i) != k_weights.end()) {
-                        auto block_name = fmt::format("llama/llama_block_{}/attention/kv_linear/weight", i);
-                        auto out_tensor1 = get_parameter(block_name);
-                        auto target_shape = out_tensor1->get_value().logical_shape();
-                        auto target_rows = target_shape[-2];
-                        auto target_cols = target_shape[-1];
-                        
-                        // Combine k and v weights: [k_weights; v_weights]
-                        auto& k_weight = k_weights[i];
-                        auto& v_weight = v_weights[i];
-                        auto k_shape = k_shapes[i];
-                        auto v_shape = v_shapes[i];
-                        
-                        // Concatenate along the output dimension (rows)
-                        std::vector<float> combined_weight;
-                        combined_weight.reserve(k_weight.size() + v_weight.size());
-                        combined_weight.insert(combined_weight.end(), k_weight.begin(), k_weight.end());
-                        combined_weight.insert(combined_weight.end(), v_weight.begin(), v_weight.end());
-                        
-                        // Resize to match target shape
-                        auto combined_rows = k_shape[0] + v_shape[0];
-                        auto combined_cols = k_shape[1];
-                        auto resized_weight = pad_and_resize_flat(
-                            combined_weight, combined_rows, combined_cols, target_rows, target_cols);
-                        
-                        out_tensor1->set_value(core::from_vector(
-                            resized_weight, target_shape, out_tensor1->get_value().device()));
-                        
-                        // Clean up stored weights
-                        k_weights.erase(i);
-                        v_weights.erase(i);
-                        k_shapes.erase(i);
-                        v_shapes.erase(i);
-                    }
+                    try_combine_kv_weights(i); // Try to combine if k_proj is already loaded
                 }
                 if (info.name == layer_pfx + ".self_attn.o_proj.weight" || info.name == layers_pfx + ".self_attn.o_proj.weight") {
                     auto block_name = fmt::format("llama/llama_block_{}/attention/out_linear/weight", i);
