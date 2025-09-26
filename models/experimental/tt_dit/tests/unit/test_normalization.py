@@ -183,9 +183,8 @@ def test_layernorm(
 @pytest.mark.parametrize(
     ("norm_eltwise_affine, bias"),
     [
-        (True, True),
-        (False, False),
         (True, False),
+        (False, False),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

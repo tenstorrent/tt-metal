@@ -161,33 +161,16 @@ class DistributedRMSNorm:
         mesh_device=None,
         ccl_manager=None,
     ):
+        assert not bias, "bias is not supported for DistributedRMSNorm"
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
-        self.use_bias = bias
         self.mesh_axis = mesh_axis
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.weight = None
-        self.bias = None
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
-        # if not (norm_elementwise_affine and bias):
-        #     if not (norm_elementwise_affine and bias):
-        #         pass  # TODO: make logging less noisy
-        #         # logger.debug(
-        #         #     "DistributedLayerNorm initialized with norm_elementwise_affine=False. Creating gamma and beta tensors to meet op requirements."
-        #         # )
-        #     weight = torch.ones(1, embedding_dim)
-        #     weight = weight.reshape([-1, self.TILE_SIZE * self.mesh_width])
-        #     bias = torch.zeros(1, embedding_dim)
-        #     bias = bias.reshape([-1, self.TILE_SIZE * self.mesh_width])
-        #     self.weight = bf16_tensor(
-        #         weight, device=self.mesh_device, mesh_axis=mesh_axis, shard_dim=-1, layout=ttnn.ROW_MAJOR_LAYOUT
-        #     )
-        #     self.bias = bf16_tensor(
-        #         bias, device=self.mesh_device, mesh_axis=mesh_axis, shard_dim=-1, layout=ttnn.ROW_MAJOR_LAYOUT
-        #     )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -206,19 +189,11 @@ class DistributedRMSNorm:
             ttnn.dump_tensor(weight_path, self.weight)
             cache_dict["weight"] = weight_path
 
-        # Cache bias
-        if self.bias is not None:
-            bias_path = path_prefix + "bias" + path_suffix
-            ttnn.dump_tensor(bias_path, self.bias)
-            cache_dict["bias"] = bias_path
-
         return cache_dict
 
     def from_cached_state_dict(self, cache_dict):
         if "weight" in cache_dict:
             self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
-        if "bias" in cache_dict:
-            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
@@ -231,21 +206,8 @@ class DistributedRMSNorm:
             self.weight = bf16_tensor(
                 weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1, layout=ttnn.ROW_MAJOR_LAYOUT
             )
-            if self.use_bias:
-                bias = state_dict["bias"]
-                bias = (
-                    bias.reshape(self.mesh_width, -1, self.TILE_SIZE)
-                    .permute(1, 0, 2)
-                    .reshape(-1, self.TILE_SIZE * self.mesh_width)
-                )
-                self.bias = bf16_tensor(
-                    bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1, layout=ttnn.ROW_MAJOR_LAYOUT
-                )
 
     def __call__(self, x, compute_kernel_config=None):
-        assert (
-            self.weight is not None and self.bias is not None
-        ), "weight and bias must be initialized before calling __call__"
         stats = ttnn.rms_norm_pre_all_gather(x)
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
@@ -266,7 +228,6 @@ class DistributedRMSNorm:
             x,
             stats,
             weight=self.weight,
-            bias=self.bias,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
         )
