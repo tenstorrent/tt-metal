@@ -594,18 +594,33 @@ class TT_CCL:
         for seqlen in self.support_seqlens:
             ag_persistent_buffers = {}
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280)],
-                "SDPA": [(1, 1, seqlen // 2, 1024)],
-                "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                "WO": [(1, 1, seqlen, 2048)],
-                "FF1": [(1, 1, seqlen, 3584)],
-                "FF3": [(1, 1, seqlen, 3584)],
-                "FF2": [(1, 1, seqlen, 2048)],
-                "LAYERNORM": [(1, 1, seqlen, 128)],
-                "LM_HEAD": [(1, 1, 32, 16384)],
-                "SAMPLING": [(1, 1, 32, 128 * 1024)],
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
+                    "WO": [(1, 1, seqlen, 2048)],
+                    "FF1": [(1, 1, seqlen, 3584)],
+                    "FF3": [(1, 1, seqlen, 3584)],
+                    "FF2": [(1, 1, seqlen, 2048)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "LM_HEAD": [(1, 1, 32, 16384)],
+                    "SAMPLING": [(1, 1, 32, 128 * 1024)],
+                }
+                if not self.use_qwen_mlp
+                else {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
+                    "WO": [(1, 1, seqlen, 1280)],
+                    "FF1": [(1, 1, seqlen, 3200)],
+                    "FF3": [(1, 1, seqlen, 3200)],
+                    "FF2": [(1, 1, seqlen, 1280)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "LM_HEAD": [(1, 1, 32, 19456)],
+                    "SAMPLING": [(1, 1, 32, 128 * 1024)],
+                }
+            )
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
