@@ -25,6 +25,9 @@ jobs:
   setup-branch:
     name: "🔧 Setup branch for testing"
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request && github.event.pull_request.head.repo.fork == false)
     outputs:
       branch-to-run: ${{
         steps.check-fork.outputs.is-fork == 'true' &&
