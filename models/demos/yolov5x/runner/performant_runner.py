@@ -6,6 +6,13 @@ import ttnn
 from models.demos.yolov5x.runner.performant_runner_infra import YOLOv5xPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class YOLOv5xPerformantRunner:
     def __init__(
@@ -91,6 +98,8 @@ class YOLOv5xPerformantRunner:
         assert trace_input_addr == self.input_tensor.buffer_address()
 
     def _execute_yolov5x_trace_2cqs_inference(self, tt_inputs_host=None):
+        if use_signpost:
+            signpost(header="start")
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
@@ -100,6 +109,8 @@ class YOLOv5xPerformantRunner:
             self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        if use_signpost:
+            signpost(header="stop")
         return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
