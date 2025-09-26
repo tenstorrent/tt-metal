@@ -98,13 +98,15 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [7.6. Limitations](#limits)
 
-[8. TT-Fabric Model](#model)
+[8. TT-Fabric Roadmap](#roadmap) 
 
-[8.1. Serialization and Visualization](#visualization)
+[8.1 TT-Fabric Model](#model)
 
-[8.2. Data Plane Simulator](#simulator)
+[8.1.1. Serialization and Visualization](#visualization)
 
-[8.3. Modelling External Disruptors and Buffer Limits](#disruptors)
+[8.1.2. Data Plane Simulator](#simulator)
+
+[8.1.3. Modelling External Disruptors and Buffer Limits](#disruptors)
 
 [9. System Specification](#system_spec)
 
@@ -124,7 +126,7 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 # 1 Overview <a id="overview"></a>
 
-![](images/image001.png)
+![](images/Scale-upAndScale-out.png)
 
 TT-fabric is a revolutionary approach to AI infrastructure, built around the Tenstorrent Galaxy as its core component.
 
@@ -259,14 +261,14 @@ User workload on data plane encounters a temporary pause in activity. If TT-Fabr
 
 TT-Fabric allows a maximum scale out to 250,000 devices. Devices are connected in groups of meshes and we support upto 1024 meshes of 256 devices each.
 
-A mesh is a fully and uniformaly connected grid of chips. Uniform connectivity means that all devices in the mesh have the same number of ethernet connections to all of their neighbors.
+A mesh is a fully and uniformaly connected grid of chips. Uniform connectivity means that all devices in the mesh have the same number of ethernet connections to all of their neighbors. 
 
 Inter-Mesh connectivity is provided through subset of devices called exit nodes. A mesh may be connected to multiple neighboring meshes in which case there are exit nodes providing routes to different neighboring meshes.
 
 To support this topology, we need two levels of routing:
 
-* L0 or Intra-Mesh routing
-* L1 or Inter-Mesh routing
+* L0 or Intra-Mesh routing (scale-up)
+* L1 or Inter-Mesh routing (scale-out)
 
 Fabric routers have fully instantiated routing tables indexed with Device Id or Mesh Id. This means that a router can look up a route to any Device or Mesh from its routing tables.
 
@@ -274,7 +276,7 @@ An intra-mesh routing table entry is a source route to a mesh destination. This 
 
 An inter-mesh routing table entry is an exit node in the current mesh.
 
-#### 2.2.1.1 L0 Routing (Intra-Mesh) <a id="intramesh"></a>
+#### 2.2.1.1 L0 Routing (Intra-Mesh a.k.a Scale-up) <a id="intramesh"></a>
 
 When a packet’s destination is within the local mesh, the next hop is looked up from L0 routing table and packet is forwarded over specified ethernet port.
 
@@ -333,7 +335,7 @@ The following table shows how a packet sent by source Device 0 gets routed to de
   </tr>
 </table>
 
-#### 2.2.1.2 L1 Routing (Inter-Mesh) <a id="intermesh"></a>
+#### 2.2.1.2 L1 Routing (Inter-Mesh a.k.a Scale-out) <a id="intermesh"></a>
 
 When a packet is not addressed to local mesh, the next hop is looked up from L1 routing table and packet is forwarded over specified ethernet port.
 
@@ -922,11 +924,15 @@ Timeouts are TT-Fabric's last line of defense against deadlocks. Timeout is a de
 
 TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
 
-# 8 TT-Fabric Model <a id="model"></a>
+
+
+# 8 TT-Fabric Roadmap <a id="roadmap"></a>
+
+## 8.1 TT-Fabric Model <a id="model"></a>
 
 TT-Fabric Model is a software functional model of all components of the Fabric. The purpose of the Fabric Model is to fully simulate the ethernet traffic in the Fabric. It will provide a ground truth for the state of any configuration of the Fabric, to help with debug and rerouting decisions. The Fabric Model will include a new piece of software to emulate the physical data plane, but otherwise shares the software components of the TT-Control Plane and Fabric Router.
 
-## 8.1 Serialization and Visualization <a id="visualization"></a>
+### 8.1.1 Serialization and Visualization <a id="visualization"></a>
 
 TT-Fabric Model will serialize these components of the Fabric:
 
@@ -939,7 +945,7 @@ TT-Fabric Model will serialize these components of the Fabric:
 * Packet traffic across data plane
   + We should be able to download traffic serialization from software simulator to run on hardware, and vice versa.
 
-## 8.2 Data Plane Simulator <a id="simulator"></a>
+### 8.1.2 Data Plane Simulator <a id="simulator"></a>
 
 The data plane simulator will model all paths ethernet packets may take across the hardware, except for NOC activity between a device and the Fabric. Key components:
 
@@ -950,7 +956,7 @@ The data plane simulator will model all paths ethernet packets may take across t
 * Directed single threaded testing for buffer limits and rerouting
 * Random testing with multi-threading. One thread per device to simulate requests to the Fabric and one thread for external disruptors.
 
-## 8.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
+### 8.1.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
 
 TT-Fabric Model will have hooks to simulate failed links, to trigger and verify rerouting in the control plane. It will also have SW APIs to simulate back-pressured buffers and VCs, to detect possible deadlock scenarios.
 
