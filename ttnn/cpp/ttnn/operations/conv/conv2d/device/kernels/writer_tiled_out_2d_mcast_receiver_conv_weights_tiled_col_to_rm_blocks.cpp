@@ -81,8 +81,6 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
-    // TODO add config tensor if in DRAM
-
     const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
 #endif
