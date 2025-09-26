@@ -287,7 +287,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
-    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+    mesh_device->initialize(
+        num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, false, nullptr);
     // TODO #20966: Remove these calls
     for (auto device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
@@ -427,7 +428,9 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.l1_small_size,
         allocator_config.trace_region_size,
         allocator_config.worker_l1_size,
-        allocator_config.l1_bank_remap);
+        allocator_config.l1_bank_remap,
+        false,
+        nullptr);
     // TODO #20966: Remove these calls
     for (auto device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(submesh);
@@ -479,6 +482,8 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_overlapped_submeshes
         std::cout << "Allocator " << i << ": " << submesh_dependencies.dependencies[i] << std::endl;
     }
 
+    auto sub_device_manager_tracker = create_subdevice_manager_tracker_();
+
     for (size_t i = 0; i < submesh_ranges.size(); ++i) {
         const auto& submesh_range = submesh_ranges[i];
         auto submesh_shape = submesh_range.shape();
@@ -510,7 +515,9 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_overlapped_submeshes
             allocator_config.l1_small_size,
             allocator_config.trace_region_size,
             allocator_config.worker_l1_size,
-            allocator_config.l1_bank_remap);
+            allocator_config.l1_bank_remap,
+            false,
+            sub_device_manager_tracker);
         // TODO #20966: Remove these calls
         for (auto device : submesh->get_devices()) {
             dynamic_cast<Device*>(device)->set_mesh_device(submesh);
@@ -957,10 +964,13 @@ bool MeshDevice::initialize(
     size_t /*trace_region_size*/,
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
-    bool /*minimal*/) {
+    bool /*minimal*/,
+    std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker) {
     TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
 
-    initialize_allocators_();
+    sub_device_manager_tracker_ =
+        sub_device_manager_tracker ? sub_device_manager_tracker : create_subdevice_manager_tracker_();
+
     initialize_cq_();
 
     Inspector::mesh_device_initialized(this);
@@ -968,7 +978,7 @@ bool MeshDevice::initialize(
     return true;
 }
 
-void MeshDevice::initialize_allocators_() {
+std::shared_ptr<SubDeviceManagerTracker> MeshDevice::create_subdevice_manager_tracker_() {
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
@@ -989,7 +999,7 @@ void MeshDevice::initialize_allocators_() {
         }
         alloc_config.allocator_dependencies = std::move(deps_cfg);
     }
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
+    return std::make_shared<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(alloc_config), sub_devices);
 }
 

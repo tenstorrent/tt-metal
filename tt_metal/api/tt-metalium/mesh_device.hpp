@@ -142,7 +142,7 @@ private:
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
     // Helper functions for initialization
-    void initialize_allocators_();
+    std::shared_ptr<SubDeviceManagerTracker> create_subdevice_manager_tracker_();
     void initialize_cq_();
 
 public:
@@ -225,7 +225,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
+        bool minimal = false,
+        std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker = nullptr) override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
     bool compile_fabric() override;
