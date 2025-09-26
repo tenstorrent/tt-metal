@@ -128,7 +128,14 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_linear"],
