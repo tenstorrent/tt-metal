@@ -93,10 +93,10 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     # tools in N300 is timing out on CIv2: https://github.com/tenstorrent/tt-metal/issues/29443
-    runs-on:
-      - in-service
-      - cloud-virtual-machine
-      - ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+      }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
