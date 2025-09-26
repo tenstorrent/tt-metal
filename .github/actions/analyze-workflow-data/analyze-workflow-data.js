@@ -230,7 +230,7 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
  * Download workflow run logs and extract up to N error snippets.
  * Returns an array of strings (snippets).
  */
-async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 3) {
+async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 50) {
   const owner = context.repo.owner; // return the owner of the repository
   const repo = context.repo.repo; // return the repository name
   try {
@@ -299,8 +299,8 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   const backtraceRegex = /backtrace:/;
   // Failure markers used both in primary and fallback passes
   const failureMarkers = [
-    /\bFAILED\b/i,          // pytest summary and generic FAILED
-    /\[\s*FAILED\s*\]/i,  // gtest [  FAILED  ]
+    /\bFAILED\b/,          // pytest summary and generic FAILED
+    /\[\s*FAILED\s*\]/,  // gtest [  FAILED  ]
     /\bERROR\b/i,           // generic ERROR
     /Traceback\b/i,         // python tracebacks
     /AssertionError\b/i,
@@ -308,31 +308,31 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   ];
 
   const collected = [];
-  const stack = [rootDir];
+  const stack = [rootDir]; // trace of the stack to use when recursing through the directories
 
-  while (stack.length && collected.length < maxCount) {
-    const dir = stack.pop();
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+  while (stack.length && collected.length < maxCount) { // while the stack is not empty and the collected snippets are less than the max count
+    const dir = stack.pop(); //remove the last directory from the stack
+    const entries = fs.readdirSync(dir, { withFileTypes: true }); // list all the files and directories in the directory
     for (const ent of entries) {
-      const p = path.join(dir, ent.name);
+      const p = path.join(dir, ent.name); // join the directory and the entry name to get the path to the entry
       if (ent.isDirectory()) {
-        stack.push(p);
-      } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
+        stack.push(p); // add the path to the stack
+      } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) { // if the entry is a file and the file name ends with .txt, .log, or doesn't include a period
         // Only consider logs whose filenames indicate test content
-        const fileBaseName = path.basename(p);
-        if (!/tests?/i.test(fileBaseName)) {
-          core.info(`Skipping non-test log file: ${fileBaseName}`);
-          continue;
+        const fileBaseName = path.basename(p); // get the base name of the file
+        if (!/tests?/i.test(fileBaseName)) { // if the file name doesn't include tests
+          core.info(`Skipping non-test log file: ${fileBaseName}`); // log the file name
+          continue; // continue to the next entry
         }
         try {
-          const text = fs.readFileSync(p, 'utf8');
-          const rawLines = text.split(/\r?\n/);
-          const lines = rawLines.map(l => l
-            .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-            .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '')
+          const text = fs.readFileSync(p, 'utf8'); // read the file as utf8
+          const rawLines = text.split(/\r?\n/); // split the text into lines
+          const lines = rawLines.map(l => l // map each line to a new line
+            .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '') // remove the timestamp
+            .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '') // remove the line number
           );
-          core.info(`Scanning ${lines.length} lines in ${p}`);
-          let foundInFile = 0;
+          core.info(`Scanning ${lines.length} lines in ${p}`); // log the number of lines in the file
+          let foundInFile = 0; // initialize the found in file count to 0
 
           // A) info: ... until backtrace:
           for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
