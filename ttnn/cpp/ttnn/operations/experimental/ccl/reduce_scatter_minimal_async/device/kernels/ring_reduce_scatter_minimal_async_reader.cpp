@@ -18,18 +18,24 @@ using tt::tt_metal::BufferType;
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(1);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(5);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(6);
+constexpr uint32_t ring_size = get_compile_time_arg_val(1);
+constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
+constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
+constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t ring_size = get_compile_time_arg_val(8);
-constexpr uint32_t num_batches = get_compile_time_arg_val(9);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(10);
-constexpr bool direction = get_compile_time_arg_val(11);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(12);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(8);
+constexpr uint32_t input_tensor_C = get_compile_time_arg_val(9);
+constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(10);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
+constexpr uint32_t slice_B = get_compile_time_arg_val(12);
+constexpr uint32_t slice_C = get_compile_time_arg_val(13);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(14);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(15);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(16);
+constexpr bool direction = get_compile_time_arg_val(17);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(18);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -41,17 +47,13 @@ void kernel_main() {
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t link = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t slice_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 13;
+    constexpr uint32_t ct_idx = 19;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -111,7 +113,7 @@ void kernel_main() {
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
 
-    for (uint32_t b = 0; b < num_batches; b++) {
+    for (uint32_t b = 0; b < input_tensor_B; b++) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
