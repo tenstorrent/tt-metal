@@ -20,6 +20,7 @@ void py_module_types(nb::module_& mod) {
     export_enum<UnaryOpType>(mod, "UnaryOpType");
 
     nb::class_<UnaryWithParam>(mod, "UnaryWithParam");
+    nb::class_<EltwiseUnaryWithParam>(mod, "EltwiseUnaryWithParam");
 }
 
 void py_module(nb::module_& mod) {
@@ -40,7 +41,7 @@ void py_module(nb::module_& mod) {
 
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it
     // Can take in just the op type, or sequence container of op type and param value
-    // nb::implicitly_convertible<UnaryOpType, UnaryWithParam>();
+    nb::implicitly_convertible<UnaryOpType, UnaryWithParam>();
     nb::implicitly_convertible<std::pair<UnaryOpType, float>, UnaryWithParam>();
     nb::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
     nb::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
