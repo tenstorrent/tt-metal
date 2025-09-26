@@ -4956,13 +4956,13 @@ def test_conv2d_1kX1k(
 @pytest.mark.parametrize("config_in_dram", [False,True])
 @pytest.mark.parametrize("full_inner_dim", [False,True])
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w,dilation_h, dilation_w, pad_h, pad_w, act_block_h_override",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
     (
-        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# single core
-        (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
-        (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
-        (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
-        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 1, 1, 64),# weird shape example
+        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
+        (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
+        (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
+        (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
+        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
 @pytest.mark.parametrize(
@@ -4983,8 +4983,8 @@ def test_conv_block_sharding(
     math_fidelity,
     output_dtype,
     weights_dtype,
-    batch_size,
     config_in_dram,
+    batch_size,
     output_channels,
     input_channels,
     input_height,
@@ -4995,8 +4995,6 @@ def test_conv_block_sharding(
     stride_w,
     pad_h,
     pad_w,
-    dilation_h,
-    dilation_w,
     output_layout,
     force_split_reader,
     full_inner_dim,
@@ -5027,7 +5025,5 @@ def test_conv_block_sharding(
         in_place=False,
         force_split_reader=force_split_reader,
         config_tensors_in_dram=config_in_dram,
-        dilation_h=dilation_h,
-        dilation_w=dilation_w,
         bs_full_inner_dim=full_inner_dim,
     )

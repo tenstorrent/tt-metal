@@ -5,59 +5,13 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
-
+#include "block_sharded_reader_common.hpp"
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
-
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);  // Input filter window height
-constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);  // Input filter window width
-
-template <int window_height, int window_width>
-FORCE_INLINE void read_dilated_channels(
-    uint32_t& l1_write_addr_act,
-    const uint32_t act_l1_read_addr,
-    const uint32_t reader_channel_idx,
-    const uint32_t conv_act_c_bytes,
-    const uint32_t stride_h_bytes,
-    const uint32_t stride_w_bytes) {
-    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
-#pragma GCC unroll weight_size_h
-    for (uint32_t outer = 0; outer < window_height; outer++) {
-        uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
-#pragma GCC unroll weight_size_w
-        for (uint32_t inner = 0; inner < window_width; inner++) {
-            // Read the partial depth.
-            noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
-            // Increment by full depth to go to the next pixel
-            l1_write_addr_act += conv_act_c_bytes;
-            act_l1_read_addr_row_offset += stride_w_bytes;
-        }
-        // Go to the next row
-        act_l1_read_addr_plus_offset += stride_h_bytes;
-    }
-}
-
-FORCE_INLINE
-void read_channels(
-    uint32_t& l1_write_addr_act,
-    const uint32_t act_l1_read_addr,
-    const uint32_t reader_channel_idx,
-    const uint32_t conv_act_c_read_bytes,
-    const uint32_t coalesced_read_bytes,
-    const uint32_t stride_h_bytes) {
-    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
-#pragma GCC unroll weight_size_h
-    for (uint32_t inner = 0; inner < weight_size_h; inner++) {
-        noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
-        l1_write_addr_act += coalesced_read_bytes;
-        // +2 is hard-coded, TODO: generalize
-        act_l1_read_addr_plus_offset += stride_h_bytes;
-    }
-}
 
 constexpr uint32_t DILATION_W = get_compile_time_arg_val(1);
 void kernel_main() {
@@ -67,6 +21,8 @@ void kernel_main() {
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t window_outer = get_compile_time_arg_val(4);
     constexpr uint32_t act_block_num_tiles_read = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
     constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
@@ -174,7 +130,7 @@ void kernel_main() {
                         uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
                         for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                             if constexpr (DILATION_W == 1) {
-                                read_channels(
+                                read_channels<weight_size_h>(
                                     l1_write_addr_act,
                                     act_l1_read_addr,
                                     ind,
