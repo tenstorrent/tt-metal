@@ -15,8 +15,8 @@ class Yolov11Conv2D:
         bn=None,
         device=None,
         activation="",
-        activation_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat8_b,
+        activation_dtype=ttnn.bfloat16,  # UPGRADED: From 256 to 65K possible values
+        weights_dtype=ttnn.bfloat16,    # UPGRADED: From 256 to 65K possible values
         reshard=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_detect=False,
@@ -39,10 +39,10 @@ class Yolov11Conv2D:
         self.deallocate_activation = deallocate_activation
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # UPGRADED: From LoFi to highest precision
+            fp32_dest_acc_en=True,                  # ENABLED: Float32 accumulation for precision
             packer_l1_acc=True,
-            math_approx_mode=True,
+            math_approx_mode=False,                 # DISABLED: No approximations for precision
         )
         self.activation_dtype = activation_dtype
         # Convert activation string to proper ttnn activation object
