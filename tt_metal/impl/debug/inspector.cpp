@@ -5,6 +5,7 @@
 #include "inspector.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
+#include "impl/debug/inspector/callstack.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -49,12 +50,39 @@ void Inspector::serialize_rpc() {
     if (!is_enabled()) {
         return;
     }
+    TT_INSPECTOR_LOG("Serializing Inspector RPC data");
     try {
         auto* data = get_inspector_data();
         data->serialize_rpc();
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to serialize RPC: {}", e.what());
+    }
+}
+
+std::string Inspector::get_call_stack() { return inspector::get_callstack(); }
+
+void Inspector::track_operation(
+    std::optional<std::int64_t> device_op_id, const std::string& operation_name, const std::string& arguments) {
+    if (!is_enabled()) {
+        return;
+    }
+
+    try {
+        auto& ctx = MetalContext::instance();
+        auto* data = ctx.get_inspector_data();
+        if (!data) {
+            return;
+        }
+
+        // Get the callstack internally
+        std::string call_stack = get_call_stack();
+
+        std::lock_guard<std::mutex> lock(data->operations_mutex);
+        data->operations_.push_back(
+            {device_op_id, operation_name, call_stack, arguments, std::chrono::steady_clock::now()});
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to track operation: {}", e.what());
     }
 }
 

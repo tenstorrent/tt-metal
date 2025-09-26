@@ -65,6 +65,14 @@ struct MeshWorkloadData {
     binaryStatusPerMeshDevice @2 :List(MeshDeviceBinaryStatus);
 }
 
+struct OperationData {
+    deviceOperationId @0 :Text;   # Can be "none" for host-only operations
+    operationName @1     :Text;
+    callstack @2         :Text;
+    arguments @3         :Text;
+    timestamp @4         :UInt64;         # Optional: nanoseconds since epoch
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -80,4 +88,7 @@ interface Inspector {
 
     # Search for a kernel
     getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
+
+    # Get tracked operations
+    getOperations @5 () -> (operations :List(OperationData));
 }
