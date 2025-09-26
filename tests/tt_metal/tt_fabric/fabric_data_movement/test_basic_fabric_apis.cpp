@@ -193,15 +193,17 @@ void RunSetUnicastRouteTest(
             if (idle_eth_cores.empty()) {
                 GTEST_SKIP() << "No IDLE_ETH cores available on device " << dev_idx;
             }
+            if (!fixture->slow_dispatch_) {
+                GTEST_SKIP() << "IDLE_ETH core test requires TT_METAL_SLOW_DISPATCH_MODE enabled in fixture";
+            }
             logical_cores[dev_idx] = *idle_eth_cores.begin();
         } else {
-            // Use first worker core for TENSIX
             logical_cores[dev_idx] = {0, 0};
         }
     }
 
     std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
-    std::vector<uint32_t> fixed_addrs(NUM_DEVICES);  // Store fixed addresses for each device
+    std::vector<uint32_t> result_addrs(NUM_DEVICES);  // Store fixed addresses for each device
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Get mesh shape to determine if it's 2D fabric
@@ -215,6 +217,12 @@ void RunSetUnicastRouteTest(
 
     uint32_t MAX_ROUTE_BUFFER_SIZE = is_2d_fabric ? 32 : 4;
     uint32_t RESULT_SIZE_PER_DEVICE = (MAX_ROUTE_BUFFER_SIZE * 2);  // 2 route buffers
+    // 0x100000 (1MB) is safe on Tensix L1
+    uint32_t FABRIC_TEST_BUFFER_BASE_ADDR = 0x100000;
+    if (core_type == HalProgrammableCoreType::IDLE_ETH) {
+        FABRIC_TEST_BUFFER_BASE_ADDR = tt_metal::MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+    }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         const auto& src_device = devices[src_idx];
@@ -223,18 +231,13 @@ void RunSetUnicastRouteTest(
         uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
         uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
-
-        // Use fixed address that works for both TENSIX and IDLE_ETH cores
-        // 0x100000 (1MB) is safe in both L1 memory maps and provides sufficient space
-        constexpr uint32_t FABRIC_TEST_BUFFER_BASE_ADDR = 0x100000;
-        uint32_t fixed_addr = FABRIC_TEST_BUFFER_BASE_ADDR + (src_idx * result_size);
-        fixed_addrs[src_idx] = fixed_addr;  // Store for later use
+        uint32_t result_addr = FABRIC_TEST_BUFFER_BASE_ADDR + (src_idx * result_size);
+        result_addrs[src_idx] = result_addr;  // Store for later use
 
         // Skip MeshBuffer creation - directly use fixed address for experimental measurement
         // This bypasses host-side device memory management for raw address access
         programs[src_idx] = tt::tt_metal::CreateProgram();
 
-        uint32_t result_addr = fixed_addr;  // Use the fixed address directly
         std::vector<uint32_t> runtime_args = {
             *src_fabric_node_id.mesh_id,         // src_mesh_id
             src_fabric_chip_id,                  // src_chip_id
@@ -262,7 +265,10 @@ void RunSetUnicastRouteTest(
                 programs[src_idx],
                 "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_fabric_set_unicast_route.cpp",
                 {logical_cores[src_idx]},
-                tt_metal::EthernetConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .defines = defines});
+                tt_metal::EthernetConfig{
+                    .eth_mode = tt_metal::Eth::IDLE,
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .defines = defines});
         } else {
             kernel = tt_metal::CreateKernel(
                 programs[src_idx],
@@ -287,7 +293,6 @@ void RunSetUnicastRouteTest(
         auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
 
-        // Read result data directly from device memory at fixed address
         uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
         std::vector<uint32_t> result_data;
 
@@ -297,7 +302,7 @@ void RunSetUnicastRouteTest(
         tt::tt_metal::detail::ReadFromDeviceL1(
             src_device->get_devices()[0],
             logical_cores[src_idx],
-            fixed_addrs[src_idx],
+            result_addrs[src_idx],
             result_size,
             result_data,
             read_core_type);
