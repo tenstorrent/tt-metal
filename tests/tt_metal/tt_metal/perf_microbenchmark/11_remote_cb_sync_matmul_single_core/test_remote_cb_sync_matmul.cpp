@@ -911,7 +911,7 @@ int main(int argc, char** argv) {
             }
             tt_metal::distributed::Finish(device->mesh_command_queue());
             for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
             }
         }
 
