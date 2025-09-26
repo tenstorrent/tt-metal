@@ -227,6 +227,8 @@ struct ReceiverChannelPointers {
 
     FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
 
+    FORCE_INLINE uint8_t get_src_chan_id() const { return src_chan_ids[0]; }
+
     FORCE_INLINE void init() { reset(); }
 
     FORCE_INLINE void reset() {
