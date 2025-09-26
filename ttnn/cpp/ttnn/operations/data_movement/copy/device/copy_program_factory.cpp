@@ -5,7 +5,6 @@
 #include <math.h>
 
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
 #include "copy_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
@@ -26,14 +25,14 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     bool tilized = output.layout() == Layout::TILE;
     bool sharded = input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_unit_size = tilized ? tt::tt_metal::detail::TileSize(input_cb_data_format)
+    uint32_t input_unit_size = tilized ? tt::tile_size(input_cb_data_format)
                                        : input.padded_shape()[-1] * input.element_size();
     uint32_t full_input_row = input_unit_size;
     if (sharded && !tilized) {
         input_unit_size = input.memory_config().shard_spec()->shape[1] * input.element_size();
     }
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_unit_size = tilized ? tt::tt_metal::detail::TileSize(output_cb_data_format)
+    uint32_t output_unit_size = tilized ? tt::tile_size(output_cb_data_format)
                                         : output.padded_shape()[-1] * output.element_size();
     uint32_t full_output_row = output_unit_size;
     if (sharded && !tilized) {

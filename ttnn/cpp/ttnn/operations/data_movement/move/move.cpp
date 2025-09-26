@@ -10,6 +10,7 @@
 #include "ttnn/distributed/api.hpp"
 
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt::tt_metal;
 
@@ -69,7 +70,7 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
     const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
-    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),
         num_banks,
@@ -79,7 +80,7 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
     // Only compute with storage cores allow CBs to be created
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {

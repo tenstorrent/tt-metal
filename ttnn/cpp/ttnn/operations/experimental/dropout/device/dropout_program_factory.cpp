@@ -11,7 +11,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -187,8 +186,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     tt::DataFormat data_fmt_in = datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat data_fmt_out = datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t single_tile_size_in = tt::tt_metal::detail::TileSize(data_fmt_in);
-    uint32_t single_tile_size_out = tt::tt_metal::detail::TileSize(data_fmt_out);
+    uint32_t single_tile_size_in = tt::tile_size(data_fmt_in);
+    uint32_t single_tile_size_out = tt::tile_size(data_fmt_out);
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 

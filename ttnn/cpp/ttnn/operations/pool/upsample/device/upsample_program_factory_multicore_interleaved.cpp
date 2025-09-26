@@ -15,7 +15,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -45,8 +44,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     if (is_tiled_layout) {
         // Tiled layout specific calculations
-        input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         aligned_input_unit_size = input_unit_size;
 
         const uint32_t input_tensor_width = input.padded_shape()[-1];

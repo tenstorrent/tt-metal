@@ -172,7 +172,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = 4;
-    uint32_t output_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t output_unit_size = tt::tile_size(input_cb_data_format);
     uint32_t output_page_size = tt::align(output_unit_size, 4);
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, input_cb_data_format}})
@@ -226,7 +226,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = 4;
-    uint32_t output_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t output_unit_size = tt::tile_size(input_cb_data_format);
     ;
     uint32_t output_page_size = tt::align(output_unit_size, 4);
     tt::tt_metal::CircularBufferConfig output_cb_out_config =

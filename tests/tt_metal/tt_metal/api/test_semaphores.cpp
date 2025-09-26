@@ -7,7 +7,6 @@
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <map>
 #include <set>
 #include <utility>
@@ -48,7 +47,7 @@ void initialize_program(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t num_tiles = 2048;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
