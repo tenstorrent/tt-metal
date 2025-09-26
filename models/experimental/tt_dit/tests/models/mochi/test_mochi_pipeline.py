@@ -160,7 +160,7 @@ def test_tt_mochi_pipeline(
         parallel_config=parallel_config,
         vae_parallel_config=vae_parallel_config,
         num_links=num_links,
-        use_cache=False,
+        use_cache=True,
         model_name="genmo/mochi-1-preview",
     )
 
