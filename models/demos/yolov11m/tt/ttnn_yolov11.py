@@ -74,12 +74,13 @@ class TtnnYoloV11:
         print(f"    Range: [{x_pre_permute_flat.min()}, {x_pre_permute_flat.max()}], Mean: {x_pre_permute_flat.mean()}")
         print(f"    Dtype: {x_pre_permute_debug.dtype}, Shape: {x_pre_permute_debug.shape}")
         
-        # CRITICAL FIX: Use explicit memory config with float32 to prevent internal typecasting
-        float32_memory_config = ttnn.DRAM_MEMORY_CONFIG  # Explicit memory config
-        x = ttnn.permute(x, (0, 2, 3, 1), memory_config=float32_memory_config)
+        # CRITICAL FIX: Use input's memory config to preserve sharding compatibility
+        # Sharded tensors require sharded output configs for transpose operations
+        input_memory_config = x.memory_config()
+        x = ttnn.permute(x, (0, 2, 3, 1), memory_config=input_memory_config)
         
-        # Ensure output maintains float32 precision
-        x = ttnn.to_memory_config(x, float32_memory_config, dtype=ttnn.float32)
+        # Ensure output maintains float32 precision without changing memory layout
+        x = ttnn.to_dtype(x, dtype=ttnn.float32)
         
         # Debug: Check diversity after permute operation  
         x_post_permute_debug = ttnn.to_torch(x)
