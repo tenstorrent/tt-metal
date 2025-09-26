@@ -746,12 +746,17 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
+    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
+    if (use_welford && !(is_pre_all_gather || is_post_all_gather)) {
+        // Welford pushes one mean and one var tile per block height
+        ex_partial_CB_size *= 2;
+        ex_external_CB_size *= 2;
+    }
     if (is_pre_all_gather || is_post_all_gather) {
         ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
     }
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
-    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
@@ -803,6 +808,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (is_pre_all_gather) {
         ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
     }
+
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
     if (num_rows_per_all_to_all_worker_last == 0) {
         num_rows_per_all_to_all_worker_last = num_rows_per_all_to_all_worker;
@@ -1088,6 +1094,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
 
+    std::cout << "Reader sender kernel file: " << sender_reader_kernel_file << std::endl;
+    std::cout << "Reader receiver kernel file: " << receiver_reader_kernel_file << std::endl;
+
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
         sender_reader_kernel_file,
@@ -1281,6 +1290,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                   "layernorm_sharded_welford.cpp"
                 : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
+
+    std::cout << "Compute kernel file: " << compute_kernel_file << std::endl;
+
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
