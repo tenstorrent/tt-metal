@@ -72,4 +72,12 @@ enum class MathFidelity : uint8_t
     HiFi4 = 3
 };
 
+enum class StochRndType : uint8_t
+{
+    None = 0,
+    Fpu  = 1,
+    Pack = 2,
+    All  = 3,
+};
+
 } // namespace ckernel

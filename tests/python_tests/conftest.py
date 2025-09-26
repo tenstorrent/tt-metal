@@ -45,6 +45,18 @@ def check_hardware_headers():
         "tensix_dev_map.h",
         "tensix_types.h",
     ]
+    required_headers_quasar = [
+        "cfg_defines.h",
+        "t6_debug_map.h",
+        "t6_mop_config_map.h",
+        "tensix_types.h",
+        "tensix.h",
+        "tt_t6_trisc_map.h",
+    ]
+
+    # Quasar has a somewhat different set of headers
+    if chip_arch == ChipArchitecture.QUASAR:
+        required_headers = required_headers_quasar
 
     # Check if header directory exists
     if not header_dir.exists():
@@ -219,4 +231,9 @@ skip_for_wormhole = pytest.mark.skipif(
 skip_for_blackhole = pytest.mark.skipif(
     get_chip_architecture() == ChipArchitecture.BLACKHOLE,
     reason="Test is not supported on Blackhole architecture",
+)
+
+skip_for_quasar = pytest.mark.skipif(
+    get_chip_architecture() == ChipArchitecture.QUASAR,
+    reason="Test is not supported on Quasar architecture",
 )

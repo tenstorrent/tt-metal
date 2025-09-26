@@ -275,9 +275,9 @@ def generate_build_header(test_config):
     result_buffer_address = test_config.get("result_buffer_address", 0x1C000)
 
     # Generate buffer declarations with optional buffer_C
-    buffer_A_line = f"constexpr Operand buffer_A({hex(buffer_A_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});"
-    buffer_B_line = f"constexpr Operand buffer_B({hex(buffer_B_address)}, {format_tile_sizes[formats.input_format if formats != None else DataFormat.Float16_b]});"
-    buffer_Res_line = f"constexpr Operand buffer_Res({hex(result_buffer_address)}, {format_tile_sizes[formats.output_format if formats != None else DataFormat.Float16_b]});"
+    buffer_A_line = f"constexpr Operand buffer_A({hex(buffer_A_address)}, {format_tile_sizes[formats.input_format if formats is not None else DataFormat.Float16_b]});"
+    buffer_B_line = f"constexpr Operand buffer_B({hex(buffer_B_address)}, {format_tile_sizes[formats.input_format if formats is not None else DataFormat.Float16_b]});"
+    buffer_Res_line = f"constexpr Operand buffer_Res({hex(result_buffer_address)}, {format_tile_sizes[formats.output_format if formats is not None else DataFormat.Float16_b]});"
 
     header_content.append(buffer_A_line)
     header_content.append(buffer_B_line)

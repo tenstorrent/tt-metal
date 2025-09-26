@@ -20,6 +20,11 @@ else ifeq ($(ARCH),blackhole)
 	ARCH_CPU        := -mcpu=tt-bh
 	ARCH_DEFINE     := -DARCH_BLACKHOLE
 	ARCH_LLK_ROOT   := tt_llk_blackhole
+else ifeq ($(ARCH),quasar)
+# until there is official support for quasar in SFPI fallback to BH
+	ARCH_CPU        := -mcpu=tt-bh
+	ARCH_DEFINE     := -DARCH_QUASAR
+	ARCH_LLK_ROOT   := tt_llk_quasar
 else
 $(error must provide archname or CHIP_ARCH environment variable (wormhole / blackhole))
 endif
@@ -85,15 +90,23 @@ TO_UPPER = $(shell echo $(1) | tr '[:lower:]' '[:upper:]')
 # =========================
 .PHONY: all dis profiler clean always
 
-all: $(ELF_DIR)/unpack.elf \
-	 $(ELF_DIR)/math.elf \
-	 $(ELF_DIR)/pack.elf \
-	 $(SHARED_ELF_DIR)/brisc.elf
+ELF_TARGETS := $(ELF_DIR)/unpack.elf \
+				$(ELF_DIR)/math.elf \
+				$(ELF_DIR)/pack.elf
 
-dis: $(DIS_DIR)/unpack.S \
-	 $(DIS_DIR)/math.S \
-	 $(DIS_DIR)/pack.S \
-	 $(SHARED_DIS_DIR)/brisc.S
+DIS_TARGETS := $(DIS_DIR)/unpack.S \
+				$(DIS_DIR)/math.S \
+				$(DIS_DIR)/pack.S
+
+ifneq ($(ARCH),quasar)
+ELF_TARGETS += $(SHARED_ELF_DIR)/brisc.elf
+
+DIS_TARGETS += $(SHARED_DIS_DIR)/brisc.S
+endif
+
+all: $(ELF_TARGETS)
+
+dis: $(DIS_TARGETS)
 
 profiler: $(PROFILER_DIR)/unpack.meta.bin \
 	  $(PROFILER_DIR)/math.meta.bin \
@@ -162,8 +175,12 @@ $(SHARED_OBJ_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(SHARED_OBJ_DIR) $(SHARED
 
 # create a stamp file to track build parameters
 PARAMS := BOOT_MODE=$(BOOT_MODE) PROFILER_BUILD=$(PROFILER_BUILD)
-$(BUILD_DIR)/params.stamp: always
+$(BUILD_DIR)/params.stamp: always | $(BUILD_DIR)
 	echo "$(PARAMS)" | cmp -s - $@ || echo "$(PARAMS)" > $@
+
+# create folder structure root for stamp file
+$(BUILD_DIR):
+	mkdir -p $@
 
 # create folder structure for shared files
 $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR) $(SHARED_DIS_DIR) $(SHARED_ELF_DIR):

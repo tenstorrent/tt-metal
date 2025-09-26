@@ -50,11 +50,6 @@ from .unpack import (
     unpack_uint32,
 )
 
-MAX_READ_BYTE_SIZE_16BIT = 2048
-
-# Constants for soft reset operation
-TRISC_SOFT_RESET_MASK = 0x7800  # Reset mask for TRISCs (unpack, math, pack) and BRISC
-
 # Constant - indicates the TRISC kernel run status
 KERNEL_COMPLETE = 1  # Kernel completed its run
 
@@ -69,14 +64,77 @@ class BootMode(Enum):
 CHIP_DEFAULT_BOOT_MODES = {
     ChipArchitecture.WORMHOLE: BootMode.BRISC,
     ChipArchitecture.BLACKHOLE: BootMode.BRISC,
+    ChipArchitecture.QUASAR: BootMode.TRISC,
 }
 
 
+# Constant - indicates that the RISC core doesn't exist on the chip
+INVALID_CORE = -1
+
+
 class RiscCore(IntEnum):
-    BRISC = 11
-    TRISC0 = 12
-    TRISC1 = 13
-    TRISC2 = 14
+    BRISC = INVALID_CORE if get_chip_architecture() == ChipArchitecture.QUASAR else 11
+    TRISC0 = 11 if get_chip_architecture() == ChipArchitecture.QUASAR else 12
+    TRISC1 = 12 if get_chip_architecture() == ChipArchitecture.QUASAR else 13
+    TRISC2 = 13 if get_chip_architecture() == ChipArchitecture.QUASAR else 14
+    TRISC3 = 14 if get_chip_architecture() == ChipArchitecture.QUASAR else INVALID_CORE
+
+
+# Constant - list of all valid cores on the chip
+ALL_CORES = [core for core in RiscCore if core != INVALID_CORE]
+
+
+def resolve_default_boot_mode(boot_mode: BootMode) -> BootMode:
+    if boot_mode == BootMode.DEFAULT:
+        CHIP_ARCH = get_chip_architecture()
+        boot_mode = CHIP_DEFAULT_BOOT_MODES[CHIP_ARCH]
+    return boot_mode
+
+
+def get_register_store(location="0,0", device_id=0, neo_id=0):
+    CHIP_ARCH = get_chip_architecture()
+    context = check_context()
+    device = context.devices[device_id]
+    chip_coordinate = OnChipCoordinate.create(location, device=device)
+    noc_block = device.get_block(chip_coordinate)
+    if CHIP_ARCH == ChipArchitecture.QUASAR:
+        match neo_id:
+            case 0:
+                register_store = noc_block.neo0.register_store
+            case 1:
+                register_store = noc_block.neo1.register_store
+            case 2:
+                register_store = noc_block.neo2.register_store
+            case 3:
+                register_store = noc_block.neo3.register_store
+            case _:
+                raise ValueError(f"Invalid neo_id {neo_id} for Quasar architecture")
+    else:
+        if neo_id != 0:
+            raise ValueError(f"Invalid non zero neo_id for non Quasar architecture")
+        register_store = noc_block.get_register_store()
+    return register_store
+
+
+def get_soft_reset_mask(cores: list[RiscCore]):
+    if INVALID_CORE in cores:
+        raise ValueError("Attempting to reset a core that doesn't exist on this chip")
+    return sum(1 << core.value for core in cores)
+
+
+def set_tensix_soft_reset(
+    value, cores: list[RiscCore] = ALL_CORES, location="0,0", device_id=0
+):
+    soft_reset = get_register_store(location, device_id).read_register(
+        "RISCV_DEBUG_REG_SOFT_RESET_0"
+    )
+    if value:
+        soft_reset |= get_soft_reset_mask(cores)
+    else:
+        soft_reset &= ~get_soft_reset_mask(cores)
+    get_register_store(location, device_id).write_register(
+        "RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset
+    )
 
 
 def collect_results(
@@ -103,35 +161,6 @@ def collect_results(
     return res_from_L1
 
 
-def perform_tensix_soft_reset(location="0,0"):
-    context = check_context()
-    device = context.devices[0]
-    chip_coordinate = OnChipCoordinate.create(location, device=device)
-    noc_block = device.get_block(chip_coordinate)
-    register_store = noc_block.get_register_store()
-
-    # Read current soft reset register, set TRISC reset bits, and write back
-    soft_reset = register_store.read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
-    soft_reset |= TRISC_SOFT_RESET_MASK
-    register_store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset)
-
-
-def run_cores(cores: list[RiscCore], device_id=0, location="0,0"):
-    context = check_context()
-    device = context.devices[device_id]
-    chip_coordinate = OnChipCoordinate.create(location, device=device)
-    noc_block = device.get_block(chip_coordinate)
-    register_store = noc_block.get_register_store()
-
-    core_mask = 0
-    for core in cores:
-        core_mask |= 1 << core.value
-
-    soft_reset = register_store.read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
-    soft_reset &= ~core_mask
-    register_store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset)
-
-
 def exalens_device_setup(chip_arch, device_id=0, location="0,0"):
     context = check_context()
     device = context.devices[device_id]
@@ -140,8 +169,9 @@ def exalens_device_setup(chip_arch, device_id=0, location="0,0"):
     ops = debug_tensix.device.instructions
 
     if chip_arch == ChipArchitecture.BLACKHOLE:
-        register_store = device.get_block(chip_coordinate).get_register_store()
-        register_store.write_register("RISCV_DEBUG_REG_DEST_CG_CTRL", 0)
+        get_register_store(location, device_id).write_register(
+            "RISCV_DEBUG_REG_DEST_CG_CTRL", 0
+        )
         debug_tensix.inject_instruction(ops.TT_OP_ZEROACC(3, 0, 0, 1, 0), 0)
     else:
         debug_tensix.inject_instruction(ops.TT_OP_ZEROACC(3, 0, 0), 0)
@@ -156,13 +186,6 @@ def exalens_device_setup(chip_arch, device_id=0, location="0,0"):
     debug_tensix.inject_instruction(ops.TT_OP_SEMINIT(1, 0, 4), 0)
 
 
-def resolve_default_boot_mode(boot_mode: BootMode) -> BootMode:
-    if boot_mode == BootMode.DEFAULT:
-        CHIP_ARCH = get_chip_architecture()
-        boot_mode = CHIP_DEFAULT_BOOT_MODES[CHIP_ARCH]
-    return boot_mode
-
-
 def run_elf_files(testname, boot_mode, device_id=0, location="0,0"):
     CHIP_ARCH = get_chip_architecture()
     LLK_HOME = os.environ.get("LLK_HOME")
@@ -170,8 +193,11 @@ def run_elf_files(testname, boot_mode, device_id=0, location="0,0"):
 
     boot_mode = resolve_default_boot_mode(boot_mode)
 
+    if CHIP_ARCH == ChipArchitecture.QUASAR and boot_mode != BootMode.TRISC:
+        raise ValueError("Quasar only supports TRISC boot mode")
+
     # Perform soft reset
-    perform_tensix_soft_reset(location)
+    set_tensix_soft_reset(1, location=location, device_id=device_id)
 
     # Load TRISC ELF files
     trisc_names = ["unpack", "math", "pack"]
@@ -181,6 +207,7 @@ def run_elf_files(testname, boot_mode, device_id=0, location="0,0"):
             elf_file=str(elf_path.absolute()),
             location=location,
             risc_name=f"trisc{i}",
+            neo_id=0 if CHIP_ARCH == ChipArchitecture.QUASAR else None,
         )
 
     # Reset the profiler barrier
@@ -195,13 +222,20 @@ def run_elf_files(testname, boot_mode, device_id=0, location="0,0"):
                 location=location,
                 risc_name="brisc",
             )
-            run_cores([RiscCore.BRISC], device_id, location)
+            set_tensix_soft_reset(
+                0, [RiscCore.BRISC], location=location, device_id=device_id
+            )
         case BootMode.TRISC:
-            run_cores([RiscCore.TRISC0], device_id, location)
+            set_tensix_soft_reset(
+                0, [RiscCore.TRISC0], location=location, device_id=device_id
+            )
         case BootMode.EXALENS:
             exalens_device_setup(CHIP_ARCH, device_id, location)
-            run_cores(
-                [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2], device_id, location
+            set_tensix_soft_reset(
+                0,
+                [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2],
+                location=location,
+                device_id=device_id,
             )
 
 

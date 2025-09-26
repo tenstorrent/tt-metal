@@ -6,9 +6,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "ckernel_globals.h"
+#ifndef ARCH_QUASAR
+#include "ckernel_globals.h" // Only for WH/BH
 // Necessary for ckernel variables
-#include "ckernel_helper.h"
+#include "ckernel_helper.h" // Only for WH/BH
+#endif
 #include "profiler.h"
 
 #if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
@@ -48,8 +50,10 @@ int main()
 #endif
 
     std::fill(ckernel::regfile, ckernel::regfile + 64, 0);
+#ifndef ARCH_QUASAR
     ckernel::reset_cfg_state_id();
     ckernel::reset_dest_offset_id();
+#endif
 
 #if defined(LLK_PROFILER)
     llk_profiler::reset();

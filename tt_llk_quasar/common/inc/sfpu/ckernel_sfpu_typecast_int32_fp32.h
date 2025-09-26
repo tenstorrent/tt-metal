@@ -28,7 +28,7 @@ inline void _calculate_typecast_int32_to_fp32_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         _calculate_typecast_int32_to_fp32_rows();
-        _incr_counters_<0x0, 0x0, SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
 }
 

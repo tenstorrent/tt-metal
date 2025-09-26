@@ -5,9 +5,11 @@
 
 // Compiler hint that a branch is unlikely to be taken
 #define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
+#define tt_l1_ptr           __attribute__((rvtt_l1_ptr))
+#define tt_reg_ptr          __attribute__((rvtt_reg_ptr))
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
-#include "fw_debug.h"
+// #include "fw_debug.h"
 #include "t6_debug_map.h"
 #include "tensix.h"
 
@@ -33,6 +35,8 @@ constexpr uint8_t TENSIX_PACK_STREAM_SEMAPHORE           = p_stall::SEMAPHORE_6;
 constexpr uint8_t PACK_STREAM_SEMAPHORE                  = 6;
 constexpr uint8_t TENSIX_UNPACK_TO_DEST_PACK_SEMAPHORE   = p_stall::SEMAPHORE_7;
 constexpr uint8_t UNPACK_TO_DEST_PACK_SEMAPHORE          = 7;
+
+constexpr uint32_t KERNEL_COMPLETE = 0x1;
 
 volatile uint *const reg_base        = (volatile uint *)0xFFB10000;
 volatile uint *const pc_buf_base     = (volatile uint *)PC_BUF_BASE;
@@ -69,6 +73,22 @@ inline void semaphore_post(const uint8_t index)
 inline void semaphore_get(const uint8_t index)
 {
     pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1;
+}
+
+// Register read (workaround for bug
+// tenstorrent/tensix#976
+// now handled by the compiler)
+// workaround is needed only for GS
+inline uint reg_read(uint32_t addr)
+{
+    volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *>(addr);
+    return p_reg[0];
+}
+
+inline void reg_write(uint32_t addr, uint32_t data)
+{
+    volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *>(addr);
+    p_reg[0]                        = data;
 }
 
 //
@@ -270,9 +290,9 @@ inline void set_ttsync_enables(uint thread_id = 0xdeadface)
 
     if (thread_id > 3)
     {
-        FWLOG0(
-            "WARNING: automatically writing to all TTSync enable regs, because the given thread ID (or lack thereof) implies that you don't know what thread "
-            "you want");
+        // FWLOG0(
+        //     "WARNING: automatically writing to all TTSync enable regs, because the given thread ID (or lack thereof) implies that you don't know what thread
+        //     " "you want");
         for (int i = 0; i < 3; i++)
         {
             t6dbg->TENSIX_TRISC_SYNC[i] = ~bitmask;

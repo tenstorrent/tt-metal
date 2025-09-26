@@ -34,7 +34,7 @@ inline void _calculate_lrelu_(const int iterations, const uint32_t slope)
     for (int d = 0; d < iterations; d++)
     {
         _calculate_lrelu_sfp_rows_();
-        _incr_counters_<0x0, 0x0, SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
     TTI_SFPENCC(0, 0, 0, 2); // disable cc
 }
@@ -64,7 +64,7 @@ inline void _calculate_relu_min_(const int iterations, const uint32_t threshold)
     for (int d = 0; d < iterations; d++)
     {
         _calculate_relu_min_sfp_rows_();
-        _incr_counters_<0x0, 0x0, SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
     TTI_SFPENCC(0, 0, 0, 2); // disable cc
 }
@@ -99,7 +99,7 @@ inline void _calculate_relu_max_(const int iterations, const uint32_t threshold)
     for (int d = 0; d < iterations; d++)
     {
         _calculate_relu_max_sfp_rows_();
-        _incr_counters_<0x0, 0x0, SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
+        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
     TTI_SFPENCC(0, 0, 0, 2); // disable cc
 }

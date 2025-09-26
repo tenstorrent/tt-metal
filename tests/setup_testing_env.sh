@@ -131,7 +131,11 @@ main() {
     fi
 
     # Download headers
-    download_headers "$chip_arch"
+    if [[ "$chip_arch" != "quasar" ]]; then
+        download_headers "$chip_arch"
+    else
+        echo "No external headers needed for quasar architecture."
+    fi
 
     # Setup pre-commit hooks
     setup_precommit

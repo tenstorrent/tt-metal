@@ -37,7 +37,11 @@ inline void _perf_unpack_loop_set_valid(uint32_t iterations)
         constexpr uint32_t cond_clear_a = set_a ? ckernel::p_stall::SRCA_CLR : 0;
         constexpr uint32_t cond_clear_b = set_b ? ckernel::p_stall::SRCB_CLR : 0;
         TTI_SETDVALID((set_b << 1) | set_a);
+#ifdef ARCH_QUASAR
+        TTI_STALLWAIT(ckernel::p_stall::STALL_TDMA, cond_clear_a, cond_clear_b, 0);
+#else
         TTI_STALLWAIT(ckernel::p_stall::STALL_TDMA, cond_clear_a | cond_clear_b);
+#endif
     }
 }
 
@@ -48,7 +52,12 @@ inline void _perf_math_loop_clear_valid(uint32_t iterations)
     {
         constexpr uint32_t cond_valid_a = clear_a ? ckernel::p_stall::SRCA_VLD : 0;
         constexpr uint32_t cond_valid_b = clear_b ? ckernel::p_stall::SRCB_VLD : 0;
+#ifdef ARCH_QUASAR
+        TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, cond_valid_a, cond_valid_b, 0);
+        TTI_CLEARDVALID((clear_b << 1) | clear_a, 0, 0, 0, 0, 0);
+#else
         TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, cond_valid_a | cond_valid_b);
         TTI_CLEARDVALID((clear_b << 1) | clear_a, 0);
+#endif
     }
 }
