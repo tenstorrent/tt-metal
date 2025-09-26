@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
 
 // split REDUCE across cores
 void kernel_main() {
+    DPRINT << "Receiver started" << ENDL();
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
@@ -25,6 +27,8 @@ void kernel_main() {
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
     constexpr bool use_welford = get_compile_time_arg_val(16) == 1;
+
+    DPRINT << "Receiver got inputs" << ENDL();
 
     const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
     const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
@@ -45,8 +49,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);  // tile size
-    const DataFormat data_format = get_dataformat(cb_ex_partial2);          // data format
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
 
     uint64_t remote_noc_addrs_first_stage[is_all_to_all_worker ? num_blocks_first_stage : 1];
     uint64_t remote_noc_addrs_second_stage[is_all_to_all_worker ? num_blocks_second_stage : 1];
@@ -131,7 +134,9 @@ void kernel_main() {
                                              const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
         // global reduce
         // wait for local data ready
+        DPRINT << "Receiver waiting on partials" << ENDL();
         cb_wait_front(cb_partial, block_h * num_tiles_scaler);
+        DPRINT << "Receiver done waiting on partials" << ENDL();
 
         // inc mcast sender
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);

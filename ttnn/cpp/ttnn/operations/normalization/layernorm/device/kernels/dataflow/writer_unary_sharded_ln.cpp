@@ -43,7 +43,7 @@ void kernel_main() {
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
-    {
+    if (!use_welford) {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         const uint32_t scalar_w = get_arg_val<uint32_t>(1);
         generate_reduce_scaler(cb_in_2, scalar_w);
@@ -55,7 +55,9 @@ void kernel_main() {
     }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(2);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    DPRINT << "EPS: " << eps << ENDL();
+    // generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_reduce_scaler(eps_cb_id, eps);
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
