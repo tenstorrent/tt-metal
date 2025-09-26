@@ -4,6 +4,12 @@
 
 /*
  * ARC telemetry metrics using FirmwareInfoProvider for direct access to telemetry data.
+ *
+ * TODO:
+ * -----
+ * - How to handle cases where an ARC telemetry value is not returned by FirmwareInfoProvider?
+ *   For now, we set it to 0. But maybe we want to stop updating it at all and retain the old
+ *   stale value instead?
  */
 
 #include <tt_stl/assert.hpp>
