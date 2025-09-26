@@ -10,6 +10,7 @@ on:
         default: "ALL SWEEPS (Nightly)"
         options:
           - ALL SWEEPS (Nightly)
+          - ALL SWEEPS (Comprehensive)
           - add
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
@@ -603,10 +604,10 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run ttnn sweeps generation (single sweep)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
@@ -617,7 +618,7 @@ jobs:
   ttnn-compute-module-matrix:
     name: Compute module matrix
     needs: ttnn-generate-sweeps
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -638,12 +639,12 @@ jobs:
           import os, json, math
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
-          # Use smaller batch size for Friday night runs (more comprehensive tests)
-          # Use larger batch size for Thursday runs (nightly suite only)
-          if "${{ github.event.schedule }}" == "0 5 * * 6":
-              BATCH_SIZE = 4  # Smaller batches for Friday night comprehensive runs
+          # Use smaller batch size for comprehensive runs (Friday night schedule or manual comprehensive dispatch)
+          # Use larger batch size for nightly runs (Thursday schedule or manual nightly dispatch)
+          if "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
+              BATCH_SIZE = 4  # Smaller batches for comprehensive runs
           else:
-              BATCH_SIZE = 10  # Larger batches for Thursday nightly runs
+              BATCH_SIZE = 10  # Larger batches for nightly runs
           batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
           print(json.dumps({"module": modules, "batches": batches}))
           PY
@@ -653,7 +654,7 @@ jobs:
     needs:
       - ttnn-generate-sweeps
       - build-artifact
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -724,7 +725,7 @@ jobs:
       - ttnn-generate-sweeps
       - build-artifact
       - ttnn-compute-module-matrix
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -784,7 +785,7 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (batch)
         run: |
-          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]]; then
+          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
           else
             python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
