@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
-from ...layers.embeddings import PatchEmbed
 from ...layers.feedforward import FeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList, Parameter
@@ -97,6 +96,62 @@ class TimeTextProjection(Module):
         return timesteps_emb + text_emb
 
 
+class FlattenedPatchEmbed(Module):
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        out_channels: int,
+        patch_count_y: int,
+        patch_count_x: int,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
+    ) -> None:
+        super().__init__()
+
+        self.patch_count_y = patch_count_y
+        self.patch_count_x = patch_count_x
+
+        sp_axis = parallel_config.sequence_parallel.mesh_axis
+        tp_axis = parallel_config.tensor_parallel.mesh_axis
+
+        self.proj = ColParallelLinear(
+            in_channels,
+            out_channels,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+        )
+
+        self.pos_embed = Parameter(
+            shape=[1, patch_count_y * patch_count_x, out_channels],
+            device=mesh_device,
+            mesh_mapping={sp_axis: 1, tp_axis: 2},
+        )
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.proj(x) + self.pos_embed.data
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "proj.weight" in state:
+            weight = state.pop("proj.weight")
+            out_channels, in_channels, kernel_y, kernel_x = weight.shape
+            weight = weight.permute(0, 2, 3, 1)
+            weight = weight.reshape(out_channels, kernel_y * kernel_x * in_channels)
+            state["proj.weight"] = weight
+
+        if "pos_embed" in state:
+            state["pos_embed"] = self._crop_pos_embed(state.pop("pos_embed"))
+
+    def _crop_pos_embed(self, pos_embed: torch.Tensor) -> torch.Tensor:
+        pos_embed_max_size = math.isqrt(pos_embed.shape[1])
+        top = (pos_embed_max_size - self.patch_count_y) // 2
+        left = (pos_embed_max_size - self.patch_count_x) // 2
+
+        spatial_pos_embed = pos_embed.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
+        spatial_pos_embed = spatial_pos_embed[:, top : top + self.patch_count_y, left : left + self.patch_count_x, :]
+        return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
+
+
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
 class MotifTransformer(Module):
     ENCODED_TEXT_DIM = 4096
@@ -130,22 +185,21 @@ class MotifTransformer(Module):
         self.patch_size = patch_size
         self.num_layers = num_layers
         self.out_channels = out_channels
+        self.latents_height = latents_height
+        self.latents_width = latents_width
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
         tp_axis = parallel_config.tensor_parallel.mesh_axis
 
-        self.pos_embed = PatchEmbed(
-            height=latents_height,
-            width=latents_width,
-            patch_size=patch_size,
+        self.pos_embed = FlattenedPatchEmbed(
             in_channels=in_channels,
-            embed_dim=inner_dim,
-            pos_embed_max_size=pos_embed_max_size,
+            out_channels=inner_dim,
+            patch_count_x=latents_width // patch_size,
+            patch_count_y=latents_height // patch_size,
             mesh_device=mesh_device,
-            tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            sp_mesh_axis=parallel_config.sequence_parallel.mesh_axis,
+            parallel_config=parallel_config,
         )
 
         self.time_text_embed = TimeTextProjection(
@@ -237,11 +291,7 @@ class MotifTransformer(Module):
         time_embed = time_embed.reshape([batch_size, 1, time_embed.shape[-1]])
         time_embed_silu = ttnn.silu(time_embed)
 
-        spatial = (
-            ttnn.linear(spatial, self.pos_embed.proj_weight, bias=ttnn.squeeze(self.pos_embed.proj_bias, 0))
-            + self.pos_embed.pos_embed
-        )
-
+        spatial = self.pos_embed.forward(spatial)
         prompt = self.context_embedder(prompt)
 
         # prepend register tokens
