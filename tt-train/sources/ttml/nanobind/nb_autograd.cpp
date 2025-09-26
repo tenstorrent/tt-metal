@@ -19,6 +19,7 @@
 #include "autograd/tensor.hpp"
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
+#include "ops/binary_ops.hpp"
 
 namespace ttml::nanobind::autograd {
 using namespace ttml::autograd;
@@ -99,6 +100,42 @@ void py_module(nb::module_& m) {
             return ret;
         });
         py_tensor.def("dtype", [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).dtype(); });
+        py_tensor.def_static(
+            "__add__",
+            [](const autograd::TensorPtr& a, const autograd::AutocastTensor& b) { return ttml::ops::add(a, b); },
+            nb::arg("a"),
+            nb::arg("b"),
+            nb::is_operator());
+        py_tensor.def_static(
+            "__add__",
+            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::add(a, b); },
+            nb::arg("a"),
+            nb::arg("b"),
+            nb::is_operator());
+        py_tensor.def_static(
+            "__mul__",
+            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::mul(a, b); },
+            nb::arg("a"),
+            nb::arg("b"),
+            nb::is_operator());
+        py_tensor.def_static(
+            "__mul__",
+            [](const autograd::TensorPtr& a, float b) { return ttml::ops::mul(a, b); },
+            nb::arg("a"),
+            nb::arg("b"),
+            nb::is_operator());
+        py_tensor.def_static(
+            "__sub__",
+            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::sub(a, b); },
+            nb::arg("a"),
+            nb::arg("b"),
+            nb::is_operator());
+        py_tensor.def_static(
+            "__div__",
+            [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::div(a, b); },
+            nb::arg("a"),
+            nb::arg("b"),
+            nb::is_operator());
     }
 
     {

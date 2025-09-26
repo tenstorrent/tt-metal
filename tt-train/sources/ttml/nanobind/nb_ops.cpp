@@ -52,32 +52,32 @@ void py_module(nb::module_& m) {
     {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
         py_binary.def(
-            "__add__",
+            "add",
             [](const autograd::TensorPtr& a, const autograd::AutocastTensor& b) { return ttml::ops::add(a, b); },
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
-            "__add__",
+            "add",
             [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::add(a, b); },
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
-            "__mul__",
+            "mul",
             [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::mul(a, b); },
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
-            "__mul__",
+            "mul",
             [](const autograd::TensorPtr& a, float b) { return ttml::ops::mul(a, b); },
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
-            "__sub__",
+            "sub",
             [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::sub(a, b); },
             nb::arg("a"),
             nb::arg("b"));
         py_binary.def(
-            "__div__",
+            "div",
             [](const autograd::TensorPtr& a, const autograd::TensorPtr& b) { return ttml::ops::div(a, b); },
             nb::arg("a"),
             nb::arg("b"));
