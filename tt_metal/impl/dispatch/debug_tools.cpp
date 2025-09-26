@@ -34,10 +34,12 @@ namespace internal {
 using namespace tt::tt_metal;
 
 // force cast a reference to solid value. Works around binding packed references
+namespace {
 template <typename T>
-static T val(T v) {
+T val(T v) {
     return v;
 }
+}  // namespace
 
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
     std::ifstream host_dispatch_dump_file;

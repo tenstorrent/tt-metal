@@ -31,13 +31,13 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
-static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
+constexpr auto TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+constexpr auto TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
-static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
+constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 // Env variable to override the core grid configuration
-static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
+constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
