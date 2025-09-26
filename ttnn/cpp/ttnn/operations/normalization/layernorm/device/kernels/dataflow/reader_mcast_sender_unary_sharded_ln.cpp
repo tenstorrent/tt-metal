@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
 
 // split REDUCE across cores
 void kernel_main() {
+    DPRINT << "Sender started" << ENDL();
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
@@ -35,6 +37,8 @@ void kernel_main() {
     const uint32_t start_x = get_arg_val<uint32_t>(4);
     const uint32_t start_y = get_arg_val<uint32_t>(5);
 
+    DPRINT << "Sender got inputs" << ENDL();
+
     tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
     tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
 
@@ -47,8 +51,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
-    const DataFormat data_format = get_dataformat(cb_ex_partial2);
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
 
     uint64_t remote_noc_addrs[num_blocks];
 
@@ -97,6 +100,7 @@ void kernel_main() {
         // global reduce
         // wait for local data ready
         cb_wait_front(cb_partial, block_h * num_tiles_scaler);
+
         // inc semaphore of other cores, tell other all-to-all workers to start
         if constexpr (num_blocks > 1) {
             *reduce_sender_semaphore_addr_ptr = VALID;
