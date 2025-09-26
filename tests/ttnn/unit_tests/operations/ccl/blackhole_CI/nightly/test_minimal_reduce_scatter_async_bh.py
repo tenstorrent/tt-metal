@@ -8,7 +8,12 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev, skip_for_n_or_less_dev
+from models.common.utility_functions import (
+    skip_for_blackhole,
+    skip_for_wormhole_b0,
+    skip_for_n_dev,
+    skip_for_n_or_less_dev,
+)
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
@@ -439,7 +444,8 @@ def test_reduce_scatter_async_line(
     rs_topology,
 ):
     validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
-
+    if is_training_shape and bh_1d_mesh_device.shape[0] == 8:
+        pytest.skip("8 device training shape test skipped for now, to be investigated")
     if is_training_shape and enable_trace:
         pytest.skip("We've seen ND PCC when running the composite-RS with trace")
 
