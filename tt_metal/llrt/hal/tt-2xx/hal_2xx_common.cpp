@@ -21,12 +21,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
-                case HalProcessorClassType::DM:
-                    switch (params.processor_id) {
-                        case 0: defines.push_back("COMPILE_FOR_BRISC"); break;
-                        case 1: defines.push_back("COMPILE_FOR_NCRISC"); break;
-                    }
-                    break;
+                case HalProcessorClassType::DM: break;
                 case HalProcessorClassType::COMPUTE: {
                     switch (params.processor_id) {
                         case 0:

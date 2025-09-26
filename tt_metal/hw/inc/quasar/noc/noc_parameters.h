@@ -2,7 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_tensix_noc_overlay_reg.h>
+#include "tt_tensix_noc_overlay_reg.h"
+
+#ifndef _NOC_PARAMETERS_H_
+#define _NOC_PARAMETERS_H_
+
+// TODO: review these values
+#define VIRTUAL_TENSIX_START_X 1
+#define VIRTUAL_TENSIX_START_Y 2
+#define COORDINATE_VIRTUALIZATION_ENABLED 1
 
 #ifndef NOC_X_SIZE
 #define NOC_X_SIZE 4
@@ -282,7 +290,7 @@
 #define NOC_FLIT_TYPE_WIDTH 3
 
 // addr fields
-#define NOC_ADDR_LOCAL_BITS 64
+#define NOC_ADDR_LOCAL_BITS 36 /*64*/
 #define NOC_ADDR_NODE_ID_BITS 6
 
 // NOC CMD fields
@@ -306,6 +314,7 @@
 #define NOC_CMD_STATIC_VC(vc) (((uint32_t)(vc)) << 14)
 #define NOC_RESP_STATIC_VC(vc) (((uint32_t)(vc)) << 20)
 #define NOC_CMD_PORT_REQ_MASK(m) (((uint32_t)(m)) << 26)
+#define NOC_CMD_VC_STATIC (0x1 << 15)  // TODO remove
 
 // CMD_HI
 #define NOC_CMD_PKT_TAG_ID(id) (((uint32_t)(id)) << 0)
@@ -434,3 +443,37 @@
 #define NOC_MULTICAST_COORD(x_start, y_start, x_end, y_end)                                                            \
     ((((uint32_t)(y_start)) << (3 * NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x_start)) << (2 * NOC_ADDR_NODE_ID_BITS)) | \
      (((uint32_t)(y_end)) << (1 * NOC_ADDR_NODE_ID_BITS)) | ((uint32_t)(x_end)))
+
+#define NOC_COORD_REG_OFFSET 0  // offset (from LSB) in register holding x-y coordinate
+
+#define NOC_XY_ENCODING(x, y) ((((uint32_t)(y)) << (NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x))))
+
+// Base address pulled from tt::umd::Cluster::get_pcie_base_addr_from_device
+#define NOC_XY_PCIE_ENCODING(x, y) \
+    ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
+
+#define NOC_LOCAL_ADDR(addr) (addr)
+
+// TODO review these alignment restrictions
+// Alignment restrictions
+#define NOC_L1_READ_ALIGNMENT_BYTES 16
+#define NOC_L1_WRITE_ALIGNMENT_BYTES 16
+#define NOC_PCIE_READ_ALIGNMENT_BYTES 64
+#define NOC_PCIE_WRITE_ALIGNMENT_BYTES 16
+#define NOC_DRAM_READ_ALIGNMENT_BYTES 64
+#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 16
+
+#define L1_ALIGNMENT                                                                              \
+    (static_cast<uint32_t>(                                                                       \
+        NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES \
+                                                                    : NOC_L1_WRITE_ALIGNMENT_BYTES))
+#define PCIE_ALIGNMENT                                                                                  \
+    (static_cast<uint32_t>(                                                                             \
+        NOC_PCIE_READ_ALIGNMENT_BYTES >= NOC_PCIE_WRITE_ALIGNMENT_BYTES ? NOC_PCIE_READ_ALIGNMENT_BYTES \
+                                                                        : NOC_PCIE_WRITE_ALIGNMENT_BYTES))
+#define DRAM_ALIGNMENT                                                                                  \
+    (static_cast<uint32_t>(                                                                             \
+        NOC_DRAM_READ_ALIGNMENT_BYTES >= NOC_DRAM_WRITE_ALIGNMENT_BYTES ? NOC_DRAM_READ_ALIGNMENT_BYTES \
+                                                                        : NOC_DRAM_WRITE_ALIGNMENT_BYTES))
+
+#endif

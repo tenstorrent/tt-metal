@@ -263,9 +263,9 @@ void Hal::initialize_qa() {
         return true;  // used to program start addr for eth FW TODO: add correct value
     };
 
-    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ADDR(x, y, 0); };
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
-        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+        return NOC_MULTICAST_ADDR(x_start, y_start, x_end, y_end, 0);
     };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
@@ -299,8 +299,8 @@ void Hal::initialize_qa() {
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
-    this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
-    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
+    this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value
+    this->noc_coord_reg_offset_ = 0;                                         // TODO: add correct value
     this->noc_overlay_start_addr_ = 0;                                       // TODO: add correct value
     this->noc_stream_reg_space_size_ = 0;                                    // TODO: add correct value
     this->noc_stream_remote_dest_buf_size_reg_index_ = 0;                    // TODO: add correct value
@@ -323,21 +323,9 @@ void Hal::initialize_qa() {
     this->nan_ = NAN_QA;
     this->inf_ = INF_QA;
 
-    this->noc_x_id_translate_table_ = {
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_3),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_4),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_5)};
+    this->noc_x_id_translate_table_ = {};
 
-    this->noc_y_id_translate_table_ = {
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_0),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
+    this->noc_y_id_translate_table_ = {};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
 }

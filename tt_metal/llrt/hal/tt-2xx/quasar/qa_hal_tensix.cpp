@@ -94,26 +94,26 @@ HalCoreInfoType create_tensix_mem_map() {
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
         },
         // COMPUTE
-        {
-            // TRISC0
-            {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
-             .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
-             .fw_launch_addr = RISCV_DEBUG_REG_TRISC0_RESET_PC,
-             .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-            // TRISC1
-            {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
-             .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
-             .fw_launch_addr = RISCV_DEBUG_REG_TRISC1_RESET_PC,
-             .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-            // TRISC2
-            {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
-             .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
-             .fw_launch_addr = RISCV_DEBUG_REG_TRISC2_RESET_PC,
-             .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-        },
+        // {
+        //     // TRISC0
+        //     {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
+        //      .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
+        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC0_RESET_PC,
+        //      .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
+        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        //     // TRISC1
+        //     {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
+        //      .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
+        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC1_RESET_PC,
+        //      .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
+        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        //     // TRISC2
+        //     {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
+        //      .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC2_RESET_PC,
+        //      .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
+        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        // },
     };
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
