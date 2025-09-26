@@ -8,14 +8,6 @@ import ttnn
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 def interleaved_to_sharded(x):
     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -123,8 +115,6 @@ class TtYOLOv9cConv2D:
         self.weight = weight
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtYOLOv9cConv2D Start")
         if self.is_detect:
             input_height = int(math.sqrt(x.shape[2]))
             input_width = int(math.sqrt(x.shape[2]))
@@ -190,8 +180,6 @@ class TtYOLOv9cConv2D:
                 dtype=self.activation_dtype,
             )
 
-        if use_signpost:
-            signpost(header="TtYOLOv9cConv2D End")
         return x
 
 
@@ -213,15 +201,11 @@ class TtnnRepconv:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnRepconv Start")
         conv1_out = self.conv1(x)
         conv2_out = self.conv2(x)
         x = ttnn.silu(conv1_out + conv2_out)
         ttnn.deallocate(conv1_out)
         ttnn.deallocate(conv2_out)
-        if use_signpost:
-            signpost(header="TtnnRepconv End")
 
         return x
 
@@ -240,13 +224,9 @@ class TtnnRepBottleneck:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnRepBottleneck Start")
         input = x
         x = self.cv1(x)
         x = self.cv2(x)
-        if use_signpost:
-            signpost(header="TtnnRepBottleneck End")
         return input + x
 
 
@@ -276,8 +256,6 @@ class TtnnRepcsp:
         self.m = TtnnRepBottleneck(device, conv_parameter.m[0], parameters, f"{conv_pt}.m.0")
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnRepcsp Start")
         cv1_out = self.cv1(x)
         m_out = self.m(cv1_out)
         ttnn.deallocate(cv1_out)
@@ -299,9 +277,6 @@ class TtnnRepcsp:
 
         x = self.cv3(concat_out)
         ttnn.deallocate(concat_out)
-
-        if use_signpost:
-            signpost(header="TtnnRepcsp End")
 
         return x
 
@@ -364,8 +339,6 @@ class TtnnRepncspelan4:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnRepncspelan4 Start")
         y1 = self.cv1_a(x)
         y2 = self.cv1_b(x)
 
@@ -403,8 +376,6 @@ class TtnnRepncspelan4:
         ttnn.deallocate(cv3_out)
         ttnn.deallocate(cv5_out)
         x = self.cv4(x)
-        if use_signpost:
-            signpost(header="TtnnRepncspelan4 End")
 
         return x
 
@@ -439,8 +410,6 @@ class TtnnADown:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnADown Start")
         input_h = int(math.sqrt(x.shape[-2]))
         input_w = int(math.sqrt(x.shape[-2]))
         output_h = input_h - 1
@@ -478,8 +447,6 @@ class TtnnADown:
 
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        if use_signpost:
-            signpost(header="TtnnADown End")
 
         return x
 
@@ -505,8 +472,6 @@ class TtnnSPPELAN:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnSPPELAN Start")
         x = self.cv1(x)
         x1 = x
         if x.is_sharded():
@@ -560,8 +525,6 @@ class TtnnSPPELAN:
         ttnn.deallocate(m3)
 
         x = self.cv5(y)
-        if use_signpost:
-            signpost(header="TtnnSPPELAN End")
 
         return x
 
@@ -742,8 +705,6 @@ class TtnnDetect:
         self.strides = parameters["strides"]
 
     def __call__(self, y):
-        if use_signpost:
-            signpost(header="TtnnDetect Start")
         y1, y2, y3 = y
         x1 = self.cv2_0_0(y1)
         x1 = self.cv2_0_1(x1)
@@ -829,9 +790,6 @@ class TtnnDetect:
         ttnn.deallocate(z)
         ttnn.deallocate(yb)
 
-        if use_signpost:
-            signpost(header="TtnnDetect End")
-
         return [out, [y1, y2, y3]]
 
 
@@ -877,15 +835,10 @@ class TtnnProto:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnProto Start")
         x = self.cv1(x)
         x = self.upsample(x)
         x = self.cv2(x)
         x = self.cv3(x)
-
-        if use_signpost:
-            signpost(header="TtnnProto End")
 
         return x
 
@@ -926,8 +879,6 @@ class TtnnSegment:
         self.detect = TtnnDetect(device, conv_parameter, parameters, f"{conv_pt}")
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtnnSegment Start")
         p = self.proto(x[0])
         bs = p.shape[0]
         mc_blocks = []
@@ -942,8 +893,6 @@ class TtnnSegment:
         mc = concat(2, False, mc_blocks[0], mc_blocks[1], mc_blocks[2])
 
         x = self.detect(x)
-        if use_signpost:
-            signpost(header="TtnnSegment End")
         return [concat(1, False, x[0], mc), [x[1], mc, p]]
 
 
