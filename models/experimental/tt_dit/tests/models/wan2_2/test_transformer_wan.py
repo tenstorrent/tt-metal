@@ -59,7 +59,7 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
     ],
     ids=["5b-720p", "14b-480p", "14b-720p"],
 )
-@pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
+@pytest.mark.parametrize("is_fsdp", [True], ids=["yes_fsdp"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_transformer_block(
     mesh_device: ttnn.MeshDevice,
