@@ -122,7 +122,7 @@ jobs:
             fi
           done
   ttnn-pytests:
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
     name: "TTNN Pytests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
