@@ -9,12 +9,40 @@ graph_templates {
       name: "node2"
       node_ref { node_descriptor: "N300_LB" }
     }
+    children {
+      name: "node3"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node4"
+      node_ref { node_descriptor: "N300_LB" }
+    }
     internal_connections {
       key: "QSFP_DD"
       value {
         connections {
-          port_a { path: ["node1"] tray_id: 2 port_id: 1 }
-          port_b { path: ["node2"] tray_id: 2 port_id: 1 }
+          port_a { path: ["node1"] tray_id: 3 port_id: 1}
+          port_b { path: ["node2"] tray_id: 3 port_id: 1}
+        }
+        connections {
+          port_a { path: ["node1"] tray_id: 1 port_id: 2}
+          port_b { path: ["node4"] tray_id: 1 port_id: 2}
+        }
+        connections {
+          port_a { path: ["node1"] tray_id: 4 port_id: 2}
+          port_b { path: ["node3"] tray_id: 4 port_id: 2}
+        }
+        connections {
+          port_a { path: ["node2"] tray_id: 2 port_id: 1 }
+          port_b { path: ["node3"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["node2"] tray_id: 4 port_id: 2 }
+          port_b { path: ["node4"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["node3"] tray_id: 3 port_id: 1 }
+          port_b { path: ["node4"] tray_id: 3 port_id: 1 }
         }
       }
     }
@@ -31,5 +59,13 @@ root_instance {
   child_mappings {
     key: "node2"
     value { host_id: 1 }
+  }
+  child_mappings {
+    key: "node3"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "node4"
+    value { host_id: 3 }
   }
 }
