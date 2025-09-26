@@ -80,6 +80,7 @@ void kernel_main() {
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
 #ifdef ACTIVATION_REUSE
         uint32_t l1_write_addr_act = cb_start_addr;
+        get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
 #endif
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
