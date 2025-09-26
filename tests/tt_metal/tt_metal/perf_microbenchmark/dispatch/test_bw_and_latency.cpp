@@ -26,7 +26,7 @@
 #include <vector>
 #include <tt-metalium/distributed.hpp>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
         auto& cq = mesh_device->mesh_command_queue();
         auto device_id = mesh_device->get_devices()[0]->id();
 
-        auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();
 
         std::string src_mem;

@@ -34,7 +34,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -888,7 +888,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
         for (auto& program : programs) {
-            auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+            auto mesh_workload = tt_metal::distributed::MeshWorkload();
             tt_metal::distributed::AddProgramToMeshWorkload(
                 mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
             mesh_workloads.push_back(std::move(mesh_workload));

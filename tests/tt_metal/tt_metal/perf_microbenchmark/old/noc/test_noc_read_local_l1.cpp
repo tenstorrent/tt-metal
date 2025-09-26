@@ -23,7 +23,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
                     {activations_addr, (uint32_t)phy_core.x, (uint32_t)phy_core.y, num_blocks, cb_n});
             }
         }
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
