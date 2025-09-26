@@ -34,11 +34,16 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
-autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, bool fast_and_approximate) {
     auto out = autograd::create_tensor();
-    out->set_value(ttnn::gelu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        static const std::string approx_mode = "none";
+    
+    // Apply GELU with specified approximation mode
+    out->set_value(ttnn::gelu(tensor->get_value(), fast_and_approximate));
+    
+    autograd::GradFunction grad = [tensor, out, fast_and_approximate]() {
+        // CRITICAL: Use the same approximation for backward as forward
+        // This ensures correct automatic differentiation
+        const std::string approx_mode = fast_and_approximate ? "tanh" : "none";
         auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
         tensor->add_grad(dL_dt);
     };
@@ -46,6 +51,13 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     std::vector<autograd::NodeId> links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
     return out;
+}
+
+// Default version uses fast approximation (matching ttnn::gelu default)
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
+    // ttnn::gelu defaults to fast_and_approximate=true based on the template instantiation
+    // in unary.cpp: ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>
+    return gelu(tensor, true);
 }
 
 autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw) {
