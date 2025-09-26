@@ -1,12 +1,14 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    prepare_linear_params,
-)
 from models.experimental.stable_diffusion_xl_refiner.tt.components.group_normalization_layer import (
     GroupNormalizationLayer,
 )
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_transformerblock import TtBasicTransformerBlock
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_transformer2dmodel_config
+from .components.weight_loader import WeightLoader
 
 
 class TtTransformer2DModel:
@@ -35,28 +37,21 @@ class TtTransformer2DModel:
         # 3. transformer_blocks (list of 4 blocks)
         # 5. output_projection
 
-        self.norm_weights = state_dict[f"{self.module_path}.norm.weight"]
-        self.norm_bias = state_dict[f"{self.module_path}.norm.bias"]
+        # Load weights
+        self.weight_loader = WeightLoader(self, state_dict, self.module_path)
 
         self.norm_layer = GroupNormalizationLayer(
             self.device,
-            self.norm_weights,
-            self.norm_bias,
+            self.weight_loader.norm_weight,
+            self.weight_loader.norm_bias,
             self.block_config.norm,
         )
 
-        weights = state_dict[f"{self.module_path}.proj_in.weight"].unsqueeze(0).unsqueeze(0)
-        bias = state_dict[f"{self.module_path}.proj_in.bias"]
-        self.tt_weights_in, self.tt_bias_in = prepare_linear_params(self.device, weights, bias, ttnn.bfloat16)
-
-        weights = state_dict[f"{self.module_path}.proj_out.weight"].unsqueeze(0).unsqueeze(0)
-        bias = state_dict[f"{self.module_path}.proj_out.bias"]
-        self.tt_weights_out, self.tt_bias_out = prepare_linear_params(self.device, weights, bias, ttnn.bfloat16)
+        self.weight_loader.prepare_linear_params(ttnn.bfloat16)
 
         self.transformer_blocks = []
         for i in range(self.block_config.num_transformer_blocks):
             transformer_block_module_path = f"{self.module_path}.transformer_blocks.{i}"
-            # Maybe refactor
 
             self.transformer_blocks.append(
                 TtBasicTransformerBlock(
@@ -71,25 +66,28 @@ class TtTransformer2DModel:
         hidden_states = input_tensor
 
         # GroupNorm
-        print(f"Input shape to Transformer2DModel: B, C, H, W = {B, C, H, W}")
-        print(f"Input tensor shape to GroupNorm: {hidden_states.shape}")
         hidden_states = self.norm_layer.apply(hidden_states, B, C, H, W)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         # Input projection
         hidden_states = ttnn.linear(
-            hidden_states, self.tt_weights_in, bias=self.tt_bias_in, compute_kernel_config=self.compute_config
+            hidden_states,
+            self.weight_loader.weights_in,
+            bias=self.weight_loader.bias_in,
+            compute_kernel_config=self.compute_config,
         )
-        print(f"Input tensor shape to input projection: {hidden_states.shape}")
+
         # Transformer blocks
         for transformer_block in self.transformer_blocks:
             hidden_states = transformer_block.forward(hidden_states, encoder_hidden_states)
 
         # Output projection
         hidden_states = ttnn.linear(
-            hidden_states, self.tt_weights_out, bias=self.tt_bias_out, compute_kernel_config=self.compute_config
+            hidden_states,
+            self.weight_loader.weights_out,
+            bias=self.weight_loader.bias_out,
+            compute_kernel_config=self.compute_config,
         )
-        print(f"Input tensor shape to output projection: {hidden_states.shape}")
 
         hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
 

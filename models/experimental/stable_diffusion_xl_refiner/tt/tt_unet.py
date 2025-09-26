@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_downblock2d import TtDownBlock2D
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
@@ -6,14 +10,13 @@ from models.experimental.stable_diffusion_xl_refiner.tt.tt_upblock2d import TtUp
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_crossattnmidblock2d import TtCrossAttnMidBlock2D
 from models.experimental.stable_diffusion_xl_base.tt.tt_timesteps import TtTimesteps
 from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
+from models.experimental.stable_diffusion_xl_refiner.tt.components.weight_loader import WeightLoader
 
 from models.experimental.stable_diffusion_xl_refiner.tt.components.convolution_layer import (
     ConvolutionLayer,
-    make_conv_config,
 )
 from models.experimental.stable_diffusion_xl_refiner.tt.components.group_normalization_layer import (
     GroupNormalizationLayer,
-    make_norm_config,
 )
 
 
@@ -26,6 +29,7 @@ class TtUNet2DConditionModel:
         super().__init__()
 
         self.device = device
+        self.weight_loader = WeightLoader(self, state_dict)
 
         self.time_proj = TtTimesteps(device, 384, True, 0, 1)
         self.add_time_proj = TtTimesteps(device, 256, True, 0, 1)
@@ -104,44 +108,27 @@ class TtUNet2DConditionModel:
             )
         )
 
-        conv_weights_in = state_dict["conv_in.weight"]
-        conv_bias_in = state_dict["conv_in.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
-        conv_in_config = make_conv_config()
-
         self.conv_in = ConvolutionLayer(
             self.device,
-            conv_weights_in,
-            conv_bias_in,
-            conv_in_config,
+            self.weight_loader.conv_in_weight,
+            self.weight_loader.conv_in_bias,
         )
-
-        norm_weights_out = state_dict["conv_norm_out.weight"]
-        norm_bias_out = state_dict["conv_norm_out.bias"]
-
-        norm_config = make_norm_config()
 
         self.norm = GroupNormalizationLayer(
             self.device,
-            norm_weights_out,
-            norm_bias_out,
-            norm_config,
+            self.weight_loader.conv_norm_out_weight,
+            self.weight_loader.conv_norm_out_bias,
         )
-
-        conv_weights_out = state_dict["conv_out.weight"]
-        conv_bias_out = state_dict["conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
-        conv_out_config = make_conv_config()
 
         self.conv_out = ConvolutionLayer(
             self.device,
-            conv_weights_out,
-            conv_bias_out,
-            conv_out_config,
+            self.weight_loader.conv_out_weight,
+            self.weight_loader.conv_out_bias,
         )
 
     def forward(self, hidden_states, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
         B, C, H, W = input_shape
+
         # 1. time embedding
         temb = self.time_proj.forward(timestep)
         temb = self.time_embedding.forward(temb)
@@ -160,35 +147,23 @@ class TtUNet2DConditionModel:
         hidden_states, [C, H, W] = self.conv_in.apply(hidden_states, B, C, H, W)
 
         # 3. down blocks
-        down_block_res_samples = [hidden_states]  # Use list instead of tuple
+        down_block_res_samples = (hidden_states,)
         for i, down_block in enumerate(self.down_blocks):
-            print("down_block:", i, "input shape:", hidden_states.shape, "[B, C, H, W]:", [B, C, H, W])
             if i == 0 or i == 3:
                 hidden_states, [C, H, W], res_samples = down_block.forward(hidden_states, [B, C, H, W], temb)
             else:
                 hidden_states, [C, H, W], res_samples = down_block.forward(
                     hidden_states, [B, C, H, W], temb, encoder_hidden_states
                 )
-            down_block_res_samples.extend(res_samples)  # Use extend instead of tuple concatenation
-            print("res samples:", res_samples)
-            print("down_block_res_samples length:", len(down_block_res_samples))
+            down_block_res_samples += res_samples
 
         # 4. mid block
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W], temb, encoder_hidden_states)
 
         # 5. up blocks
-        print("Down block res samples length before up blocks:", len(down_block_res_samples))
-        print("Down_block_res_samples shape:", [x.shape for x in down_block_res_samples])
         for i, up_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-len(up_block.resnets) :]
-            print("res_samples:", res_samples)
-
-            # Check allocation status of each tensor before up block
-            for j, tensor in enumerate(res_samples):
-                print(f"res_samples[{j}] is allocated: {tensor.is_allocated()}")
-
             down_block_res_samples = down_block_res_samples[: -len(up_block.resnets)]
-            print("down_block_res_samples length after trim:", len(down_block_res_samples))
             if i == 0 or i == 3:
                 hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W], res_samples, temb)
             else:

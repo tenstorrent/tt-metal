@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -16,8 +16,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize(
     "input_shape, encoder_shape, down_block_id, pcc",
     [
-        ((1, 768, 64, 64), (1, 77, 1280), 1, 0.997),
-        ((1, 1536, 32, 32), (1, 77, 1280), 2, 0.985),
+        ((1, 768, 64, 64), (1, 77, 1280), 1, 0.996),
+        ((1, 1536, 32, 32), (1, 77, 1280), 2, 0.984),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

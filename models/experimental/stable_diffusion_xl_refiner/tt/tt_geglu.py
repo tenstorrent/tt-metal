@@ -1,7 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    prepare_linear_params,
-)
+from .components.weight_loader import WeightLoader
 
 
 class TtGEGLU:
@@ -16,31 +18,22 @@ class TtGEGLU:
         self.device = device
         self.module_path = module_path
 
-        weights = state_dict[f"{self.module_path}.proj.weight"]
-        bias = state_dict[f"{self.module_path}.proj.bias"]
-        w1, w2 = weights.chunk(2, dim=0)
-        b1, b2 = bias.chunk(2, dim=0)
+        self.weight_loader = WeightLoader(self, state_dict, module_path)
 
-        self.w1 = w1.unsqueeze(0).unsqueeze(0)
-        self.w2 = w2.unsqueeze(0).unsqueeze(0)
-        self.b1 = b1
-        self.b2 = b2
-
-        # TODO: check dtype
-        self.value_weights, self.value_bias = prepare_linear_params(device, w1, b1, ttnn.bfloat16)
-        self.gate_weights, self.gate_bias = prepare_linear_params(device, w2, b2, ttnn.bfloat16)
+        # Prepare linear parameters for both value and gate projections
+        self.weight_loader.prepare_linear_params(ttnn.bfloat16)
 
     def forward(self, input_tensor):
         hidden_states = ttnn.linear(
             input_tensor,
-            self.value_weights,
-            bias=self.value_bias,
+            self.weight_loader.value_weights,
+            bias=self.weight_loader.value_bias,
         )
 
         gate = ttnn.linear(
             input_tensor,
-            self.gate_weights,
-            bias=self.gate_bias,
+            self.weight_loader.gate_weights,
+            bias=self.weight_loader.gate_bias,
         )
 
         gate = ttnn.gelu(gate)

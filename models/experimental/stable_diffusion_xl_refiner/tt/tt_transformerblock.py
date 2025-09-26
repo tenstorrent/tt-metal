@@ -1,8 +1,13 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_refiner.tt.components.tt_components import TransformerBlockLayerNorm
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_feedforward import TtFeedForward
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_transformerblock_config
+from .components.weight_loader import WeightLoader
 
 
 class TtBasicTransformerBlock:
@@ -29,12 +34,14 @@ class TtBasicTransformerBlock:
         # 3. layer_norm_2
         # 4. attention_2
         # 5. layer_norm_3
-        # 6. feedforward
+        # 6. feed_forward
+
+        self.weight_loader = WeightLoader(self, state_dict, self.module_path)
 
         self.layer_norm_1 = TransformerBlockLayerNorm(
             self.device,
-            state_dict[f"{self.module_path}.norm1.weight"],
-            state_dict[f"{self.module_path}.norm1.bias"],
+            self.weight_loader.norm_weights_1,
+            self.weight_loader.norm_bias_1,
         )
 
         self.attention_1 = TtAttention(
@@ -46,8 +53,8 @@ class TtBasicTransformerBlock:
 
         self.layer_norm_2 = TransformerBlockLayerNorm(
             self.device,
-            state_dict[f"{self.module_path}.norm2.weight"],
-            state_dict[f"{self.module_path}.norm2.bias"],
+            self.weight_loader.norm_weights_2,
+            self.weight_loader.norm_bias_2,
         )
 
         self.attention_2 = TtAttention(
@@ -59,8 +66,8 @@ class TtBasicTransformerBlock:
 
         self.layer_norm_3 = TransformerBlockLayerNorm(
             self.device,
-            state_dict[f"{self.module_path}.norm3.weight"],
-            state_dict[f"{self.module_path}.norm3.bias"],
+            self.weight_loader.norm_weights_3,
+            self.weight_loader.norm_bias_3,
         )
 
         self.feedforward = TtFeedForward(
@@ -70,10 +77,6 @@ class TtBasicTransformerBlock:
         )
 
     def forward(self, input_tensor, encoder_tensor):
-        print("Entering TtBasicTransformerBlock forward")
-        print(f"Input tensor shape: {input_tensor.shape}")
-        print(f"Encoder tensor shape: {encoder_tensor.shape}")
-        print(self.module_path)
         hidden_states = input_tensor
 
         # Self-attention layer

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from models.experimental.stable_diffusion_xl_refiner.tt.components.group_normalization_layer import (
@@ -88,7 +92,7 @@ resnet_configs = {
         norm1_out_blocks=3,
         norm1_grid=(4, 4),
         conv1_split_in=2,
-        norm2_out_blocks=3,  # Will be sharded so norm2_out_blocks and norm2_grid don't matter but can be used if we want to revert to DRAM group norm
+        norm2_out_blocks=3,
         norm2_grid=(4, 4),
         use_conv_shortcut=True,
     ),
@@ -107,8 +111,6 @@ def get_resnet_config(module_path: str) -> ResnetBlockConfig:
 
 
 ########## Upsample block configurations ##########
-
-
 @dataclass
 class UpsampleConfig:
     conv: ConvConfig = None
@@ -136,8 +138,6 @@ def get_upsample_config(module_path: str) -> UpsampleConfig:
 
 
 ########## Downsample block configurations ##########
-
-
 @dataclass
 class DownsampleConfig:
     conv: ConvConfig = None
@@ -165,8 +165,6 @@ def get_downsample_config(module_path: str) -> DownsampleConfig:
 
 
 ########## UpBlock configurations ##########
-
-
 @dataclass
 class UpBlockConfig:
     num_resnets: int = 3
@@ -180,13 +178,11 @@ def make_upblock_config(
     has_upsample: bool = True,
     block_id: int = None,
 ) -> UpBlockConfig:
-    # Create resnet configs for all resnets in this block
     resnet_config_dict = {}
     for i in range(num_resnets):
         if block_id is not None:
-            # Look up in the global resnet_configs
             existing_path = f"up_blocks.{block_id}.resnets.{i}"
-            existing_config = resnet_configs.get(existing_path)  # Use global resnet_configs
+            existing_config = resnet_configs.get(existing_path)
             if existing_config is not None:
                 resnet_config_dict[i] = existing_config
 
@@ -221,8 +217,6 @@ def get_upblock_config(module_path: str) -> UpBlockConfig:
 
 
 ############ DownBlock configurations ##########
-
-
 @dataclass
 class DownBlockConfig:
     num_resnets: int = 2
@@ -242,7 +236,7 @@ def make_downblock_config(
         if block_id is not None:
             # Look up in the global resnet_configs
             existing_path = f"down_blocks.{block_id}.resnets.{i}"
-            existing_config = resnet_configs.get(existing_path)  # Use global resnet_configs
+            existing_config = resnet_configs.get(existing_path)
             if existing_config is not None:
                 resnet_config_dict[i] = existing_config
 
@@ -277,8 +271,6 @@ def get_downblock_config(module_path: str) -> DownBlockConfig:
 
 
 ########### TransformerBlock configurations ##########
-
-
 @dataclass
 class TransformerBlockConfig:
     num_attn_heads: int = 8
@@ -357,8 +349,6 @@ def get_transformerblock_config(module_path: str) -> TransformerBlockConfig:
 
 
 ########## TransformerModel configurations ##########
-
-
 @dataclass
 class Transformer2DModelConfig:
     num_transformer_blocks: int = 4
@@ -377,9 +367,6 @@ def make_transformer2dmodel_config(
 
 
 # Transformer2DModel configurations for SDXL Refiner
-
-
 def get_transformer2dmodel_config(module_path: str) -> Transformer2DModelConfig:
     config = make_transformer2dmodel_config()
-    # config = transformer2dmodel_configs.get(module_path)
     return config

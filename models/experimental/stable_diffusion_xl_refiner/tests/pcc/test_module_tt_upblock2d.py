@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import gc
 from loguru import logger
 import torch
@@ -18,7 +22,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             (1, 1536),
             ((1, 1536, 16, 16), (1, 1536, 16, 16), (1, 1536, 16, 16)),
             0,
-            0.994,
+            0.996,
         ),
         (
             (1, 768, 128, 128),
@@ -79,7 +83,6 @@ def test_upblock2d_refiner(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     B, C, H, W = list(ttnn_input_tensor.shape)
-    print(f"B, C, H, W: {B, C, H, W}")
 
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
@@ -102,7 +105,6 @@ def test_upblock2d_refiner(
 
         ttnn_residual_tensors = ttnn_residual_tensors + (ttnn_residual,)
 
-    print(f"B, C, H, W before upblock: {B, C, H, W}")
     ttnn_output_tensor, output_shape = tt_upblock.forward(
         ttnn_input_tensor, [B, C, H, W], ttnn_residual_tensors, ttnn_temb_tensor
     )
