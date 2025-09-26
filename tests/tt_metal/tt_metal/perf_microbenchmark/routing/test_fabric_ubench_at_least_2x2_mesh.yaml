@@ -61,7 +61,7 @@ Tests:
         iterations: 3
 
   # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we split them up and run some for extra iterations
-  - name: "FullRingMcast_links1_unicast_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -76,9 +76,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingMcast_links1_unicast_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -95,7 +95,7 @@ Tests:
       - type: full_ring
         iterations: 30
 
-  - name: "FullRingMcast_links1_fused_atomic_inc_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -110,9 +110,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingMcast_links1_fused_atomic_inc_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -127,9 +127,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingMcast_links1_unicast_scatter_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -146,7 +146,7 @@ Tests:
       - type: full_ring
         iterations: 30
 
-  - name: "FullRingMcast_links1_unicast_scatter_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -161,9 +161,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingMcast_links2_unicast_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -180,7 +180,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links2_unicast_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -197,7 +197,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links2_fused_atomic_inc_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -214,7 +214,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links2_fused_atomic_inc_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -231,7 +231,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links2_unicast_scatter_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -248,7 +248,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links2_unicast_scatter_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -265,7 +265,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links3_unicast_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -282,7 +282,7 @@ Tests:
       - type: full_ring
         iterations: 30
 
-  - name: "FullRingMcast_links3_unicast_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -299,7 +299,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links3_fused_atomic_inc_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -316,7 +316,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links3_fused_atomic_inc_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -333,7 +333,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links3_unicast_scatter_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -348,9 +348,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingMcast_links3_unicast_scatter_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -367,7 +367,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links4_unicast_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -384,7 +384,7 @@ Tests:
       - type: full_ring
         iterations: 30
 
-  - name: "FullRingMcast_links4_unicast_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -401,7 +401,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links4_fused_atomic_inc_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -418,7 +418,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links4_fused_atomic_inc_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -435,7 +435,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingMcast_links4_unicast_scatter_write_2048"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -450,9 +450,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingMcast_links4_unicast_scatter_write_4096"
+  - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -469,7 +469,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links1_unicast_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -484,9 +484,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingUcast_links1_unicast_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -503,7 +503,7 @@ Tests:
       - type: full_ring
         iterations: 30
 
-  - name: "FullRingUcast_links1_fused_atomic_inc_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -520,7 +520,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links1_fused_atomic_inc_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -537,7 +537,7 @@ Tests:
       - type: full_ring
         iterations: 30
 
-  - name: "FullRingUcast_links1_unicast_scatter_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -554,7 +554,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links1_unicast_scatter_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -569,9 +569,9 @@ Tests:
 
     patterns:
       - type: full_ring
-        iterations: 10
+        iterations: 30
 
-  - name: "FullRingUcast_links2_unicast_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -588,7 +588,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links2_unicast_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -605,7 +605,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links2_fused_atomic_inc_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -622,7 +622,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links2_fused_atomic_inc_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -639,7 +639,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links2_unicast_scatter_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -656,7 +656,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links2_unicast_scatter_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -673,7 +673,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links3_unicast_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -690,7 +690,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links3_unicast_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -707,7 +707,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links3_fused_atomic_inc_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -724,7 +724,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links3_fused_atomic_inc_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -741,7 +741,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links3_unicast_scatter_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -758,7 +758,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links3_unicast_scatter_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -775,7 +775,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links4_unicast_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -792,7 +792,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links4_unicast_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -809,7 +809,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links4_fused_atomic_inc_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -826,7 +826,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links4_fused_atomic_inc_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -843,7 +843,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links4_unicast_scatter_write_2048"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
@@ -860,7 +860,7 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUcast_links4_unicast_scatter_write_4096"
+  - name: "FullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
