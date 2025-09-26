@@ -52,9 +52,8 @@ uint32_t get_num_cores_channels_from_sharded_tensor(const Tensor& tensor) {
     }
     return num_cores_channels;
 }
-namespace {
-
-std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_slice_runtime_args_rm_sharded_output(
+static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
+get_padded_slice_runtime_args_rm_sharded_output(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
@@ -202,9 +201,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
 
     return ret_val;
 }
-}  // namespace
 
-operation::ProgramWithCallbacks padded_slice_rm_multi_core(
+static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
@@ -356,7 +354,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-std::vector<std::tuple<std::vector<uint32_t>, std::vector<uint32_t>, std::vector<uint32_t>>>
+static std::vector<std::tuple<std::vector<uint32_t>, std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_tile_sharded_output(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -629,7 +627,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     return ret_val;
 }
 
-operation::ProgramWithCallbacks padded_slice_tile_multi_core(
+static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;

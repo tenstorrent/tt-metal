@@ -25,7 +25,7 @@ namespace ttnn::operations::experimental::detail {
 const uint32_t cb_input_index = 0;
 
 using SliceWriteRuntimeArgs = std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>;
-SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
+static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
@@ -187,7 +187,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     return ret_val;
 }
 
-SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
+static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
@@ -362,7 +362,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     return ret_val;
 }
 
-operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
+static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     const Tensor& input,
     const Tensor& output,
     const ttnn::Shape& output_tensor_start,
@@ -495,8 +495,7 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-namespace {
-SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
+static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
@@ -667,9 +666,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     return ret_val;
 }
-}  // namespace
 
-operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_core(
+static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_core(
     const Tensor& input,
     const Tensor& output,
     const ttnn::Shape& output_tensor_start,
@@ -810,7 +808,7 @@ operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
+static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     const Tensor& input,
     const Tensor& output,
     const ttnn::Shape& output_tensor_start,
