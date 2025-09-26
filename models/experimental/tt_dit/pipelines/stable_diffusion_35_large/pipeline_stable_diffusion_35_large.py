@@ -229,24 +229,35 @@ class StableDiffusion3Pipeline:
         self.vae_submesh_idx = vae_submesh_idx
 
         logger.info("loading models...")
-        self._tokenizer_1 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer")
-        self._tokenizer_2 = CLIPTokenizer.from_pretrained(model_checkpoint_path, subfolder="tokenizer_2")
-        self._tokenizer_3 = T5TokenizerFast.from_pretrained(model_checkpoint_path, subfolder="tokenizer_3")
+        self._tokenizer_1 = CLIPTokenizer.from_pretrained(
+            model_checkpoint_path, subfolder="tokenizer", local_files_only=True
+        )
+        self._tokenizer_2 = CLIPTokenizer.from_pretrained(
+            model_checkpoint_path, subfolder="tokenizer_2", local_files_only=True
+        )
+        self._tokenizer_3 = T5TokenizerFast.from_pretrained(
+            model_checkpoint_path, subfolder="tokenizer_3", local_files_only=True
+        )
         self._text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(
-            model_checkpoint_path, subfolder="text_encoder"
+            model_checkpoint_path, subfolder="text_encoder", local_files_only=True
         )
         self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-            model_checkpoint_path, subfolder="text_encoder_2"
+            model_checkpoint_path, subfolder="text_encoder_2", local_files_only=True
         )
         if enable_t5_text_encoder:
-            torch_text_encoder_3 = T5EncoderModel.from_pretrained(model_checkpoint_path, subfolder="text_encoder_3")
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_checkpoint_path, subfolder="scheduler")
-        self._torch_vae = AutoencoderKL.from_pretrained(model_checkpoint_path, subfolder="vae")
+            torch_text_encoder_3 = T5EncoderModel.from_pretrained(
+                model_checkpoint_path, subfolder="text_encoder_3", local_files_only=True
+            )
+        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+            model_checkpoint_path, subfolder="scheduler", local_files_only=True
+        )
+        self._torch_vae = AutoencoderKL.from_pretrained(model_checkpoint_path, subfolder="vae", local_files_only=True)
 
         torch_transformer = TorchSD3Transformer2DModel.from_pretrained(
             model_checkpoint_path,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
+            local_files_only=True,
         )
         torch_transformer.eval()
 
