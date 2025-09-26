@@ -94,7 +94,7 @@ void run_heartbeat_check_point_to_point(
 
     // poll for completion on the initiator endpoint
     const auto initiator_completion_result = control_channel_interface.poll_for_remote_heartbeat_request_completion(
-        initiator_endpoint.node_id, initiator_endpoint.channel_id, sequence_id);
+        initiator_endpoint.node_id, initiator_endpoint.channel_id, sequence_id, 10000, 200);
     EXPECT_EQ(initiator_completion_result, ControlChannelResult::SUCCESS);
     log_info(tt::LogTest, "Initiator result: {}", initiator_completion_result);
 

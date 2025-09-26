@@ -426,10 +426,10 @@ private:
         // need to prepare noc address using the target router's noc coords
         uint64_t noc_addr =
             get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][channel_id], get_remote_buffer_slot_address(channel_id));
-        // TODO: fix api usage here
-        // noc_async_write_one_packet(noc_addr, packet_start_address);
+        noc_async_write_one_packet(packet_start_address, noc_addr, sizeof(ControlPacketHeader));
         update_local_write_counter(channel_id);
         update_remote_write_counter(channel_id);
+        noc_async_writes_flushed();
     }
 
     FORCE_INLINE void update_local_write_counter(uint8_t channel_id) { local_write_counters_[channel_id].increment(); }
@@ -445,9 +445,9 @@ private:
 
     static constexpr size_t remote_buffer_base_addr_ = control_channel_local_buffer_base_address;
     static constexpr size_t from_remote_read_counters_base_addr_ =
-        control_channel_local_buffer_remote_write_counter_base_address;
-    static constexpr size_t to_remote_write_counters_base_addr_ =
         control_channel_local_buffer_remote_read_counter_base_address;
+    static constexpr size_t to_remote_write_counters_base_addr_ =
+        control_channel_local_buffer_remote_write_counter_base_address;
 };
 
 template <typename Derived>
@@ -455,15 +455,17 @@ class BaseFSMContext {
 public:
     BaseFSMContext() = default;
 
-    void init() { static_cast<Derived*>(this)->init(); }
+    void init() { static_cast<Derived*>(this)->init_impl(); }
 
     void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
-        static_cast<Derived*>(this)->process(packet_header, staging_packet_address);
+        static_cast<Derived*>(this)->process_impl(packet_header, staging_packet_address);
     }
 
     bool has_outbound_packet() const { return has_outbound_packet_; }
 
     void clear_outbound_packet() { has_outbound_packet_ = false; }
+
+    bool is_active() const { return has_outbound_packet_ || static_cast<const Derived*>(this)->is_active_impl(); }
 
 protected:
     bool has_outbound_packet_ = false;
@@ -477,12 +479,12 @@ public:
         log_ptr->current_state = static_cast<uint8_t>(RemoteHeartbeatFSMState::INVALID);
     }
 
-    void init() {
+    void init_impl() {
         state_ = RemoteHeartbeatFSMState::INIT;
         log_state();
     }
 
-    void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+    void process_impl(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         // drop any non-heartbeat packets
         if (packet_header->type != ControlPacketType::REMOTE_HEARTBEAT) {
             return;
@@ -520,7 +522,7 @@ public:
         log_state();
     }
 
-    bool is_active() const { return state_ != RemoteHeartbeatFSMState::COMPLETED; }
+    bool is_active_impl() const { return state_ != RemoteHeartbeatFSMState::COMPLETED; }
 
 private:
     static constexpr uint32_t log_address_ = control_channel_heartbeat_fsm_log_address;
@@ -570,17 +572,17 @@ public:
         log_ptr->current_state = static_cast<uint8_t>(RerouteFSMState::INVALID);
     }
 
-    void init() {
+    void init_impl() {
         state_ = RerouteFSMState::INIT;
         log_state();
     }
 
-    void process(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
+    void process_impl(ControlPacketHeader* packet_header, uint32_t staging_packet_address) {
         state_ = RerouteFSMState::COMPLETED;
         log_state();
     }
 
-    bool is_active() const { return state_ != RerouteFSMState::COMPLETED; }
+    bool is_active_impl() const { return state_ != RerouteFSMState::COMPLETED; }
 
 private:
     static constexpr uint32_t log_address_ = control_channel_reroute_fsm_log_address;
@@ -630,20 +632,10 @@ public:
         switch (active_fsm_type_) {
             case FSMType::REMOTE_HEARTBEAT:
                 remote_heartbeat_fsm_context_.process(packet_header, staging_packet_address_);
-                if (!remote_heartbeat_fsm_context_.is_active()) {
-                    post_fsm_completion_actions(packet_header);
-                }
                 break;
-            case FSMType::REROUTE:
-                reroute_fsm_context_.process(packet_header, staging_packet_address_);
-                if (!reroute_fsm_context_.is_active()) {
-                    post_fsm_completion_actions(packet_header);
-                }
-                break;
+            case FSMType::REROUTE: reroute_fsm_context_.process(packet_header, staging_packet_address_); break;
             default: __builtin_unreachable();
         }
-
-        log_current_fsm_type();
     }
 
     bool has_outbound_packet() const {
@@ -659,6 +651,21 @@ public:
             case FSMType::REMOTE_HEARTBEAT: remote_heartbeat_fsm_context_.clear_outbound_packet(); break;
             case FSMType::REROUTE: reroute_fsm_context_.clear_outbound_packet(); break;
             default: __builtin_unreachable();
+        }
+    }
+
+    void check_and_log_fsm_completion(ControlPacketHeader* packet_header) {
+        bool fsm_completed = false;
+        switch (active_fsm_type_) {
+            case FSMType::REMOTE_HEARTBEAT: fsm_completed = !remote_heartbeat_fsm_context_.is_active(); break;
+            case FSMType::REROUTE: fsm_completed = !reroute_fsm_context_.is_active(); break;
+            default: __builtin_unreachable();
+        }
+
+        if (fsm_completed) {
+            post_fsm_completion_actions(packet_header);
+        } else {
+            log_current_fsm_type();
         }
     }
 
@@ -683,8 +690,9 @@ private:
     FORCE_INLINE void reset_active_fsm_type() { active_fsm_type_ = FSMType::NONE; }
 
     void post_fsm_completion_actions(ControlPacketHeader* packet_header) {
-        log_completed_sequence_id(packet_header->sequence_id);
         reset_active_fsm_type();
+        log_current_fsm_type();
+        log_completed_sequence_id(packet_header->sequence_id);
     }
 };
 
@@ -781,6 +789,7 @@ private:
         bool success = forward_control_packet(reinterpret_cast<ControlPacketHeader*>(packet_address));
         if (success) {
             fsm_manager_.clear_outbound_packet();
+            fsm_manager_.check_and_log_fsm_completion(reinterpret_cast<ControlPacketHeader*>(packet_address));
         }
     }
 
@@ -830,6 +839,7 @@ private:
         }
 
         fsm_manager_.process(packet_header);
+        fsm_manager_.check_and_log_fsm_completion(packet_header);
     }
 
     InterfaceType get_outbound_interface_type(ControlPacketHeader* packet_header) {
