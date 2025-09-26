@@ -128,7 +128,7 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
-        timeout-minutes: ${{ inputs.timeout * 3 }}
+        timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
             GTEST_FILTER="${{inputs.gtest_filter}}"
