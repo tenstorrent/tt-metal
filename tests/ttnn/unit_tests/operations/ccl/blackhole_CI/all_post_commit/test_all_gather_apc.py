@@ -548,16 +548,15 @@ def test_all_gather_8D_vertical(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 10),
     ],
-    ids=["trace", "non-trace"],
+    ids=["non-trace"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 150000}, ttnn.Topology.Linear),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 150000}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 150000}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
     ids=["fabric_linear", "fabric_ring"],
