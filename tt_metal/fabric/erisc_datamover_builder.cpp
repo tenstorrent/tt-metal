@@ -350,8 +350,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     buffer_address += field_size;
 
     // location for temporarily store the src address when performing inline writes to L1 with spoof
-    this->notify_worker_of_read_counter_update_src_address = buffer_address;
-    buffer_address += field_size;
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        this->notify_worker_of_read_counter_update_src_address = buffer_address;
+        buffer_address += field_size;
+    }
 
     // Channel Allocations
     this->max_l1_loading_size =
@@ -1314,7 +1316,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->edm_status_ptr,
 
         config.notify_worker_of_read_counter_update_src_address,
-        0x7a9b3c4d,
+        0x7a9b3c4d,  // special tag marker to catch incorrect ct args
 
         // fabric counters
         FabricEriscDatamoverConfig::enable_fabric_counters,
