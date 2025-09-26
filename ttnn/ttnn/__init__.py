@@ -213,6 +213,7 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    SourceType,
     CBFormatDescriptor,
     CBDescriptor,
     ReaderConfigDescriptor,
