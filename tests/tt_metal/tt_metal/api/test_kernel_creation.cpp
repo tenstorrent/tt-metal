@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "base_types.hpp"
-#include "circular_buffer_constants.h"
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -24,7 +23,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include "impl/kernels/kernel_impl.hpp"
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
@@ -182,9 +180,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
 
     // The hashes should be different across two kernels due to the difference in unpack_to_dest_mode
     EXPECT_NE(hash_default, hash_fp32)
-        << "Kernels with different unpack_to_dest_mode should have different compute hashes. "
-        << "hash_default: " << hash_default << ", hash_fp32: " << hash_fp32 << ". "
-        << "If this test fails, it indicates that unpack_to_dest_mode is missing from ComputeKernel::config_hash()";
+        << "unpack_to_dest_mode is not accounted for in computing ComputeKernel::config_hash()";
 }
 
 }  // namespace tt::tt_metal
