@@ -126,6 +126,10 @@ class Module:
 
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
+    # deprecated
+    def load_state_dict(self, state_dict: Mapping[str, torch.Tensor]) -> None:
+        self.load_torch_state_dict(state_dict)
+
     def save(self, path_prefix: str, /) -> None:
         if path_prefix and path_prefix[-1] not in [".", "/"]:
             path_prefix += "/"
