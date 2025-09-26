@@ -13,7 +13,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/math.hpp>
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
