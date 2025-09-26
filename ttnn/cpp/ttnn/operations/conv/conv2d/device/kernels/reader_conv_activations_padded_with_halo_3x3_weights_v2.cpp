@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
+#include "conv_reader_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);

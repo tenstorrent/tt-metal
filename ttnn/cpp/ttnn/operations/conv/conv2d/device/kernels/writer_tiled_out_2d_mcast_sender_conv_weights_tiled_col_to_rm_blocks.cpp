@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
-#include "block_sharded_reader_common.hpp"
+#include "conv_reader_common.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -160,50 +159,25 @@ void kernel_main() {
                 cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
                 if (is_sender_core) {
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
-                    if constexpr (sliced_inner_dim) {
-                        read_sticks<
-                            dilation_w,
-                            coalesced_read_bytes,
-                            conv_act_c_read_bytes,
-                            act_block_w_extra_align_bytes,
-                            stride_w_bytes,
-                            weight_size_w,
-                            stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
-                    } else {
-                        uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                        while (num_elems--) {
-                            reader_idx++;
-                            uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                            uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
-                            for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
-                                if constexpr (dilation_w == 1) {
-                                    read_channels<weight_size_h>(
-                                        l1_write_addr_act,
-                                        act_l1_read_addr,
-                                        ind,
-                                        conv_act_c_read_bytes,
-                                        coalesced_read_bytes,
-                                        stride_h_bytes);
-                                    if constexpr (act_block_w_extra_align_bytes) {
-                                        l1_write_addr_act += act_block_w_extra_align_bytes;
-                                    }
-                                } else {
-                                    read_dilated_channels<weight_size_h, weight_size_w>(
-                                        l1_write_addr_act,
-                                        act_l1_read_addr,
-                                        ind,
-                                        conv_act_c_read_bytes,
-                                        stride_h_bytes,
-                                        stride_w_bytes);
-                                }
-                            }
-                        }
-                        reader_idx++;
-                    }
-                    noc_async_read_barrier();
+                    read_activation_data<
+                        sliced_inner_dim,
+                        dilation_w,
+                        coalesced_read_bytes,
+                        conv_act_c_read_bytes,
+                        act_block_w_extra_align_bytes,
+                        stride_w_bytes,
+                        weight_size_w,
+                        stride_w,
+                        weight_size_h,
+                        window_outer_offset>(
+                        packed_reader_indices_ptr,
+                        reader_offset,
+                        l1_write_addr_act,
+                        reader_idx,
+                        act_l1_read_addr,
+                        stride_h_bytes);
                 }
                 cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-                reader_offset += window_outer_offset;
 #endif
                 if (skip_work) {
                     continue;

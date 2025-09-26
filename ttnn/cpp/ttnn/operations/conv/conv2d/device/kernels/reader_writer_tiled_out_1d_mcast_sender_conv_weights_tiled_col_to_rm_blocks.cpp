@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
+#include "conv_reader_common.hpp"
 
 void kernel_main() {
     // This writer is for output tensor in tile format

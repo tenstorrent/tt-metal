@@ -350,3 +350,107 @@ void load_config_tensor_if_in_dram(uint32_t core_index) {
     cb_push_back(cb_reader_index, 1);
 #endif
 }
+
+template <int window_height, int window_width>
+FORCE_INLINE void read_dilated_channels(
+    uint32_t& l1_write_addr_act,
+    const uint32_t act_l1_read_addr,
+    const uint32_t reader_channel_idx,
+    const uint32_t conv_act_c_bytes,
+    const uint32_t stride_h_bytes,
+    const uint32_t stride_w_bytes) {
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
+#pragma GCC unroll(window_height)
+    for (uint32_t outer = 0; outer < window_height; outer++) {
+        uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
+#pragma GCC unroll(window_width)
+        for (uint32_t inner = 0; inner < window_width; inner++) {
+            // Read the partial depth.
+            noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
+            // Increment by full depth to go to the next pixel
+            l1_write_addr_act += conv_act_c_bytes;
+            act_l1_read_addr_row_offset += stride_w_bytes;
+        }
+        // Go to the next row
+        act_l1_read_addr_plus_offset += stride_h_bytes;
+    }
+}
+
+template <int window_height>
+FORCE_INLINE void read_channels(
+    uint32_t& l1_write_addr_act,
+    const uint32_t act_l1_read_addr,
+    const uint32_t reader_channel_idx,
+    const uint32_t conv_act_c_read_bytes,
+    const uint32_t coalesced_read_bytes,
+    const uint32_t stride_h_bytes) {
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
+#pragma GCC unroll(window_height)
+    for (uint32_t inner = 0; inner < window_height; inner++) {
+        noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
+        l1_write_addr_act += coalesced_read_bytes;
+        act_l1_read_addr_plus_offset += stride_h_bytes;
+    }
+}
+
+template <
+    bool sliced_inner_dim,
+    uint32_t dilation_w,
+    uint32_t coalesced_read_bytes,
+    uint32_t conv_act_c_read_bytes,
+    uint32_t act_block_w_extra_align_bytes,
+    uint32_t stride_w_bytes,
+    uint32_t weight_size_w,
+    uint32_t stride_w,
+    uint32_t weight_size_h,
+    uint32_t window_outer_offset>
+FORCE_INLINE void read_activation_data(
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
+    uint32_t& reader_offset,
+    uint32_t& l1_write_addr_act,
+    uint32_t& reader_idx,
+    uint32_t act_l1_read_addr,
+    uint32_t stride_h_bytes) {
+    if constexpr (sliced_inner_dim) {
+        read_sticks<
+            dilation_w,
+            coalesced_read_bytes,
+            conv_act_c_read_bytes,
+            act_block_w_extra_align_bytes,
+            stride_w_bytes,
+            weight_size_w,
+            stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+    } else {
+        uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+        while (num_elems--) {
+            reader_idx++;
+            uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+            uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+            for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
+                if constexpr (dilation_w == 1) {
+                    read_channels<weight_size_h>(
+                        l1_write_addr_act,
+                        act_l1_read_addr,
+                        ind,
+                        conv_act_c_read_bytes,
+                        coalesced_read_bytes,
+                        stride_h_bytes);
+                    if constexpr (act_block_w_extra_align_bytes) {
+                        l1_write_addr_act += act_block_w_extra_align_bytes;
+                    }
+                } else {
+                    read_dilated_channels<weight_size_h, weight_size_w>(
+                        l1_write_addr_act,
+                        act_l1_read_addr,
+                        ind,
+                        conv_act_c_read_bytes,
+                        stride_h_bytes,
+                        stride_w_bytes);
+                }
+            }
+        }
+        reader_idx++;
+    }
+    noc_async_read_barrier();
+    reader_offset += window_outer_offset;
+}
