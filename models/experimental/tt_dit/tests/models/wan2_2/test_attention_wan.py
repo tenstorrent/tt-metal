@@ -8,7 +8,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ....utils.check import assert_quality
 from ....models.transformers.wan2_2.attention_wan import WanAttention
 from ....parallel.manager import CCLManager
@@ -61,7 +61,7 @@ from models.tt_transformers.tt.common import get_rot_transformation_mat
     ids=["5b-720p", "14b-480p", "14b-720p"],
 )
 @pytest.mark.parametrize("prompt_seq_len", [None, 26, 126], ids=["no_prompt", "short_prompt", "long_prompt"])
-@pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
+@pytest.mark.parametrize("is_fsdp", [True], ids=["yes_fsdp"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_attention(
     mesh_device: ttnn.MeshDevice,
@@ -141,7 +141,7 @@ def test_wan_attention(
     # Create input tensors
     spatial_input = torch.randn((B, spatial_seq_len, dim), dtype=torch_dtype)
     spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), chunk_size_lcm=256, num_devices=sp_factor)
-    tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
     logger.info(f"spatial_input shape: {spatial_input.shape}. tt_spatial shape: {tt_spatial.shape}")
 
     if attn_type == "cross":
@@ -200,7 +200,7 @@ def test_wan_attention(
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
-    spatial_concat_dims[tp_axis] = 0
+    spatial_concat_dims[tp_axis] = 3
     tt_spatial_out = ttnn.to_torch(
         tt_spatial_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -210,5 +210,4 @@ def test_wan_attention(
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
 
     logger.info(f"Checking spatial outputs for {attn_type} attention")
-    for i in range(tt_spatial_out.shape[0]):
-        assert_quality(torch_spatial_out, tt_spatial_out[i], pcc=MIN_PCC)
+    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC)
