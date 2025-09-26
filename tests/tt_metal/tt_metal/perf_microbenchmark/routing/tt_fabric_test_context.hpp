@@ -43,6 +43,7 @@ using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
+using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -867,6 +868,20 @@ private:
         return freq_mhz;
     }
 
+    TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config);
+
+    std::string fetch_pattern_test_type(const TrafficPatternConfig& pattern, auto lambda_test_type);
+
+    std::string fetch_pattern_ftype(const TrafficPatternConfig& pattern);
+
+    std::string fetch_pattern_ntype(const TrafficPatternConfig& pattern);
+
+    uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter);
+
+    uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
+
+    uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
+
     void calculate_bandwidth(const TestConfig& config) {
         log_debug(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
 
@@ -1011,25 +1026,12 @@ private:
             // Use base name for test name, rather than name with _iter_0 suffix
             const std::string& test_name = config.name;
             // Find test parameters based on the test's first test pattern
-            std::string ftype_str = "None";
-            std::string ntype_str = "None";
-            uint32_t num_packets_first_pattern = 0;
-            uint32_t packet_size_first_pattern = 0;
-            if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
-                const auto& first_pattern = config.senders[0].patterns[0];
-                if (first_pattern.ftype.has_value()) {
-                    ftype_str = enchantum::to_string(first_pattern.ftype.value()).data();
-                }
-                if (first_pattern.ntype.has_value()) {
-                    ntype_str = enchantum::to_string(first_pattern.ntype.value()).data();
-                }
-                if (first_pattern.num_packets.has_value()) {
-                    num_packets_first_pattern = first_pattern.num_packets.value();
-                }
-                if (first_pattern.size.has_value()) {
-                    packet_size_first_pattern = first_pattern.size.value();
-                }
-            }
+            const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
+            std::string ftype_str = fetch_pattern_ftype(first_pattern);
+            std::string ntype_str = fetch_pattern_ntype(first_pattern);
+            uint32_t num_packets_first_pattern = fetch_pattern_num_packets(first_pattern);
+            uint32_t packet_size_first_pattern = fetch_pattern_packet_size(first_pattern);
+
             // Create a new entry that represents all iterations of the same test
             bandwidth_results_summary_.emplace_back(BandwidthResultSummary{
                 .test_name = test_name,
@@ -1134,17 +1136,9 @@ private:
 
     void generate_bandwidth_csv(const TestConfig& config) {
         // Extract representative ftype and ntype from first sender's first pattern
-        std::string ftype_str = "None";
-        std::string ntype_str = "None";
-        if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
-            const auto& first_pattern = config.senders[0].patterns[0];
-            if (first_pattern.ftype.has_value()) {
-                ftype_str = enchantum::to_string(first_pattern.ftype.value()).data();
-            }
-            if (first_pattern.ntype.has_value()) {
-                ntype_str = enchantum::to_string(first_pattern.ntype.value()).data();
-            }
-        }
+        const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
+        std::string ftype_str = fetch_pattern_ftype(first_pattern);
+        std::string ntype_str = fetch_pattern_ntype(first_pattern);
 
         // Open CSV file in append mode
         std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
@@ -1354,70 +1348,11 @@ private:
         }
     }
 
-    bool golden_entry_matches_test_result(const BandwidthResultSummary& test_result, const GoldenCsvEntry& golden_result) {
-        std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
-        return test_result.test_name == golden_result.test_name
-            && test_result.ftype == golden_result.ftype
-            && test_result.ntype == golden_result.ntype
-            && test_result.topology == golden_result.topology
-            && num_devices_str == golden_result.num_devices
-            && test_result.num_links == golden_result.num_links
-            && test_result.packet_size == golden_result.packet_size;
-    }
+    bool golden_entry_matches_test_result(const BandwidthResultSummary& test_result, const GoldenCsvEntry& golden_result);
 
-    // Converts vector of num_devices to a string representation eg. <2, 4> -> "[2, 4]"
-    std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices) {
-        std::string num_devices_str = "[";
-        for (size_t i = 0; i < num_devices.size(); ++i) {
-            if (i > 0) {
-                num_devices_str += ",";
-            }
-            num_devices_str += std::to_string(num_devices[i]);
-        }
-        num_devices_str += "]";
-        return num_devices_str;
-    }
+    std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
 
-    // Creates common CSV format string for any failure case
-    std::string generate_failed_test_format_string(const BandwidthResultSummary& test_result, double test_result_avg_bandwidth, double difference_percent, double acceptable_tolerance) {
-        std::ostringstream tolerance_stream;
-        tolerance_stream << std::fixed << std::setprecision(1) << acceptable_tolerance;
-        // Because statistics order may change, we need to find the index of average cycles and packets per second
-        double test_result_avg_cycles = -1;
-        auto cycles_stat_location = std::find(stat_names_.begin(), stat_names_.end(), "Avg Cycles");
-        if (cycles_stat_location == stat_names_.end()) {
-            log_warning(tt::LogTest, "Average cycles statistic not found, omitting it in failure report");
-        }
-        else {
-            int cycles_stat_index = std::distance(stat_names_.begin(), cycles_stat_location);
-            test_result_avg_cycles = test_result.statistics_vector[cycles_stat_index];
-        }
-        double test_result_avg_packets_per_second = -1;
-        auto packets_per_second_stat_location = std::find(stat_names_.begin(), stat_names_.end(), "Avg Packets/s");
-        if (packets_per_second_stat_location == stat_names_.end()) {
-            log_warning(tt::LogTest, "Average packets per second statistic not found, omitting it in failure report");
-        }
-        else {
-            int packets_per_second_stat_index = std::distance(stat_names_.begin(), packets_per_second_stat_location);
-            test_result_avg_packets_per_second = test_result.statistics_vector[packets_per_second_stat_index];
-        }
-        std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
-        std::string csv_format_string =
-            test_result.test_name + ","
-            + test_result.ftype + ","
-            + test_result.ntype + ","
-            + test_result.topology
-            + ",\"" + num_devices_str + "\","
-            + std::to_string(test_result.num_links) + ","
-            + std::to_string(test_result.packet_size) + ","
-            + std::to_string(test_result.num_iterations) + ","
-            + std::to_string(test_result_avg_cycles) + ","
-            + std::to_string(test_result_avg_bandwidth) + ","
-            + std::to_string(test_result_avg_packets_per_second) + ","
-            + std::to_string(difference_percent) + ","
-            + tolerance_stream.str();
-        return csv_format_string;
-    }
+    std::string generate_failed_test_format_string(const BandwidthResultSummary& test_result, double test_result_avg_bandwidth, double difference_percent, double acceptable_tolerance);
 
     void compare_summary_results_with_golden() {
         if (golden_csv_entries_.empty()) {
