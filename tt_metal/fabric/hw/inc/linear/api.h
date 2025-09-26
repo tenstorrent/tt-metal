@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -257,7 +257,7 @@ static FORCE_INLINE void fabric_set_unicast_route(
     fabric_set_unicast_route(
         packet_header, connection_manager.my_chip_id, slot.dst_dev_id, slot.dst_mesh_id, connection_manager.ew_dim);
 #else
-    fabric_set_unicast_route(slot.dst_dev_id, packet_header);
+    fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
 #endif
 #else
     // 1D unicast, nop

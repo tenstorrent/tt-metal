@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "f2baa545114550fe2cb1fb055114528791c7a1c1"
+        default: "74455e61626060cd8363cb99c82e28b89856c0e6"
 
 jobs:
   ttsim-integration:
@@ -54,7 +54,7 @@ jobs:
     steps:
 
       - name: Download packages artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}

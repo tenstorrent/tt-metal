@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,9 @@ flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
 }
 
 // For page sizes, keep lambda usage consistent across types.
-static inline uint32_t to_flatbuffer(const uint32_t& value) { return value; }
+namespace {
+uint32_t to_flatbuffer(const uint32_t& value) { return value; }
+}  // namespace
 
 // Original type defined in circular_buffer_config.hpp
 flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
