@@ -1082,8 +1082,6 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
                     PrintTypedUint32Array(
                         intermediate_stream, most_recent_setw, sz / 4, reinterpret_cast<uint32_t*>(ptr));
                     break;
-                case DPrintRAISE:
-                case DPrintWAIT: AssertSize(sz, 4); break;
                 default:
                     TT_THROW(
                         "Unexpected debug print type wpos {:#x} rpos {:#x} code {} chip {} phy {}, {}",
