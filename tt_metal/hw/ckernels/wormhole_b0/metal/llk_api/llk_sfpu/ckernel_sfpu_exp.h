@@ -43,8 +43,10 @@ sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
 template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     sfpi::vFloat y = sfpi::vConst0;
-    // Intermediary values can overflow if input value is below -88.0f, which leads to output increasing again instead
-    // of staying at 0. This overflow happens when `log2(e) * val < 127.0f`, which correspond to `val < 88.0f`
+    // Intermediary values can overflow if abs(val) is above 88.5f, which leads to output increasing again instead
+    // of staying at 0 (or becoming finite on large inputs). This overflow happens when `| log2(e) * val | > 127.0f`,
+    // which correspond to `|val| > 88.5f` To avoid this, we clamp absolute value to 88.5f (and restore sign if negative
+    // input)
     sfpi::vFloat val_positive = setsgn(val, 0);
     sfpi::vFloat clamp_threshold = sfpi::vFloat(88.5f);
     vec_min_max(val_positive, clamp_threshold);
@@ -54,7 +56,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // z = (bias + x * factor * N_m; where:
     // factor = 0x00b8aa3b (computed through log(e))
     // bias = 0x3f800000
-    // Is sfpi::vFloat(0x3f800000) getting optimized ?
     sfpi::vInt z = _float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
     sfpi::vInt zii = exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
