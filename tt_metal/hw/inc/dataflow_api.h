@@ -2300,7 +2300,7 @@ public:
     void async_read(
         const Src& src,
         const Dst& dst,
-        uint32_t size,
+        uint32_t size_bytes,
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
@@ -2317,7 +2317,7 @@ public:
     void async_write(
         const Src& src,
         const Dst& dst,
-        uint32_t size,
+        uint32_t size_bytes,
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t vc = NOC_UNICAST_WRITE_VC) const {
@@ -2379,11 +2379,11 @@ template <typename DSpecT>
 struct noc_traits_t<TensorAccessor<DSpecT>> {
     struct src_args_type {
         uint32_t page_id{};
-        uint32_t offset = 0;
+        uint32_t offset_bytes = 0;
     };
     struct dst_args_type {
         uint32_t page_id{};
-        uint32_t offset = 0;
+        uint32_t offset_bytes = 0;
     };
     static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, const src_args_type& args) {
         return src.get_noc_addr(args.page_id, args.offset, noc.get_noc_id());
