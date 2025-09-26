@@ -173,13 +173,12 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
     auto kernel_handle_fp32 = CreateKernel(program_fp32, kernel_file, CoreCoord(0, 0), config_fp32);
 
     // Get the kernels from programs
-    const auto& kernels_default =
-        program_default.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-    const auto& kernels_fp32 = program_fp32.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+    auto kernel_default = program_default.impl().get_kernel(kernel_handle_default);
+    auto kernel_fp32 = program_fp32.impl().get_kernel(kernel_handle_fp32);
 
     // Direct hash comparison - this tests the actual Kernel::compute_hash() method
-    auto hash_default = kernels_default.at(kernel_handle_default)->compute_hash();
-    auto hash_fp32 = kernels_fp32.at(kernel_handle_fp32)->compute_hash();
+    auto hash_default = kernel_default->compute_hash();
+    auto hash_fp32 = kernel_fp32->compute_hash();
 
     // The hashes should be different across two kernels due to the difference in unpack_to_dest_mode
     EXPECT_NE(hash_default, hash_fp32)
