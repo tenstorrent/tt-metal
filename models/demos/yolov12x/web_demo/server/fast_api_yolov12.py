@@ -39,7 +39,7 @@ async def startup():
     global model
     device_id = 0
     device = ttnn.CreateDevice(
-        device_id, l1_small_size=YOLOV12_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
+        device_id, l1_small_size=YOLOV12_L1_SMALL_SIZE, trace_region_size=6434816, num_command_queues=2
     )
     device.enable_program_cache()
     model = YOLOv12xPerformantRunner(
