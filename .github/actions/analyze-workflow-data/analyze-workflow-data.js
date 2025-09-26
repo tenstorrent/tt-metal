@@ -379,29 +379,29 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   // return names (and a small context) of log files that clearly indicate failure.
   if (collected.length === 0) {
 
-    const stack2 = [rootDir];
-    while (stack2.length && collected.length < maxCount) {
-      const dir = stack2.pop();
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const stack2 = [rootDir]; // set up new stack
+    while (stack2.length && collected.length < maxCount) { // while the stack is not empty and the collected snippets are less than the max count
+      const dir = stack2.pop(); // remove the last directory from the stack
+      const entries = fs.readdirSync(dir, { withFileTypes: true }); // list all the files and directories in the directory
       for (const ent of entries) {
-        const p = path.join(dir, ent.name);
-        if (ent.isDirectory()) {
-          stack2.push(p);
+        const p = path.join(dir, ent.name); // join the directory and the entry name to get the path to the entry
+        if (ent.isDirectory()) { // if the entry is a directory
+          stack2.push(p); // add the path to the stack
         } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
-          try {
+          try { // try to read the file
             // Simple fallback: Only consider lines where 'FAILED' is the first word after
             // stripping leading timestamps and whitespace.
-            const text = fs.readFileSync(p, 'utf8');
-            const rawLines = text.split(/\r?\n/);
-            const timestampPrefix = /^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/;
-            const FAILED_AT_START = /^FAILED\b/; // case-sensitive, first word
-            for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) {
+            const text = fs.readFileSync(p, 'utf8'); // read the file as utf8
+            const rawLines = text.split(/\r?\n/); // split the text into lines
+            const timestampPrefix = /^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/; // regex to match the timestamp prefix
+            const FAILED_AT_START = /^FAILED\b/; // case-sensitive, first word is FAILED
+            for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) { // iterate through the lines
               const original = rawLines[i];
-              const modified = rawLines.slice(i, i + 2).join('\n');
-              const stripped = original.replace(timestampPrefix, '').replace(/^\s+/, '');
-              if (FAILED_AT_START.test(stripped)) {
-                const fileBase = path.basename(p).split('.')[0];
-                collected.push({
+              const modified = rawLines.slice(i, i + 2).join('\n'); // join two consecutive lines into a single string (safe because slice doesn't throw an error if the index is out of bounds)
+              const stripped = original.replace(timestampPrefix, '').replace(/^\s+/, ''); // remove the timestamp prefix and leading whitespace
+              if (FAILED_AT_START.test(stripped)) { // if the line starts with FAILED (this logic is flawed)
+                const fileBase = path.basename(p).split('.')[0]; // get the base name of the log file
+                collected.push({ // add the snippet to the collected snippets
                   label: `${fileBase}:\nFAILED line`,
                   // Return the original line (full context), truncated
                   snippet: original.length > 600 ? original.slice(0, 600) + '…' : modified,
@@ -411,22 +411,24 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
             }
           } catch (_) { /* ignore */ }
         }
-        if (collected.length >= maxCount) break;
+        if (collected.length >= maxCount) break; // if the collected snippets are greater than or equal to the max count, break the loop
       }
     }
   }
+  // TODO: the failure markers are incorrectly flagging the line below them when the failing test
+  // is actually far above them. the logic above needs to be changed
 
   // Attach owners based on mapping
   try {
-    for (const it of collected) {
-      if (it && !it.owner) {
+    for (const it of collected) { // iterate through the collected snippets
+      if (it && !it.owner) { // if the item is not empty and the owner is not set
         const owner = findOwnerForLabel(it.label || '');
-        if (owner) it.owner = owner;
+        if (owner) it.owner = owner; // if the owner is found, set the owner to the owner
       }
     }
   } catch (_) { /* ignore */ }
 
-  return collected;
+  return collected; // return the collected snippets
 }
 
 /**
