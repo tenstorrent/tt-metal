@@ -5036,26 +5036,12 @@ def test_resnet50_first_conv_p150(
         (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize(
-    "output_dtype",
-    [ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("force_split_reader", [True, False])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_block_sharding(
     device,
     torch_tensor_map,
-    math_fidelity,
-    output_dtype,
-    weights_dtype,
     config_in_dram,
-    batch_size,
     output_channels,
     input_channels,
     input_height,
@@ -5066,7 +5052,6 @@ def test_conv_block_sharding(
     stride_w,
     pad_h,
     pad_w,
-    output_layout,
     force_split_reader,
     full_inner_dim,
     act_block_h_override,
@@ -5075,10 +5060,10 @@ def test_conv_block_sharding(
     run_conv(
         device,
         torch_tensor_map,
-        math_fidelity,
-        output_dtype,
-        weights_dtype,
-        batch_size,
+        ttnn.MathFidelity.LoFi, #math_fidelity
+        ttnn.bfloat8_b, #output_dtype
+        ttnn.bfloat8_b, #weights_dtype
+        1, # batch_size
         output_channels,
         input_channels,
         input_height,
@@ -5090,8 +5075,8 @@ def test_conv_block_sharding(
         (pad_h, pad_w),
         {"act_block_h": act_block_h_override},
         shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
-        output_layout=output_layout,
+        input_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
         groups=1,
         in_place=False,
         force_split_reader=force_split_reader,
