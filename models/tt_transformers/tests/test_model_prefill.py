@@ -127,6 +127,7 @@ def test_model_inference(
         model_args.base_model_name.startswith("Mistral-")
         or model_args.base_model_name.startswith("Qwen3-")
         or model_args.base_model_name.startswith("Phi-3-mini-")
+        or model_args.base_model_name.startswith("phi-4")
     ):
         # TODO: Per layer KV cache fetching is not implemented for all models
         # See issue https://github.com/tenstorrent/tt-metal/issues/19806"
