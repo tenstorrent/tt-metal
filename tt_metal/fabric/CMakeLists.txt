@@ -45,32 +45,23 @@ target_sources(
         fabric_tensix_builder.cpp
         compressed_routing_table.cpp
         compressed_routing_path.cpp
-        serialization/intermesh_link_table.cpp
+        serialization/router_port_directions.cpp
         serialization/physical_system_descriptor_serialization.cpp
+        serialization/intermesh_connections_serialization.cpp
+        serialization/port_descriptor_serialization.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
 )
-
-# Include helper functions and generate headers from flatbuffer schemas
-include(flatbuffers)
-set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
-
-# Collect all generated headers
-set(GENERATED_FBS_HEADERS)
-foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE})
-    list(APPEND GENERATED_FBS_HEADERS ${FBS_GENERATED_HEADER_FILE})
-endforeach()
-
-# Add the generated headers to your target
-target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
 # Include helper functions and generate headers from protobuf schemas
 include(protobuf)
 set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
 )
 
 # Collect all generated protobuf files

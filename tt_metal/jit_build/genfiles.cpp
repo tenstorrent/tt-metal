@@ -8,7 +8,6 @@
 #include <data_format.hpp>
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
-#include <utils.hpp>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -20,14 +19,14 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
-#include "kernel.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 enum class UnpackToDestMode : uint8_t;
 

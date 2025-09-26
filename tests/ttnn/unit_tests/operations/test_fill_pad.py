@@ -7,7 +7,7 @@ import torch
 import ttnn
 import math
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, run_for_wormhole_b0
+from models.common.utility_functions import torch_random, run_for_wormhole_b0
 
 
 def create_nd_padded_tiled_tensor(shape, tile_size, fill_value, dtype):

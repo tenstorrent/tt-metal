@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
@@ -238,6 +238,9 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC = 1;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
+    static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
 
     // If a mesh axis spans eight or more devices, use more buffer slot configuration.
     // Threshold (8 devices) was determined empirically.
@@ -289,6 +292,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_channel_ack_addr = 0;
     std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
     std::size_t edm_local_sync_address = 0;
+    std::size_t edm_local_tensix_sync_address = 0;
     std::size_t edm_status_address = 0;
 
     // Performance telemetry buffer address (16B aligned)
@@ -340,10 +344,10 @@ struct FabricEriscDatamoverConfig {
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
     // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
     // use use a different crediting scheme.
-    std::array<std::size_t, num_sender_channels> to_sender_channel_remote_ack_counter_addrs = {};
-    std::array<std::size_t, num_sender_channels> to_sender_channel_remote_completion_counter_addrs = {};
-    std::array<std::size_t, num_receiver_channels> receiver_channel_remote_ack_counter_addrs = {};
-    std::array<std::size_t, num_receiver_channels> receiver_channel_remote_completion_counter_addrs = {};
+    size_t to_sender_channel_remote_ack_counters_base_addr = 0;
+    size_t to_sender_channel_remote_completion_counters_base_addr = 0;
+    size_t receiver_channel_remote_ack_counters_base_addr = 0;
+    size_t receiver_channel_remote_completion_counters_base_addr = 0;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
@@ -433,6 +437,7 @@ struct FabricRiscConfig {
         is_sender_channel_serviced_[channel_idx] = enabled;
     }
 
+    void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
     size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
@@ -604,6 +609,7 @@ public:
 
     size_t termination_signal_ptr = 0;
     size_t edm_local_sync_ptr = 0;
+    size_t edm_local_tensix_sync_ptr = 0;
     size_t edm_status_ptr = 0;
     eth_chan_directions direction = eth_chan_directions::EAST;
     size_t downstream_edms_connected = 0;
@@ -643,6 +649,7 @@ public:
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
+    uint32_t num_downstream_tensix_connections = 0;
 
 private:
     // Shared helper for setting up VC connections

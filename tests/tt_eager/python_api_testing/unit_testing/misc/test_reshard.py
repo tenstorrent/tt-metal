@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
 def random_torch_tensor(dtype, shape):
@@ -903,6 +903,7 @@ def test_reshard_diff_width(
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+@pytest.mark.timeout(120)
 def test_sd_reshard(
     device,
     input_shape,

@@ -13,7 +13,7 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
@@ -30,7 +30,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal::distributed::test::utils {
@@ -214,7 +213,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         // Create Semaphores
         for (uint32_t j = 0; j < NUM_SEMS; j++) {
             CreateSemaphore(program, cr_set, j + 1);
-            if (active_eth_cores.size()) {
+            if (!active_eth_cores.empty()) {
                 auto active_eth_core = active_eth_cores.begin();
                 for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
                      ++i, ++active_eth_core) {
@@ -394,7 +393,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
                 TT_THROW("Invalid");
             }
         }
-        if (active_eth_cores.size()) {
+        if (!active_eth_cores.empty()) {
             auto active_eth_core = active_eth_cores.begin();
             for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end(); ++i, ++active_eth_core) {
                 auto dummy_erisc_kernel = CreateKernel(

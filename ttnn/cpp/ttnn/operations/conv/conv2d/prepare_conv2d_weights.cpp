@@ -5,7 +5,7 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "conv2d/conv2d_utils.hpp"
 #include "conv2d/device/conv2d_op.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/constants.hpp"
@@ -953,7 +953,7 @@ bool is_valid_device_conv_bias(
     return true;
 }
 
-static OptimizedConvBlockConfig get_opt_block_config(
+static Conv2dBlockConfig get_opt_block_config(
     bool mm_conv,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -1003,8 +1003,12 @@ static OptimizedConvBlockConfig get_opt_block_config(
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
-    const uint32_t in_channels_alignment =
-        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
+    const uint32_t in_channels_alignment = get_input_channels_alignment(
+        conv_config.shard_layout.value(),
+        input_layout,
+        input_memory_config.buffer_type(),
+        mm_conv,
+        input_memory_config);
 
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
@@ -1047,7 +1051,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
     ParallelConfig largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
                                                  ? output_parallel_config
                                                  : parallel_config;
-    OptimizedConvParallelizationConfig opt_conv_op_parallel_config =
+    Conv2dParallelizationConfig opt_conv_op_parallel_config =
         determine_conv_op_parallel_config_from_conv_output_mem_config(
             conv_out_memory_config,
             get_num_cores_nhw_from_parallel_config(parallel_config),
@@ -1123,6 +1127,13 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     if (dram_slice_config_.has_value()) {
         Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
+        uint32_t slice_rounding_value = 1;
+        if (conv_config.output_layout == tt_metal::Layout::TILE &&
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH) {
+            // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+            slice_rounding_value = tt::constants::TILE_HEIGHT;
+        }
+
         const uint32_t output_sliced_dim =
             dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
         TT_FATAL(
@@ -1131,16 +1142,16 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             dram_slice_config.num_slices < output_sliced_dim,
             " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
 
-        const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
-        const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
-        const uint32_t max_output_slice_size = min_output_slice_size + (output_slice_rem > 0);
+        const uint32_t min_output_slice_size =
+            tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
+            slice_rounding_value;
 
         if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
-            output_height = max_output_slice_size;
+            output_height = min_output_slice_size;
             input_height =
                 ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
         } else {
-            output_width = max_output_slice_size;
+            output_width = min_output_slice_size;
             input_width =
                 ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
         }
@@ -1173,8 +1184,12 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
 
-    const uint32_t input_channels_alignment =
-        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        conv_config.shard_layout.value(),
+        input_layout,
+        input_memory_config.buffer_type(),
+        mm_conv,
+        input_memory_config);
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
