@@ -462,7 +462,7 @@ class FileResultDestination(ResultDestination):
                 card_type="n/a",
                 backend="n/a",
                 data_source="ttnn op test",
-                input_hash=header.get("input_hash"),
+                input_hash=raw.get("input_hash"),
                 message=_coerce_to_optional_string(raw.get("message", None)),
                 exception=_coerce_to_optional_string(raw.get("exception", None)),
                 metrics=raw.get("device_perf", None),
