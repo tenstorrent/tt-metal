@@ -18,14 +18,14 @@ namespace {
 
 constexpr auto kReaderKernelPath =
     "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/dataflow/"
-    "read.cpp";
+    "reader_sgd_fused_interleaved_start_id.cpp";
 
 constexpr auto kWriterKernelPath =
     "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/dataflow/"
-    "write.cpp";
+    "writer_sgd_fused_interleaved_start_id.cpp";
 
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/compute/compute.cpp";
+    "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/compute/sgd_fused_kernel.cpp";
 
 // reader runtime args
 constexpr uint32_t kParamInAddrIdx = 0;
@@ -167,7 +167,6 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     TT_FATAL(grad_data_format == tt::DataFormat::Float16_b, "Gradient input data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = param_in.padded_shape();
     auto padded_tensor_volume = param_in.physical_volume();
@@ -185,9 +184,6 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    // get the number of inner dimension
-    uint32_t num_inner = param_in.logical_shape()[-1];
 
     // compile arguments
     uint32_t block_size = get_block_size(Wt, 4U);
