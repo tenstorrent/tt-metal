@@ -86,7 +86,6 @@ auto create_nanobind_from_buffer_overload() {
             // in further validations.
             switch (dtype) {
                 case DataType::UINT8: {
-                    // auto cpp_buffer = buffer.cast<std::vector<uint8_t>>();
                     auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
                     return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
                 }

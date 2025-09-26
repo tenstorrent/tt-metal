@@ -233,6 +233,10 @@ void py_module_types(nb::module_& mod) {
         .def_rw("runtime_args", &tt::tt_metal::KernelDescriptor::runtime_args, "Arguments provided at runtime")
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel");
 
+    // needed to set SemaphoreDescriptor CoreType default
+    // nb::module_::import_("types");
+    // nb::module_::import_("ttnn.types");
+
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
         Descriptor for synchronization semaphores.
@@ -244,7 +248,7 @@ void py_module_types(nb::module_& mod) {
     )pbdoc")
         .def(  // TODO_NANOBIND
             nb::init<CoreType, CoreRangeSet, uint32_t>(),
-            nb::arg("core_type") = CoreType::WORKER,
+            nb::arg("core_type"),  //= nb::cast(CoreType::WORKER), // TODO_NANOBIND causes segfault when import ttnn???
             nb::arg("core_ranges"),
             nb::arg("initial_value"),
             R"pbdoc(
