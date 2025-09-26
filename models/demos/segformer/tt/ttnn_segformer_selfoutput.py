@@ -4,12 +4,21 @@
 
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSegformerSelfOutput:
     def __init__(self):
         super().__init__()
 
     def __call__(self, device, hidden_states: ttnn.Tensor, parameters):
+        if use_signpost:
+            signpost(header="TtSegformerSelfOutput")
         if len(hidden_states.shape) == 4:
             batch_size, __, seq_len, hidden_size = hidden_states.shape
         elif len(hidden_states.shape) == 3:

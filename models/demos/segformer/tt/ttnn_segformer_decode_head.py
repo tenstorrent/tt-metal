@@ -9,6 +9,13 @@ from models.demos.segformer.tt.common import Conv
 from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     input = ttnn.from_torch(input, ttnn.bfloat8_b)
@@ -49,6 +56,8 @@ class TtSegformerDecodeHead:
         self.config = config
 
     def __call__(self, device, encoder_hidden_states: ttnn.bfloat8_b, parameters) -> ttnn.Tensor:
+        if use_signpost:
+            signpost(header="TtSegformerDecodeHead")
         batch_size = encoder_hidden_states[-1].shape[0]
 
         all_hidden_states = ()
@@ -57,7 +66,8 @@ class TtSegformerDecodeHead:
         for encoder_hidden_state, mlp in zip(encoder_hidden_states, self.linear_c):
             height = width = int(math.sqrt(encoder_hidden_state.shape[-2]))
             encoder_hidden_state = mlp(device, encoder_hidden_state, parameters=parameters["linear_c"][index])
-            encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
+            if encoder_hidden_state.shape[-2] == 256:
+                encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
             encoder_hidden_state = ttnn.reshape(encoder_hidden_state, (batch_size, height, width, -1))
 
             if encoder_hidden_state.shape[-2] == 16:
@@ -78,6 +88,7 @@ class TtSegformerDecodeHead:
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
             encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
+            encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
 
             encoder_hidden_state = ttnn.upsample(
                 encoder_hidden_state,
