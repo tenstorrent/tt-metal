@@ -1193,9 +1193,9 @@ def test_demo_text(
                 "N300_Qwen2.5-7B": 90,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
-                "T3K_Qwen2.5-Coder-32B": 173,  # `f10cs08`
-                "T3K_Qwen2.5-72B": 240,
-                "T3K_Qwen3-32B": 166.5,
+                "T3K_Qwen2.5-Coder-32B": 185,  # `f10cs08`
+                "T3K_Qwen2.5-72B": 260,
+                "T3K_Qwen3-32B": 167.0,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
