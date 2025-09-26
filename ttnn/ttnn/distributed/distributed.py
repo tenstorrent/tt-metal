@@ -64,14 +64,19 @@ class TensorShardingInfo:
         )
 
         mesh_to_distribution_map = {}
+        distribution_to_mesh_map = {}
         coord_idx = 0
         for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
             if coord_idx < len(self.mesh_coords_ordered):
                 distribution_key = ttnn.MeshCoordinate(
                     [distribution_coord[i] for i in range(distribution_coord.dims())]
                 )
-                mesh_to_distribution_map[self.mesh_coords_ordered[coord_idx]] = distribution_key
+                mesh_coord = self.mesh_coords_ordered[coord_idx]
+                mesh_to_distribution_map[mesh_coord] = distribution_key
+                distribution_to_mesh_map[distribution_key] = mesh_coord
                 coord_idx += 1
+
+        self.distribution_to_mesh_map = distribution_to_mesh_map
 
         def mapper(mesh_coord):
             return mesh_to_distribution_map.get(mesh_coord, mesh_coord)
@@ -135,7 +140,22 @@ class TensorShardingInfo:
         mapping = {}
         try:
             mesh_device = self.tensor.device()
-            for i, mesh_coord in enumerate(self.mesh_coords):
+            for i, coord in enumerate(self.mesh_coords):
+                # `self.mesh_coords` may be in distribution coordinate space (e.g., 1D)
+                # Convert to mesh coordinate space when needed (e.g., 2D meshes)
+                mesh_coord = coord
+                try:
+                    if mesh_coord.dims() != len(self.mesh_shape):
+                        mesh_coord = getattr(self, "distribution_to_mesh_map", {}).get(mesh_coord, mesh_coord)
+                except Exception:
+                    for distribution_coord, mapped_mesh_coord in self._iter_distribution_to_mesh_coords():
+                        try:
+                            if distribution_coord == coord:
+                                mesh_coord = mapped_mesh_coord
+                                break
+                        except Exception:
+                            break
+
                 dev_id = mesh_device.get_device_id(mesh_coord)
                 mapping[dev_id] = i
 
