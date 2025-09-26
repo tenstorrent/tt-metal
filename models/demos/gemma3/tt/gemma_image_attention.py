@@ -5,7 +5,7 @@ We have made the linears (Q,K,V) to be executed separately and added bias suppor
 configuration changes.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 

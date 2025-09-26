@@ -5,7 +5,7 @@ We have modified the RMSNorm implementation equivalent to RMSNorm in Gemma-3-4b-
 We have handled the unit offset addition in the RMSNorm implementation directly into the TTNN Weights
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
