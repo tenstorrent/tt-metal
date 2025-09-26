@@ -78,7 +78,9 @@ class Module:
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Prepare Torch state dict before loading."""
 
-    def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
+    def _load_torch_state_dict_inner(
+        self, state_dict: Mapping[str, torch.Tensor], *, module_key_prefix: str
+    ) -> IncompatibleKeys:
         state_dict = dict(state_dict)
         self._prepare_torch_state(state_dict)
 
@@ -89,7 +91,9 @@ class Module:
             child_state = pop_substate(state_dict, name)
 
             if isinstance(child, Module):
-                child_missing, child_unexpected = child.load_torch_state_dict(child_state, strict=False)
+                child_missing, child_unexpected = child._load_torch_state_dict_inner(  # noqa: SLF001
+                    child_state, module_key_prefix=f"{module_key_prefix}{name}."
+                )
                 missing_keys.extend(f"{name}.{k}" for k in child_missing)
                 unexpected_keys.extend(f"{name}.{k}" for k in child_unexpected)
             else:  # legacy
@@ -100,12 +104,17 @@ class Module:
                 try:
                     parameter.load_torch_tensor(state_dict.pop(name))
                 except ParameterLoadingError as err:
-                    msg = f"while loading {name}: {err}"
+                    msg = f"while loading {module_key_prefix}{name}: {err}"
                     raise ParameterLoadingError(msg) from err
             else:
                 missing_keys.append(name)
 
         unexpected_keys.extend(state_dict.keys())
+
+        return IncompatibleKeys(missing_keys, unexpected_keys)
+
+    def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
+        missing_keys, unexpected_keys = self._load_torch_state_dict_inner(state_dict, module_key_prefix="")
 
         error_msg = ""
         if strict and missing_keys:
