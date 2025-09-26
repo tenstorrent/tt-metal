@@ -78,6 +78,12 @@ TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
     [[maybe_unused]] auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
 }
 
+TEST_F(ControlPlaneFixture, TestN150ControlPlaneInit) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    EXPECT_EQ(control_plane.get_user_physical_mesh_ids().size(), 1);
+}
+
 TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
