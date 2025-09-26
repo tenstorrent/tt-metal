@@ -15,6 +15,19 @@ namespace sfpu {
 sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 
 /*
+ * Both _float_to_int32_ and _float_to_int32_positive_ use branch to handle special cases
+ * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
+ * This allow for a branch free (and much smaller algorithm) to compute integer value
+ */
+sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
+    sfpi::vInt exp = exexp(val);
+    sfpi::vInt man = exman8(val);
+    sfpi::vInt shift = exp - 23;
+    man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
+    return man;
+}
+
+/*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
  * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
@@ -29,20 +42,22 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
  */
 template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
-    sfpi::vFloat y = 0.0f;
+    sfpi::vFloat y = sfpi::vConst0;
     // Intermediary values can overflow if input value is below -88.0f, which leads to output increasing again instead
     // of staying at 0. This overflow happens when `log2(e) * val < 127.0f`, which correspond to `val < 88.0f`
-
-    v_if(val > -88.0f) { val = -88.0f; }
-    v_endif;
+    sfpi::vFloat val_positive = setsgn(val, 0);
+    sfpi::vFloat clamp_threshold = sfpi::vFloat(88.5f);
+    vec_min_max(val_positive, clamp_threshold);
+    val = setsgn(val_positive, val);
 
     // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
     // z = (bias + x * factor * N_m; where:
     // factor = 0x00b8aa3b (computed through log(e))
     // bias = 0x3f800000
-    sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
+    // Is sfpi::vFloat(0x3f800000) getting optimized ?
+    sfpi::vInt z = _float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+    sfpi::vInt zii = exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent
+    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));    // Extract mantissa
 
     // Polynomial coefficients for approximation of exp on [1; 2]
     constexpr float POLY_D1 = 0.40196114e-7f;
@@ -53,11 +68,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
     sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
     d2 = d1 * d2;
-    zif = sfpu::_float_to_int32_positive_(d2 * d3);
+
+    zif = _float_to_int32_exp21f_(d2 * d3);
 
     // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(
-        sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
+    // Is this compiling properly to 1 instruction (vs. add + setexp)
+    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), zii));  // restore exponent
 
     y = sfpi::reinterpret<sfpi::vFloat>(zii);
 
