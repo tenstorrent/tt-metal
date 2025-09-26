@@ -12,6 +12,7 @@ from models.common.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     torch2tt_tensor,
+    is_blackhole,
 )
 from models.perf.perf_utils import prep_perf_report
 from models.experimental.convnet_mnist.tt.convnet_mnist import convnet_mnist
@@ -22,7 +23,7 @@ from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.0042,
+            0.0085 if is_blackhole() else 0.0042,
             6.5,
         ),
     ),
