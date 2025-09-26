@@ -145,7 +145,7 @@ class TensorShardingInfo:
                 # Convert to mesh coordinate space when needed (e.g., 2D meshes)
                 mesh_coord = coord
                 try:
-                    if hasattr(mesh_coord, "dims") and mesh_coord.dims() != len(self.mesh_shape):
+                    if mesh_coord.dims() != len(self.mesh_shape):
                         mesh_coord = getattr(self, "distribution_to_mesh_map", {}).get(mesh_coord, mesh_coord)
                 except Exception:
                     for distribution_coord, mapped_mesh_coord in self._iter_distribution_to_mesh_coords():

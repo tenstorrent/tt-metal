@@ -125,8 +125,7 @@ void py_module(py::module& module) {
             "__getitem__", [](const MeshShape& ms, int index) { return ms[index]; }, py::arg("index"))
         .def("dims", &MeshShape::dims)
         .def("mesh_size", &MeshShape::mesh_size)
-        .def("__eq__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs == rhs; })
-        .def("__ne__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs != rhs; });
+        .def("__eq__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs == rhs; });
 
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
