@@ -452,9 +452,9 @@ Key operations include:</p>
 <p>On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (<code class="docutils literal notranslate"><span class="pre">Mt</span></code>, <code class="docutils literal notranslate"><span class="pre">Kt</span></code>, <code class="docutils literal notranslate"><span class="pre">Nt</span></code>) that define the scope of the operation for the current invocation.
 The overall execution flow is managed by enqueuing commands:</p>
 <ol class="arabic simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">EnqueueWriteBuffer</span></code>: Transfers input matrices A and B from host memory to their respective DRAM buffers on the device.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">EnqueueProgram</span></code>: Launches the compiled program (reader, compute, and writer kernels) on the designated core.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">EnqueueReadBuffer</span></code>: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">EnqueueWriteMeshBuffer</span></code>: Transfers input matrices A and B from host memory to their respective DRAM buffers on the Mesh Device (a 1x1 Mesh Device in this example).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">EnqueueMeshWorkload</span></code>: Launches the compiled workload (reader, compute, and writer kernels) on the designated core on the Unit Mesh Device.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">EnqueueReadMeshBuffer</span></code>: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.</p></li>
 </ol>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// Set runtime arguments for kernels</span>
