@@ -3526,6 +3526,7 @@ def test_conv2d_sdxl_refiner(
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
+@pytest.mark.timeout(120)
 def test_conv2d_vae_sdxl(
     device,
     torch_tensor_map,
