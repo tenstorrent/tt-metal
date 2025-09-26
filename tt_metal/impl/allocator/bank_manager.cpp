@@ -5,7 +5,7 @@
 #include "bank_manager.hpp"
 
 #include <enchantum/enchantum.hpp>
-#include <util.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -13,7 +13,7 @@
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include "allocator_types.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -407,7 +407,7 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, alignment_bytes_);
+    DeviceAddr size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
     DeviceAddr address_limit = 0;
     if (!is_sharded and buffer_type_ == BufferType::L1) {
         address_limit = interleaved_address_limit_;

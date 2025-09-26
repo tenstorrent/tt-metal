@@ -934,7 +934,10 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        attn_mask=None,
     ):
+        if attn_mask is not None:
+            raise NotImplementedError("attn_mask is not supported for Qwen2.5 VL Attention module.")
         if mode == "prefill":
             return self.forward_prefill(
                 x,

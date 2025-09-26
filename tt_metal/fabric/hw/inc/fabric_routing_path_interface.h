@@ -10,7 +10,7 @@ namespace tt::tt_fabric {
 
 // Device-side compressed decoder function for 2D routing
 template <>
-inline bool routing_path_t<2, true>::decode_route_to_buffer(
+inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
     uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
 
@@ -81,7 +81,7 @@ inline bool routing_path_t<2, true>::decode_route_to_buffer(
 
 // Device-side decoder function for 1D routing (packed paths)
 template <>
-inline bool routing_path_t<1, false>::decode_route_to_buffer(
+inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
     uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // Out of bounds - fill buffer with NOOPs/zeros
@@ -102,14 +102,15 @@ inline bool routing_path_t<1, false>::decode_route_to_buffer(
 
 // Device-side compressed decoder function for 1D routing
 template <>
-inline bool routing_path_t<1, true>::decode_route_to_buffer(uint16_t hops, volatile uint8_t* out_route_buffer) const {
+inline bool intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
+    uint16_t hops, volatile uint8_t* out_route_buffer) const {
     return true;
 }
 
 inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
     auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
 
-    if (hops >= routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
+    if (hops >= intra_mesh_routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
         // invalid chip or Noop to self
         *route_ptr = 0;
         ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
@@ -117,9 +118,10 @@ inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_
     }
 
     // Forward for (hops - 1) steps, then write on the final hop
-    uint32_t routing_field_value =
-        (routing_path_t<1, true>::FWD_ONLY_FIELD & ((1 << (hops - 1) * routing_path_t<1, true>::FIELD_WIDTH) - 1)) |
-        (routing_path_t<1, true>::WRITE_ONLY << (hops - 1) * routing_path_t<1, true>::FIELD_WIDTH);
+    uint32_t routing_field_value = (intra_mesh_routing_path_t<1, true>::FWD_ONLY_FIELD &
+                                    ((1 << (hops - 1) * intra_mesh_routing_path_t<1, true>::FIELD_WIDTH) - 1)) |
+                                   (intra_mesh_routing_path_t<1, true>::WRITE_ONLY
+                                    << (hops - 1) * intra_mesh_routing_path_t<1, true>::FIELD_WIDTH);
     *route_ptr = routing_field_value;
     return true;
 }

@@ -8,7 +8,7 @@
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
-#include <utils.hpp>
+#include <tt_stl/tt_stl/reflection.hpp>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -17,7 +17,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "data_types.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
@@ -331,7 +331,7 @@ std::string ComputeKernel::config_hash() const {
 std::string Kernel::compute_hash() const {
     size_t define_hash_value = 0;
     for (const auto& [define, value] : this->defines_) {
-        tt::utils::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
+        ttsl::hash::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
     }
 
     size_t named_args_hash_value = ttsl::hash::hash_objects_with_default_seed(this->named_compile_time_args_);
