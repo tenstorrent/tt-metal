@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 
@@ -19,6 +20,24 @@ enum NOC : uint8_t {
     NOC_0 = 0,
     NOC_1 = 1,
 };
+
+namespace detail {
+
+inline NOC preferred_noc_for_dram_read(ARCH arch) {
+    switch (arch) {
+        case ARCH::WORMHOLE_B0:
+        default: return NOC::NOC_0;
+    }
+}
+
+inline NOC preferred_noc_for_dram_write(ARCH arch) {
+    switch (arch) {
+        case ARCH::WORMHOLE_B0:
+        default: return NOC::NOC_1;
+    }
+}
+
+}  // namespace detail
 
 enum NOC_MODE : uint8_t {
     DM_DEDICATED_NOC = 0,

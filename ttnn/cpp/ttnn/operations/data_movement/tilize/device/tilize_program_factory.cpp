@@ -9,7 +9,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -32,10 +31,10 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
@@ -160,9 +159,9 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -424,9 +423,9 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 
@@ -612,9 +611,9 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;

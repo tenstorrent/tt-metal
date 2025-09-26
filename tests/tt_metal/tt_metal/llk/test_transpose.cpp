@@ -35,7 +35,6 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {

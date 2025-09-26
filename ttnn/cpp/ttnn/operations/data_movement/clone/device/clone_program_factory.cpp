@@ -27,7 +27,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     bool convert_dtype = input_data_format != output_data_format;
     bool tilized = output.layout() == Layout::TILE;
     auto compute_unit_size = [&](const auto& tensor, const auto& data_format) {
-        return tilized ? TileSize(data_format) : tensor.logical_shape()[-1] * tensor.element_size();
+        return tilized ? tt::tile_size(data_format) : tensor.logical_shape()[-1] * tensor.element_size();
     };
     uint32_t input_unit_size = compute_unit_size(input, input_data_format);
     uint32_t output_unit_size = compute_unit_size(output, output_data_format);

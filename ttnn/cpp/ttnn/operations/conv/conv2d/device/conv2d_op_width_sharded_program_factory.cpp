@@ -12,7 +12,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -480,7 +479,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         (uint32_t)act_mcast_start.y,
         (uint32_t)act_mcast_end.x,
         (uint32_t)act_mcast_end.y,
-        (uint32_t)act_block_num_tiles * tt::tt_metal::detail::TileSize(tilized_act_df),
+        (uint32_t)act_block_num_tiles * tt::tile_size(tilized_act_df),
         (uint32_t)output_num_cores,
         (uint32_t)all_reader_cores.size(),
         get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,

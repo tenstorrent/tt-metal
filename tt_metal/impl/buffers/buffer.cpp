@@ -27,7 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
-#include "util.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -528,7 +528,7 @@ DeviceAddr Buffer::aligned_size() const { return this->num_dev_pages() * this->a
 DeviceAddr Buffer::aligned_size_per_bank() const {
     uint32_t num_banks =
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
-    return tt::tt_metal::detail::SizeBytesPerBank(
+    return tt::tt_metal::detail::calculate_bank_size_spread(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 

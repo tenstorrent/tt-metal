@@ -22,7 +22,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher polling the eth link training counter.

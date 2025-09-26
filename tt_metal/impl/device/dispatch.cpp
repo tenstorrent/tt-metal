@@ -7,6 +7,7 @@
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -216,7 +217,7 @@ void read_core_data_from_completion_queue(
 
         num_bytes_read += num_bytes_to_copy;
         const uint32_t num_pages_read =
-            div_up(num_bytes_to_copy + completion_queue_read_offset, DispatchSettings::TRANSFER_PAGE_SIZE);
+            tt::div_up(num_bytes_to_copy + completion_queue_read_offset, DispatchSettings::TRANSFER_PAGE_SIZE);
         sysmem_manager.completion_queue_pop_front(num_pages_read, cq_id);
         completion_queue_read_offset = 0;
     }

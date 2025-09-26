@@ -41,7 +41,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    auto tile_size = tt::tile_size(data_format);
 
     bool use_bias = bias_tensor.has_value();
 

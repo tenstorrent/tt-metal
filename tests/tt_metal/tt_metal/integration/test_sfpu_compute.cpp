@@ -38,7 +38,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {

@@ -38,7 +38,6 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {

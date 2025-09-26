@@ -9,7 +9,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -479,8 +478,8 @@ process_mcast_in0_program_and_create_override_variables(
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     if (fuse_op && fused_op_signaler->is_all_gather()) {
         // Create semaphores
@@ -1262,8 +1261,8 @@ process_mcast_in1_program_and_create_override_variables(
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
@@ -2017,8 +2016,8 @@ process_gather_in0_program_and_create_override_variables(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     bool use_dedicated_noc = true;
     tt_metal::NOC_MODE noc_mode =
@@ -3240,8 +3239,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
         program,

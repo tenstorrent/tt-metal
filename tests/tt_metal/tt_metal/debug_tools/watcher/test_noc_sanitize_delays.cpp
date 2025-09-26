@@ -32,7 +32,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {

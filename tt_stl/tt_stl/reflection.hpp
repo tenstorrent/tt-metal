@@ -1237,6 +1237,13 @@ inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
     return detail::hash_objects(DEFAULT_SEED, args...);
 }
 
+// Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
+template <typename T>
+void hash_combine(std::size_t& seed, const T& value) {
+    std::hash<T> hasher;
+    seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
 }  // namespace hash
 
 namespace json {
