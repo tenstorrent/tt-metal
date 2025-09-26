@@ -63,7 +63,7 @@ void build_and_run_program(
     CreateCircularBuffer(program2, cr_set, cb_config);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size};
-    tt_metal::TensorAccessorArgs().append_to(compile_args);
+    tt_metal::TensorAccessorArgs::create_l1_interleaved().append_to(compile_args);
 
     auto brisc_kernel1 = CreateKernel(
         program1,
