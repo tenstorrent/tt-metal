@@ -22,11 +22,11 @@ void kernel_main() {
     auto accessor_src = TensorAccessor(args_src, bank_base_address_src, page_size);
 
     constexpr uint32_t one_tile = 1;
-    for (uint32_t page_id = start_page; page_id < end_page; ++page_id) {
+    uint32_t cb_addr = get_write_ptr(cb_id);
+    auto pages = accessor_src.pages(start_page, end_page);
+    for (const auto& page : pages) {
         cb_reserve_back(cb_id, one_tile);
-        uint32_t cb_addr = get_write_ptr(cb_id);
-        auto noc_addr_src = accessor_src.get_noc_addr(page_id);
-        noc_async_read(noc_addr_src, cb_addr, page_size);
+        noc_async_read(page.noc_addr(), cb_addr, page_size);
         noc_async_read_barrier();
         cb_push_back(cb_id, one_tile);
     }

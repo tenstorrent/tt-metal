@@ -28,11 +28,6 @@ enum class ShardDistributionStrategy {
     GRID_2D = 1,
 };
 
-enum class ShardMode {
-    PHYSICAL,  // TODO: Deprecate this option to treat shard shape as physical
-    LOGICAL,
-};
-
 enum class BufferType {
     DRAM,
     L1,

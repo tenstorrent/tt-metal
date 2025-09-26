@@ -29,8 +29,8 @@ namespace tensor_accessor {
 uint64_t get_dram_bank_base_offset(uint32_t base_address, uint32_t bank_id, uint8_t noc);
 }
 
-static uint32_t my_x[1] = {0};
-static uint32_t my_y[1] = {0};
+[[maybe_unused]] static uint32_t my_x[1] = {0};
+[[maybe_unused]] static uint32_t my_y[1] = {0};
 
 #define noc_index 0
 #define ASSERT(condition, ...)

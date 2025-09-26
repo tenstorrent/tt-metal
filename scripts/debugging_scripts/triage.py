@@ -491,7 +491,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     """
     # Skip flag for dependency checks
     try:
-        skip_check = bool(args.get("--skip-version-check", False)) if args else False
+        skip_check = bool(args["--skip-version-check"])
     except Exception:
         skip_check = False
 

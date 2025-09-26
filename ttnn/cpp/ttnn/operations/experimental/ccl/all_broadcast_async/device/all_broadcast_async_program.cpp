@@ -15,7 +15,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -77,8 +76,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
-    auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
@@ -120,16 +117,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 .set_page_size(src0_cb_index, buffer_page_size);
     }
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
-    static constexpr auto num_packet_headers_storable = 8;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -152,20 +139,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     std::vector<uint32_t> writer_compile_args = {
-        reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-        num_packet_headers_storable,      // num_packet_headers_storable
-        src0_cb_index,                    // cb0_id
-        num_pages_per_packet,             // packet_size_in_pages
-        op_config.get_page_size(),        // tensor0_page_size
-        num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
+        src0_cb_index,              // cb0_id
+        num_pages_per_packet,       // packet_size_in_pages
+        op_config.get_page_size(),  // tensor0_page_size
+        num_targets_forward,        // num_targets_forward_direction
+        num_targets_backward,       // num_targets_backward_direction
     };
 
     if (!tilized) {
         writer_compile_args = {
-            reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-            num_packet_headers_storable,      // num_packet_headers_storable
-            src0_cb_index,                    // cb0_id
+            src0_cb_index,  // cb0_id
             buffer_page_size,
             row_size,
             max_packet_size,
@@ -174,6 +157,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_targets_forward,                                // num_targets_forward_direction
             num_targets_backward,                               // num_targets_backward_direction
         };
+    }
+    std::vector<uint32_t> mcast_forward_args(2, 0);
+    std::vector<uint32_t> mcast_backward_args(2, 0);
+    if (forward_device.has_value()) {
+        mcast_forward_args[0] = 1;
+        mcast_forward_args[1] = num_targets_forward;
+    }
+    if (backward_device.has_value()) {
+        mcast_backward_args[0] = 1;
+        mcast_backward_args[1] = num_targets_backward;
     }
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
@@ -257,28 +250,28 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             barrier_core.x,                                  // barrier_sem_noc0_x
             barrier_core.y                                   // barrier_sem_noc0_y
         };
+        auto num_connections = (int)forward_device.has_value() + (int)backward_device.has_value();
+        writer_rt_args.push_back(num_connections);
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
+        const auto sender_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+        dst_nodes.reserve(num_connections);
         if (forward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
             const auto forward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+            dst_nodes.push_back(forward_device_fabric_node_id);
         }
-        writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
-            const auto sender_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
             const auto backward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
+            dst_nodes.push_back(backward_device_fabric_node_id);
         }
+
+        append_routing_plane_connection_manager_rt_args(
+            sender_fabric_node_id, dst_nodes, {link}, program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 

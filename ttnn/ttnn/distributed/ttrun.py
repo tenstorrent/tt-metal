@@ -143,6 +143,18 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
 
     cmd = [mpi_launcher]
 
+    # Check if --bind-to is already specified in mpi_args
+    bind_to_already_specified = False
+    if mpi_args:
+        for i, arg in enumerate(mpi_args):
+            if arg == "--bind-to":
+                bind_to_already_specified = True
+                break
+
+    # Add --bind-to none only if not already specified
+    if not bind_to_already_specified:
+        cmd.extend(["--bind-to", "none"])
+
     if mpi_args:
         cmd.extend(mpi_args)
 

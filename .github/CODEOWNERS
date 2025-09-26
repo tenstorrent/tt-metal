@@ -2,7 +2,7 @@
 
 # Top-level files
 /* @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
-METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-codeowners-large-changes
+METALIUM_GUIDE.md @davorchap @marty1885 @tenstorrent/metalium-codeowners-large-changes
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
