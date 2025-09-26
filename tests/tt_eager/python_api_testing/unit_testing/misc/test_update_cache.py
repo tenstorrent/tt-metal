@@ -6,9 +6,9 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from models.utility_functions import nearest_32, pad_by_zero
+from models.common.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import is_grayskull, skip_for_blackhole
+from models.common.utility_functions import is_grayskull, skip_for_blackhole
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")

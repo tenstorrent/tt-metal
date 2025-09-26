@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <numeric>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -385,6 +385,10 @@ public:
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
+            // Skip tests based on topology and device requirements
+            if (should_skip_test(raw_config)) {
+                continue;
+            }
             std::vector<ParsedTestConfig> parametrized_configs = this->expand_parametrizations(raw_config);
 
             // For each newly generated parametrized config, expand its high-level patterns
@@ -405,6 +409,25 @@ public:
     }
 
 private:
+    static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
+
+    // Helper function to check if a test should be skipped based on topology and device count
+    bool should_skip_test(const ParsedTestConfig& test_config) const {
+        if (test_config.fabric_setup.topology == Topology::Ring) {
+            uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
+            if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {
+                log_info(
+                    LogTest,
+                    "Skipping test '{}' - Ring topology requires at least {} devices, but only {} devices available",
+                    test_config.name,
+                    MIN_RING_TOPOLOGY_DEVICES,
+                    num_devices);
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test) {
         TestConfig resolved_test;

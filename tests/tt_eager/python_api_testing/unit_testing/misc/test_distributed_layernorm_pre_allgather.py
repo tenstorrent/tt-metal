@@ -5,7 +5,7 @@
 
 import pytest
 import torch
-from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
 
 import ttnn
 

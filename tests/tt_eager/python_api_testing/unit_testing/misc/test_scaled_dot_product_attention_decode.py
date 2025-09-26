@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, skip_for_blackhole
 import math
 import numpy as np
 
@@ -523,6 +523,7 @@ def run_test_sdpa_decode_single_iter(
         # [1, 8, 1, 8192*16, 128, (1, 1), False, True],  # llama2-70B long seqlen
     ),
 )
+@pytest.mark.timeout(120)
 def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor):
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
@@ -558,6 +559,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
         [32, 4, 1, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n300
     ),
 )
+@pytest.mark.timeout(120)
 def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")

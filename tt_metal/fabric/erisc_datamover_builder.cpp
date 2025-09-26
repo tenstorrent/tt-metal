@@ -5,7 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <stdint.h>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -115,15 +115,6 @@ static void configure_risc_settings(
 static uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     return is_2D_routing ? direction : 0;
-}
-
-static uint32_t get_vc1_connected_sender_channel(Topology topology) {
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        return FabricEriscDatamoverConfig::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
-        return FabricEriscDatamoverConfig::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
-    }
-    return 0;
 }
 
 static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
@@ -352,6 +343,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
+
+    // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
+    // the hang is root caused for multiprocess test.
+    this->edm_local_tensix_sync_address = buffer_address;
+    buffer_address += field_size;
 
     // Channel Allocations
     this->max_l1_loading_size =
@@ -1150,6 +1146,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     termination_signal_ptr(config.termination_signal_address),
     edm_local_sync_ptr(config.edm_local_sync_address),
+    edm_local_tensix_sync_ptr(config.edm_local_tensix_sync_address),
     edm_status_ptr(config.edm_status_address),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     fabric_edm_type(fabric_edm_type),
@@ -1255,6 +1252,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
+    // add the downstream tensix connection arg here, num_downstream_tensix_connections
+    ct_args.push_back(this->num_downstream_tensix_connections);
+
     // when have dateline vc (vc1) and with tensix exntension enabled, need to send vc1 to downstream fabric router
     // instead of downstream tensix exntension.
     bool vc1_has_different_downstream_dest =
@@ -1305,6 +1305,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,
+        this->edm_local_tensix_sync_ptr,
         this->edm_status_ptr,
 
         // fabric counters
@@ -1374,8 +1375,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     ct_args.insert(ct_args.end(), main_args.begin(), main_args.end());
 
     // insert the sender channel num buffers
-    // Index updated to account for 23 stream ID arguments + 1 marker at the beginning
-    const size_t sender_channel_num_buffers_idx = 38;  // 14 + 23 + 1
+    // Index updated to account for 23 stream ID arguments + 1 marker + 1 downstream tensix connections
+    const size_t sender_channel_num_buffers_idx = 39;  // 14 + 23 + 1 + 1
     ct_args.insert(
         ct_args.begin() + sender_channel_num_buffers_idx,
         this->sender_channels_num_buffers.begin(),
@@ -1753,6 +1754,11 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     eth_chan_directions ds_dir = downstream_builder.get_direction();
 
     auto adapter_spec = downstream_builder.build_connection_to_fabric_channel(channel_id);
+
+    if constexpr (std::is_same_v<BuilderType, FabricTensixDatamoverBuilder>) {
+        this->num_downstream_tensix_connections++;
+        downstream_builder.append_upstream_routers_noc_xy(this->my_noc_x, this->my_noc_y);
+    }
 
     if (is_2D_routing) {
         // TODO: unify vc0 and vc1?
