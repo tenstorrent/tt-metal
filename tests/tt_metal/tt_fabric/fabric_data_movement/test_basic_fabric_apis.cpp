@@ -258,10 +258,9 @@ void RunSetUnicastRouteTest(BaseFabricFixture* fixture, bool is_multi_mesh = fal
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
-            if (!is_2d_fabric &&
-                std::abs(
-                    static_cast<long>(src_fabric_node_id.chip_id) - static_cast<long>(dst_fabric_node_id.chip_id)) >=
-                    routing_path_t<1, true>::MAX_CHIPS_LOWLAT) {
+            if (!is_2d_fabric && std::abs(
+                                     static_cast<long>(src_fabric_node_id.chip_id) -
+                                     static_cast<long>(dst_fabric_node_id.chip_id)) >= MAX_CHIPS_LOWLAT_1D) {
                 // Skip 1D route buffer comparison if src and dst are more than 16 chips apart
                 continue;
             }
