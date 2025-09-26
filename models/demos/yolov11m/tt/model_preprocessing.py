@@ -41,15 +41,26 @@ def create_yolov11_input_tensors(
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        # Debug: Check diversity before ttnn.from_torch conversion (ELSE branch)
-        pre_conversion_flat = torch_input_tensor.flatten()
-        pre_conversion_unique = torch.unique(pre_conversion_flat)
-        print(f"🔍 [PREPROCESSING DEBUG - ELSE] BEFORE ttnn.from_torch: {len(pre_conversion_unique)} unique values out of {len(pre_conversion_flat)} total")
-        print(f"    Range: [{pre_conversion_flat.min()}, {pre_conversion_flat.max()}], Mean: {pre_conversion_flat.mean()}")
-        print(f"    Dtype: {torch_input_tensor.dtype}")
+        # Debug: Check diversity before scaling
+        pre_scale_flat = torch_input_tensor.flatten()
+        pre_scale_unique = torch.unique(pre_scale_flat)
+        print(f"🔍 [SCALING DEBUG] BEFORE scaling: {len(pre_scale_unique)} unique values")
+        print(f"    Range: [{pre_scale_flat.min()}, {pre_scale_flat.max()}], Mean: {pre_scale_flat.mean()}")
+        
+        # CRITICAL FIX: Scale tensor to better utilize bfloat16's range
+        # Scale by 8x to move from [-5, +5] to [-40, +40] range
+        # This utilizes more of bfloat16's 65K capacity instead of just 3K
+        scale_factor = 8.0
+        torch_input_tensor_scaled = torch_input_tensor * scale_factor
+        
+        # Debug: Check diversity after scaling
+        post_scale_flat = torch_input_tensor_scaled.flatten()
+        post_scale_unique = torch.unique(post_scale_flat)
+        print(f"🔍 [SCALING DEBUG] AFTER scaling by {scale_factor}x: {len(post_scale_unique)} unique values")
+        print(f"    Range: [{post_scale_flat.min()}, {post_scale_flat.max()}], Mean: {post_scale_flat.mean()}")
         
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
+            torch_input_tensor_scaled,  # Use scaled tensor for better bfloat16 utilization
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,

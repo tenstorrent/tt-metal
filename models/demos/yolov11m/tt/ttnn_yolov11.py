@@ -49,6 +49,18 @@ class TtnnYoloV11:
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
         
+        # CRITICAL FIX: Scale down from preprocessing to restore expected input range
+        # Preprocessing scaled by 8x to preserve bfloat16 diversity, now scale back
+        scale_factor = 8.0
+        input = ttnn.multiply(input, 1.0/scale_factor)
+        
+        # Debug: Check diversity after scale-down
+        input_debug = ttnn.to_torch(input)
+        input_flat = input_debug.flatten()
+        input_unique = torch.unique(input_flat)
+        print(f"🔍 [BACKBONE DEBUG] AFTER scale-down: {len(input_unique)} unique values")
+        print(f"    Range: [{input_flat.min()}, {input_flat.max()}], Mean: {input_flat.mean()}")
+        
         # Only pad if we need more channels
         if channel_padding_needed > 0:
             # Use list format instead of tuples for ttnn.pad API compatibility
