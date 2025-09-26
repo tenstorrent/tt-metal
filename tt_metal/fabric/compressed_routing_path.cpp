@@ -10,7 +10,8 @@ namespace tt::tt_fabric {
 // 1D routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim, bool is_torus) {
+    uint16_t src_chip_id, size_t mesh_shape[2], bool is_torus) {
+    uint8_t num_chips = mesh_shape[1];
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
     for (uint16_t hops = 1; hops < num_chips; ++hops) {
@@ -22,16 +23,18 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim, bool is_torus) {
+    uint16_t src_chip_id, size_t mesh_shape[2], bool is_torus) {
     // No-op
 }
 
 // 2D compressed routing specialization
 template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim, bool is_torus) {
+    uint16_t src_chip_id, size_t mesh_shape[2], bool is_torus) {
     // Calculate NS dimension size (assuming rectangular grid)
-    uint16_t ns_dim = num_chips / ew_dim;
+    uint8_t num_chips = mesh_shape[0] * mesh_shape[1];
+    uint8_t ew_dim = mesh_shape[1];
+    uint8_t ns_dim = mesh_shape[0];
 
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
