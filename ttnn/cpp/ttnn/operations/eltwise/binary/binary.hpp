@@ -53,11 +53,11 @@ struct BinaryOperationWithFastApprox {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt);
 
     static Tensor invoke(
         const ttnn::Tensor& lhs,
@@ -65,11 +65,11 @@ struct BinaryOperationWithFastApprox {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
@@ -159,20 +159,20 @@ struct InplaceBinaryOperationWithFastApprox {
     static Tensor invoke(
         const Tensor& lhs,
         const Tensor& rhs,
+        std::optional<bool> fast_and_approximate_mode = std::nullopt,
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        std::optional<bool> fast_and_approximate_mode = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 
     static Tensor invoke(
         const Tensor& lhs,
         float rhs,
+        std::optional<bool> fast_and_approximate_mode = std::nullopt,
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        std::optional<bool> fast_and_approximate_mode = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
