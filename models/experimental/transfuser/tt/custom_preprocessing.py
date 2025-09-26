@@ -40,6 +40,7 @@ def custom_preprocessor(
     #             ttnn_module_args=ttnn_module_args,
     #         )
     elif isinstance(model, TransfuserBackbone):
+        # Image encoder conv1
         if hasattr(model, "image_encoder") and hasattr(model.image_encoder, "features"):
             weight, bias = fold_batch_norm2d_into_conv2d(
                 model.image_encoder.features.conv1, model.image_encoder.features.bn1
@@ -54,6 +55,21 @@ def custom_preprocessor(
             parameters["image_encoder"]["features"]["conv1"]["bias"] = ttnn.from_torch(
                 bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
             )
+            # Lidar encoder
+            if hasattr(model, "lidar_encoder") and hasattr(model.lidar_encoder, "_model"):
+                lidar_weight, lidar_bias = fold_batch_norm2d_into_conv2d(
+                    model.lidar_encoder._model.conv1, model.lidar_encoder._model.bn1
+                )
+                parameters["lidar_encoder"] = {}
+                parameters["lidar_encoder"]["_model"] = {}
+                parameters["lidar_encoder"]["_model"]["conv1"] = {}
+                parameters["lidar_encoder"]["_model"]["conv1"]["weight"] = ttnn.from_torch(
+                    lidar_weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                )
+                lidar_bias = lidar_bias.reshape((1, 1, 1, -1))
+                parameters["lidar_encoder"]["_model"]["conv1"]["bias"] = ttnn.from_torch(
+                    lidar_bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                )
     return parameters
 
 

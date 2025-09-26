@@ -13,6 +13,7 @@ class TtTransfuserBackbone:
         model_config,
         # layer_optimisations=neck_optimisations,
     ) -> None:
+        print(f"{parameters=}")
         self.conv1 = TTConv2D(
             kernel_size=3,
             stride=2,
@@ -29,7 +30,22 @@ class TtTransfuserBackbone:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
-            # is_reshape=True,
+        )
+        self.lidar_conv1 = TTConv2D(
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            parameters=parameters.lidar_encoder._model.conv1,
+            kernel_fidelity=model_config,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            reshard_if_not_optimal=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            dtype=ttnn.bfloat16,
         )
 
     def normalize_imagenet_ttnn(self, x):
@@ -63,16 +79,17 @@ class TtTransfuserBackbone:
 
         return x
 
-    def __call__(
-        self,
-        x,
-        device,
-    ):
-        x = self.normalize_imagenet_ttnn(x)
-        # conv1 is stride 2 conv 3x3
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        out, shape = self.conv1(device, x, x.shape)
+    def __call__(self, image_x, lidar_x, device):
+        # Process image input
+        image_x = self.normalize_imagenet_ttnn(image_x)
+        image_x = ttnn.permute(image_x, (0, 2, 3, 1))
+        image_out, image_shape = self.conv1(device, image_x, image_x.shape)
         # Reshape to spatial dimensions: 80 * 352 = 28160
         # out = ttnn.reshape(out, (1, 80, 352, 32))
         # out = ttnn.permute(out, (0, 3, 1, 2))
-        return out
+
+        # Process lidar input
+        lidar_x = ttnn.permute(lidar_x, (0, 2, 3, 1))
+        lidar_out, lidar_shape = self.lidar_conv1(device, lidar_x, lidar_x.shape)
+
+        return image_out, lidar_out
