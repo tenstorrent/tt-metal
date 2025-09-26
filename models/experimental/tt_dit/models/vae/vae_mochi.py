@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     pass
 
 
-# TODO REIMPLEMENT WITH THE LINEAR LAYER
 class Conv1x1:
     def __init__(
         self,
@@ -116,7 +115,7 @@ class Conv1x1:
             in_channels=in_channels,
             out_channels=out_channels,
             bias=bias,
-            swizzle_weight=siwzzle_weight,
+            swizzle_weight=swizzle_weight,
             mesh_device=mesh_device,
             torch_ref=torch_ref,
         )
@@ -202,7 +201,7 @@ class ResBlock:
         grid_size_x = mesh_device.core_grid.x
         grid_size_y = (
             self.core_grid_y_map[768][self.parallel_config.time_parallel.factor]
-            if torch_ref.channels == 768
+            if torch_ref.in_channels == 768
             else mesh_device.core_grid.y
         )
         self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
@@ -212,14 +211,14 @@ class ResBlock:
             mesh_device=mesh_device,
             mesh_axis=None,
             core_grid=self.grid_size,
-            torch_ref=torch_ref.stack[0] if torch_ref is not None else None,
+            torch_ref=torch_ref.norm1.norm_layer if torch_ref is not None else None,
         )
         self.norm2 = GroupNorm(
             num_groups=32,
             mesh_device=mesh_device,
             mesh_axis=None,
             core_grid=self.grid_size,
-            torch_ref=torch_ref.stack[3] if torch_ref is not None else None,
+            torch_ref=torch_ref.norm2.norm_layer if torch_ref is not None else None,
         )
         self.conv1 = ContextParallelConv3d(
             mesh_device=mesh_device,
@@ -230,7 +229,7 @@ class ResBlock:
             causal=causal,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            torch_ref=torch_ref.stack[2] if torch_ref is not None else None,
+            torch_ref=torch_ref.conv1.conv if torch_ref is not None else None,
         )
         self.conv2 = ContextParallelConv3d(
             mesh_device=mesh_device,
@@ -241,7 +240,7 @@ class ResBlock:
             causal=causal,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            torch_ref=torch_ref.stack[5] if torch_ref is not None else None,
+            torch_ref=torch_ref.conv2.conv if torch_ref is not None else None,
         )
 
     def get_tensor_shapes(self, x):
@@ -344,7 +343,7 @@ class ResBlock:
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
         ttnn.deallocate(x_tiled_NTHWC)
-        x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)  # in-place
+        x_norm_tiled_NTHWC = ttnn.swish(x_norm_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_norm_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_norm_tiled_NTHWC)
 
@@ -415,7 +414,7 @@ class ResBlock:
         num_out_blocks = self.num_out_blocks_map[C][HW]
         x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_conv1_tiled_NTHWC)
-        x_tiled_NTHWC = ttnn.silu(x_tiled_NTHWC, output_tensor=x_tiled_NTHWC)  # in-place
+        x_tiled_NTHWC = ttnn.swish(x_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_tiled_NTHWC)
 
@@ -481,6 +480,7 @@ class CausalUpsampleBlock:
         num_res_blocks: int = 0,
         temporal_expansion: int = 2,
         spatial_expansion: int = 2,
+        temporal_offset: int = 0,
         has_attention: bool = False,
         affine: bool = True,
         attn_block=None,
@@ -500,22 +500,22 @@ class CausalUpsampleBlock:
         assert not prune_bottleneck
         assert not has_attention
         self.mesh_device = mesh_device
-        self.blocks = []
-        for i in range(num_res_blocks):
-            self.blocks.append(
-                ResBlock(
-                    mesh_device=mesh_device,
-                    causal=causal,
-                    padding_mode=padding_mode,
-                    bias=bias,
-                    torch_ref=torch_ref.blocks[i],
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
+        self.blocks = [
+            ResBlock(
+                mesh_device=mesh_device,
+                causal=causal,
+                padding_mode=padding_mode,
+                bias=bias,
+                torch_ref=resnet,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
             )
+            for resnet in torch_ref.resnets
+        ]
 
         self.temporal_expansion = temporal_expansion
         self.spatial_expansion = spatial_expansion
+        self.temporal_offset = temporal_offset
         self.out_channels = out_channels
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -553,8 +553,8 @@ class CausalUpsampleBlock:
 
             x = ttnn.reshape(x, [B, T * texp, H * sexp, W * sexp, self.out_channels])
             if texp > 1:
-                # Drop the first texp - 1 frames.
-                x = ttnn.slice(x, [0, texp - 1, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels])
+                # Drop the first temporal_offset frames.
+                x = ttnn.slice(x, [0, temporal_offset, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels])
             return x
         else:
             # Workaround for 1) issue #17535 for multi-device reshape,
@@ -568,7 +568,7 @@ class CausalUpsampleBlock:
             return x_NTHWC
 
     def reshard_output(self, x_NTHWC):
-        if self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1:
+        if self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1 and self.temporal_offset > 0:
             HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
             C = x_NTHWC.shape[4]
             num_devices = self.parallel_config.time_parallel.factor
@@ -580,7 +580,7 @@ class CausalUpsampleBlock:
                 cluster_axis=1,
                 dim=0,
                 output_shape=padded_T,
-                output_offset=self.temporal_expansion - 1,
+                output_offset=self.temporal_offset,
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         return x_NTHWC
@@ -595,7 +595,7 @@ class CausalUpsampleBlock:
         return x_NTHWC
 
 
-class Decoder:
+class MochiVAEDecoder:
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -611,9 +611,12 @@ class Decoder:
         latent_dim=12,
         has_attention=[False, False, False, False, False],
         output_norm=False,
-        nonlinearity="silu",
-        output_nonlinearity="silu",
+        nonlinearity="swish",
+        output_nonlinearity="swish",
         causal=True,
+        latents_mean=None,
+        latents_std=None,
+        scaling_factor=1.0,
     ):
         """
         TTNN implementation of the VAE Decoder.
@@ -624,7 +627,8 @@ class Decoder:
         self.num_res_blocks = num_res_blocks
         self.output_nonlinearity = output_nonlinearity
         self.mesh_device = mesh_device
-        assert nonlinearity == "silu"
+        self.config = [("latents_mean", latents_mean), ("latents_std", latents_std), ("scaling_factor", scaling_factor)]
+        assert nonlinearity == "swish"
         assert causal
         assert not any(has_attention), "Attention is not supported in the decoder"
         attn_block = None
@@ -636,64 +640,58 @@ class Decoder:
         assert len(temporal_expansions) == len(spatial_expansions) == self.num_up_blocks
         assert len(num_res_blocks) == len(has_attention) == self.num_up_blocks + 2
 
-        first_block_torch_ref = torch_ref.blocks[0]
         # Create the initial projection from latent space
         self.input_proj = Conv1x1(
             mesh_device=mesh_device,
             in_channels=latent_dim,
             out_channels=ch[-1],
-            torch_ref=first_block_torch_ref[0],
+            torch_ref=torch_ref.conv_in,
         )
 
         # First set of residual blocks
-        self.first_blocks = []
-        for i in range(num_res_blocks[-1]):
-            self.first_blocks.append(
-                ResBlock(
-                    mesh_device=mesh_device,
-                    causal=causal,
-                    padding_mode="replicate",
-                    torch_ref=first_block_torch_ref[i + 1],
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
+        self.first_blocks = [
+            ResBlock(
+                mesh_device=mesh_device,
+                causal=causal,
+                padding_mode="replicate",
+                torch_ref=resnet,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
             )
+            for resnet in torch_ref.block_in.resnets
+        ]
 
         # Create upsampling blocks
-        self.up_blocks = []
-        for i in range(self.num_up_blocks):
-            upsample_block_torch_ref = torch_ref.blocks[i + 1]
-            self.up_blocks.append(
-                CausalUpsampleBlock(
-                    mesh_device=mesh_device,
-                    in_channels=ch[-i - 1],
-                    out_channels=ch[-i - 2],
-                    num_res_blocks=num_res_blocks[-i - 2],
-                    attn_block=attn_block,
-                    temporal_expansion=temporal_expansions[-i - 1],
-                    spatial_expansion=spatial_expansions[-i - 1],
-                    causal=causal,
-                    padding_mode="replicate",
-                    torch_ref=upsample_block_torch_ref,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
+        self.up_blocks = [
+            CausalUpsampleBlock(
+                mesh_device=mesh_device,
+                in_channels=ch[-i - 1],
+                out_channels=ch[-i - 2],
+                num_res_blocks=num_res_blocks[-i - 2],
+                attn_block=attn_block,
+                temporal_expansion=temporal_expansions[-i - 1],
+                spatial_expansion=spatial_expansions[-i - 1],
+                causal=causal,
+                padding_mode="replicate",
+                torch_ref=upblock,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
             )
+            for i, upblock in enumerate(torch_ref.up_blocks)
+        ]
 
-        last_block_torch_ref = torch_ref.blocks[1 + self.num_up_blocks]
         # Last set of residual blocks
-        self.last_blocks = []
-        for i in range(num_res_blocks[0]):
-            self.last_blocks.append(
-                ResBlock(
-                    mesh_device=mesh_device,
-                    causal=causal,
-                    padding_mode="replicate",
-                    torch_ref=last_block_torch_ref[i],
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
+        self.last_blocks = [
+            ResBlock(
+                mesh_device=mesh_device,
+                causal=causal,
+                padding_mode="replicate",
+                torch_ref=resnet,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
             )
+            for resnet in torch_ref.block_out.resnets
+        ]
 
         # Final output projection
         self.output_proj = Conv1x1(
@@ -701,7 +699,7 @@ class Decoder:
             in_channels=ch[0],
             out_channels=out_channels,
             bias=True,
-            torch_ref=torch_ref.output_proj,
+            torch_ref=torch_ref.proj_out,
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -769,10 +767,10 @@ class Decoder:
             x_NTHWC = x_res_NTHWC
 
         # Apply output nonlinearity if needed
-        if self.output_nonlinearity == "silu":
+        if self.output_nonlinearity == "swish":
             x_tile_NTHWC = ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)
             ttnn.deallocate(x_NTHWC)
-            x_tile_NTHWC = ttnn.silu(x_tile_NTHWC, output_tensor=x_tile_NTHWC)  # in-place
+            x_tile_NTHWC = ttnn.swish(x_tile_NTHWC)  # in-place
             x_NTHWC = ttnn.to_layout(x_tile_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tile_NTHWC)
         else:
@@ -782,22 +780,3 @@ class Decoder:
         x_NTHWC = self.output_proj(x_NTHWC)
 
         return x_NTHWC
-
-    @classmethod
-    def from_pretrained(cls, mesh_device, **kwargs):
-        """
-        Create a TtDecoder from pretrained weights.
-
-        Args:
-            mesh_device: TTNN mesh device
-            **kwargs: Additional arguments to pass to the constructor
-
-        Returns:
-            TtDecoder: Initialized decoder
-        """
-        state_dict = load_decoder_weights()
-        if state_dict is None:
-            logger.error("Failed to load decoder weights")
-            return None
-
-        return cls(mesh_device=mesh_device, state_dict=state_dict, **kwargs)

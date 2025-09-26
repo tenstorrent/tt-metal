@@ -13,42 +13,18 @@ from ...models.vae.vae_mochi import (
     Conv1x1 as TtConv1x1,
     ResBlock as TtResBlock,
     CausalUpsampleBlock as TtCausalUpsampleBlock,
-    Decoder as TtDecoder,
+    MochiVAEDecoder as TtDecoder,
 )
 from ...parallel.manager import CCLManager
 from ...parallel.config import MochiVAEParallelConfig, ParallelFactor
-from loguru import logger
-from genmo.mochi_preview.vae.models import Decoder as RefDecoder
-from genmo.mochi_preview.vae.models import ResBlock as RefResBlock
-from genmo.mochi_preview.vae.models import CausalUpsampleBlock as RefCausalUpsampleBlock
+from diffusers.models.autoencoders.autoencoder_kl_mochi import MochiResnetBlock3D, MochiUpBlock3D, MochiDecoder3D
 
+from loguru import logger
 from pathlib import Path
 
 
 def get_padded_size(numerator, denominator):
     return ((numerator + denominator - 1) // denominator) * denominator
-
-
-# Basic decoder configuration that aligns with typical decoder settings
-decoder_base_args = {
-    "out_channels": 3,
-    "base_channels": 128,
-    "channel_multipliers": [1, 2, 4, 6],
-    "temporal_expansions": [1, 2, 3],
-    "spatial_expansions": [2, 2, 2],
-    "num_res_blocks": [3, 3, 4, 6, 3],
-    "latent_dim": 12,
-    "has_attention": [False, False, False, False, False],
-    "output_norm": False,
-    "nonlinearity": "silu",
-    "output_nonlinearity": "silu",
-    "causal": True,
-}
-
-vae_shapes = [
-    # more optimal reshaped versions
-    [16, 60, 106, 768],
-]
 
 
 # Custom pytest mark for shared VAE device configuration
@@ -179,10 +155,10 @@ resblock_args = {
 }
 
 
-def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, **model_args):
+def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_channels):
     """Initialize both reference and TT models."""
     # Create reference model
-    reference_model = RefResBlock(**model_args)
+    reference_model = MochiResnetBlock3D(in_channels=in_channels)
 
     # Create TT model
     tt_model = TtResBlock(
@@ -235,10 +211,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
 
     reference_model, tt_model = create_random_resblock_models(
-        mesh_device,
-        parallel_config=vae_parallel_config,
-        ccl_manager=ccl_manager,
-        **block_args,
+        mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager, in_channels=block_args["channels"]
     )
 
     # Create input tensor
@@ -310,7 +283,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     # Get reference output
     logger.info("Run RefResBlock forward")
     with torch.no_grad():
-        ref_output = reference_model(torch_input)
+        ref_output = reference_model(torch_input)[0]
     logger.info("End RefResBlock forward")
 
     logger.info("assert quality")
@@ -320,62 +293,26 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
         assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.999)
 
 
-# Base configuration that applies to all test cases
-upsample_base_args = {
-    "affine": True,
-    "causal": True,
-    "prune_bottleneck": False,
-    "padding_mode": "replicate",
-    "bias": True,
-    "has_attention": False,
-}
-
-
 def create_random_causalupsampleblock_models(
-    mesh_device, in_channels, out_channels, use_real_weights, parallel_config, ccl_manager, **model_args
+    mesh_device,
+    in_channels,
+    out_channels,
+    num_layers,
+    temporal_expansion,
+    spatial_expansion,
+    temporal_offset,
+    parallel_config,
+    ccl_manager,
 ):
     """Initialize both reference and TT models with optional real weights."""
     # Create reference model
-    reference_model = RefCausalUpsampleBlock(in_channels=in_channels, out_channels=out_channels, **model_args)
-
-    # Try to load real weights if requested
-    if use_real_weights:
-        decoder_weights = load_decoder_weights()
-        if decoder_weights:
-            # Find the right upsample block based on channels
-            block_idx = None
-            if in_channels == 768 and out_channels == 512:
-                block_idx = 1  # First upsample block
-            elif in_channels == 512 and out_channels == 256:
-                block_idx = 2  # Second upsample block
-            elif in_channels == 256 and out_channels == 128:
-                block_idx = 3  # Third upsample block
-
-            if block_idx is not None:
-                # Extract weights with the correct prefix
-                block_prefix = f"blocks.{block_idx}"
-                block_state_dict = {}
-
-                # Find all weights belonging to this block
-                for key, value in decoder_weights.items():
-                    if key.startswith(block_prefix):
-                        # Remove the block prefix to match reference model keys
-                        local_key = key[len(block_prefix) + 1 :]  # +1 for the dot
-                        block_state_dict[local_key] = value
-
-                if block_state_dict:
-                    try:
-                        # Load weights that match the reference model
-                        reference_model.load_state_dict(block_state_dict, strict=False)
-                        logger.info(
-                            f"Loaded real weights for upsample block {block_idx} ({in_channels}->{out_channels})"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to load weights for block {block_idx}: {e}")
-                else:
-                    logger.warning(f"No weights found for upsample block {block_idx}")
-            else:
-                logger.warning(f"No matching upsample block for {in_channels}->{out_channels}")
+    reference_model = MochiUpBlock3D(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        num_layers=num_layers,
+        temporal_expansion=temporal_expansion,
+        spatial_expansion=spatial_expansion,
+    )
 
     # Create TT model with same weights
     tt_model = TtCausalUpsampleBlock(
@@ -385,7 +322,10 @@ def create_random_causalupsampleblock_models(
         torch_ref=reference_model,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
-        **model_args,
+        num_res_blocks=num_layers,
+        temporal_expansion=temporal_expansion,
+        spatial_expansion=spatial_expansion,
+        temporal_offset=temporal_offset,
     )
 
     return reference_model, tt_model
@@ -395,7 +335,7 @@ def create_random_causalupsampleblock_models(
     "config",
     [
         # large latent
-        # First upsample block (768->512), T padded from 28->32
+        # First upsample block (768->512)
         {
             "name": "block1_768-512",
             "in_channels": 768,
@@ -404,9 +344,9 @@ def create_random_causalupsampleblock_models(
             "temporal_expansion": 3,
             "spatial_expansion": 2,
             "input_shape": [1, 768, 28, 60, 106],
-            "expected_output_shape": (1, 512, 82, 120, 212),
+            "expected_output_shape": (1, 512, 84, 120, 212),
         },
-        # Second upsample block (512->256), T padded from 82->88
+        # Second upsample block (512->256)
         {
             "name": "block2_512-256",
             "in_channels": 512,
@@ -414,10 +354,10 @@ def create_random_causalupsampleblock_models(
             "num_res_blocks": 4,
             "temporal_expansion": 2,
             "spatial_expansion": 2,
-            "input_shape": [1, 512, 82, 120, 212],
-            "expected_output_shape": (1, 256, 163, 240, 424),
+            "input_shape": [1, 512, 84, 120, 212],
+            "expected_output_shape": (1, 256, 168, 240, 424),
         },
-        # Third upsample block (256->128), T padded from 163->168
+        # Third upsample block (256->128)
         {
             "name": "block3_256-128",
             "in_channels": 256,
@@ -425,16 +365,15 @@ def create_random_causalupsampleblock_models(
             "num_res_blocks": 3,
             "temporal_expansion": 1,
             "spatial_expansion": 2,
-            "input_shape": [1, 256, 163, 240, 424],
-            "expected_output_shape": (1, 128, 163, 480, 848),
+            "input_shape": [1, 256, 168, 240, 424],
+            "expected_output_shape": (1, 128, 168, 480, 848),
         },
     ],
     ids=["l768", "l512", "l256"],
 )
-@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
 @vae_device_config
-def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights, num_links):
+def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     """Test TtCausalUpsampleBlock against reference implementation."""
     in_channels = config["in_channels"]
     out_channels = config["out_channels"]
@@ -443,16 +382,8 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights,
     spatial_expansion = config["spatial_expansion"]
     input_shape = config["input_shape"]
     expected_output_shape = config["expected_output_shape"]
+    temporal_offset = 0  # temporal_expansion-1
     N, C, T, H, W = input_shape
-
-    block_args = upsample_base_args.copy()
-    block_args.update(
-        {
-            "temporal_expansion": temporal_expansion,
-            "spatial_expansion": spatial_expansion,
-            "num_res_blocks": num_res_blocks,
-        }
-    )
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     h_parallel_factor = 4
@@ -468,10 +399,12 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights,
         mesh_device,
         in_channels=in_channels,
         out_channels=out_channels,
-        use_real_weights=use_real_weights,
+        num_layers=num_res_blocks,
+        temporal_expansion=temporal_expansion,
+        spatial_expansion=spatial_expansion,
+        temporal_offset=temporal_offset,
         parallel_config=vae_parallel_config,
         ccl_manager=ccl_manager,
-        **block_args,
     )
 
     # Create input tensor
@@ -521,7 +454,7 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights,
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtCausalUpsampleBlock forward")
     tt_output = tt_model(tt_input)
-    logger.info("End TtResBlock forward")
+    logger.info("End TtCausalUpsampleBlock forward")
     tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
@@ -530,7 +463,7 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 0]),
     )
 
-    expected_T = T * temporal_expansion - (temporal_expansion - 1)
+    expected_T = T * temporal_expansion - temporal_offset
     expected_padded_T = get_padded_size(expected_T, num_devices_T)
     expected_H = (H * spatial_expansion) // num_devices_H
     expected_W = (W * spatial_expansion) // num_devices_W
@@ -542,7 +475,6 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights,
     tt_output_torch = torch.reshape(
         tt_output_torch, (N, expected_padded_T, H * spatial_expansion, W * spatial_expansion, expected_output_shape[1])
     )
-
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     if mesh_device.get_num_devices() > 1:
         tt_output_torch = tt_output_torch[
@@ -556,31 +488,38 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights,
     # Get reference output
     logger.info("Run RefCausalUpsampleBlock forward")
     with torch.no_grad():
-        ref_output = reference_model(torch_input)
-    logger.info("End RefResBlock forward")
+        ref_output = reference_model(torch_input)[0]
+    logger.info("End RefCausalUpsampleBlock forward")
 
     logger.info("assert quality")
-    for i in range(T * temporal_expansion - (temporal_expansion - 1)):
+    for i in range(T * temporal_expansion - temporal_offset):
         ref_output_slice = ref_output[:, :, i, :, :]
         tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
         assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.989)
 
 
-def create_decoder_models(mesh_device, use_real_weights, parallel_config, ccl_manager, **model_args):
+def create_decoder_models(
+    mesh_device,
+    parallel_config,
+    ccl_manager,
+    latent_dim,
+    out_channels,
+    base_channels,
+    channel_multipliers,
+    temporal_expansions,
+    spatial_expansions,
+    num_res_blocks,
+):
     """Initialize both reference and TT decoder models with optional real weights."""
     # Create reference model
-    reference_model = RefDecoder(**model_args)
-
-    # Try to load real weights if requested
-    if use_real_weights:
-        state_dict = load_decoder_weights()
-        if state_dict:
-            try:
-                # Load weights into reference model
-                reference_model.load_state_dict(state_dict, strict=True)
-                logger.info(f"Loaded real weights for reference decoder model")
-            except Exception as e:
-                logger.warning(f"Failed to load weights for reference decoder: {e}")
+    reference_model = MochiDecoder3D(
+        in_channels=latent_dim,
+        out_channels=out_channels,
+        block_out_channels=[base_channels * multiplier for multiplier in channel_multipliers],
+        layers_per_block=num_res_blocks,
+        temporal_expansions=temporal_expansions,
+        spatial_expansions=spatial_expansions,
+    )
 
     # Create TT model with same weights
     tt_model = TtDecoder(
@@ -588,7 +527,13 @@ def create_decoder_models(mesh_device, use_real_weights, parallel_config, ccl_ma
         torch_ref=reference_model,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
-        **model_args,
+        out_channels=out_channels,
+        base_channels=base_channels,
+        channel_multipliers=channel_multipliers,
+        temporal_expansions=temporal_expansions,
+        spatial_expansions=spatial_expansions,
+        num_res_blocks=num_res_blocks,
+        latent_dim=latent_dim,
     )
 
     return reference_model, tt_model
@@ -597,18 +542,20 @@ def create_decoder_models(mesh_device, use_real_weights, parallel_config, ccl_ma
 # Test case configurations for different input sizes
 decoder_test_configs = [
     {
-        "name": "small_latent",
-        "input_shape": [1, 12, 28, 30, 53],
-        # Expected output will be approximately: (1, 3, 163, 240, 424)
-    },
-    {
-        "name": "medium_latent",
-        "input_shape": [1, 12, 28, 40, 76],
-        # Expected output will be approximately: (1, 3, 163, 480, 848)
-    },
-    {
         "name": "large_latent",
         "input_shape": [1, 12, 28, 60, 106],
+        "out_channels": 3,
+        "base_channels": 128,
+        "channel_multipliers": [1, 2, 4, 6],
+        "temporal_expansions": [1, 2, 3],
+        "spatial_expansions": [2, 2, 2],
+        "num_res_blocks": [3, 3, 4, 6, 3],
+        "latent_dim": 12,
+        "has_attention": [False, False, False, False, False],
+        "output_norm": False,
+        "nonlinearity": "swish",
+        "output_nonlinearity": "swish",
+        "causal": True,
         # Expected output will be approximately: (1, 3, 163, 480, 848)
     },
 ]
@@ -619,22 +566,17 @@ decoder_test_configs = [
     decoder_test_configs,
     ids=[cfg["name"] for cfg in decoder_test_configs],
 )
-@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize("load_dit_weights", [False, True], ids=["no_dit", "load_dit"])
 @pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
 @vae_device_config
-def test_tt_decoder_forward(mesh_device, config, reset_seeds, use_real_weights, load_dit_weights, num_links):
+def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
 
-    # Initialize model arguments
-    model_args = decoder_base_args.copy()
-
     logger.info(
-        f"Testing decoder with latent_dim={model_args['latent_dim']}, "
-        f"base_channels={model_args['base_channels']}, "
-        f"channel_multipliers={model_args['channel_multipliers']}, "
-        f"use_real_weights={use_real_weights}"
+        f"Testing decoder with latent_dim={config['latent_dim']}, "
+        f"base_channels={config['base_channels']}, "
+        f"channel_multipliers={config['channel_multipliers']}, "
     )
 
     # TODO after the new model creation API is set
@@ -658,10 +600,15 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, use_real_weights, 
 
     reference_model, tt_model = create_decoder_models(
         mesh_device,
-        use_real_weights=use_real_weights,
         parallel_config=vae_parallel_config,
         ccl_manager=ccl_manager,
-        **model_args,
+        latent_dim=config["latent_dim"],
+        out_channels=config["out_channels"],
+        base_channels=config["base_channels"],
+        channel_multipliers=config["channel_multipliers"],
+        num_res_blocks=config["num_res_blocks"],
+        temporal_expansions=config["temporal_expansions"],
+        spatial_expansions=config["spatial_expansions"],
     )
 
     # Create input tensor (latent representation)
@@ -722,7 +669,7 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, use_real_weights, 
     # Get reference output
     logger.info("Run RefDecoder forward")
     with torch.no_grad():
-        ref_output = reference_model(torch_input)
+        ref_output = reference_model(torch_input)[0]
     logger.info("End RefDecoder forward")
 
     # unpad tt output
