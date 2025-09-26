@@ -240,6 +240,8 @@ def run_all_broadcast_impl(
         (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 1, [11, 10, 32784], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (4, 1, [1, 2, 16300], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
