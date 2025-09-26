@@ -1132,7 +1132,7 @@ void DPrintServer::Impl::poll_print_data() {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     while (true) {
         if (stop_print_server_ && !new_data_last_iter_) {
-            // If the stop signal was received, exit the print server thread immediately.
+            // If the stop signal was received, exit the print server thread after all new data has been processed.
             break;
         }
 
