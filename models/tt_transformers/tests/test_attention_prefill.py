@@ -69,18 +69,19 @@ def test_attention_inference(
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
+    first_layer_prefix = model_args.get_ref_state_dict_prefix("self_attn", 0) + "."
     partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+        k[len(first_layer_prefix) :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_rot_mats(
-        head_dim=model_args.head_dim,
+        head_dim=int(model_args.head_dim * model_args.partial_rotary_factor),
         device=mesh_device,
         seq_len=max_seq_len,
         theta=model_args.rope_theta,
@@ -165,7 +166,7 @@ def test_attention_inference(
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
     positions = torch.LongTensor(range(max_seq_len))
     freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim,
+        int(model_args.head_dim * model_args.partial_rotary_factor),
         model_args.max_seq_len * 2,
         model_args.rope_theta,
         model_args.rope_scaling.factor if model_args.rope_scaling else None,

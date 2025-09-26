@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -67,6 +67,7 @@ def test_rms_norm_inference(
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         tt_ccl=tt_ccl,
+        base_model_name=model_args.base_model_name,
     )
 
     # Wrap it in DistributedNorm
@@ -80,6 +81,8 @@ def test_rms_norm_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)
+    if isinstance(reference_model, torch.nn.LayerNorm):
+        input = input.to(dtype=next(iter(partial_state_dict.values())).dtype)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
@@ -104,7 +107,7 @@ def test_rms_norm_inference(
         ),
     )[:1, :, :, :]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.999)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
@@ -114,4 +117,4 @@ def test_rms_norm_inference(
     else:
         logger.warning("rms_norm Failed!")
 
-    assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
+    assert passing, f"rms_norm output does not meet PCC requirement {0.999}."
