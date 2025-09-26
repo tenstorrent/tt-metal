@@ -46,50 +46,30 @@ class TtnnYoloV11:
         self.obb = TtnnOBB(device, parameters.model_args.model[23], parameters.model[23])
 
     def __call__(self, input, min_channels=16):
-        n, c, h, w = input.shape
-        channel_padding_needed = min_channels - c
+        # Input is already NHWC format with 16 channels from PyTorch preprocessing
+        n, h, w, c = input.shape  # NHWC format
         
         # PROVEN: float32 preprocessing preserves all input diversity (0% loss)
-        # No scaling needed - input already in correct range with full precision
+        # No scaling or permute needed - input already in correct format with full precision
         input_debug = ttnn.to_torch(input)
         input_flat = input_debug.flatten()
         input_unique = torch.unique(input_flat)
         print(f"🔍 [BACKBONE DEBUG] Float32 input diversity: {len(input_unique)} unique values")
         print(f"    Range: [{input_flat.min()}, {input_flat.max()}], Mean: {input_flat.mean()}")
         
-        # Only pad if we need more channels
-        if channel_padding_needed > 0:
-            # Use list format instead of tuples for ttnn.pad API compatibility
-            x = ttnn.pad(input, [[0, 0], [0, channel_padding_needed], [0, 0], [0, 0]], value=0.0)
-            ttnn.deallocate(input)
-        else:
-            # No padding needed, use input as is
-            x = input
-            min_channels = c  # Update min_channels to actual channels
-        # Debug: Check diversity before permute operation
-        x_pre_permute_debug = ttnn.to_torch(x)
-        x_pre_permute_flat = x_pre_permute_debug.flatten()
-        x_pre_permute_unique = torch.unique(x_pre_permute_flat)
-        print(f"🔍 [RESHAPE DEBUG] BEFORE PERMUTE: {len(x_pre_permute_unique)} unique values out of {len(x_pre_permute_flat)} total")
-        print(f"    Range: [{x_pre_permute_flat.min()}, {x_pre_permute_flat.max()}], Mean: {x_pre_permute_flat.mean()}")
-        print(f"    Dtype: {x_pre_permute_debug.dtype}, Shape: {x_pre_permute_debug.shape}")
+        # No padding needed - already done in PyTorch preprocessing
+        x = input
+        # PERMUTE MOVED TO PYTORCH PREPROCESSING: Input already in NHWC format
+        # No ttnn.permute needed - preprocessing converts NCHW→NHWC in high precision
+        print(f"🔍 [BACKBONE DEBUG] Input already NHWC from preprocessing: {x.shape}")
         
-        # CRITICAL FIX: Use input's memory config to preserve sharding compatibility
-        # Sharded tensors require sharded output configs for transpose operations
-        input_memory_config = x.memory_config()
-        x = ttnn.permute(x, (0, 2, 3, 1), memory_config=input_memory_config)
-        
-        # Ensure output maintains float32 precision without changing memory layout
-        x = ttnn.to_dtype(x, dtype=ttnn.float32)
-        
-        # Debug: Check diversity after permute operation  
-        x_post_permute_debug = ttnn.to_torch(x)
-        x_post_permute_flat = x_post_permute_debug.flatten()
-        x_post_permute_unique = torch.unique(x_post_permute_flat)
-        print(f"🔍 [RESHAPE DEBUG] AFTER PERMUTE: {len(x_post_permute_unique)} unique values out of {len(x_post_permute_flat)} total")
-        print(f"    Range: [{x_post_permute_flat.min()}, {x_post_permute_flat.max()}], Mean: {x_post_permute_flat.mean()}")
-        print(f"    Dtype: {x_post_permute_debug.dtype}, Shape: {x_post_permute_debug.shape}")
-        print(f"🔍 [PERMUTE KILLER] DIVERSITY LOSS: {len(x_pre_permute_unique)} → {len(x_post_permute_unique)} ({100*(len(x_pre_permute_unique)-len(x_post_permute_unique))/len(x_pre_permute_unique):.2f}% loss)")
+        # Debug: Verify input diversity preservation  
+        x_debug = ttnn.to_torch(x)
+        x_flat = x_debug.flatten()
+        x_unique = torch.unique(x_flat)
+        print(f"🔍 [NO PERMUTE] Input diversity preserved: {len(x_unique)} unique values out of {len(x_flat)} total")
+        print(f"    Range: [{x_flat.min()}, {x_flat.max()}], Mean: {x_flat.mean()}")
+        print(f"    Dtype: {x_debug.dtype}, Shape: {x_debug.shape}")
         
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         

@@ -36,8 +36,9 @@ def create_yolov11_input_tensors(
         if c == 3:
             c = 16
         n = n // num_devices if n // num_devices != 0 else n
+        # Memory config updated for NHWC layout after PyTorch permute
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, h, w],
+            [n, h, w, c],  # NHWC format after PyTorch permute
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
@@ -46,8 +47,21 @@ def create_yolov11_input_tensors(
         print(f"🔍 [PREPROCESSING DEBUG] Input diversity: {len(torch.unique(torch_input_tensor.flatten()))} unique values")
         print(f"    Range: [{torch_input_tensor.min()}, {torch_input_tensor.max()}], Mean: {torch_input_tensor.mean()}")
         
+        # CRITICAL FIX: Apply channel padding and permute in PyTorch (high precision)
+        # This prevents 94% diversity loss from ttnn.permute's sharded memory operations
+        if torch_input_tensor.shape[1] == 3:
+            # Pad channels from 3 to 16 in PyTorch before permute
+            channel_padding = torch.zeros(1, 13, h, w, dtype=torch_input_tensor.dtype, device=torch_input_tensor.device)
+            torch_input_tensor_padded = torch.cat([torch_input_tensor, channel_padding], dim=1)
+            print(f"🔍 [PYTORCH PADDING] Padded channels: {torch_input_tensor.shape} → {torch_input_tensor_padded.shape}")
+        else:
+            torch_input_tensor_padded = torch_input_tensor
+            
+        torch_input_tensor_nhwc = torch_input_tensor_padded.permute(0, 2, 3, 1)  # NCHW → NHWC
+        print(f"🔍 [PYTORCH PERMUTE] Applied permute in PyTorch: {torch_input_tensor_padded.shape} → {torch_input_tensor_nhwc.shape}")
+        
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor,         # Use original tensor (no scaling needed)
+            torch_input_tensor_nhwc,    # Use PyTorch-permuted tensor (preserves all values)
             dtype=ttnn.float32,         # CRITICAL: Use float32 to preserve all 306K values
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -63,7 +77,7 @@ def create_yolov11_input_tensors(
         print(f"    Range: [{post_conversion_flat.min()}, {post_conversion_flat.max()}], Mean: {post_conversion_flat.mean()}")
         print(f"    Dtype: {post_conversion_debug.dtype}")
         print(f"🔍 [PREPROCESSING DEBUG - ELSE] DIVERSITY LOSS: {len(torch_input_tensor)} → {len(post_conversion_unique)} ({100*(len(torch_input_tensor)-len(post_conversion_unique))/len(torch_input_tensor):.2f}% loss)")
-    return torch_input_tensor, ttnn_input_tensor
+    return torch_input_tensor, ttnn_input_tensor  # Return original NCHW for PyTorch, NHWC for TTNN
 
 
 def make_anchors(device, feats, strides, grid_cell_offset=0.5, mesh_mapper=None):
