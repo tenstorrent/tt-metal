@@ -671,8 +671,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         input_channels_padded);
 
     if (config_tensors_in_dram) {
-        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as
-        // the maximum possible size.
+        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
+        // maximum possible size.
         TT_FATAL(
             access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
                 conv_reader_indices_storage.get_buffer()->page_size(),
@@ -884,9 +884,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         num_blocks_weight_w_per_core,
         out_conv_c_blocks};
 
-    std::vector<uint32_t> split_reader_args;
     if (enable_split_reader) {
-        split_reader_args = {
+        std::vector<uint32_t> split_reader_args = {
             (uint32_t)act_block_num_tiles_split_last,
             (uint32_t)conv_act_c_read_bytes,
             (uint32_t)filter_w,                       // weight_size_w
@@ -898,9 +897,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             (uint32_t)stride_w,
             (uint32_t)filter_h};
 
-        std::vector<uint32_t> activation_reuse_args;
-        if (enable_activation_reuse) {
-            activation_reuse_args = {
+        if (enable_activation_reuse && height_sharded) {
+            std::vector<uint32_t> activation_reuse_args = {
                 activation_reuse_config.act_cb_num_tiles_split_last,
                 act_block_w_ntiles,
                 static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
@@ -909,14 +907,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 activation_reuse_config.reuse_window_offset,
                 static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
                 static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
-        } else {
-            activation_reuse_args = std::vector<uint32_t>(9, 0);
+            split_reader_args.insert(
+                split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
         }
-        split_reader_args.insert(split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
-    } else {
-        split_reader_args = std::vector<uint32_t>(18, 0);
+        writer_compile_time_args.insert(
+            writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
-    writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
