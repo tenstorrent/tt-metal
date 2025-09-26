@@ -43,6 +43,9 @@ function(create_unit_test_executable)
             numa
     )
 
+    # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
+    target_compile_options(${exec_name} PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
     # Set include directories
     target_include_directories(
         ${exec_name}
