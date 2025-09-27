@@ -67,6 +67,7 @@ jobs:
             cmd: |
               { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_tools_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_tools_tests.sh
               ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER
           - name: ttnn tensor accessor
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER"
           - name: data movement
