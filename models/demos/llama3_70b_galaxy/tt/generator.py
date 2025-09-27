@@ -73,10 +73,14 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         enable_trace=True,
-        sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
+        sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
+        if sampling_params is None:
+            return_logits = True
+        else:
+            return_logits = False
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
