@@ -42,20 +42,6 @@
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 
-struct Bad {
-    int* data;
-
-    Bad(int value) : data(new int(value)) {}
-
-    // Destructor is defined
-    ~Bad() { delete data; }
-
-    // Copy constructor is implicitly generated
-    // Copy assignment operator is implicitly generated
-    // Move constructor is implicitly deleted
-    // Move assignment operator is implicitly deleted
-};
-
 namespace {
 
 inline std::string get_soc_description_file(
