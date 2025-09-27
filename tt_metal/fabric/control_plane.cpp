@@ -1090,13 +1090,18 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         for (auto src_mesh : local_mesh_binding_.mesh_ids) {
             for (std::size_t chip_id = 0; chip_id < intermesh_connectivity[*src_mesh].size(); chip_id++) {
                 for (const auto& [dst_mesh, edge] : intermesh_connectivity[*src_mesh][chip_id]) {
-                    auto src_physical_id = this->get_physical_chip_id_from_fabric_node_id(FabricNodeId(src_mesh, chip_id));
-                    const auto src_asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(src_physical_id);
-                    for (const auto& asic_neigbor : physical_system_descriptor_->get_asic_neighbors(tt::tt_metal::AsicID{src_asic_id})) {
+                    auto src_physical_id =
+                        this->get_physical_chip_id_from_fabric_node_id(FabricNodeId(src_mesh, chip_id));
+                    const auto src_asic_id =
+                        tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(src_physical_id);
+                    for (const auto& asic_neigbor :
+                         physical_system_descriptor_->get_asic_neighbors(tt::tt_metal::AsicID{src_asic_id})) {
                         auto neighbor_fabric_node_id = this->get_fabric_node_id_from_asic_id(*asic_neigbor);
                         if (neighbor_fabric_node_id.mesh_id == dst_mesh) {
-                            for (const auto chan : physical_system_descriptor_->get_eth_connections(tt::tt_metal::AsicID{src_asic_id}, asic_neigbor)) {
-                                this->assign_direction_to_fabric_eth_chan(FabricNodeId(src_mesh, chip_id), chan.src_chan, edge.port_direction);
+                            for (const auto chan : physical_system_descriptor_->get_eth_connections(
+                                     tt::tt_metal::AsicID{src_asic_id}, asic_neigbor)) {
+                                this->assign_direction_to_fabric_eth_chan(
+                                    FabricNodeId(src_mesh, chip_id), chan.src_chan, edge.port_direction);
                             }
                         }
                     }
@@ -1779,12 +1784,9 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& local_mesh_chip_id_container =
         this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-    uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
-                             ? MAX_CHIPS_LOWLAT_1D
-                             : static_cast<uint16_t>(local_mesh_chip_id_container.size());
-
+    size_t shape[2] = {MAX_CHIPS_LOWLAT_1D, 1};
     intra_mesh_routing_path_t<1, false> routing_path;
-    routing_path.calculate_chip_to_all_routing_fields(0, num_chips);
+    routing_path.calculate_chip_to_all_routing_fields(0, shape);
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
@@ -1807,8 +1809,8 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
 
     // Get mesh shape for 2D routing calculation
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
+    size_t shape[2] = {mesh_shape[0], mesh_shape[1]};
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
-    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
         mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
@@ -1816,12 +1818,14 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         *mesh_id,
         mesh_shape[0],
         mesh_shape[1]);
+    auto topology = this->fabric_context_->get_fabric_topology();
+    bool is_torus = topology == Topology::Torus;
 
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
         intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, shape, is_torus);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         write_to_all_tensix_cores(
             &routing_path,
@@ -2308,7 +2312,6 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         distributed_context.barrier();
     }
 }
-
 
 // Intermesh Connectivity Generation Functions
 
