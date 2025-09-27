@@ -103,38 +103,32 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     // Extract dimensions for N-dimensional tensors
     uint32_t tensor_rank = input_shape.rank();
 
-    // Create vectors for all dimensions by copying from shapes
-    std::vector<uint32_t> input_dims(input_shape.cbegin(), input_shape.cend());
-    std::vector<uint32_t> output_dims(output_shape.cbegin(), output_shape.cend());
-    std::vector<uint32_t> slice_starts(slice_start.cbegin(), slice_start.cend());
-    std::vector<uint32_t> slice_ends(slice_end.cbegin(), slice_end.cend());
-    std::vector<uint32_t> slice_steps(slice_step.cbegin(), slice_step.cend());
+    // For backward compatibility, extract specific 4D dimensions using negative indexing
+    // This avoids manual bounds checking since ttnn::Shape handles it automatically
+    uint32_t input_n = input_shape[-4];  // Returns 1 if rank < 4
+    uint32_t input_d = input_shape[-3];  // Returns 1 if rank < 3
+    uint32_t input_h = input_shape[-2];  // Returns 1 if rank < 2
+    uint32_t input_w = input_shape[-1];  // Always valid for rank >= 1
 
-    // For backward compatibility, extract specific 4D dimensions if needed
-    uint32_t input_n = (tensor_rank >= 4) ? input_dims[tensor_rank - 4] : 1;
-    uint32_t input_d = (tensor_rank >= 3) ? input_dims[tensor_rank - 3] : 1;
-    uint32_t input_h = (tensor_rank >= 2) ? input_dims[tensor_rank - 2] : 1;
-    uint32_t input_w = input_dims[tensor_rank - 1];
+    uint32_t output_n = output_shape[-4];
+    uint32_t output_d = output_shape[-3];
+    uint32_t output_h = output_shape[-2];
+    uint32_t output_w = output_shape[-1];
 
-    uint32_t output_n = (tensor_rank >= 4) ? output_dims[tensor_rank - 4] : 1;
-    uint32_t output_d = (tensor_rank >= 3) ? output_dims[tensor_rank - 3] : 1;
-    uint32_t output_h = (tensor_rank >= 2) ? output_dims[tensor_rank - 2] : 1;
-    uint32_t output_w = output_dims[tensor_rank - 1];
+    uint32_t start_n = slice_start[-4];  // Returns 0 if rank < 4
+    uint32_t start_d = slice_start[-3];  // Returns 0 if rank < 3
+    uint32_t start_h = slice_start[-2];  // Returns 0 if rank < 2
+    uint32_t start_w = slice_start[-1];  // Always valid
 
-    uint32_t start_n = (tensor_rank >= 4) ? slice_starts[tensor_rank - 4] : 0;
-    uint32_t start_d = (tensor_rank >= 3) ? slice_starts[tensor_rank - 3] : 0;
-    uint32_t start_h = (tensor_rank >= 2) ? slice_starts[tensor_rank - 2] : 0;
-    uint32_t start_w = slice_starts[tensor_rank - 1];
+    uint32_t end_n = slice_end[-4];  // Returns appropriate default if rank < 4
+    uint32_t end_d = slice_end[-3];  // Returns appropriate default if rank < 3
+    uint32_t end_h = slice_end[-2];  // Returns appropriate default if rank < 2
+    uint32_t end_w = slice_end[-1];  // Always valid
 
-    uint32_t end_n = (tensor_rank >= 4) ? slice_ends[tensor_rank - 4] : 1;
-    uint32_t end_d = (tensor_rank >= 3) ? slice_ends[tensor_rank - 3] : 1;
-    uint32_t end_h = (tensor_rank >= 2) ? slice_ends[tensor_rank - 2] : 1;
-    uint32_t end_w = slice_ends[tensor_rank - 1];
-
-    uint32_t step_n = (tensor_rank >= 4) ? slice_steps[tensor_rank - 4] : 1;
-    uint32_t step_d = (tensor_rank >= 3) ? slice_steps[tensor_rank - 3] : 1;
-    uint32_t step_h = (tensor_rank >= 2) ? slice_steps[tensor_rank - 2] : 1;
-    uint32_t step_w = slice_steps[tensor_rank - 1];
+    uint32_t step_n = slice_step[-4];  // Returns 1 if rank < 4
+    uint32_t step_d = slice_step[-3];  // Returns 1 if rank < 3
+    uint32_t step_h = slice_step[-2];  // Returns 1 if rank < 2
+    uint32_t step_w = slice_step[-1];  // Always valid
 
     // WORK DISTRIBUTION ALGORITHM:
     // Distribute rows as evenly as possible across cores
@@ -213,11 +207,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 row_start_id                       // 4: start_row - starting row for this core
             };
             // Append dimension arrays: input_dims, output_dims, slice_starts, slice_ends, slice_steps
-            reader_args.insert(reader_args.end(), input_dims.begin(), input_dims.end());
-            reader_args.insert(reader_args.end(), output_dims.begin(), output_dims.end());
-            reader_args.insert(reader_args.end(), slice_starts.begin(), slice_starts.end());
-            reader_args.insert(reader_args.end(), slice_ends.begin(), slice_ends.end());
-            reader_args.insert(reader_args.end(), slice_steps.begin(), slice_steps.end());
+            reader_args.insert(reader_args.end(), input_shape.cbegin(), input_shape.cend());
+            reader_args.insert(reader_args.end(), output_shape.cbegin(), output_shape.cend());
+            reader_args.insert(reader_args.end(), slice_start.cbegin(), slice_start.cend());
+            reader_args.insert(reader_args.end(), slice_end.cbegin(), slice_end.cend());
+            reader_args.insert(reader_args.end(), slice_step.cbegin(), slice_step.cend());
 
             // Writer arguments: dst_addr, tensor_rank, element_size, num_rows, start_row, then output_dims
             writer_args = {
@@ -228,7 +222,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 row_start_id                        // 4: start_row - starting row for this core
             };
             // Append output dimensions
-            writer_args.insert(writer_args.end(), output_dims.begin(), output_dims.end());
+            writer_args.insert(writer_args.end(), output_shape.cbegin(), output_shape.cend());
         }
 
         ret_val[core_idx] = {reader_args, writer_args};
