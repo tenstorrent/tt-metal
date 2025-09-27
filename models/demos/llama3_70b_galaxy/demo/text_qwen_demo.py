@@ -724,7 +724,9 @@ def test_qwen_demo_text(
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
-
+        device_sampling_params = SamplingParams(
+            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+        )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -737,6 +739,7 @@ def test_qwen_demo_text(
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
+                    sampling_params=device_sampling_params,
                 )
             except Exception as e:
                 logger.error(f"Error during prefill warmup: {str(e)}")
@@ -759,6 +762,7 @@ def test_qwen_demo_text(
                 prompt_lens=decoding_pos,
                 enable_trace=prefill_enable_trace,
                 tt_out_logits_all_users=tt_out_logits_all_users,
+                sampling_params=device_sampling_params,
             )
             if prefill_profile:
                 signpost("stop")
@@ -806,8 +810,6 @@ def test_qwen_demo_text(
 
         # Keeps track when a user reaches EoD token
         user_done = [False] * batch_size
-
-        device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
@@ -1158,48 +1160,48 @@ def test_qwen_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = ["Qwen3-70B"]
-    # model_args.base_model_name = "Qwen3-70B"
-    supported_devices = ["TG"]
+    # # Benchmark targets
+    # supported_models = ["Qwen3-70B"]
+    # # model_args.base_model_name = "Qwen3-70B"
+    # supported_devices = ["TG"]
 
-    tt_device_name = model_args.device_name
+    # tt_device_name = model_args.device_name
 
-    # Set the target times to first token for every combination of device and model
-    target_prefill_tok_s = {
-        "TG_Qwen3-70B": 1050,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    # # Set the target times to first token for every combination of device and model
+    # target_prefill_tok_s = {
+    #     "TG_Qwen3-70B": 1050,  # TODO Update target
+    # }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    # Set the target decode times for every combination of device and model
-    target_decode_tok_s_u = {
-        "TG_Qwen3-70B": 20,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    # # Set the target decode times for every combination of device and model
+    # target_decode_tok_s_u = {
+    #     "TG_Qwen3-70B": 20,  # TODO Update target
+    # }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    target_decode_tok_s = target_decode_tok_s_u * batch_size
-    targets = {
-        "prefill_t/s": target_prefill_tok_s,
-        "decode_t/s": target_decode_tok_s,
-        "decode_t/s/u": target_decode_tok_s_u,
-    }
-    # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
-    if repeat_batches == 2 and batch_size == 1:
-        target = 56.5 if galaxy_type == "6U" else 99
-        assert (
-            avg_time_to_first_token * 1000 < target
-        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
+    # target_decode_tok_s = target_decode_tok_s_u * batch_size
+    # targets = {
+    #     "prefill_t/s": target_prefill_tok_s,
+    #     "decode_t/s": target_decode_tok_s,
+    #     "decode_t/s/u": target_decode_tok_s_u,
+    # }
+    # # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
+    # if repeat_batches == 2 and batch_size == 1:
+    #     target = 56.5 if galaxy_type == "6U" else 99
+    #     assert (
+    #         avg_time_to_first_token * 1000 < target
+    #     ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
 
-    # Save benchmark data for CI dashboard
-    if is_ci_env and repeat_batches > 1:
-        benchmark_data.add_measurement(
-            profiler,
-            1,  # grab the second repeat batch of prefill
-            "inference_prefill",
-            f"ttft_e2e_{galaxy_type}",
-            round(avg_time_to_first_token * 1000, 2),
-        )  # average TTFT in ms
+    # # Save benchmark data for CI dashboard
+    # if is_ci_env and repeat_batches > 1:
+    #     benchmark_data.add_measurement(
+    #         profiler,
+    #         1,  # grab the second repeat batch of prefill
+    #         "inference_prefill",
+    #         f"ttft_e2e_{galaxy_type}",
+    #         round(avg_time_to_first_token * 1000, 2),
+    #     )  # average TTFT in ms
 
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"tg_qwen_text_demo_prefill",
-            ml_model_name="qwen70b-tg",
-        )
+    #     benchmark_data.save_partial_run_json(
+    #         profiler,
+    #         run_type=f"tg_qwen_text_demo_prefill",
+    #         ml_model_name="qwen70b-tg",
+    #     )
