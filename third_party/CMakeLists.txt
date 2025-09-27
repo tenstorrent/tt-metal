@@ -28,6 +28,11 @@ function(ensureboosttarget boostTarget)
     endif()
 endfunction()
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(BOOST_EXTRA_CXX_FLAGS "-Wno-aggressive-loop-optimizations -Wno-stringop-overflow")
+    set(BOOST_EXTRA_C_FLAGS "-Wno-aggressive-loop-optimizations -Wno-stringop-overflow")
+endif()
+
 CPMAddPackage(
     NAME Boost
     VERSION 1.86.0
@@ -40,6 +45,8 @@ CPMAddPackage(
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree"
+        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} ${BOOST_EXTRA_CXX_FLAGS}"
+        "CMAKE_C_FLAGS ${CMAKE_C_FLAGS} ${BOOST_EXTRA_C_FLAGS}"
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
@@ -55,6 +62,12 @@ ensureboosttarget(interprocess)
 # protobuf
 ############################################################################################################################
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(PROTOBUF_EXTRA_CXX_FLAGS "-Wno-deprecated-declarations -Wno-invalid-noreturn")
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(PROTOBUF_EXTRA_CXX_FLAGS "-Wno-stringop-overflow")
+endif()
+
 CPMAddPackage(
     NAME protobuf
     GITHUB_REPOSITORY protocolbuffers/protobuf
@@ -63,7 +76,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "protobuf_BUILD_TESTS OFF"
-        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-invalid-noreturn"
+        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} ${PROTOBUF_EXTRA_CXX_FLAGS}"
         "protobuf_INSTALL OFF"
         "BUILD_TESTING OFF"
         "protobuf_BUILD_EXAMPLES OFF"
@@ -328,6 +341,12 @@ CPMAddPackage(
 ####################################################################################################################
 # Cap'n Proto : https://github.com/capnproto/capnproto
 ####################################################################################################################
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(CAPNPROTO_EXTRA_CXX_FLAGS "-Wno-deprecated-this-capture")
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(CAPNPROTO_EXTRA_CXX_FLAGS "-Wno-maybe-uninitialized -Wno-deprecated")
+endif()
+
 CPMAddPackage(
     NAME capnproto
     GITHUB_REPOSITORY capnproto/capnproto
@@ -340,5 +359,6 @@ CPMAddPackage(
         "CAPNP_LITE OFF"
         "BUILD_SHARED_LIBS OFF"
         "CMAKE_CXX_EXTENSIONS ON"
+        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} ${CAPNPROTO_EXTRA_CXX_FLAGS}"
     CUSTOM_CACHE_KEY "1_2_0_patched"
 )
