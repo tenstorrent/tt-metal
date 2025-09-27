@@ -19,22 +19,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 /**
- * Get element size in bytes for different TTNN data types.
- * Translated from Python _get_element_size method.
- */
-inline uint32_t get_element_size(const DataType& dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return 2;  // 16-bit brain floating point
-        case DataType::FLOAT32: return 4;   // 32-bit IEEE floating point
-        case DataType::INT32: return 4;     // 32-bit signed integer
-        case DataType::UINT32: return 4;    // 32-bit unsigned integer
-        case DataType::UINT16: return 2;    // 16-bit unsigned integer
-        case DataType::UINT8: return 1;     // 8-bit unsigned integer
-        default: TT_THROW("Unsupported data type for multi-core stride slice operation");
-    }
-}
-
-/**
  * Calculate total output rows based on tensor rank - this is what we distribute across cores.
  * Generalized for N-dimensional tensors. For rank R, rows = product(dims[0:R-1])
  * The last dimension is always processed as contiguous width data.
@@ -103,7 +87,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const std::string& writer_kernel_path) {
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
-    uint32_t element_size = get_element_size(input_tensor.dtype());
+    uint32_t element_size = input_tensor.element_size();
 
     // Extract dimensions for N-dimensional tensors
     uint32_t tensor_rank = input_shape.rank();
@@ -269,7 +253,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
 
     const auto& input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
-    uint32_t element_size = get_element_size(input_tensor.dtype());
+    uint32_t element_size = input_tensor.element_size();
 
     // Calculate total output rows based on tensor rank - this is what we distribute across cores
     uint32_t total_output_rows = calculate_total_output_rows(output_shape);
