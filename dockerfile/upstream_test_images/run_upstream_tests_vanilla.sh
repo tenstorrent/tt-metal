@@ -109,6 +109,11 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
     TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
     TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
+    if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+        pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py
+    elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
+        pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py
+    fi
 }
 
 test_suite_bh_multi_pcie_llama_demo_tests() {

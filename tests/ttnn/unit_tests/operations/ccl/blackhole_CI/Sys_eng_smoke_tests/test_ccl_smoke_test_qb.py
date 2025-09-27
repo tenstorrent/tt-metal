@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,19 +7,29 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+# Test uses 3.932GB of space per device to nearly fill the dram
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+    ],
+)
+@pytest.mark.parametrize(
+    "ag_input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.uint32,
+        ttnn.bfloat8_b,
     ],
     ids=[
-        "sd35_spatial",
-        "sd35_prompt",
+        "float_16",
+        "uint_32",
+        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
@@ -28,36 +38,32 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
         (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        )
+        ),
+    ],
+    ids=[
+        "DRAM_ONLY",
     ],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-@pytest.mark.parametrize(
-    "all_gather_function",
-    [ttnn.experimental.all_gather_async, ttnn.experimental.all_gather_async_reversed],
-    ids=["normal", "reversed"],
-)
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-def test_all_gather_async(
-    mesh_device,
+def test_ccl_ddr_smoke_test(
+    bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -72,10 +78,10 @@ def test_all_gather_async(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
-    all_gather_function,
 ):
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    cluster_axis = 0
+    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
+    # Check all the rows and columns independantly within the device
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
         num_devices,
@@ -89,59 +95,80 @@ def test_all_gather_async(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis,
+        cluster_axis=0,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
-        all_gather_function=all_gather_function,
+        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
+# P300 with 2 harvested columns so 110 cores are available.
+# Test utilizes 1'478'492.16 bytes per core to nearly maximize 1.5MB size
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [1], ids=["1links"])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (4, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (4, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+    ],
+)
+@pytest.mark.parametrize(
+    "ag_input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.uint32,
+        ttnn.bfloat8_b,
     ],
     ids=[
-        "sd35_spatial",
-        "sd35_prompt",
+        "float_16",
+        "uint_32",
+        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
     [
         (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        )
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+    ],
+    ids=[
+        "L1_TO_DRAM",
+        "DRAM_TO_L1",
+        "L1_ONLY",
     ],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-@pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
-def test_all_gather_async(
-    mesh_device,
+def test_ccl_other_smoke_test(
+    bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -157,8 +184,8 @@ def test_all_gather_async(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    cluster_axis = 0
+    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
         num_devices,
@@ -172,9 +199,11 @@ def test_all_gather_async(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis,
+        cluster_axis=0,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
+        allowed_pcc=0.9999,
+        num_l1_banks=120,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
