@@ -1964,6 +1964,7 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();
@@ -1988,4 +1989,5 @@ void kernel_main() {
     noc_async_full_barrier();
 
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": out" << ENDL();
+    set_l1_data_cache<false>();
 }

@@ -26,7 +26,7 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "READ_DEBUG_DELAY",
     "WRITE_DEBUG_DELAY",
     "ATOMIC_DEBUG_DELAY",
-    "DISABLE_L1_DATA_CACHE",
+    "ENABLE_L1_DATA_CACHE",
 };
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
@@ -535,17 +535,13 @@ void RunTimeOptions::ParseFeatureRiscvMask(
     if (env_var_str != nullptr) {
         feature_targets[feature].processors = hal.parse_processor_set_spec(env_var_str);
     } else {
-        // Default is all RISCVs enabled.
-        bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
-        if (!default_disabled) {
-            auto& processors = feature_targets[feature].processors;
-            uint32_t num_core_types = hal.get_programmable_core_type_count();
-            for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
-                auto core_type = hal.get_programmable_core_type(core_type_index);
-                uint32_t num_processors = hal.get_num_risc_processors(core_type);
-                for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
-                    processors.add(core_type, processor_index);
-                }
+        auto& processors = feature_targets[feature].processors;
+        uint32_t num_core_types = hal.get_programmable_core_type_count();
+        for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
+            auto core_type = hal.get_programmable_core_type(core_type_index);
+            uint32_t num_processors = hal.get_num_risc_processors(core_type);
+            for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
+                processors.add(core_type, processor_index);
             }
         }
     }
