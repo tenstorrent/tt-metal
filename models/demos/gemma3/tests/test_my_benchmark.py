@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import skip_for_grayskull
@@ -13,6 +15,10 @@ from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
 from models.demos.gemma3.tt.model_config import ModelArgs
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.ccl import TT_CCL
+
+NR_ITER_E2E = 1
+NR_FORWARD_ITERATIONS = 15
+TEST_FORWARD_INFERENCE_ONLY = True
 
 
 class BenchmarkProfilerWrapper:
@@ -31,23 +37,7 @@ class BenchmarkProfilerWrapper:
         return self.profiler_backbone.get_duration(*args, **kwargs)
 
 
-# from models.common.utility_functions import (
-#     disable_persistent_kernel_cache,
-#     enable_persistent_kernel_cache,
-# Profiler,
-# )
-
-
 # copied most of pytest parameters from https://github.com/tenstorrent/tt-metal/blob/1566d9ae155c4aba5432f874d375dfbae5d551cd/models/demos/gemma3/tests/test_vision_cross_attention_transformer.py#L30C5-L30C22
-@pytest.mark.parametrize(
-    "expected_time1TODO, expected_time2TODO",
-    (
-        (
-            69.0,
-            420.0,
-        ),
-    ),
-)
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
@@ -62,31 +52,25 @@ class BenchmarkProfilerWrapper:
 @pytest.mark.parametrize("bsz", [1])
 def test_perf_gemma_vision(
     mesh_device,
-    reset_seeds,
     bsz,
-    expected_time1TODO,
-    expected_time2TODO,
 ):
-    # vrv ne koristiti
-    # profiler = Profiler()
-    # benchmark_data = BenchmarkData()
-
-    # logger.info(f"Start profiler")
-    # profiler = BenchmarkProfiler()
+    assert os.environ.get("HF_MODEL") is None, "This test will set it depending on the device being run"
+    os_mesh_device = os.environ["MESH_DEVICE"]
+    if os_mesh_device in ["N150", "N300"]:
+        os.environ["HF_MODEL"] = "google/gemma-3-4b-it"
+    elif os_mesh_device == "T3k":
+        os.environ["HF_MODEL"] = "google/gemma-3-27b-it"
+    else:
+        assert False, "Unknown model"
 
     profiler = BenchmarkProfilerWrapper()
-    first_key = "first_iter"  # TODO menjaj
-    second_key = "second_iter"  # TODO menjaj
-    cpu_key = "ref_key"  # TODO menjaj
 
-    nr_iter_e2e = 10
-    nr_forward_iterations = 15
     keys_e2e = ["total_run", "model_load_and_initialization", "postprocessing_and_transfer"]
     key_model_forward = "model_forward"
 
-    for cur_e2e_iteration in range(nr_iter_e2e):
+    for cur_e2e_iteration in range(NR_ITER_E2E):
         if cur_e2e_iteration == 0:
-            nr_forward_iterations_actual = nr_forward_iterations
+            nr_forward_iterations_actual = NR_FORWARD_ITERATIONS
         else:
             nr_forward_iterations_actual = 1
 
@@ -103,41 +87,49 @@ def test_perf_gemma_vision(
 
     measurements = dict()
     for key in keys_e2e + [key_model_forward + "_compile"]:
-        measurements[key] = [profiler.get_duration(key + str(i), i) for i in range(nr_iter_e2e)]
+        measurements[key] = [profiler.get_duration(key + str(i), i) for i in range(NR_ITER_E2E)]
     measurements[key_model_forward + "_inference"] = [
-        profiler.get_duration(key_model_forward + "_inference" + str(i), i) for i in range(nr_forward_iterations - 1)
+        profiler.get_duration(key_model_forward + "_inference" + str(i), i) for i in range(NR_FORWARD_ITERATIONS - 1)
     ]
 
+    measurements_summarised = (
+        dict()
+    )  # a mean, median, or similar function of all the measurements done for that one specific metric
     for key, val in measurements.items():
         mean = sum(val) / len(val)
-        std = sum([(i - mean) ** 2 for i in val]) ** (0.5)
-        std_as_percent = std / mean * 100
-        print("measurements for", key, val)
-        print("stats for", key, f": {mean=} {std=} {std_as_percent=}%")
-        print()
-        print()
-        print()
+        measurements_summarised[key] = mean
 
-    print()
+        # The idea is to look only at larger ones as they are only relevant for upper threshold. Also we square them so outliers have more impact
+        # We can perhaps change this threshold at load time when the test is being run (eg. multiply it by 2)
+        values_above = [p for p in val if p >= mean]
+        average_squared_above = sum([p**2 for p in values_above]) / len(values_above)
+        measurements_summarised[key + "_threshold"] = average_squared_above ** (0.5)
 
-    # prep_perf_report(
-    #     "trocr",
-    #     BATCH_SIZE,
-    #     first_iter_time, #?
-    #     second_iter_time, #?
-    #     expected_compile_time,
-    #     expected_inference_time,
-    #     "causal_llm", # TODO menjaj
-    #     cpu_time,
-    # )
-    # # compile_time = first_iter_time - second_iter_time
+    DEBUG_save_and_print = True
+    if DEBUG_save_and_print:
+        for key, val in measurements.items():
+            mean = measurements_summarised[key]
+            std = (sum([(i - mean) ** 2 for i in val]) / len(val)) ** (0.5)
+            std_as_percent = std / mean * 100
+            print("measurements for", key, val)
+            print("stats for", key, f": {mean=} {std=} {std_as_percent=}%")
+            print()
+            print()
+            print()
 
-    # logger.info(f"trocr inference time: {second_iter_time}") # TODO menjaj
-    # logger.info(f"trocr compile time: {compile_time}") # TODO menjaj
-    # assert second_iter_time < expected_inference_time, "trocr is too slow"
-    # assert compile_time < expected_compile_time, "trocr compile time is too slow"
+        helper_write_to_json(os.environ.get("MESH_DEVICE"), measurements_summarised)
 
-    # zelim ovakav format za assertove: assert (expected - measured) / expected * 0.1
+    targets = load_targets("models/demos/gemma3/tests/test_my_benchmark_json.json", os.environ.get("MESH_DEVICE"))
+
+    if TEST_FORWARD_INFERENCE_ONLY:
+        metric_keys_to_test = ["model_forward_inference"]
+    else:
+        metric_keys_to_test = [k for k in targets.keys() if not k.endswith("_threshold")]
+
+    for key in metric_keys_to_test:
+        threshold = targets[key] + 2 * (targets[key + "_threshold"] - targets[key])
+        measured_value = measurements_summarised[key]
+        assert measured_value < threshold
 
 
 def get_image_features(vision_tower, projector, input_tensor):
@@ -149,55 +141,20 @@ def get_image_features(vision_tower, projector, input_tensor):
     return image_features
 
 
-"""
-def xxxx_test():
-    profiler = BenchmarkProfiler()
-    benchmark_data = BenchmarkData()
+def helper_write_to_json(device_type, measurements, output_filename=None):
+    """
+    This function is used to help you to faster generate the .json where all the measurements are stored
+    """
 
-    logger.info(f"Start profiler")
-    profiler = BenchmarkProfiler()
-    profiler.start("run")
+    if output_filename is None:
+        output_filename = "tmp_measurements_" + device_type + ".json"
 
+    # Wrap the measurements dict inside another dict keyed by device_type
+    data = {device_type: measurements}
 
-
-    # svidja mi se ovaj pattern, mozda koristiti ovo za inpute mozda ne ali pattern dobar
-    logger.info(f"Reading inputs...")
-    profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
-        input_prompts = input_prompts * global_batch_size
-    else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
-    profiler.end("loading_inputs")
-
-"""
-
-# ============================================================
-
-
-"""
-takodje dobar pattern:
-profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
-profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
-
-
-
-ovo se cepa brda puta
-benchmark_data.add_measurement(profiler, 0, step_name, f"ttft_estimate_80l_{galaxy_type}", ttft_estimate_80l)
-
-    Required Parameters:
-    - profiler: BenchmarkProfiler instance to get timing data from
-    - iteration: int - The benchmark iteration number
-    - step_name: str - Name of the profiled step (must exist in profiler)
-    - name: str - Unique identifier for this measurement
-    - value: float - The measurement value to record
-
-    Optional Parameters:
-    - step_warm_up_num_iterations: int - Number of warm-up iterations for the step
-    - target: float - Target performance value for comparison
-    - device_power: float - Device power consumption during measurement
-    - device_temperature: float - Device temperature during measurement
-
-"""
+    # Write JSON file with indentation for readability
+    with open(output_filename, "w") as f:
+        json.dump(data, f, indent=4)
 
 
 def run_model(mesh_device, bsz, profiler, cur_e2e_iteration, nr_forward_iterations, key_model_forward):
@@ -249,3 +206,20 @@ def run_model(mesh_device, bsz, profiler, cur_e2e_iteration, nr_forward_iteratio
     profiler.end("postprocessing_and_transfer" + str(cur_e2e_iteration), cur_e2e_iteration)
 
     return tt_output_torch
+
+
+def load_targets(filename, device_type):
+    if not os.path.exists(filename):
+        logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
+        return []
+
+    with open(filename, "r") as f:
+        try:
+            targets = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
+            return []
+
+    dict_targets = targets["targets"][device_type]
+
+    return dict_targets

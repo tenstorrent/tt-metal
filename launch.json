@@ -1,0 +1,30 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Test",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                // "models/demos/gemma3/tests/test_vision_cross_attention_transformer_benchmark.py"
+                "models/demos/gemma3/tests/test_my_benchmark.py"
+            ],
+
+            "env": {
+                // "HF_MODEL": "google/gemma-3-4b-it",
+                "MESH_DEVICE": "T3K"
+            },
+            "console": "integratedTerminal"
+        }
+    ]
+}
+
+// Run pajinog testa - HF_MODEL="google/gemma-3-4b-it" MESH_DEVICE="N300" pytest models/demos/gemma3/tests/test_vision_cross_attention_transformer.py
+
+// ostojin test models/tt_transformers/demo/simple_text_demo.py
+
+// run ostojinog perf testa - MESH_DEVICE="N150" HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1"

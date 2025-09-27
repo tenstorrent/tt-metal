@@ -1,0 +1,14 @@
+{
+    "N150": {
+        "total_run": 39.865949,
+        "total_run_threshold": 39.865949,
+        "model_load_and_initialization": 7.294577,
+        "model_load_and_initialization_threshold": 7.294577,
+        "postprocessing_and_transfer": 0.146629,
+        "postprocessing_and_transfer_threshold": 0.146629,
+        "model_forward_compile": 21.442998,
+        "model_forward_compile_threshold": 21.442998,
+        "model_forward_inference": 0.7843120000000001,
+        "model_forward_inference_threshold": 0.7942363108073837
+    }
+}
