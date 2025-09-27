@@ -17,7 +17,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
@@ -26,12 +25,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -39,7 +32,9 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-const std::string golden_output_data0 =
+
+namespace {
+const std::vector<std::string> golden_output = {
     R"(Test Debug Print: Data0
 Basic Types:
 101-1.618@0.122559
@@ -69,90 +64,7 @@ SLICE:
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-)";
-const std::string golden_output_compute =
-    R"(Test Debug Print: Unpack
-Basic Types:
-101-1.618@0.122559
-e5551234569123456789
--17-343-44444-5123456789
-Pointer:
-123
-456
-789
-SETPRECISION/FIXED/DEFAULTFLOAT:
-3.1416
-3.14159012
-3.14159
-3.141590118
-SETW:
-    123456123456  ab
-HEX/OCT/DEC:
-1e240361100123456
-SLICE:
-0.122558594 0.127929688 0.490234375 0.51171875
-0.245117188 0.255859375 0.98046875 1.0234375
-1.9609375 2.046875 7.84375 8.1875
-3.921875 4.09375 15.6875 16.375
-0.122558594 0.124511719 0.127929688 0.131835938 0.490234375 0.498046875 0.51171875 0.52734375
-0.182617188 0.186523438 0.190429688 0.194335938 0.73046875 0.74609375 0.76171875 0.77734375
-0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
-0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
-<TileSlice data truncated due to exceeding max count (32)>
-Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-Test Debug Print: Math
-Basic Types:
-101-1.618@0.122559
-e5551234569123456789
--17-343-44444-5123456789
-Pointer:
-123
-456
-789
-SETPRECISION/FIXED/DEFAULTFLOAT:
-3.1416
-3.14159012
-3.14159
-3.141590118
-SETW:
-    123456123456  ab
-HEX/OCT/DEC:
-1e240361100123456
-SLICE:
-Warning: MATH core does not support TileSlice printing, omitting print...
-Warning: MATH core does not support TileSlice printing, omitting print...
-Warning: MATH core does not support TileSlice printing, omitting print...
-Test Debug Print: Pack
-Basic Types:
-101-1.618@0.122559
-e5551234569123456789
--17-343-44444-5123456789
-Pointer:
-123
-456
-789
-SETPRECISION/FIXED/DEFAULTFLOAT:
-3.1416
-3.14159012
-3.14159
-3.141590118
-SETW:
-    123456123456  ab
-HEX/OCT/DEC:
-1e240361100123456
-SLICE:
-0.122558594 0.127929688 0.490234375 0.51171875
-0.245117188 0.255859375 0.98046875 1.0234375
-1.9609375 2.046875 7.84375 8.1875
-3.921875 4.09375 15.6875 16.375
-0.122558594 0.124511719 0.127929688 0.131835938 0.490234375 0.498046875 0.51171875 0.52734375
-0.182617188 0.186523438 0.190429688 0.194335938 0.73046875 0.74609375 0.76171875 0.77734375
-0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
-0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
-<TileSlice data truncated due to exceeding max count (32)>
-Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-)";
-const std::string golden_output_data1 =
+)",
     R"(Test Debug Print: Data1
 Basic Types:
 101-1.618@0.122559
@@ -182,12 +94,92 @@ SLICE:
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-)";
+)",
+    R"(Test Debug Print: Unpack
+Basic Types:
+101-1.618@0.122559
+e5551234569123456789
+-17-343-44444-5123456789
+Pointer:
+123
+456
+789
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.14159
+3.141590118
+SETW:
+    123456123456  ab
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+0.122558594 0.127929688 0.490234375 0.51171875
+0.245117188 0.255859375 0.98046875 1.0234375
+1.9609375 2.046875 7.84375 8.1875
+3.921875 4.09375 15.6875 16.375
+0.122558594 0.124511719 0.127929688 0.131835938 0.490234375 0.498046875 0.51171875 0.52734375
+0.182617188 0.186523438 0.190429688 0.194335938 0.73046875 0.74609375 0.76171875 0.77734375
+0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
+0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
+<TileSlice data truncated due to exceeding max count (32)>
+Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
+)",
+    R"(Test Debug Print: Math
+Basic Types:
+101-1.618@0.122559
+e5551234569123456789
+-17-343-44444-5123456789
+Pointer:
+123
+456
+789
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.14159
+3.141590118
+SETW:
+    123456123456  ab
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+Warning: MATH core does not support TileSlice printing, omitting print...
+Warning: MATH core does not support TileSlice printing, omitting print...
+Warning: MATH core does not support TileSlice printing, omitting print...
+)",
+    R"(Test Debug Print: Pack
+Basic Types:
+101-1.618@0.122559
+e5551234569123456789
+-17-343-44444-5123456789
+Pointer:
+123
+456
+789
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.14159
+3.141590118
+SETW:
+    123456123456  ab
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+0.122558594 0.127929688 0.490234375 0.51171875
+0.245117188 0.255859375 0.98046875 1.0234375
+1.9609375 2.046875 7.84375 8.1875
+3.921875 4.09375 15.6875 16.375
+0.122558594 0.124511719 0.127929688 0.131835938 0.490234375 0.498046875 0.51171875 0.52734375
+0.182617188 0.186523438 0.190429688 0.194335938 0.73046875 0.74609375 0.76171875 0.77734375
+0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
+0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
+<TileSlice data truncated due to exceeding max count (32)>
+Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
+)"};
 
-void RunTest(
-    DPrintMeshFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const std::string& golden_output) {
+void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     distributed::MeshWorkload workload;
@@ -237,24 +229,24 @@ void RunTest(
     fixture->RunProgram(mesh_device, workload);
 
     // Check that the expected print messages are in the log file
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    DPrintSeparateFilesFixture::check_output(golden_output);
 }
 
 struct TestParams {
     std::string test_name;
     std::vector<HalProcessorIdentifier> enabled_processors;
-    std::string golden_output;
 };
 
 using enum HalProgrammableCoreType;
 using enum HalProcessorClassType;
 
-class PrintAllHartsFixture : public DPrintMeshFixture, public ::testing::WithParamInterface<TestParams> {
+class PrintAllHartsFixture : public DPrintSeparateFilesFixture, public ::testing::WithParamInterface<TestParams> {
 private:
     HalProcessorSet original_enabled_processors_;
 
 protected:
     void ExtraSetUp() override {
+        DPrintSeparateFilesFixture::ExtraSetUp();
         original_enabled_processors_ = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
             tt::llrt::RunTimeDebugFeatureDprint);
         HalProcessorSet processor_set;
@@ -270,6 +262,7 @@ protected:
     void ExtraTearDown() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_processors(
             tt::llrt::RunTimeDebugFeatureDprint, original_enabled_processors_);
+        DPrintSeparateFilesFixture::ExtraTearDown();
     }
 };
 
@@ -286,14 +279,12 @@ INSTANTIATE_TEST_SUITE_P(
                 {TENSIX, COMPUTE, 1},
                 {TENSIX, COMPUTE, 2},
             },
-            golden_output_data0 + golden_output_compute + golden_output_data1,
         },
         TestParams{
             "Brisc",
             {
                 {TENSIX, DM, 0},
             },
-            golden_output_data0,
         },
         TestParams{
             "BriscCompute",
@@ -304,18 +295,15 @@ INSTANTIATE_TEST_SUITE_P(
                 {TENSIX, COMPUTE, 1},
                 {TENSIX, COMPUTE, 2},
             },
-            golden_output_data0 + golden_output_compute,
         }),
     [](const ::testing::TestParamInfo<TestParams>& info) { return info.param.test_name; });
 
 TEST_P(PrintAllHartsFixture, TensixTestPrint) {
     for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunTest(fixture, mesh_device, GetParam().golden_output);
-            },
-            mesh_device);
+        this->RunTestOnDevice(RunTest, mesh_device);
     }
 }
+
+}  // namespace
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
