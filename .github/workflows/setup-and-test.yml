@@ -20,6 +20,11 @@ on:
         required: false
         default: "not perf"
         type: string
+      timeout_minutes:
+        description: "Timeout in minutes for the test job"
+        required: false
+        default: 80
+        type: number
 
 permissions:
   checks: write
@@ -38,7 +43,7 @@ jobs:
   setup-and-test:
     needs: generate-matrix
     runs-on: ${{ inputs.runs_on }}
-    timeout-minutes: 80
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
