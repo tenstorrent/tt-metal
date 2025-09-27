@@ -53,7 +53,7 @@ class TtLlamaMLP(LightweightModule):
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}" + "prefetcher")
+            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
 
         w1_w3_mem_config = self.model_config[
             "W1W3_RING_MEMCFG"
@@ -137,7 +137,9 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
             use_noc1_only=False,
         )
+
         ttnn.deallocate(x)
+
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
             cluster_axis=1,
@@ -155,8 +157,6 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
-        # print("eltwise mul", w2_in)
-
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
@@ -169,6 +169,7 @@ class TtLlamaMLP(LightweightModule):
             buffer_key="BINARY_MUL",
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
+
         ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
@@ -182,7 +183,6 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
-
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
@@ -190,7 +190,6 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced
@@ -203,7 +202,8 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        use_w1_w3_interleaved = seq_len >= 4096 or seq_len == 128
+        # use_w1_w3_interleaved = seq_len >= 4096 or seq_len == 128
+        use_w1_w3_interleaved = True
         pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
         pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
@@ -266,11 +266,12 @@ class TtLlamaMLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ttnn.deallocate(w2_in)
+        # ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
         ttnn.deallocate(w2_out)
+
         if 1024 <= seq_len < 4096:
             original_shape = w2_out_reduced.shape
             w2_out_reduced = ttnn.reshape(

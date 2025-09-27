@@ -11,10 +11,10 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
-from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 
@@ -107,13 +107,18 @@ class TtTransformer(LightweightModule):
                 weight_key="norm",
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
-                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"]
+                if not args.qk_norm
+                else self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
             ),
             args,
             args.is_galaxy,
             tt_ccl=self.tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
+
+        state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.norm_weight = state_dict[f"{state_dict_prefix}norm.weight"]
 
         self.lm_head = LMHead(
             args=args,
@@ -147,6 +152,7 @@ class TtTransformer(LightweightModule):
                 self.prefetcher_setup.worker_sub_device_id,
                 mode="prefill",
                 allocate_prefill_buffers=self.allocate_prefill_buffers,
+                use_qwen_mlp=True,
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
@@ -164,7 +170,12 @@ class TtTransformer(LightweightModule):
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
         if mesh_sub_device_manager_id_decode is None:
-            self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
+            self.tt_ccl = TT_CCL(
+                self.mesh_device,
+                self.args,
+                self.prefetcher_setup.worker_sub_device_id,
+                use_qwen_mlp=True,
+            )
             self.tt_sampling = TTSampling(
                 args=self.args,
                 mesh_device=self.mesh_device,
@@ -406,6 +417,7 @@ class TtTransformer(LightweightModule):
         # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
+        tt_tokens = tokens
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
     def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
@@ -482,14 +494,14 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         rot_mats=None,
-        batch_size=1,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        x_embd = self.embd(x)
         tt_logits = self.forward(
-            x,
+            x_embd,
             current_pos=None,
             rot_mats=rot_mats if rot_mats is not None else self.tt_rot_mats_prefill,
             user_id=user_id,

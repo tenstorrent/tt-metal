@@ -14,11 +14,12 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
-from tracy.process_model_log import (
+from tt_metal.tools.profiler.process_model_log import (
     get_latest_ops_log_filename,
 )
 
 from models.demos.llama3_70b_galaxy.demo.demo_decode import run_llama3_demo
+from models.demos.llama3_70b_galaxy.demo.demo_qwen_decode import run_qwen_demo
 from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 
 
@@ -120,6 +121,109 @@ def test_llama_demo(
         paged_attention_config = None
 
     return run_llama3_demo(
+        user_input=input_prompts,
+        mesh_device=mesh_device,
+        max_seq_len=max_seq_len,
+        batch_size=batch_size,
+        num_batches=repeat_batches,
+        paged_attention=paged_attention,
+        paged_attention_config=paged_attention_config,
+        max_generated_tokens=max_generated_tokens,
+        optimizations=optimizations,
+        sampling_params=sampling_params,
+        instruct_mode=instruct,
+        is_ci_env=is_ci_env,
+        print_to_file=False,
+        weights=weights,
+        layers=layers,
+        stress_test=stress_test,
+        start_pos=start_pos,
+    )
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
+    [
+        (  # 10 layers for devive perf measurements
+            "instruct",
+            10,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            1,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+            127,  # start_pos
+        ),
+    ],
+    ids=[
+        "device-perf-measurement",
+    ],
+)
+@pytest.mark.parametrize(
+    "optimizations",
+    [
+        LlamaOptimizations.performance,
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 12726272,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
+def test_qwen_demo(
+    weights,
+    layers,
+    input_prompts,
+    instruct,
+    repeat_batches,
+    max_seq_len,
+    batch_size,
+    max_generated_tokens,
+    paged_attention,
+    page_params,
+    sampling_params,
+    optimizations,
+    mesh_device,
+    is_ci_env,
+    reset_seeds,
+    stress_test,
+    start_pos,
+):
+    if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
+        pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
+
+    # TODO: Remove this once all batch sizes are supported on TG
+    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
+        pytest.skip("TG only supports batch 1 and 32")
+
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+    else:
+        paged_attention_config = None
+
+    return run_qwen_demo(
         user_input=input_prompts,
         mesh_device=mesh_device,
         max_seq_len=max_seq_len,
@@ -773,6 +877,609 @@ def test_llama_TG_perf_device(
         profiler,
         run_type=run_type,
         ml_model_name="llama70b-tg",
+    )
+
+    assert all_passing
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.models_device_performance_bare_metal
+# To update:
+# Run FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_qwen_TG_perf_device
+# Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
+# Manually compare each entry between old-expected and the new average values
+# - Any perf regressions? Everything as expected?
+# If all looks good, update the expected_kernel_times_dict and expected_dispatch_times_dict with the new average values
+# If the op list changed (new ops, less ops, fused ops), then update mapping_op_code_to_name and give the new ops meaningful names
+# Run at least once again to verify the new expected values are correct and margins hold
+def test_qwen_TG_perf_device(
+    reset_seeds,
+    galaxy_type,
+):
+    perf_targets = load_perf_targets(galaxy_type)
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = "tg-qwen-demo-device-perf-default"
+    batch_size = 32
+    subdir = "tg-qwen-demo-device-perf-default"
+    num_iterations = 1
+    num_layers = 10
+
+    command = f"pytest models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_qwen_demo"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+    profiler.start("run")
+    profiler.start(step_name)
+    device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
+    post_processed_results = run_device_perf(
+        command, subdir, num_iterations, cols, batch_size, device_analysis_types=device_analysis_types
+    )
+    profiler.end(step_name)
+    profiler.end("run")
+
+    filename = get_latest_ops_log_filename(subdir)
+
+    df = pd.read_csv(filename)
+    df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
+    df = merge_device_rows(df)
+    # Excluding compile run and capture trace entries
+    len_without_second_sampling_compile_run = (
+        len(df) - NUM_OPS_IN_SAMPLING
+    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_model_compilation = df[: int(len_without_second_sampling_compile_run / 3)]
+    df_model_trace = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
+
+    # Excluding model embeddings and lmhead+sampling ops
+    df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    # Use layers 2-9 for verifying against targets for more stability
+    # assert len(df_layers_compilation) % num_layers == 0
+
+    # first decoder layer
+    df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
+    df_first_layer_trace = df_layers_trace[: int(len(df_layers_trace) / num_layers)]
+    # mid decoder layers (layers 2-9)
+    df_mid_layers_compilation = df_layers_compilation[int(len(df_layers_compilation) / num_layers) :]
+    df_mid_layers_trace = df_layers_trace[int(len(df_layers_trace) / num_layers) :]
+    # model tail ops (lm head + sampling)
+    df_model_tail_compilation = df_model_compilation[DECODER_OP_END_INDEX:]
+    df_model_tail_trace = df_model_trace[DECODER_OP_END_INDEX:]
+    # Get first layer compilation and trace measurements
+    avg_kernel_duration_first_layer_compilation, _, _, _, _, _, _, _, _ = process_measurements(
+        df_first_layer_compilation, 1
+    )
+    (
+        avg_kernel_duration_first_layer_trace,
+        _,
+        _,
+        avg_dispatch_duration_first_layer_trace,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = process_measurements(df_first_layer_trace, 1)
+    # Get mid layers compilation and trace measurements
+    (
+        avg_kernel_duration_mid_layers_compilation,
+        min_kernel_duration_mid_layers_compilation,
+        max_kernel_duration_mid_layers_compilation,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = process_measurements(df_mid_layers_compilation, num_layers - 1)
+    (
+        avg_kernel_duration_mid_layers_trace,
+        min_kernel_duration_mid_layers_trace,
+        max_kernel_duration_mid_layers_trace,
+        avg_dispatch_duration_mid_layers_trace,
+        min_dispatch_duration_mid_layers_trace,
+        max_dispatch_duration_mid_layers_trace,
+        avg_first_to_last_start_mid_layers_trace,
+        min_first_to_last_start_mid_layers_trace,
+        max_first_to_last_start_mid_layers_trace,
+    ) = process_measurements(df_mid_layers_trace, num_layers - 1)
+
+    # Get model tail compilation and trace measurements
+    avg_kernel_duration_model_tail_compilation, _, _, _, _, _, _, _, _ = process_measurements(
+        df_model_tail_compilation, 1
+    )
+    (
+        avg_kernel_duration_model_tail_trace,
+        _,
+        _,
+        avg_dispatch_duration_model_tail_trace,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = process_measurements(df_model_tail_trace, 1)
+
+    # Prints
+    ## targets
+    if len(avg_kernel_duration_mid_layers_compilation) != len(perf_targets["decoder"]):
+        print_dict(perf_targets["decoder"], "perf_targets['decoder']")
+    if len(avg_kernel_duration_model_tail_trace) != len(perf_targets["model_tail"]):
+        print_dict(perf_targets["model_tail"], "perf_targets['model_tail']")
+
+    ## decoder mid layers
+    print_dict(avg_kernel_duration_mid_layers_compilation, "avg_kernel_duration_mid_layers_compilation")
+    print_dict(avg_kernel_duration_mid_layers_trace, "avg_kernel_duration_mid_layers_trace")
+    print_dict(avg_dispatch_duration_mid_layers_trace, "avg_dispatch_duration_mid_layers_trace")
+    print_dict(avg_first_to_last_start_mid_layers_trace, "avg_first_to_last_start_mid_layers_trace")
+
+    ## model tail ops
+    print_dict(avg_kernel_duration_model_tail_compilation, "avg_kernel_duration_model_tail_compilation")
+    print_dict(avg_kernel_duration_model_tail_trace, "avg_kernel_duration_model_tail_trace")
+    print_dict(avg_dispatch_duration_model_tail_trace, "avg_dispatch_duration_model_tail_trace")
+
+    # assert len(avg_kernel_duration_mid_layers_compilation) == len(
+    #     perf_targets["decoder"]
+    # ), f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. If the number or type of operations changed, expected times must be updated."
+    # assert len(avg_dispatch_duration_model_tail_trace) == len(
+    #     perf_targets["model_tail"]
+    # ), f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. If the number or type of operations changed, expected times must be updated."
+
+    all_passing = True
+    # Verify decoder layer (mid layers)
+    logger.info(f"Decoder layer")
+    for op_code_with_id in avg_kernel_duration_mid_layers_compilation.keys():
+        if op_code_with_id in perf_targets["decoder"]:
+            op_name = perf_targets["decoder"][op_code_with_id]["op_name"]
+
+            # Dependent on collective/non-collectivewe need to look at compile time or trace time for kernel duration
+            if is_collective_op(op_code_with_id):
+                avg_kernel_duration = avg_kernel_duration_mid_layers_trace[op_code_with_id]
+                min_kernel_duration = min_kernel_duration_mid_layers_trace[op_code_with_id]
+                max_kernel_duration = max_kernel_duration_mid_layers_trace[op_code_with_id]
+            else:
+                avg_kernel_duration = avg_kernel_duration_mid_layers_compilation[op_code_with_id]
+                min_kernel_duration = min_kernel_duration_mid_layers_compilation[op_code_with_id]
+                max_kernel_duration = max_kernel_duration_mid_layers_compilation[op_code_with_id]
+
+            avg_dispatch_duration = avg_dispatch_duration_mid_layers_trace[op_code_with_id]
+
+            # Avg first to last
+            avg_first_to_last_start = avg_first_to_last_start_mid_layers_trace[op_code_with_id]
+            avg_first_to_last_start = avg_first_to_last_start if not math.isnan(avg_first_to_last_start) else 0
+
+            # Min first to last
+            min_first_to_last_start = min_first_to_last_start_mid_layers_trace[op_code_with_id]
+            min_first_to_last_start = min_first_to_last_start if not math.isnan(min_first_to_last_start) else 0
+
+            # Max first to last
+            max_first_to_last_start = max_first_to_last_start_mid_layers_trace[op_code_with_id]
+            max_first_to_last_start = max_first_to_last_start if not math.isnan(max_first_to_last_start) else 0
+
+            # average
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                avg_kernel_duration,
+                DECODER_PREFIX,
+                KERNEL_MEASUREMENT_TYPE,
+                AVG_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                avg_dispatch_duration,
+                DECODER_PREFIX,
+                OP_TO_OP_MEASUREMENT_TYPE,
+                AVG_TYPE,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-avg",
+                avg_first_to_last_start,
+            )
+
+            # min
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                min_kernel_duration,
+                DECODER_PREFIX,
+                KERNEL_MEASUREMENT_TYPE,
+                MIN_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                min_dispatch_duration_mid_layers_trace[op_code_with_id],
+                DECODER_PREFIX,
+                OP_TO_OP_MEASUREMENT_TYPE,
+                MIN_TYPE,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-min",
+                min_first_to_last_start,
+            )
+
+            # max
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                max_kernel_duration,
+                DECODER_PREFIX,
+                KERNEL_MEASUREMENT_TYPE,
+                MAX_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                max_dispatch_duration_mid_layers_trace[op_code_with_id],
+                DECODER_PREFIX,
+                OP_TO_OP_MEASUREMENT_TYPE,
+                MAX_TYPE,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-max",
+                max_first_to_last_start,
+            )
+
+            # Verify kernel duration is within tolerance
+            passing = verify_value_within_margin(
+                avg_kernel_duration,
+                perf_targets["decoder"][op_code_with_id]["kernel_duration"],
+                perf_targets["decoder"][op_code_with_id]["kernel_duration_relative_margin"],
+                op_code_with_id,
+                "kernel",
+            )
+            all_passing = all_passing and passing
+            # Verify op_to_op latency is within tolerance
+            passing = verify_value_within_margin(
+                avg_dispatch_duration,
+                perf_targets["decoder"][op_code_with_id]["op_to_op"],
+                perf_targets["decoder"][op_code_with_id]["op_to_op_duration_relative_margin"],
+                op_code_with_id,
+                "op_to_op",
+            )
+            all_passing = all_passing and passing
+            # Verify first_to_last_start is within tolerance
+            passing = verify_value_within_margin(
+                avg_first_to_last_start,
+                perf_targets["decoder"][op_code_with_id]["first_to_last_start"],
+                perf_targets["decoder"][op_code_with_id]["first_to_last_start_relative_margin"],
+                op_code_with_id,
+                "first_to_last_start",
+            )
+            # Skip asserting for first_to_last_start for now since it's not stable
+            # all_passing = all_passing and passing
+
+        else:
+            all_passing = False
+            logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
+
+    # Verify model tail ops
+    logger.info(f"Model tail ops")
+    for op_code_with_id in avg_kernel_duration_model_tail_compilation.keys():
+        if op_code_with_id in perf_targets["model_tail"]:
+            op_name = perf_targets["model_tail"][op_code_with_id]["op_name"]
+
+            # Dependent on collective/non-collectivewe need to look at compile time or trace time for kernel duration
+            if is_collective_op(op_code_with_id):
+                kernel_duration = avg_kernel_duration_model_tail_trace[op_code_with_id]
+            else:
+                kernel_duration = avg_kernel_duration_model_tail_compilation[op_code_with_id]
+
+            dispatch_duration = avg_dispatch_duration_model_tail_trace[op_code_with_id]
+
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                kernel_duration,
+                MODEL_TAIL_PREFIX,
+                KERNEL_MEASUREMENT_TYPE,
+                AVG_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                dispatch_duration,
+                MODEL_TAIL_PREFIX,
+                OP_TO_OP_MEASUREMENT_TYPE,
+                AVG_TYPE,
+            )
+
+            # Verify kernel duration is within tolerance
+            passing = verify_value_within_margin(
+                kernel_duration,
+                perf_targets["model_tail"][op_code_with_id]["kernel_duration"],
+                perf_targets["model_tail"][op_code_with_id]["kernel_duration_relative_margin"],
+                op_code_with_id,
+                "kernel",
+            )
+            all_passing = all_passing and passing
+            # Verify op_to_op latency is within tolerance
+            passing = verify_value_within_margin(
+                dispatch_duration,
+                perf_targets["model_tail"][op_code_with_id]["op_to_op"],
+                perf_targets["model_tail"][op_code_with_id]["op_to_op_duration_relative_margin"],
+                op_code_with_id,
+                "op_to_op",
+            )
+            all_passing = all_passing and passing
+        else:
+            all_passing = False
+            logger.warning(f"Warning: {op_code_with_id} not found in perf_targets")
+
+    # Calculate e2e performance
+    e2e_estimate_80l = 0
+    # First layer
+    for op_id in avg_kernel_duration_first_layer_trace.keys():
+        op_to_op_latency = avg_dispatch_duration_first_layer_trace[op_id]
+        if is_collective_op(op_id):
+            kernel_duration = avg_kernel_duration_first_layer_trace[op_id]
+        else:
+            kernel_duration = avg_kernel_duration_first_layer_compilation[op_id]
+
+        if op_to_op_latency < 0:
+            op_to_op_latency = 0
+
+        e2e_estimate_80l += kernel_duration + op_to_op_latency
+    # 79 layers based on average of layers 2-9
+    for op_id in avg_kernel_duration_mid_layers_trace.keys():
+        if is_collective_op(op_id):
+            avg_kernel_duration = avg_kernel_duration_mid_layers_trace[op_id]
+        else:
+            avg_kernel_duration = avg_kernel_duration_mid_layers_compilation[op_id]
+        avg_dispatch_duration = avg_dispatch_duration_mid_layers_trace[op_id]
+        e2e_estimate_80l += (avg_kernel_duration + avg_dispatch_duration) * 79  # weighting avg for 79 layers
+
+    model_tail_e2e_estimate = 0
+    # Model tail ops
+    for op_id in avg_kernel_duration_model_tail_trace.keys():
+        op_to_op_latency = avg_dispatch_duration_model_tail_trace[op_id]
+        if is_collective_op(op_id):
+            kernel_duration = avg_kernel_duration_model_tail_trace[op_id]
+        else:
+            kernel_duration = avg_kernel_duration_model_tail_compilation[op_id]
+
+        if op_to_op_latency < 0:
+            op_to_op_latency = 0
+
+        model_tail_e2e_estimate += kernel_duration + op_to_op_latency
+
+    # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
+    tsu_estimate = 1000000 / ((e2e_estimate_80l + model_tail_e2e_estimate) / 1000 + 300)
+
+    logger.info(f"80L e2e time estimate: {e2e_estimate_80l}")
+    logger.info(f"Model tail e2e time estimate: {model_tail_e2e_estimate}")
+    logger.info(f"80L T/s/u estimate: {tsu_estimate}")
+
+    benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
+    benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
+
+    run_type = "tg_qwen_demo_decode" if galaxy_type == "4U" else "tg_qwen_demo_decode_6u"
+    # Save the results
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=run_type,
+        ml_model_name="qwen70b-tg",
+    )
+
+    assert all_passing
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.models_device_performance_bare_metal
+# To update:
+# Run FAKE_DEVICE=TG TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_qwen_TG_perf_device_non_overlapped_dispatch
+# Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
+# Manually compare each entry between old-expected and the new average values
+# - Any perf regressions? Everything as expected?
+# If all looks good, update the expected_dispatch_times_dict with the new average values
+# If the op list changed (new ops, less ops, fused ops), and not done for the above test, then update mapping_op_code_to_name and give the new ops meaningful names
+# Run at least once again to verify the new expected values are correct and margins hold
+def test_qwen_TG_perf_device_non_overlapped_dispatch(
+    reset_seeds,
+    galaxy_type,
+):
+    perf_targets = load_perf_targets(galaxy_type)
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = "tg-qwen-demo-device-perf-non-overlapped-dispatch"
+    batch_size = 32
+    subdir = "tg-qwen-demo-device-perf-non-overlapped-dispatch"
+    num_iterations = 1
+    num_layers = 10
+
+    command = f"pytest models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_qwen_demo"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+    profiler.start("run")
+    profiler.start(step_name)
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    filename = get_latest_ops_log_filename(subdir)
+
+    df = pd.read_csv(filename)
+    df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
+    df = merge_device_rows(df)
+    # Excluding compile run and capture trace entries
+    len_without_second_sampling_compile_run = (
+        len(df) - NUM_OPS_IN_SAMPLING
+    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_model = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
+
+    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    # assert len(df_layers) % num_layers == 0
+    df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
+
+    df_model_tail = df_model[DECODER_OP_END_INDEX:]
+
+    (
+        _,
+        _,
+        _,
+        avg_dispatch_duration_mid_layers,
+        min_dispatch_duration_mid_layers,
+        max_dispatch_duration_mid_layers,
+        _,
+        _,
+        _,
+    ) = process_measurements(df_layers, num_layers - 1)
+    (
+        _,
+        _,
+        _,
+        avg_dispatch_duration_model_tail,
+        min_dispatch_duration_model_tail,
+        max_dispatch_duration_model_tail,
+        _,
+        _,
+        _,
+    ) = process_measurements(df_model_tail, 1)
+
+    if len(avg_dispatch_duration_mid_layers) != len(perf_targets["decoder"]):
+        print_dict(perf_targets["decoder"], "perf_targets['decoder']")
+    if len(avg_dispatch_duration_model_tail) != len(perf_targets["model_tail"]):
+        print_dict(perf_targets["model_tail"], "perf_targets['model_tail']")
+
+    print_dict(avg_dispatch_duration_mid_layers, "avg_dispatch_duration_mid_layers")
+    print_dict(avg_dispatch_duration_model_tail, "avg_dispatch_duration_model_tail")
+
+    assert len(avg_dispatch_duration_mid_layers) == len(
+        perf_targets["decoder"]
+    ), f"Expected {len(perf_targets['decoder'])} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. If the number or type of operations changed, expected times must be updated."
+    assert len(avg_dispatch_duration_model_tail) == len(
+        perf_targets["model_tail"]
+    ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
+
+    logger.info("Decoder")
+    passing = True
+    for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_mid_layers.items():
+        if op_code_with_id in perf_targets["decoder"]:
+            op_name = perf_targets["decoder"][op_code_with_id]["op_name"]
+
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                avg_dispatch_duration,
+                DECODER_PREFIX,
+                DISPATCH_MEASUREMENT_TYPE,
+                AVG_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                min_dispatch_duration_mid_layers[op_code_with_id],
+                DECODER_PREFIX,
+                DISPATCH_MEASUREMENT_TYPE,
+                MIN_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                max_dispatch_duration_mid_layers[op_code_with_id],
+                DECODER_PREFIX,
+                DISPATCH_MEASUREMENT_TYPE,
+                MAX_TYPE,
+            )
+
+            # Verify dispatch latency is within tolerance
+            passing = passing and verify_value_within_margin(
+                avg_dispatch_duration,
+                perf_targets["decoder"][op_code_with_id]["non-overlapped-dispatch-time"],
+                perf_targets["decoder"][op_code_with_id]["dispatch_duration_relative_margin"],
+                op_code_with_id,
+                "dispatch",
+            )
+        else:
+            passing = False
+            logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
+
+    logger.info("Model tail")
+    all_passing = True
+    for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_model_tail.items():
+        if op_code_with_id in perf_targets["model_tail"]:
+            op_name = perf_targets["model_tail"][op_code_with_id]["op_name"]
+
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                avg_dispatch_duration,
+                MODEL_TAIL_PREFIX,
+                DISPATCH_MEASUREMENT_TYPE,
+                AVG_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                min_dispatch_duration_model_tail[op_code_with_id],
+                MODEL_TAIL_PREFIX,
+                DISPATCH_MEASUREMENT_TYPE,
+                MIN_TYPE,
+            )
+            add_benchmark_measurement(
+                profiler,
+                benchmark_data,
+                step_name,
+                op_name,
+                max_dispatch_duration_model_tail[op_code_with_id],
+                MODEL_TAIL_PREFIX,
+                DISPATCH_MEASUREMENT_TYPE,
+                MAX_TYPE,
+            )
+
+            # Verify dispatch latency is within tolerance
+            passing = verify_value_within_margin(
+                avg_dispatch_duration,
+                perf_targets["model_tail"][op_code_with_id]["non-overlapped-dispatch-time"],
+                perf_targets["model_tail"][op_code_with_id]["dispatch_duration_relative_margin"],
+                op_code_with_id,
+                "dispatch",
+            )
+            all_passing = all_passing and passing
+        else:
+            all_passing = False
+            logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
+
+    run_type = "tg_qwen_demo_decode" if galaxy_type == "4U" else "tg_qwen_demo_decode_6u"
+    # Save the results
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=run_type,
+        ml_model_name="qwen32b-tg",
     )
 
     assert all_passing
