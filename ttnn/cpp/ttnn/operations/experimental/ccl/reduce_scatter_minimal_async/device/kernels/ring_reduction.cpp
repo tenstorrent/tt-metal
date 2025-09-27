@@ -11,16 +11,14 @@ void MAIN {
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(5);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(6);
-    constexpr bool direction = get_compile_time_arg_val(7);
+    constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(4);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(5);
+    constexpr bool direction = get_compile_time_arg_val(6);
 
     uint32_t arg_idx = 0;
 
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tiles_read = start_tiles_read;
     uint32_t tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
     // Initialize binary operations - use the same constants consistently
@@ -29,6 +27,8 @@ void MAIN {
 
     for (uint32_t b = 0; b < num_batches; b++) {
         for (uint32_t i = 0; i < ring_size - 1; i++) {  // Don't reduce on the first slice
+            uint32_t tiles_read = start_tiles_read;
+
             if constexpr (!direction) {
                 uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                 tiles_read += backwards_offset;
@@ -68,8 +68,6 @@ void MAIN {
                     tiles_read += num_pages_to_read;
                 }
             }
-
-            tiles_read = start_tiles_read;
         }
     }
 }

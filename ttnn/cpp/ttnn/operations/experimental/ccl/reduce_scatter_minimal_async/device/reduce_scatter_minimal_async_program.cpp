@@ -544,19 +544,17 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
                 uint32_t worker_id = link * num_workers_per_direction + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
-                uint32_t tiles_read = (worker_id * batch_slice_num_pages / num_workers);
-                uint32_t tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
-                uint32_t chunks_per_sync_val =
-                    chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                        topology, tiles_to_read, tiles_read, tile_granularity));
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
-                uint32_t start_pages_read_in_row =
-                    (worker_id * batch_slice_num_pages / num_workers) % (input_tensor_Wt / ring_size);
-                uint32_t start_row_offset =
-                    (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) * input_tensor_Wt;
                 uint32_t start_tiles_read = worker_id * batch_slice_num_pages / num_workers;
                 uint32_t start_tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
+
+                uint32_t start_pages_read_in_row = start_tiles_read % (slice_Wt);
+                uint32_t start_row_offset = start_tiles_read / (input_tensor_Wt / ring_size) * input_tensor_Wt;
+
+                uint32_t chunks_per_sync_val =
+                    chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
+                        topology, start_tiles_to_read, start_tiles_read, tile_granularity));
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,              // my_chip_id
@@ -716,7 +714,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     input_cb_index,
                     intermediate_cb_index,
                     compute_output_cb_index,
-                    batch_slice_num_pages,
                     tile_granularity,
                     ring_size,
                     input_tensor_B,
