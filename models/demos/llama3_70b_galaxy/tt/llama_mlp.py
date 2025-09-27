@@ -63,7 +63,8 @@ class TtLlamaMLP(LightweightModule):
         ]  # args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
         as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type,
+            # dtype=type,
+            dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
@@ -73,7 +74,8 @@ class TtLlamaMLP(LightweightModule):
 
         as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type,
+            # dtype=type,
+            dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
