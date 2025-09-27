@@ -551,7 +551,11 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
                 if (!cores_str.empty()) {
                     cores_str += ", ";
                 }
-                cores_str += "(" + std::to_string(core.x) + "," + std::to_string(core.y) + ")";
+                cores_str += "(";
+                cores_str += std::to_string(core.x);
+                cores_str += ",";
+                cores_str += std::to_string(core.y);
+                cores_str += ")";
             }
 
             CoreCoord reducer_core = {
@@ -608,8 +612,11 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
             if (!worker_cores_str.empty()) {
                 worker_cores_str += ", ";
             }
-            worker_cores_str += "(" + std::to_string(worker_core_physical_xs[reduction_group_id][i]) + "," +
-                                std::to_string(worker_core_physical_ys[reduction_group_id][i]) + ")";
+            worker_cores_str += "(";
+            worker_cores_str += std::to_string(worker_core_physical_xs[reduction_group_id][i]);
+            worker_cores_str += ",";
+            worker_cores_str += std::to_string(worker_core_physical_ys[reduction_group_id][i]);
+            worker_cores_str += ")";
         }
         log_debug(
             tt::LogOp,

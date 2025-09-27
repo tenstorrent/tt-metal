@@ -93,17 +93,17 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
 
     std::map<std::string, std::string> compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
-        compute_defines["SOFTMAX"] = "1";
+        compute_defines["SOFTMAX"] = std::string("1");
     } else {
-        compute_defines["SOFTMIN"] = "1";
+        compute_defines["SOFTMIN"] = std::string("1");
     }
 
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
-        compute_defines["LOG"] = "1";
+        compute_defines["LOG"] = std::string("1");
     }
 
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = std::string("1");
     }
 
     // create compute kernel
