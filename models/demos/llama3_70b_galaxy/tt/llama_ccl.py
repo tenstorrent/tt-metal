@@ -594,7 +594,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3584)],
                     "FF2": [(1, 1, seqlen, 2048)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
-                    # "SAMPLING": [(1, 1, 32, 128 * 1024)]
+                    "SAMPLING": [(1, 1, 32, 128 * 1024)],
                 }
                 if not self.use_qwen_mlp
                 else {
@@ -604,6 +604,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3200)],
                     "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "SAMPLING": [(1, 1, 32, 155648)],
                 }
             )
             for key, shape in buffers_dict.items():

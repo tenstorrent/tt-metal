@@ -166,7 +166,7 @@ class Generator:
 
             # If PCC check enabled or return_logits is True (we save output logits)
             if tt_out_logits_all_users is not None or return_logits:
-                tt_out_logits_saved = torch.zeros(1, 131072)
+                tt_out_logits_saved = torch.zeros(1, 155648)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:
