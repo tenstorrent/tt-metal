@@ -20,7 +20,6 @@ from ...parallel.config import MochiVAEParallelConfig, ParallelFactor
 from diffusers.models.autoencoders.autoencoder_kl_mochi import MochiResnetBlock3D, MochiUpBlock3D, MochiDecoder3D
 
 from loguru import logger
-from pathlib import Path
 
 
 def get_padded_size(numerator, denominator):
@@ -47,30 +46,6 @@ def vae_device_config(func):
     return func
 
 
-def get_vae_dir():
-    mochi_dir = os.environ.get("MOCHI_DIR")
-    if not mochi_dir:
-        raise ValueError("MOCHI_DIR environment variable must be set")
-    vae_dir = Path(mochi_dir)
-    assert vae_dir.exists()
-    return vae_dir
-
-
-def load_decoder_weights():
-    """Load VAE decoder weights from safetensors file."""
-    vae_dir = get_vae_dir()
-    path = vae_dir / "decoder.safetensors"
-
-    try:
-        from safetensors.torch import load_file
-
-        logger.info(f"Loading VAE decoder weights from {path}")
-        return load_file(path)
-    except (ImportError, FileNotFoundError) as e:
-        logger.warning(f"Failed to load decoder weights: {e}")
-        return None
-
-
 class Conv3d1x1(nn.Conv3d):
     def __init__(self, in_channels, out_channels, bias=True):
         super().__init__(in_channels, out_channels, kernel_size=(1, 1, 1), bias=bias)
@@ -79,27 +54,13 @@ class Conv3d1x1(nn.Conv3d):
 def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=True):
     """Initialize both reference Conv3d and TT models."""
     # Create reference model
-    # reference_model = Conv3d1x1(in_channels, out_channels, bias=bias)
-
-    # Create reference model
-    reference_model = RefDecoder(**decoder_base_args)
-
-    # Try to load real weights if requested
-    state_dict = load_decoder_weights()
-    if state_dict:
-        try:
-            # Load weights into reference model
-            reference_model.load_state_dict(state_dict, strict=True)
-            reference_model = reference_model.output_proj
-            logger.info(f"Loaded real weights for reference decoder model")
-        except Exception as e:
-            logger.warning(f"Failed to load weights for reference decoder: {e}")
+    reference_model = Conv3d1x1(in_channels, out_channels, bias=bias)
 
     # Create TT model
     tt_model = TtConv1x1(
         mesh_device=mesh_device,
-        in_channels=reference_model.in_features,
-        out_channels=reference_model.out_features,
+        in_channels=in_channels,
+        out_channels=out_channels,
         bias=bias,
         torch_ref=reference_model,
     )
@@ -112,31 +73,88 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
     [
         (1, 12, 768, 28, 60, 106),
     ],
-    ids=["12->768"],
+    ids=["large_latent"],
 )
-@pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @vae_device_config
-def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds, divide_T):
+def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
-    T = T // divide_T
     reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
+
+    h_parallel_factor = 4
+    vae_parallel_config = MochiVAEParallelConfig(
+        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=0),
+        w_parallel=ParallelFactor(factor=mesh_device.shape[0] // h_parallel_factor, mesh_axis=0),
+    )
+    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
+    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
 
     # Create input tensor
     torch_input = torch.randn(N, C_in, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
+    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
+    if T % num_devices_T:
+        padded_T = get_padded_size(T, num_devices_T)
+        T_padding = padded_T - T
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, T_padding))
+    else:
+        padded_T = T
+    num_devices_W = vae_parallel_config.w_parallel.factor
+    if W % num_devices_W:
+        padded_W = get_padded_size(W, num_devices_W)
+        W_padding = padded_W - W
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, W_padding))
+    else:
+        padded_W = W
+    num_devices_H = vae_parallel_config.h_parallel.factor
+    if H % num_devices_H:
+        padded_H = get_padded_size(H, num_devices_H)
+        H_padding = padded_H - H
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, H_padding))
+    else:
+        padded_H = H
+
+    tt_input = torch.reshape(
+        tt_input,
+        (N, padded_T, num_devices_H, padded_H // num_devices_H, num_devices_W, padded_W // num_devices_W, C_in),
+    )
+    tt_input = tt_input.permute(0, 1, 2, 4, 3, 5, 6)
+    tt_input = torch.reshape(
+        tt_input,
+        (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C_in),
+    )
+
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
     )
+    tt_input = ttnn.squeeze(tt_input, 2)
 
     logger.info("Run TtConv1x1 forward (Conv3d mode)")
     tt_output = tt_model(tt_input)
+    logger.info("End TtResBlock forward")
+    tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
-    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]).permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 0]),
+    )
+
+    tt_output_torch = torch.reshape(
+        tt_output_torch,
+        (N, padded_T, num_devices_H, num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C_out),
+    )
+    tt_output_torch = tt_output_torch.permute(0, 1, 2, 4, 3, 5, 6)
+    tt_output_torch = torch.reshape(tt_output_torch, (N, padded_T, padded_H, padded_W, C_out))
+
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    tt_output_torch = tt_output_torch[0:N, 0:C_out, 0:T, 0:H, 0:W]
 
     # Get reference output
     with torch.no_grad():
