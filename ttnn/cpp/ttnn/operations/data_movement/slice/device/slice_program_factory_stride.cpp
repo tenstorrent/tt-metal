@@ -19,6 +19,18 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 /**
+ * Core allocation result structure for multi-core slice operations.
+ * Contains all the computed values for core grid layout and allocation.
+ */
+struct CoreAllocation {
+    uint32_t grid_x;               // Grid width (number of cores in x direction)
+    uint32_t grid_y;               // Grid height (number of cores in y direction)
+    uint32_t num_cores;            // Total number of cores used (grid_x * grid_y)
+    uint32_t max_cores_available;  // Maximum cores available on device
+    uint32_t num_cores_needed;     // Number of cores needed for optimal allocation
+};
+
+/**
  * Calculate total output rows based on tensor rank - this is what we distribute across cores.
  * Generalized for N-dimensional tensors. For rank R, rows = product(dims[0:R-1])
  * The last dimension is always processed as contiguous width data.
@@ -39,8 +51,7 @@ inline uint32_t calculate_total_output_rows(const ttnn::Shape& output_shape) {
  * This implements the key insight from Python: use only as many cores as we have work for.
  * Translated from Python get_multicore_slice_descriptor method.
  */
-inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_core_allocation(
-    tt::tt_metal::IDevice* device, uint32_t total_output_rows) {
+inline CoreAllocation calculate_core_allocation(tt::tt_metal::IDevice* device, uint32_t total_output_rows) {
     // Get hardware compute grid dimensions
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t max_cores_available = compute_grid.x * compute_grid.y;
@@ -65,7 +76,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_co
 
     uint32_t num_cores = grid_x * grid_y;
 
-    return std::make_tuple(grid_x, grid_y, num_cores, max_cores_available, num_cores_needed);
+    return {grid_x, grid_y, num_cores, max_cores_available, num_cores_needed};
 }
 
 /**
@@ -261,15 +272,17 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     // MULTI-CORE ALLOCATION STRATEGY:
     // The key insight is to use only as many cores as we have work for
     // This avoids the overhead of idle cores and optimizes resource utilization
-    auto [grid_x, grid_y, num_cores, max_cores_available, num_cores_needed] =
-        calculate_core_allocation(device, total_output_rows);
+    auto core_allocation = calculate_core_allocation(device, total_output_rows);
+    uint32_t grid_x = core_allocation.grid_x;
+    uint32_t grid_y = core_allocation.grid_y;
+    uint32_t num_cores = core_allocation.num_cores;
 
     // DEBUG OUTPUT: Show core allocation decisions for performance analysis
     log_debug(
         tt::LogOp,
         "Multi-core slice allocation - Total output rows: {}, Available cores: {}",
         total_output_rows,
-        max_cores_available);
+        core_allocation.max_cores_available);
     log_debug(tt::LogOp, "Tensor shape: {}D {}", input_shape.rank(), output_shape);
     log_debug(tt::LogOp, "Using grid: {}x{} = {} cores", grid_x, grid_y, num_cores);
 
