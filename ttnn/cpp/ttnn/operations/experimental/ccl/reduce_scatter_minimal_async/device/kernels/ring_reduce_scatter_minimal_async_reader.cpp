@@ -36,6 +36,7 @@ constexpr uint32_t slice_Wt = get_compile_time_arg_val(15);
 constexpr uint32_t fuse_op = get_compile_time_arg_val(16);
 constexpr bool direction = get_compile_time_arg_val(17);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(18);
+constexpr uint32_t dim = get_compile_time_arg_val(19);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -53,7 +54,7 @@ void kernel_main() {
     int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 19;
+    constexpr uint32_t ct_idx = 20;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -138,8 +139,15 @@ void kernel_main() {
             }
 
             chunk_count = 0;
-            uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
-            uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+            uint32_t input_tile_id_start;
+            uint32_t intermediate_tile_id_start;
+            if constexpr (dim == 3) {
+                input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
+                intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+            } else if constexpr (dim == 2) {
+                input_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt + batch_offset;
+                intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
+            }
             for (uint32_t c = 0; c < input_tensor_C; ++c) {
                 uint32_t input_pages_read_in_row = start_pages_read_in_row;
                 uint32_t input_row_offset = start_row_offset;

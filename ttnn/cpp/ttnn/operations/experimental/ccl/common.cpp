@@ -6,9 +6,11 @@
 
 namespace composite_common {
 
+// TODO: (GR) This will need to add topology as a parameter
 bool use_composite_reduce_scatter(
     const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
     int32_t rank = input_tensor.logical_shape().rank();
@@ -27,15 +29,16 @@ bool use_composite_reduce_scatter(
         return true;
     }
 
-    // Use composite if scattering on a dim that isn't 3
-    if (scatter_dim != 3) {
+    // Use composite if scattering on a dim that isn't 2 or 3
+    if (scatter_dim != 2 && scatter_dim != 3) {
         return true;
     }
 
-    // Use composite if tiled and scattering on padded dim 3
+    // Use composite if tiled and scattering on padded dim 2 or 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    return scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0;
+    return (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
+           (scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
 }
 
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config) {

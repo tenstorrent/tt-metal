@@ -44,24 +44,25 @@ constexpr uint32_t slice_Ht = get_compile_time_arg_val(14);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(15);
 constexpr bool direction = get_compile_time_arg_val(16);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(17);
+constexpr uint32_t dim = get_compile_time_arg_val(18);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(18);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(19);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(20);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(26);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(28);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(30);
+constexpr bool is_termination_master = get_compile_time_arg_val(19);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(20);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(21);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(27);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(28);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(29);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(30);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(31);
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<31>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<32>();
 constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<31 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<32 + ccl_routing_utils::num_line_unicast_args>();
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -94,7 +95,7 @@ void kernel_main() {
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx =
-        31 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+        32 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -236,9 +237,14 @@ void kernel_main() {
             uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
             if (i < (ring_size - 1)) {
                 chunk_count = 0;
-
                 constexpr uint32_t input_channel_num_pages = (batch_slice_num_pages * ring_size) / input_tensor_C;
-                uint32_t tile_id_start = actual_slice_idx * slice_Wt;
+
+                uint32_t tile_id_start;
+                if constexpr (dim == 3) {
+                    tile_id_start = actual_slice_idx * slice_Wt;
+                } else if constexpr (dim == 2) {
+                    tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
+                }
                 for (uint32_t c = 0; c < input_tensor_C; ++c) {
                     uint32_t pages_read_in_row = start_pages_read_in_row;
                     uint32_t row_offset = start_row_offset;

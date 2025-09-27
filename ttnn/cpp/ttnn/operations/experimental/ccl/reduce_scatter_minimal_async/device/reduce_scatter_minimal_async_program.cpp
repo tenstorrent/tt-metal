@@ -548,8 +548,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 uint32_t start_tiles_read = worker_id * batch_slice_num_pages / input_tensor_C / num_workers;
                 uint32_t start_tiles_to_read = (worker_id + 1) * batch_slice_num_pages / input_tensor_C / num_workers;
 
-                uint32_t start_pages_read_in_row = start_tiles_read % (slice_Wt);
-                uint32_t start_row_offset = start_tiles_read / (slice_Wt)*input_tensor_Wt;
+                uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
+                uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
 
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
@@ -579,6 +579,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     fuse_op,                 // fused op
                     dir,                     // direction
                     chunks_per_sync_val,     // chunks_per_sync
+                    dim,                     // dim
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -644,6 +645,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     slice_Wt,                       // slice_Wt
                     dir,                            // direction
                     chunks_per_sync_val,            // chunks_per_sync
+                    dim,                            // dim
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
