@@ -134,7 +134,6 @@ class TtTransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        batch_size=1,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
@@ -150,48 +149,6 @@ class TtTransformerBlock(LightweightModule):
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
             attn_in_sharded, _ = self.attention_norm(x, None, mode)
-            # if not mode == "prefill":
-            #     attn_in_sharded = ttnn.to_memory_config(
-            #         attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
-            #     )
-            attn_in_sharded, _ = self.attention_norm(x, None, mode)
-            attn_in_sharded = ttnn.to_memory_config(
-                attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
-            )
-            # inp_torch = ttnn.to_torch(
-            #     x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
-            # )[:, :1, :, :]
-            # attn_in_torch = inp_torch * torch.rsqrt(
-            #     inp_torch.pow(2).mean(-1, keepdim=True) + self.attention_norm.norm.eps
-            # )
-            # attn_in_torch = attn_in_torch * self.attn_norm_weight
-            # if mode == "decode":
-            #     attn_in_sharded = ttnn.from_torch(
-            #         attn_in_torch,
-            #         mesh_mapper=ttnn.ShardTensor2dMesh(
-            #             self.mesh_device,
-            #             dims=(None, 3),
-            #             mesh_shape=(8, 4),
-            #         ),
-            #         memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
-            #         # dtype=ttnn.bfloat8_b,
-            #         dtype=ttnn.bfloat16,
-            #         layout=ttnn.TILE_LAYOUT,
-            #         device=self.mesh_device,
-            #     )
-            # else:
-            #     attn_in_sharded = ttnn.from_torch(
-            #         attn_in_torch,
-            #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            #         mesh_mapper=ttnn.ShardTensor2dMesh(
-            #             self.mesh_device,
-            #             dims=(None, 3),
-            #             mesh_shape=(8, 4),
-            #         ),
-            #         dtype=ttnn.bfloat16,
-            #         layout=ttnn.TILE_LAYOUT,
-            #         device=self.mesh_device,
-            #     )
             h = x
 
         else:
@@ -209,7 +166,6 @@ class TtTransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
-            batch_size=batch_size,
         )
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
@@ -231,6 +187,6 @@ class TtTransformerBlock(LightweightModule):
                 ff_out.deallocate(True)
             if mode == "prefill":
                 h.deallocate(True)
-            return out, h
+            return out, None
         else:
             return ff_out, h
