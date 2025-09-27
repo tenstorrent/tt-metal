@@ -259,6 +259,7 @@ jobs:
       run: |
         grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
         mv .clang-tidy-new .clang-tidy
+        cat .clang-tidy
     - name: Prepare compile_commands.json
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
