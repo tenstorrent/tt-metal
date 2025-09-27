@@ -14,7 +14,6 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     v_elseif(exp > 30)  // overflow occurs above this range
     {
         // set to int32 max value in case of overflow
-        // This should be 0x7fff ffff  => is it 2 SFPLOADI ?
         result = std::numeric_limits<int32_t>::max();
     }
     v_else {
