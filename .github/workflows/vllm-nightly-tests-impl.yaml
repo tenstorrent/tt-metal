@@ -74,15 +74,25 @@ jobs:
             owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           {
-            name: "[BH-RB] Llama-3.1-8B-Instruct",
+            name: "[BH-LB] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 35,
             benchmark-timeout: 10,
             runner-label: bh-rackbox,
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8}",
-            multimodal: false,
+            override-tt-config: "{\"data_parallel\": 1}",
+            owner_id: U08GELBB1AP, # Ambrose Ling
+          },
+          {
+            name: "[BH-LB] Llama-3.3-70B-Instruct",
+            model: "meta-llama/Llama-3.3-70B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: bh-rackbox,
+            mesh-device: P150x8,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 1}",
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
           {
