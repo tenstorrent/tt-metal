@@ -255,6 +255,11 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
         sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
         pip install pyyaml # Needed for clang-tidy-diff-20.py
+    - name: Prepare .clang-tidy with extra checks
+      run: |
+        grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
+        mv .clang-tidy-new .clang-tidy
+        cat .clang-tidy
     - name: Prepare compile_commands.json
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
