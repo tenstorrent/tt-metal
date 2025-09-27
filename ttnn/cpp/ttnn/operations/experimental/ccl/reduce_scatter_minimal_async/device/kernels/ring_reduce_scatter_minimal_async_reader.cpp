@@ -140,13 +140,13 @@ void kernel_main() {
 
             uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+
+            uint32_t input_pages_read_in_row = start_pages_read_in_row;
+            uint32_t input_row_offset = start_row_offset;
+
+            uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
+            uint32_t intermediate_row_offset = input_row_offset;
             for (uint32_t c = 0; c < input_tensor_C; ++c) {
-                uint32_t input_pages_read_in_row = start_pages_read_in_row;
-                uint32_t input_row_offset = start_row_offset;
-
-                uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
-                uint32_t intermediate_row_offset = input_row_offset;
-
                 uint32_t tiles_read = start_tiles_read / input_tensor_C;
                 uint32_t tiles_to_read = start_tiles_to_read / input_tensor_C;
 
