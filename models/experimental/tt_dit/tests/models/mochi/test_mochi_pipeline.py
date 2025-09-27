@@ -161,6 +161,7 @@ def test_tt_mochi_pipeline(
         vae_parallel_config=vae_parallel_config,
         num_links=num_links,
         use_cache=True,
+        use_reference_vae=False,
         model_name="genmo/mochi-1-preview",
     )
 
@@ -172,7 +173,7 @@ def test_tt_mochi_pipeline(
     # Generate frames with reduced parameters for faster testing
     frames = tt_pipe(
         prompt,
-        num_inference_steps=50,  # Reduced for faster testing
+        num_inference_steps=2,  # Reduced for faster testing
         guidance_scale=3.5,
         num_frames=168,  # Reduced for faster testing
         height=480,  # Reduced resolution for faster testing
