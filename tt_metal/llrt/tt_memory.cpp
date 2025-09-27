@@ -27,6 +27,20 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     elf.ReadImage(path);
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
+
+        // debug: dump disassembly after XIP transform
+        // Enable by setting environment variable TT_METAL_ELF_DUMP_AFTER_XIP to any value.
+        if (std::getenv("TT_METAL_ELF_DUMP_AFTER_XIP") != nullptr) {
+            // Write the modified ELF out and run objdump -S -d on it
+            std::string out_elf_path = std::string(path) + ".xip.elf";
+            try {
+                elf.WriteImage(out_elf_path);
+            } catch (const std::exception &e) {
+                log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
+            } catch (...) {
+                log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly: {}", out_elf_path);
+            }
+        }
     }
 
     auto const& segments = elf.GetSegments();
