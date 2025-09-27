@@ -302,7 +302,6 @@ class TtSDXLPipeline(LightweightModule):
         fixed_seed_bool=True,
     ):
         # Generate user input tensors for the TT model.
-        print("self.batch_size: in generate_input_tensors: ", self.batch_size)
 
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")

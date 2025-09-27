@@ -91,24 +91,6 @@ def run_demo_inference(
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
     )
 
-    # tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-    #     prompt_embeds_torch=(torch.randn(batch_size, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),),
-    #     pooled_prompt_embeds_torch=(torch.randn(batch_size, TEXT_ENCODER_2_PROJECTION_DIM),),
-    #     negative_prompt_embeds_torch=(torch.randn(batch_size, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),),
-    #     negative_pooled_prompt_embeds_torch=(torch.randn(batch_size, TEXT_ENCODER_2_PROJECTION_DIM),),
-    # )
-    # (
-    #     all_prompt_embeds_torch,
-    #     torch_add_text_embeds,
-    # ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
-
-    # tt_sdxl.prepare_input_tensors(
-    #     [
-    #         tt_latents,
-    #         tt_prompt_embeds[0],
-    #         tt_add_text_embeds[0],
-    #     ]
-    # )
     tt_sdxl.compile_image_processing()
 
     logger.info("=" * 80)
@@ -181,9 +163,8 @@ def run_demo_inference(
             if is_ci_env:
                 logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
             else:
-                cfg_flag = "cfg" if use_cfg_parallel else "no_cfg"
-                img.save(f"output/output{len(images) + start_from}_{cfg_flag}.png")
-                logger.info(f"Image saved to output/output{len(images) + start_from}_{cfg_flag}.png")
+                img.save(f"output/output{len(images) + start_from}.png")
+                logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
     return images
 
@@ -224,7 +205,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "prompt",
-    (["An astronaut riding a green horse", "An astronaut riding a green horse"],),
+    (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
     "negative_prompt",
