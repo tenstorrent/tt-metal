@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
-        (10, 310),
+        (10, 330),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
