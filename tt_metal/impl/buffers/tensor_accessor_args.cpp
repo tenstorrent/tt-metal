@@ -108,6 +108,14 @@ TensorAccessorArgs::TensorAccessorArgs(
     const std::shared_ptr<distributed::MeshBuffer>& buffer, tensor_accessor::ArgsConfig args_config) :
     TensorAccessorArgs(buffer.get(), args_config) {}
 
+TensorAccessorArgs TensorAccessorArgs::create_dram_interleaved() {
+    TensorAccessorArgs args;
+    args.args_config_ = tensor_accessor::ArgConfig::IsDram;
+    return args;
+}
+
+TensorAccessorArgs TensorAccessorArgs::create_l1_interleaved() { return TensorAccessorArgs(); }
+
 void TensorAccessorArgs::update_args_config() {
     if (!buffer_) {
         args_config_ = tensor_accessor::ArgConfig::None;
