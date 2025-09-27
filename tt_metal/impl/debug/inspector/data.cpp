@@ -22,17 +22,20 @@ Data::Data()
             auto host = rtoptions.get_inspector_rpc_server_host();
             auto port = rtoptions.get_inspector_rpc_server_port();
             rpc_server_controller.start(host, port);
-
-            // Connect callbacks that we want to respond to
-            get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
-            get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
-            get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
-            get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
-            get_rpc_server().setGetKernelCallback([this](auto params, auto result) { this->rpc_get_kernel(params, result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
     }
+    else {
+        log_warning(tt::LogInspector, "Inspector RPC server is disabled");
+    }
+
+    // Connect callbacks that we want to respond to (or serialize when requested)
+    get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
+    get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
+    get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+    get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
+    get_rpc_server().setGetKernelCallback([this](auto params, auto result) { this->rpc_get_kernel(params, result); });
 }
 
 Data::~Data() {

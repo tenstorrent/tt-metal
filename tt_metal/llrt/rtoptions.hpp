@@ -88,7 +88,7 @@ struct InspectorSettings {
     std::filesystem::path log_path;
     std::string rpc_server_host = "localhost";
     uint16_t rpc_server_port = 50051;
-    bool rpc_server_enabled = true;
+    bool rpc_server_enabled = false;
 };
 
 class RunTimeOptions {
