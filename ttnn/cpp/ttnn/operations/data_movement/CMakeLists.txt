@@ -37,7 +37,9 @@ target_sources(
             bcast/bcast.hpp
             bcast/bcast_types.hpp
             concat/concat.hpp
+            copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            pad/pad.hpp
             permute/permute.hpp
             repeat/repeat.hpp
             reshape_view/reshape.hpp

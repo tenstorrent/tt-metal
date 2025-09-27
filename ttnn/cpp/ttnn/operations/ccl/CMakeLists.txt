@@ -22,7 +22,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES ccl_op_fusion.hpp
+        FILES
+            ccl_common.hpp
+            ccl_host_datastructures.hpp
+            ccl_host_types.hpp
+            ccl_op_fusion.hpp
+            common/host/ccl_command_stream_builders.hpp
+            common/types/ccl_types.hpp
+            common/uops/ccl_command.hpp
+            mesh_partition/mesh_partition.hpp
+            shared_with_host/hetergeneous_data_structs.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

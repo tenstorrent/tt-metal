@@ -18,7 +18,12 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
+        FILES
+            nlp_concat_heads/nlp_concat_heads.hpp
+            nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.hpp
+            nlp_create_qkv_heads/nlp_create_qkv_heads.hpp
+            nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
+            rotary_embedding_llama/rotary_embedding_llama.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

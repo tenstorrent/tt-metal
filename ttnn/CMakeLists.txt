@@ -402,6 +402,7 @@ list(
 
 add_library(ttnncpp SHARED)
 add_library(TTNN::CPP ALIAS ttnncpp)
+add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
