@@ -107,6 +107,7 @@ enum SfpuType {
     fmod,
     ceil,
     unused,
+    reshuffle_rows,
     cumsum,
     fill,
     prelu,
@@ -125,4 +126,6 @@ enum SfpuType {
     celu,
     max_pool_with_indices,
     selu,
+    rpow,
+    cbrt,  // cube root
 };

@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.common.utility_functions import disable_persistent_kernel_cache, skip_for_grayskull
+from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -97,7 +97,6 @@ def test_device_perf_wh_bare_metal(
         ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 533),
     ),
 )
-@skip_for_grayskull()
 def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples):
     margin = 0.03
     num_iterations = 1

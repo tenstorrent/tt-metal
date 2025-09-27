@@ -12,7 +12,6 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-from models.common.utility_functions import skip_for_grayskull
 from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
@@ -418,7 +417,6 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 
 
 @pytest.mark.timeout(240000)
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )

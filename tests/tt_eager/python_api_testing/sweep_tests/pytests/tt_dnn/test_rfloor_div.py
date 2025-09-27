@@ -14,7 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import skip_for_grayskull
 
 mem_configs = [
     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
@@ -34,7 +33,6 @@ mem_configs = [
     "dst_mem_config",
     mem_configs,
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for floor")
 class TestRfloor_div:
     def test_run_rfloor_div(
         self,

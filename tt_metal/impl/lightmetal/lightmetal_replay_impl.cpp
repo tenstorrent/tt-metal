@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -256,27 +256,27 @@ void LightMetalReplayImpl::close_devices() { CloseDevice(this->device_); }
 // Later can update these to be asserts once all paths covered properly.
 void LightMetalReplayImpl::clear_object_maps() {
     // Later can update these to be asserts.
-    if (buffer_map_.size()) {
+    if (!buffer_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay BufferMap: {} entries", buffer_map_.size());
         buffer_map_.clear();
     }
 
-    if (program_map_.size()) {
+    if (!program_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay ProgramMap: {} entries", program_map_.size());
         program_map_.clear();
     }
 
-    if (kernel_handle_map_.size()) {
+    if (!kernel_handle_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelHandleMap: {} entries", kernel_handle_map_.size());
         kernel_handle_map_.clear();
     }
 
-    if (kernel_map_.size()) {
+    if (!kernel_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelMap: {} entries", kernel_map_.size());
         kernel_map_.clear();
     }
 
-    if (cb_handle_map_.size()) {
+    if (!cb_handle_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay CBHandleMap: {} entries", cb_handle_map_.size());
         cb_handle_map_.clear();
     }
@@ -482,8 +482,9 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteB
         buffer->address());
 
     // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // Issue #24955: Enable after Light-Metal rearchitecture
+    // EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) {
@@ -502,9 +503,10 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
         buffer->size());
 
     // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
     std::vector<uint32_t> readback_data(buffer->size() / sizeof(uint32_t), 0);
-    EnqueueReadBuffer(cq, buffer, readback_data.data(), cmd->blocking());
+    // Issue #24955: Enable after Light-Metal rearchitecture
+    // EnqueueReadBuffer(cq, buffer, readback_data.data(), cmd->blocking());
 
     // TODO (kmabee) - TBD what to do with readback data. For now, optionally print.
     // One idea is to store in map by global_read_id that caller can access.
@@ -517,9 +519,10 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(Finish) cq_global_id: {}", cmd->cq_global_id());
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
     auto sub_device_ids = from_flatbuffer(cmd->sub_device_ids());
-    Finish(cq, sub_device_ids);
+    // Issue #24955: Enable after Light-Metal rearchitecture
+    // Finish(cq, sub_device_ids);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd) {
@@ -541,8 +544,9 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueProgra
         cmd->cq_global_id());
 
     // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    EnqueueProgram(cq, *program, cmd->blocking());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // Issue #24955: Enable after Light-Metal rearchitecture
+    // EnqueueProgram(cq, *program, cmd->blocking());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd) {
@@ -660,9 +664,9 @@ void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalC
         cmd->buffer_global_id());
 
     // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
     std::vector<uint32_t> rd_data(buffer->size() / sizeof(uint32_t), 0);
-    EnqueueReadBuffer(cq, buffer, rd_data.data(), true);
+    // EnqueueReadBuffer(cq, buffer, rd_data.data(), true);
 
     if (disable_checking_) {
         log_debug(

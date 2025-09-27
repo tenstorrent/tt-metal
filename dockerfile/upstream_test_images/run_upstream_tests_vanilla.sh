@@ -26,6 +26,8 @@ test_suite_bh_umd_unit_tests() {
     # so makes sense we broke it
     # ./build/test/umd/api/api_tests
     ./build/test/umd/blackhole/unit_tests
+    # Filter out the test that is failing due to local YAML files, see: https://github.com/tenstorrent/tt-metal/issues/24359
+    ./build/test/umd/api/api_tests --gtest_filter=-ApiClusterTest.DifferentConstructors
 }
 
 # Function to run BH single PCIe small ML model tests
@@ -104,7 +106,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         echo "Health checks failed, retrying..."
         sleep 5
     done
-    TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+    TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
     TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
 }
@@ -117,7 +119,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
-    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+    elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
     else
         echo "Your blackhole hw topology is not supported to run Llama demo model tests!"
@@ -137,7 +139,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
-    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+    elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
     else
         echo "Your blackhole hw topology is not supported to run Llama demo stress tests!"
@@ -223,7 +225,7 @@ test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
-hw_topology_test_suites["blackhole_rackbox"]="
+hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,8 +62,8 @@ struct CBInfo {
 // CBInfo::index and CBInfo::handle won't be valid until allocate_cbs() is called.
 std::vector<CBInfo> get_cb_info(
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const OptimizedConvBlockConfig& block_config,
-    const OptimizedConvParallelizationConfig& pconfig,
+    const Conv2dBlockConfig& block_config,
+    const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> input_shape,

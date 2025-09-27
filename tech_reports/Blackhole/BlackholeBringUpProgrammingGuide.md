@@ -68,13 +68,15 @@ Information relevant to programming Blackhole while it is being brought up.
 
 Blackhole added a small (4 x 16B cachelines) write-through data cache in L1. Writing an address on one core and reading it from another only requires the reader to invalidate if the address was previously read.
 
-Invalidating the cache can be done via calls to `invalidate_l1_cache()`. Hardware can clear the cache at some randomized time interval but this is slower than explicitly invalidating the cache. By default the hardware timeout is disabled but can be enabled by setting env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION`
+The data cache is disabled by default but can be enabled globally through an env var:
+```
+export TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
+```
+where the values specify which riscs to enable cache on.
 
-The cache can be disabled through an env var:
-```
-export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
-```
-where the values specify which riscs to disable cache on.
+Alternatively, the data cache can be enabled on kernel by kernel basis by calling `set_l1_data_cache<true>()`. This needs to be accompanied with a `set_l1_data_cache<false>()` call before kernel exits.
+
+Invalidating the cache can be done via calls to `invalidate_l1_cache()`. Hardware can clear the cache at some randomized time interval but this is slower than explicitly invalidating the cache. By default the hardware timeout is disabled but can be enabled by setting env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION`
 
 ### Ethernet Cores
 

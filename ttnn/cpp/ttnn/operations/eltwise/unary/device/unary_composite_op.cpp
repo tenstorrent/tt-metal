@@ -26,20 +26,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
-// cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
-//         = exp[ (1/3)*log[a] ]
-Tensor _cbrt(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    constexpr float scale = (float)(1.0 / 3.0);
-    Tensor t_ln_input = ttnn::log(
-        ttnn::abs(input_tensor, output_mem_config), true, output_mem_config);  // negative log is not useful here
-    Tensor t1 = ttnn::multiply(t_ln_input, scale, std::nullopt, output_mem_config);
-    t_ln_input.deallocate();
-    Tensor t2 = ttnn::exp(t1, false, output_mem_config);
-    t1.deallocate();
-    Tensor t3 = ttnn::multiply(t2, ttnn::sign(input_tensor, output_mem_config), std::nullopt, output_mem_config);
-    return t3;
-}
-
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
 Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
@@ -224,7 +210,7 @@ Tensor _variance_impl(
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor y_minus_mean_y = ttnn::bcast(ttnn::DefaultQueueId, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
@@ -259,7 +245,7 @@ Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>& output_
 Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
-    Tensor y_minus_mean_y = ttnn::bcast(ttnn::DefaultQueueId, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
     Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, output_mem_config);
@@ -372,11 +358,11 @@ Tensor _selu(
     Tensor x_Exp_minus_1 = ttnn::expm1(x, output_mem_config);
     Tensor result_t2_ = ttnn::multiply_(x_Exp_minus_1, alpha);
     x_Exp_minus_1.deallocate();
-    Tensor result_term2 = ttnn::minimum(ttnn::DefaultQueueId, result_t2_, 0.0f, std::nullopt, output_mem_config);
+    Tensor result_term2 = ttnn::minimum(result_t2_, 0.0f, std::nullopt, output_mem_config);
     result_t2_.deallocate();
 
     // term 1
-    Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
+    Tensor x_max = ttnn::maximum(x, 0.0f, std::nullopt, output_mem_config);
     Tensor sum_max_term2 = ttnn::add_(x_max, result_term2);
     x_max.deallocate();
     Tensor result_selu = ttnn::multiply_(sum_max_term2, scale);
@@ -396,8 +382,8 @@ std::vector<Tensor> split_tensor_for_glu(
     ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, step, output_mem_config);
-    Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, step, output_mem_config);
+    Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
+    Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);
@@ -516,7 +502,6 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 
 // rdiv
 Tensor ExecuteRdiv::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     float value,
     const std::optional<std::string>& round_mode,
@@ -526,8 +511,8 @@ Tensor ExecuteRdiv::invoke(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_inf = std::numeric_limits<float>::infinity();
-    Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
-    Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
+    Tensor recip_result = ttnn::reciprocal(input_tensor, memory_config, optional_output_tensor);
+    Tensor result = ttnn::multiply(recip_result, value, std::nullopt, memory_config, optional_output_tensor);
 
     if (round_mode == "trunc") {
         result = ttnn::trunc(result);
@@ -535,7 +520,7 @@ Tensor ExecuteRdiv::invoke(
         result = ttnn::floor(result);
     }
     return ttnn::where(
-        ttnn::eqz(queue_id, input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
+        ttnn::eqz(input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
 }
 
 // logit(input, eps)=log(input / 1 - input)
@@ -575,15 +560,6 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
 // // tanhshrink(x) = x - tanh(x)
 Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_not(x, output_mem_config, x);
-}
-
-// rpow: y = k**(a) = exp( a**log(k) )
-Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(k > 0.0, "rpow cannot be calcualted for non-positive numbers");
-    float log_k = logf(k);
-
-    Tensor result = ttnn::multiply(a, log_k);
-    return ttnn::exp(result, false);
 }
 
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;

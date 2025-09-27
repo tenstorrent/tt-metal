@@ -6,14 +6,12 @@
 #include "device/fill_rm_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor FillRMOperation::invoke(
-    QueueId queue_id,
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -26,12 +24,11 @@ ttnn::Tensor FillRMOperation::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto output_memory_config = memory_config.value_or(any.memory_config());
     return operation::run_without_autoformat(
-               FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_memory_config}, {any}, {}, {}, queue_id)
+               FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_memory_config}, {any}, {}, {})
         .at(0);
 }
 
 ttnn::Tensor FillOnesRMOperation::invoke(
-    QueueId queue_id,
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -42,7 +39,7 @@ ttnn::Tensor FillOnesRMOperation::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto output_memory_config = memory_config.value_or(any.memory_config());
     return operation::run_without_autoformat(
-               FillRM{N, C, H, W, hFill, wFill, 1.0f, 0.0f, output_memory_config}, {any}, {}, {}, queue_id)
+               FillRM{N, C, H, W, hFill, wFill, 1.0f, 0.0f, output_memory_config}, {any}, {}, {})
         .at(0);
 }
 

@@ -9,7 +9,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
@@ -90,7 +89,7 @@ process_agmm_fusion_program_and_create_override_variables(
     }
     for (auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        if (intersection.size() > 0) {
+        if (!intersection.empty()) {
             non_idle_cores_vec.push_back(intersection.bounding_box());
         }
     }
@@ -429,8 +428,8 @@ process_agmm_fusion_program_and_create_override_variables(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     bool use_dedicated_noc = true;
     tt_metal::NOC_MODE noc_mode =

@@ -93,10 +93,14 @@ struct RouterElasticChannelWriterAdapter {
         this->edm_connection_handshake_l1_addr = connected_to_persistent_fabric
                                                      ? edm_connection_handshake_l1_id
                                                      : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
+        ASSERT(is_l1_address(edm_connection_handshake_l1_addr));  // must be a L1 address
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
+        ASSERT(is_l1_address(edm_worker_location_info_addr));  // must be a L1 address
         this->edm_copy_of_wr_counter_addr =
             connected_to_persistent_fabric ? edm_buffer_index_id : get_semaphore<my_core_type>(edm_buffer_index_id);
+        ASSERT(is_l1_address(edm_copy_of_wr_counter_addr));  // must be a L1 address
         this->worker_teardown_addr = worker_teardown_addr;
+        ASSERT(is_l1_address(reinterpret_cast<size_t>(worker_teardown_addr)));  // must be a L1 address
         this->buffer_size_bytes = buffer_size_bytes;
         this->edm_noc_x = edm_worker_x;
         this->edm_noc_y = edm_worker_y;
@@ -163,8 +167,7 @@ struct RouterElasticChannelWriterAdapter {
                 edm_worker_location_info_addr +
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
         // write the address of our local copy of read counter (that EDM is supposed to update)
-
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+        noc_inline_dw_write<InlineWriteDst::L1, posted>(
             dest_edm_location_info_addr,
             reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
             0xf,
@@ -173,7 +176,7 @@ struct RouterElasticChannelWriterAdapter {
             dest_noc_addr_coord_only |
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
         // Write our local teardown ack address to EDM
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+        noc_inline_dw_write<InlineWriteDst::L1, posted>(
             edm_teardown_semaphore_address_address,
             reinterpret_cast<size_t>(worker_teardown_addr),
             0xf,
@@ -181,7 +184,7 @@ struct RouterElasticChannelWriterAdapter {
         // Write out core noc-xy coord to EDM
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+        noc_inline_dw_write<InlineWriteDst::L1, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
     }
 
@@ -195,7 +198,7 @@ struct RouterElasticChannelWriterAdapter {
         // As EDM will potentially increment the register as well
         this->buffer_slot_index = BufferIndex(0);
 
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+        noc_inline_dw_write<InlineWriteDst::L1, posted>(
             edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
         *this->worker_teardown_addr = 0;
     }
@@ -206,10 +209,10 @@ struct RouterElasticChannelWriterAdapter {
 
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-        noc_inline_dw_write(remote_buffer_index_addr, this->get_buffer_slot_index());
+        noc_inline_dw_write<InlineWriteDst::L1>(remote_buffer_index_addr, this->get_buffer_slot_index());
 
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
+        noc_inline_dw_write<InlineWriteDst::L1>(dest_edm_connection_state_addr, close_connection_request_value);
     }
 
     void close_finish() {
@@ -232,13 +235,9 @@ public:
         const uint64_t noc_sem_addr = get_noc_addr(
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, EDM_TO_DOWNSTREAM_NOC);
         noc_sem_addr_ = noc_sem_addr;
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         noc_inline_dw_write_set_state<true, true>(
-            noc_sem_addr,
-            (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC,
-            0xF,
-            this->sync_noc_cmd_buf,
-            EDM_TO_DOWNSTREAM_NOC,
-            EDM_TO_DOWNSTREAM_NOC_VC);
+            noc_sem_addr, packed_val, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
@@ -268,7 +267,7 @@ public:
         noc_addr = get_noc_addr(
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] + offset, noc);
 
-        noc_inline_dw_write(noc_addr, data, 0xf, noc);
+        noc_inline_dw_write<InlineWriteDst::L1>(noc_addr, data, 0xf, noc);
         if constexpr (inc_pointers) {
             post_send_payload_increment_pointers(noc);
         }
@@ -327,8 +326,8 @@ private:
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
                 if constexpr (vc1_has_different_downstream_dest) {
-                    noc_inline_dw_write<InlineWriteDst::REG>(
-                        noc_sem_addr_, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+                    auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+                    noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr_, packed_val, 0xf, noc);
                 } else {
                     noc_inline_dw_write_with_state<true, false, true>(
                         0,  // val unused
@@ -344,9 +343,10 @@ private:
                     noc);
             }
         } else {
+            auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
         }
         // Write to the atomic increment stream register (write of -1 will subtract 1)
         increment_local_update_ptr_val(worker_credits_stream_id, -1);

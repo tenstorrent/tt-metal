@@ -41,7 +41,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
@@ -1196,7 +1195,12 @@ TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE3HopsW4Hops) {
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric1DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
+TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        GTEST_SKIP() << "Test applicable only on T3K";
+    }
+    RunSetUnicastRouteTest(this, false);
+}
 
 // 1 mesh all-to-all
 TEST_F(Fabric2DFixture, TestSetUnicastRoute) {

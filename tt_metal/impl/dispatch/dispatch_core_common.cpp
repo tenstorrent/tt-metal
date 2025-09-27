@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,12 @@
 namespace tt::tt_metal {
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
-    return (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) ? DispatchCoreAxis::COL
-                                                                                  : DispatchCoreAxis::ROW;
+    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+        if (MetalContext::instance().get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+            return DispatchCoreAxis::COL;
+        }
+    }
+    return DispatchCoreAxis::ROW;
 }
 
 DispatchCoreConfig get_dispatch_core_config() {

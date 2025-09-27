@@ -6,9 +6,8 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
-    skip_for_grayskull,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
@@ -203,7 +202,6 @@ def run_conv_transpose2d(
     assert passing
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -289,7 +287,6 @@ def test_simple_conv_t2d(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 # fmt: off
 @pytest.mark.parametrize(

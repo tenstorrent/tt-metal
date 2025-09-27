@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 namespace ttnn::operations::rand {
 struct Rand {
     static Tensor invoke(
-        QueueId queue_id,
         const ttnn::Shape& size,
         MeshDevice& device,
         DataType dtype = DataType::BFLOAT16,
