@@ -56,3 +56,46 @@ function(create_unit_test_executable)
 endfunction()
 
 create_unit_test_executable()
+
+# Inspector unit tests
+set(UNIT_TESTS_INSPECTOR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/inspector/test_rpc_startup.cpp)
+
+# Create the test executable
+add_executable(unit_tests_inspector ${UNIT_TESTS_INSPECTOR_SRC})
+
+# Enable unity build for the executable
+TT_ENABLE_UNITY_BUILD(unit_tests_inspector)
+
+# Link libraries
+target_link_libraries(
+    unit_tests_inspector
+    PRIVATE
+        test_metal_common_libs
+        Metalium::Metal::Impl
+        capnp
+        capnp-rpc
+        numa
+)
+
+# Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
+target_compile_options(unit_tests_inspector PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
+# Set include directories
+target_include_directories(
+    unit_tests_inspector
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+# Set runtime output directory
+set_target_properties(
+    unit_tests_inspector
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
