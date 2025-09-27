@@ -5,15 +5,128 @@
 #include "llama.hpp"
 
 #include "autograd/tensor.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "core/xtensor_utils.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/llama_block.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
+#include "serialization/safetensors.hpp"
+#include "serialization/serializable.hpp"
+#include <set>
+#include <random>
+#include <algorithm>
+#include <numeric>
+#include <cmath>
+
+namespace {
+
+static std::vector<float> transpose_2d_flat(const std::vector<float> &flat, int64_t rows, int64_t cols) {
+    assert(rows * cols == static_cast<int64_t>(flat.size()));
+    std::vector<int> shape_vec = {static_cast<int>(rows), static_cast<int>(cols)};
+    auto src = xt::adapt(flat, shape_vec);
+    xt::xarray<float> t = xt::transpose(src);
+    auto view = ttml::core::xtensor_to_span(t);
+    return std::vector<float>(view.begin(), view.end());
+}
+
+static std::vector<float> pad_and_resize_flat(
+    const std::vector<float> &flat, int64_t rows, int64_t cols, int64_t target_rows, int64_t target_cols) {
+    // If dimensions match, return as is
+    if (rows == target_rows && cols == target_cols) {
+        return flat;
+    }
+    
+    // Create output tensor with target dimensions
+    std::vector<float> out(static_cast<size_t>(target_rows * target_cols), 0.0f);
+    
+    // Copy data from source to target, handling both row and column differences
+    int64_t copy_rows = std::min(rows, target_rows);
+    int64_t copy_cols = std::min(cols, target_cols);
+    
+    for (int64_t r = 0; r < copy_rows; ++r) {
+        for (int64_t c = 0; c < copy_cols; ++c) {
+            out[r * target_cols + c] = flat[r * cols + c];
+        }
+    }
+    
+    // Initialize random number generator once if we need to fill additional space
+    bool need_random_fill = (target_rows > rows) || (target_cols > cols);
+    std::mt19937 gen;
+    std::normal_distribution<float> dist(0.0f, 0.02f); // Small random values
+    
+    if (need_random_fill) {
+        std::random_device rd;
+        gen.seed(rd());
+    }
+    
+    // For additional rows (if target_rows > rows), use small random initialization
+    // instead of zeros to avoid dead neurons
+    if (target_rows > rows) {
+        for (int64_t r = copy_rows; r < target_rows; ++r) {
+            for (int64_t c = 0; c < target_cols; ++c) {
+                out[r * target_cols + c] = dist(gen);
+            }
+        }
+    }
+    
+    // For additional columns (if target_cols > cols), use small random initialization
+    if (target_cols > cols) {
+        for (int64_t r = 0; r < copy_rows; ++r) {
+            for (int64_t c = copy_cols; c < target_cols; ++c) {
+                out[r * target_cols + c] = dist(gen);
+            }
+        }
+    }
+    
+    return out;
+}
+
+static void validate_weight_distribution(const std::vector<float>& weights, const std::string& weight_name) {
+    if (weights.empty()) {
+        fmt::print("[WARNING] Weight {} is empty\n", weight_name);
+        return;
+    }
+    
+    // Calculate basic statistics
+    float min_val = *std::min_element(weights.begin(), weights.end());
+    float max_val = *std::max_element(weights.begin(), weights.end());
+    float sum = std::accumulate(weights.begin(), weights.end(), 0.0f);
+    float mean = sum / weights.size();
+    
+    // Calculate standard deviation
+    float sq_sum = std::inner_product(weights.begin(), weights.end(), weights.begin(), 0.0f);
+    float variance = sq_sum / weights.size() - mean * mean;
+    float std_dev = std::sqrt(variance);
+    
+    // Count zeros and extreme values
+    int zero_count = std::count(weights.begin(), weights.end(), 0.0f);
+    int extreme_count = std::count_if(weights.begin(), weights.end(), 
+        [](float val) { return std::abs(val) > 10.0f; });
+    
+    fmt::print("[WEIGHT_VALIDATION] {}: min={:.6f}, max={:.6f}, mean={:.6f}, std={:.6f}, zeros={}/{}, extreme_vals={}\n",
+               weight_name, min_val, max_val, mean, std_dev, zero_count, weights.size(), extreme_count);
+    
+    // Check for potential issues
+    if (zero_count > weights.size() * 0.5) {
+        fmt::print("[WARNING] Weight {} has >50% zeros, this may cause issues\n", weight_name);
+    }
+    if (extreme_count > 0) {
+        fmt::print("[WARNING] Weight {} has {} extreme values (>10.0), this may cause issues\n", 
+                   weight_name, extreme_count);
+    }
+    if (std::abs(mean) > 1.0f) {
+        fmt::print("[WARNING] Weight {} has large mean ({:.6f}), this may cause issues\n", 
+                   weight_name, mean);
+    }
+}
+}  // namespace
+
 
 namespace ttml::models::llama {
 
-Llama::Llama(const LlamaConfig& config) {
+Llama::Llama(const LlamaConfig& config) : m_config(config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
@@ -39,6 +152,11 @@ Llama::Llama(const LlamaConfig& config) {
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
     fmt::print("    Theta: {}\n", theta);
 
+    // Safely calculate vocab_size divisible by 32, avoiding potential overflow
+    if (vocab_size > UINT32_MAX - 31) {
+        throw std::logic_error(fmt::format(
+            "Vocab size {} is too large and would cause overflow when rounding to 32", vocab_size));
+    }
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
         throw std::logic_error(fmt::format(
@@ -52,12 +170,16 @@ Llama::Llama(const LlamaConfig& config) {
             "embedding_dim={}",
             embedding_dim));
     }
-    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
+    // Ensure consistent vocab size between embedding and output layers
+    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size_divisible_by_32, /* bias */ false);
     if (config.weight_tying == WeightTyingType::Enabled) {
         tok_emb = std::make_shared<ttml::modules::Embedding>(last_fc->get_weight());
     } else {
         tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
     }
+    
+    // Store the original vocab size for token validation
+    m_original_vocab_size = vocab_size;
 
     // Create RoPE scaling params if they are set
     ops::RopeScalingParams rope_scaling_params;
@@ -188,4 +310,320 @@ std::shared_ptr<Llama> create(const YAML::Node& config) {
     return std::make_shared<Llama>(llama_config);
 }
 
+void Llama::load_from_safetensors(const std::filesystem::path& model_path) {
+    for (const auto &entry : std::filesystem::directory_iterator(model_path)) {
+        if (entry.path().extension() == ".safetensors") {
+            auto path = entry.path();
+            fmt::print("Loading model from: {}\n", path.string());
+            auto parameters = this->parameters();
+            load_model_from_safetensors(path, parameters, m_config);
+        }
+    }
+}
+
+void load_model_from_safetensors(const std::filesystem::path &path, serialization::NamedParameters &parameters, const LlamaConfig& config) {
+    // Track which parameters have been used
+    std::set<std::string> used_parameters;
+    
+    // Store k_proj and v_proj weights for combining into kv_linear (thread-safe local variables)
+    std::map<int, std::vector<float>> k_weights, v_weights;
+    std::map<int, std::array<int64_t, 2>> k_shapes, v_shapes;
+    
+    auto get_parameter = [&parameters, &used_parameters](const std::string &name) -> ttml::autograd::TensorPtr {
+        auto it = parameters.find(name);
+        if (it == parameters.end()) {
+            throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
+        }
+        used_parameters.insert(name);
+        return it->second;
+    };
+    
+    // Helper function to combine k and v weights when both are available
+    auto try_combine_kv_weights = [&](int layer_idx) {
+        if (k_weights.find(layer_idx) != k_weights.end() && 
+            v_weights.find(layer_idx) != v_weights.end()) {
+            
+            auto block_name = fmt::format("llama/llama_block_{}/attention/kv_linear/weight", layer_idx);
+            auto out_tensor1 = get_parameter(block_name);
+            auto target_shape = out_tensor1->get_value().logical_shape();
+            auto target_rows = target_shape[-2];
+            auto target_cols = target_shape[-1];
+            
+            // Get k and v weights and shapes
+            auto& k_weight = k_weights[layer_idx];
+            auto& v_weight = v_weights[layer_idx];
+            auto k_shape = k_shapes[layer_idx];
+            auto v_shape = v_shapes[layer_idx];
+            
+            // Validate that k and v have the same input dimension (columns)
+            if (k_shape[1] != v_shape[1]) {
+                throw std::runtime_error(fmt::format(
+                    "Layer {}: k_proj and v_proj input dimensions must match. k_shape[1]={}, v_shape[1]={}",
+                    layer_idx, k_shape[1], v_shape[1]));
+            }
+            
+            // Concatenate along the output dimension (rows): [k_weights; v_weights]
+            std::vector<float> combined_weight;
+            combined_weight.reserve(k_weight.size() + v_weight.size());
+            combined_weight.insert(combined_weight.end(), k_weight.begin(), k_weight.end());
+            combined_weight.insert(combined_weight.end(), v_weight.begin(), v_weight.end());
+            
+            // Resize to match target shape
+            auto combined_rows = k_shape[0] + v_shape[0];
+            auto combined_cols = k_shape[1];
+            auto resized_weight = pad_and_resize_flat(
+                combined_weight, combined_rows, combined_cols, target_rows, target_cols);
+            
+            out_tensor1->set_value(core::from_vector(
+                resized_weight, target_shape, out_tensor1->get_value().device()));
+            
+            // Clean up stored weights
+            k_weights.erase(layer_idx);
+            v_weights.erase(layer_idx);
+            k_shapes.erase(layer_idx);
+            v_shapes.erase(layer_idx);
+            
+            fmt::print("Successfully combined k_proj and v_proj weights for layer {}\n", layer_idx);
+        }
+    };
+    serialization::SafetensorSerialization::TensorCallback loading_callback =
+        [&parameters, &get_parameter, &config, &k_weights, &v_weights, &k_shapes, &v_shapes, &try_combine_kv_weights](
+            const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
+            fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
+            std::vector<float> float_vec;
+            if (info.dtype == "BF16") {
+                // Convert BF16 bytes to float
+                if (bytes.size_bytes() % 2 != 0) {
+                    throw std::runtime_error("BF16 data size must be even");
+                }
+                const std::size_t n = bytes.size_bytes() / 2;
+                float_vec.reserve(n);
+                const uint16_t* bf16_data = reinterpret_cast<const uint16_t*>(bytes.data());
+                for (std::size_t i = 0; i < n; ++i) {
+                    // Convert BF16 to float by shifting to upper 16 bits
+                    uint32_t tmp = static_cast<uint32_t>(bf16_data[i]) << 16;
+                    float value;
+                    std::memcpy(&value, &tmp, sizeof(value));
+                    float_vec.push_back(value);
+                }
+            } else if (info.dtype == "F32") {
+                float_vec = serialization::SafetensorSerialization::bytes_to_floats_copy(bytes);
+            } else {
+                throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
+            }
+            
+            // Token embedding weights
+            if (info.name == "embed_tokens.weight" || info.name == "model.embed_tokens.weight" ||
+                info.name == "transformer.wte.weight" || info.name == "wte.weight" ||
+                info.name == "model.wte.weight" || info.name == "embeddings.word_embeddings.weight") {
+                
+                fmt::print("Loading embedding weight from: {}\n", info.name);
+                
+                // Validate original weights
+                validate_weight_distribution(float_vec, fmt::format("original_{}", info.name));
+                
+                // Load to embedding layer
+                auto out_tensor1 = get_parameter("llama/tok_emb/weight");
+                auto resized_emb = pad_and_resize_flat(
+                    float_vec, 
+                    info.shape[0], 
+                    info.shape[1], 
+                    out_tensor1->get_value().logical_shape()[-2],
+                    out_tensor1->get_value().logical_shape()[-1]);
+                
+                // Validate resized weights
+                validate_weight_distribution(resized_emb, "resized_embedding_weight");
+                
+                out_tensor1->set_value(core::from_vector(
+                    resized_emb, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
+                
+                // For weight-tied models, also load to output layer (transposed)
+                if (config.weight_tying == WeightTyingType::Disabled) {
+                    fmt::print("Loading same weight to output layer (weight tying disabled)\n");
+                    auto out_tensor2 = get_parameter("llama/fc/weight");
+                    auto transposed_emb = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto resized_weight2 = pad_and_resize_flat(
+                        transposed_emb, 
+                        info.shape[1], 
+                        info.shape[0], 
+                        out_tensor2->get_value().logical_shape()[-2],
+                        out_tensor2->get_value().logical_shape()[-1]);
+                    out_tensor2->set_value(core::from_vector(
+                        resized_weight2, out_tensor2->get_value().logical_shape(), out_tensor2->get_value().device()));
+                }
+            }
+            
+            // Final layer norm
+            if (info.name == "norm.weight" || info.name == "model.norm.weight") {
+                auto out_tensor1 = get_parameter("llama/ln_fc/gamma");
+                // Handle potential shape mismatch for LayerNorm weights
+                auto target_shape = out_tensor1->get_value().logical_shape();
+                auto target_size = target_shape[-1];  // Last dimension size
+                if (float_vec.size() != target_size) {
+                    // Resize the vector to match target size
+                    std::vector<float> resized_vec(target_size, 0.0f);
+                    size_t copy_size = std::min(float_vec.size(), static_cast<size_t>(target_size));
+                    std::copy(float_vec.begin(), float_vec.begin() + copy_size, resized_vec.begin());
+                    out_tensor1->set_value(core::from_vector(
+                        resized_vec, target_shape, out_tensor1->get_value().device()));
+                } else {
+                    out_tensor1->set_value(core::from_vector(
+                        float_vec, target_shape, out_tensor1->get_value().device()));
+                }
+            }
+
+            // ---- Per-block mappings for Llama ----
+            // Llama uses different parameter naming conventions
+            for (int i = 0; i < static_cast<int>(config.num_blocks); ++i) {  // Use actual number of blocks from config
+                const std::string layer_pfx = "model.layers." + std::to_string(i);
+                const std::string layers_pfx = "layers." + std::to_string(i);
+                
+                // Attention norm (input_layernorm)
+                if (info.name == layer_pfx + ".input_layernorm.weight" || info.name == layers_pfx + ".input_layernorm.weight") {
+                    auto block_name = fmt::format("llama/llama_block_{}/attention_norm/gamma", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    // Handle potential shape mismatch for LayerNorm weights
+                    auto target_shape = out_tensor1->get_value().logical_shape();
+                    auto target_size = target_shape[-1];  // Last dimension size
+                    if (float_vec.size() != target_size) {
+                        // Resize the vector to match target size
+                        std::vector<float> resized_vec(target_size, 0.0f);
+                        size_t copy_size = std::min(float_vec.size(), static_cast<size_t>(target_size));
+                        std::copy(float_vec.begin(), float_vec.begin() + copy_size, resized_vec.begin());
+                        out_tensor1->set_value(core::from_vector(
+                            resized_vec, target_shape, out_tensor1->get_value().device()));
+                    } else {
+                        out_tensor1->set_value(core::from_vector(
+                            float_vec, target_shape, out_tensor1->get_value().device()));
+                    }
+                }
+                
+                // MLP norm (post_attention_layernorm)
+                if (info.name == layer_pfx + ".post_attention_layernorm.weight" || info.name == layers_pfx + ".post_attention_layernorm.weight") {
+                    auto block_name = fmt::format("llama/llama_block_{}/mlp_norm/gamma", i);
+                    auto out_tensor1 = get_parameter(block_name);
+                    // Handle potential shape mismatch for LayerNorm weights
+                    auto target_shape = out_tensor1->get_value().logical_shape();
+                    auto target_size = target_shape[-1];  // Last dimension size
+                    if (float_vec.size() != target_size) {
+                        // Resize the vector to match target size
+                        std::vector<float> resized_vec(target_size, 0.0f);
+                        size_t copy_size = std::min(float_vec.size(), static_cast<size_t>(target_size));
+                        std::copy(float_vec.begin(), float_vec.begin() + copy_size, resized_vec.begin());
+                        out_tensor1->set_value(core::from_vector(
+                            resized_vec, target_shape, out_tensor1->get_value().device()));
+                    } else {
+                        out_tensor1->set_value(core::from_vector(
+                            float_vec, target_shape, out_tensor1->get_value().device()));
+                    }
+                }
+                
+                // Attention weights
+                if (info.name == layer_pfx + ".self_attn.q_proj.weight" || info.name == layers_pfx + ".self_attn.q_proj.weight") {
+                    auto block_name = fmt::format("llama/llama_block_{}/attention/q_linear/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = get_parameter(block_name);
+                    // Handle potential shape mismatch for attention weights
+                    auto target_shape = out_tensor1->get_value().logical_shape();
+                    auto target_rows = target_shape[-2];
+                    auto target_cols = target_shape[-1];
+                    auto resized_weight = pad_and_resize_flat(
+                        transposed, info.shape[1], info.shape[0], target_rows, target_cols);
+                    out_tensor1->set_value(core::from_vector(
+                        resized_weight, target_shape, out_tensor1->get_value().device()));
+                }
+                // For GroupedQueryAttention, k_proj and v_proj are combined into kv_linear
+                // Store weights and try to combine when both are available
+                if (info.name == layer_pfx + ".self_attn.k_proj.weight" || info.name == layers_pfx + ".self_attn.k_proj.weight") {
+                    k_weights[i] = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    k_shapes[i] = {info.shape[1], info.shape[0]}; // transposed shape
+                    try_combine_kv_weights(i); // Try to combine if v_proj is already loaded
+                }
+                if (info.name == layer_pfx + ".self_attn.v_proj.weight" || info.name == layers_pfx + ".self_attn.v_proj.weight") {
+                    v_weights[i] = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    v_shapes[i] = {info.shape[1], info.shape[0]}; // transposed shape
+                    try_combine_kv_weights(i); // Try to combine if k_proj is already loaded
+                }
+                if (info.name == layer_pfx + ".self_attn.o_proj.weight" || info.name == layers_pfx + ".self_attn.o_proj.weight") {
+                    auto block_name = fmt::format("llama/llama_block_{}/attention/out_linear/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = get_parameter(block_name);
+                    // Handle potential shape mismatch for attention weights
+                    auto target_shape = out_tensor1->get_value().logical_shape();
+                    auto target_rows = target_shape[-2];
+                    auto target_cols = target_shape[-1];
+                    auto resized_weight = pad_and_resize_flat(
+                        transposed, info.shape[1], info.shape[0], target_rows, target_cols);
+                    out_tensor1->set_value(core::from_vector(
+                        resized_weight, target_shape, out_tensor1->get_value().device()));
+                }
+                
+                // MLP weights (gate_proj, up_proj, down_proj)
+                if (info.name == layer_pfx + ".mlp.gate_proj.weight" || info.name == layers_pfx + ".mlp.gate_proj.weight") {
+                    auto block_name = fmt::format("llama/llama_block_{}/mlp/w1/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = get_parameter(block_name);
+                    // Handle potential shape mismatch for MLP weights
+                    auto target_shape = out_tensor1->get_value().logical_shape();
+                    auto target_rows = target_shape[-2];
+                    auto target_cols = target_shape[-1];
+                    auto resized_weight = pad_and_resize_flat(
+                        transposed, info.shape[1], info.shape[0], target_rows, target_cols);
+                    out_tensor1->set_value(core::from_vector(
+                        resized_weight, target_shape, out_tensor1->get_value().device()));
+                }
+                if (info.name == layer_pfx + ".mlp.up_proj.weight" || info.name == layers_pfx + ".mlp.up_proj.weight") {
+                    auto block_name = fmt::format("llama/llama_block_{}/mlp/w3/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = get_parameter(block_name);
+                    // Handle potential shape mismatch for MLP weights
+                    auto target_shape = out_tensor1->get_value().logical_shape();
+                    auto target_rows = target_shape[-2];
+                    auto target_cols = target_shape[-1];
+                    auto resized_weight = pad_and_resize_flat(
+                        transposed, info.shape[1], info.shape[0], target_rows, target_cols);
+                    out_tensor1->set_value(core::from_vector(
+                        resized_weight, target_shape, out_tensor1->get_value().device()));
+                }
+                if (info.name == layer_pfx + ".mlp.down_proj.weight" || info.name == layers_pfx + ".mlp.down_proj.weight") {
+                    auto block_name = fmt::format("llama/llama_block_{}/mlp/w2/weight", i);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto out_tensor1 = get_parameter(block_name);
+                    // Handle potential shape mismatch for MLP weights
+                    auto target_shape = out_tensor1->get_value().logical_shape();
+                    auto target_rows = target_shape[-2];
+                    auto target_cols = target_shape[-1];
+                    auto resized_weight = pad_and_resize_flat(
+                        transposed, info.shape[1], info.shape[0], target_rows, target_cols);
+                    out_tensor1->set_value(core::from_vector(
+                        resized_weight, target_shape, out_tensor1->get_value().device()));
+                }
+            }
+            return true;
+        };
+    serialization::SafetensorSerialization::visit_safetensors_file(path, loading_callback);
+    
+    // Check if all parameters were used
+    std::vector<std::string> unused_parameters;
+    for (const auto &[param_name, param_tensor] : parameters) {
+        if (used_parameters.find(param_name) == used_parameters.end()) {
+            unused_parameters.push_back(param_name);
+        }
+    }
+    
+    if (!unused_parameters.empty()) {
+        fmt::print("Warning: The following parameters were not used during loading:\n");
+        for (const auto &param_name : unused_parameters) {
+            fmt::print("  - {}\n", param_name);
+        }
+        fmt::print("Total unused parameters: {}\n", unused_parameters.size());
+        
+        // Optionally throw an error if strict checking is desired
+        // Uncomment the following line to make unused parameters an error:
+        // throw std::runtime_error(fmt::format("Found {} unused parameters in the model", unused_parameters.size()));
+    } else {
+        fmt::print("All {} parameters were successfully loaded and used.\n", parameters.size());
+    }
+
+}
 }  // namespace ttml::models::llama
