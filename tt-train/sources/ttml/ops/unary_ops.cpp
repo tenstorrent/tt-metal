@@ -34,11 +34,15 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
-autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, bool fast_and_approximate) {
     auto out = autograd::create_tensor();
-    out->set_value(ttnn::gelu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        static const std::string approx_mode = "none";
+
+    // Forward: honor the requested approximation (matches device behavior when true).
+    out->set_value(ttnn::gelu(tensor->get_value(), fast_and_approximate));
+
+    autograd::GradFunction grad = [tensor, out, fast_and_approximate]() {
+        // Backward: use the SAME approximation as forward to avoid fw/bw mismatch.
+        const std::string approx_mode = fast_and_approximate ? "tanh" : "none";
         auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), approx_mode);
         tensor->add_grad(dL_dt);
     };
@@ -46,6 +50,11 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     std::vector<autograd::NodeId> links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
     return out;
+}
+
+// Default version uses fast/tanh approximation to match TT device forward.
+autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
+    return gelu(tensor, /*fast_and_approximate=*/true);
 }
 
 autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw) {

@@ -53,6 +53,7 @@ set(SOURCES
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
+    ops/gelu_diagnostics_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/slice_repeat_ops_test.cpp
     ops/binary_ops_test.cpp
