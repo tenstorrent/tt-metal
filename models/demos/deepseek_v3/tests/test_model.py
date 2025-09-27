@@ -193,7 +193,8 @@ def test_forward_pass(
     )
 
     tt_page_tables = tuple(
-        MLA.create_page_table(torch_page_table, paged_config, mesh_device) for torch_page_table in torch_page_tables
+        MLA.create_page_table(page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device)
+        for torch_page_table in torch_page_tables
     )
 
     # RoPE setup
