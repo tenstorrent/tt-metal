@@ -235,14 +235,14 @@ void kernel_main() {
             // If not the last slice, write what's on cb_output_id forward
             uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
             if (i < (ring_size - 1)) {
+                uint32_t tile_id_start = actual_slice_idx * slice_Wt;
+                uint32_t pages_read_in_row = start_pages_read_in_row;
+                uint32_t row_offset = start_row_offset;
+
                 chunk_count = 0;
                 for (uint32_t c = 0; c < input_tensor_C; ++c) {
                     uint32_t tiles_read = start_tiles_read / input_tensor_C;
                     uint32_t tiles_to_read = start_tiles_to_read / input_tensor_C;
-
-                    uint32_t tile_id_start = actual_slice_idx * slice_Wt;
-                    uint32_t pages_read_in_row = start_pages_read_in_row;
-                    uint32_t row_offset = start_row_offset;
 
                     if constexpr (!direction) {
                         uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
@@ -375,10 +375,11 @@ void kernel_main() {
             } else {
                 // Otherwise, on the last slice, write it to output buffer
                 for (uint32_t c = 0; c < input_tensor_C; ++c) {
+                    uint32_t tile_id_start = batch_slice_offset + c * batch_slice_num_pages / input_tensor_C;
+
                     uint32_t tiles_read = start_tiles_read / input_tensor_C;
                     uint32_t tiles_to_read = start_tiles_to_read / input_tensor_C;
 
-                    uint32_t tile_id_start = batch_slice_offset;
                     if constexpr (!direction) {
                         tiles_read += std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                     }

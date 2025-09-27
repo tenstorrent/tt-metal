@@ -717,6 +717,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     tile_granularity,
                     ring_size,
                     input_tensor_B,
+                    input_tensor_C,
                     dir};
 
                 auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
